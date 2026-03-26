@@ -119,6 +119,10 @@ Submit button unresponsive on iOS Safari when keyboard is open.
 - `## Bugs` → Collapsible section below the kanban board (starts collapsed)
 - Each `###` heading is one item. Format: `### {ID}: {Title}`
 - First line after heading: `Priority: {high|medium|low} | Complexity: {S|M|L|XL} | Status: {status}`
+- Optional lines after metadata (each on its own line, before description):
+  - `Parent: {parent-id}` — links sub-tickets to parent
+  - `Rationale: {reason}` — captures "why" decisions (shown collapsed on card)
+  - `Depends: {id1}, {id2}` — inter-ticket dependencies (blocked tickets dimmed on dashboard)
 - Next paragraph (non-bullet lines) until a bullet list or next `###`/`##`: **description text**
 - Lines starting with `- [ ]` or `- [x]`: **acceptance criteria** (rendered as checklist in expanded card view)
 - If no priority/complexity line, defaults: `medium`, `M`
@@ -195,6 +199,11 @@ python3 ~/.claude/dashboard/generate.py
 ```
 
 This script parses `PRODUCT_BACKLOG.md` + `PRODUCT_SPECIFICATION.md` for each project, generates the HTML to `{project}/docs/sdlc-dashboard.html`, and opens it in the browser. It runs in under a second.
+
+For programmatic/agent queries, use `--json` to get structured JSON output to stdout:
+```bash
+python3 ~/.claude/dashboard/generate.py --json
+```
 
 **Do NOT generate HTML manually.** Always use the script. The script is the source of truth for the HTML template.
 

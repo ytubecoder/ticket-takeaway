@@ -24,6 +24,7 @@ Self-contained Python script that parses PRODUCT_BACKLOG.md + PRODUCT_SPECIFICAT
 
 ### B-02: Per-Feature Working Files
 Priority: medium | Complexity: M | Status: specified
+Depends: B-01
 Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include PLAN.md, NOTES.md, BUGS.md, TESTS.md, REVIEW.md templates. Clean up on acceptance after /sync.
 - [ ] Create directory structure on WIP transition
 - [ ] Template files with section headers
@@ -32,6 +33,7 @@ Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include P
 
 ### B-03: Dashboard Skill Simplification
 Priority: medium | Complexity: S | Status: specified
+Rationale: Original SKILL.md included HTML template details that are now in generate.py, causing unnecessary context bloat
 Simplify the SKILL.md now that generate.py handles HTML. The skill should focus on: when to run the script, how to edit PRODUCT_BACKLOG.md, and the status/add/accept/show commands.
 - [ ] Remove HTML template details from SKILL.md
 - [ ] Keep only: mode detection, markdown editing rules, script invocation

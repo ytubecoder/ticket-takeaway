@@ -23,6 +23,9 @@ python3 ~/.claude/ticket-takeaway/generate.py
 
 # Add a new ticket
 /dashboard add ticket-takeaway "New feature title"
+
+# JSON output (for programmatic agent queries)
+python3 ~/.claude/ticket-takeaway/generate.py --json
 ```
 
 ## Architecture
@@ -40,7 +43,7 @@ PRODUCT_SPECIFICATION.md ─┘
 4. Collects git/code stats via shell commands
 5. Renders a self-contained HTML file with inline CSS/JS (dark theme kanban)
 
-Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, column, description, acceptance_criteria) → `Project` dataclass (tickets + CodeStats) → HTML.
+Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, column, description, acceptance_criteria, parent, rationale, depends, summary, archived) → `Project` dataclass (tickets + CodeStats) → HTML or JSON.
 
 **`src/skills/`** contains Claude Code skill definitions:
 - `dashboard/SKILL.md` — the `/dashboard` skill
@@ -53,6 +56,9 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 ```markdown
 ### {ID}: {Title}
 Priority: {priority} | Complexity: {complexity} | Status: {status}
+Parent: {parent-id}       (optional — for sub-tickets)
+Rationale: {reason}       (optional — captures "why" decisions)
+Depends: {id1}, {id2}     (optional — inter-ticket dependencies)
 {Description}
 - [ ] Acceptance criterion
 - [x] Completed criterion

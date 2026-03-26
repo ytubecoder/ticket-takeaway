@@ -1,5 +1,11 @@
 # Ticket Takeaway
 
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![GitHub release](https://img.shields.io/github/v/release/ytubecoder/ticket-takeaway)
+![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-blueviolet)
+![Works with Codex CLI](https://img.shields.io/badge/works%20with-Codex%20CLI-orange)
+
 ```
                          _______________________________________________
                         /                                              /|
@@ -87,6 +93,8 @@ Run `/review` to walk through all completed work, or `/review {ID}` for one tick
 5. On acceptance: `/accept` moves the ticket to `PRODUCT_SPECIFICATION.md`, summarizes development notes, and cleans up working files
 
 Double-clicking the For Review column header copies `/review` to your clipboard.
+
+**Compatible with:** [Claude Code](https://claude.ai/code) · [Codex CLI](https://github.com/openai/codex) · Any AI coding agent that reads markdown
 
 ## Install
 

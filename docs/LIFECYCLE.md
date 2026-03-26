@@ -109,7 +109,7 @@ Each ticket has a `Status:` value. The section determines the dashboard column; 
 | `in-progress` | Actively being worked on | WIP |
 | `blocked` | Work started but stuck on a dependency or issue | WIP |
 | `for-review` | Code complete, ready for review | For Review |
-| `rework` | Failed review, needs fixes before re-review | For Review |
+| `rework` | Failed review, needs fixes before re-review | WIP |
 | `done` | Reviewed and accepted, not yet in a release | Done |
 | `released` | Shipped in a tagged version | Done |
 | `wont-do` | Decided against building | Won't Do |
@@ -155,7 +155,7 @@ PRODUCT_BACKLOG.md                                        PRODUCT_SPECIFICATION.
 | `in-progress` → `blocked` | WIP | Stuck on dependency | Claude/Developer |
 | `blocked` → `in-progress` | WIP | Blocker resolved | Claude/Developer |
 | `in-progress` → `for-review` | For Review | Code complete, move to `## For Review` | Claude (auto on feature complete) |
-| `for-review` → `rework` | For Review | Review found issues | Developer |
+| `for-review` → `rework` | WIP | Review found issues, ticket moves back to `## WIP` | Developer |
 | `rework` → `in-progress` | WIP | Fixes started, move back to `## WIP` | Claude |
 | `for-review` → `done` | Done | Review passed → `/sync` → summarize → `/accept` → clean up working files | Developer |
 | `done` → `released` | Done | Shipped in a version tag | Developer |

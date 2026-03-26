@@ -42,8 +42,8 @@ The board uses a **stage-and-state** model from Kanban methodology. **Stages** a
 |----------------|-----------------|---------|
 | **Ideas** | `proposed` | Unvetted — just a title or rough notion |
 | **Backlog** | `proposed`, `specified`, `ready` | Being specced and queued for work |
-| **WIP** | `in-progress`, `blocked` | Actively being built |
-| **For Review** | `for-review`, `rework` | Code complete, awaiting sign-off |
+| **WIP** | `in-progress`, `blocked`, `rework` | Actively being built |
+| **For Review** | `for-review` | Code complete, awaiting sign-off |
 | **Done** | `done`, `released` | Accepted or shipped |
 
 Side lanes: **Bugs** (`bug`, `bug-fixed`), **Icebox** (`icebox`), **Won't Do** (`wont-do`) — reachable from any stage.

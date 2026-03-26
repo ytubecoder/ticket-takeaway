@@ -150,9 +150,13 @@ If the file already exists, append a new session entry.
 
 ### 4. Update Parent Status
 
-In PRODUCT_BACKLOG.md, change the parent ticket's status from `for-review` to `rework`:
+In PRODUCT_BACKLOG.md:
 
-Change `Status: for-review` to `Status: rework` on the metadata line. The ticket stays in the `## For Review` section.
+1. Remove the parent ticket from `## For Review`
+2. Move it to `## WIP`
+3. Change `Status: for-review` to `Status: rework`
+
+The ticket goes back to WIP because it needs active work — rework is a WIP state, not a review state.
 
 ### 5. Report
 

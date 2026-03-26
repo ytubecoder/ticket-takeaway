@@ -19,6 +19,7 @@
 > Markdown-native project board. Double-click. Paste. Build.
 
 Your project board lives in `PRODUCT_BACKLOG.md`. Ticket Takeaway renders it as a kanban dashboard — no database, no JSON intermediary. Double-click any ticket to copy a ready-made prompt, paste it into Claude Code, and take it away.
+<img width="1507" height="790" alt="image" src="https://github.com/user-attachments/assets/7a10b450-9f84-4c4b-9481-515d448cbe2f" />
 
 ## Project Structure
 

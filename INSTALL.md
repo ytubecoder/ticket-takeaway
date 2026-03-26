@@ -24,7 +24,11 @@ cp src/skills/dashboard/SKILL.md ~/.claude/skills/dashboard/SKILL.md
 mkdir -p ~/.claude/skills/review
 cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md
 
-# 4. Create a registry (edit paths for your machine)
+# 4. Install the spec skill
+mkdir -p ~/.claude/skills/spec
+cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
+
+# 5. Create a registry (edit paths for your machine)
 cp src/registry.example.json ~/.claude/dashboard/registry.json
 # Then edit ~/.claude/dashboard/registry.json to set your project paths
 ```
@@ -36,6 +40,7 @@ cp src/registry.example.json ~/.claude/dashboard/registry.json
 | `src/generate.py` | `~/.claude/dashboard/generate.py` | Dashboard HTML generator script |
 | `src/skills/dashboard/SKILL.md` | `~/.claude/skills/dashboard/SKILL.md` | `/dashboard` skill for Claude Code |
 | `src/skills/review/SKILL.md` | `~/.claude/skills/review/SKILL.md` | `/review` skill for Claude Code |
+| `src/skills/spec/SKILL.md` | `~/.claude/skills/spec/SKILL.md` | `/spec` skill for Claude Code |
 | `src/registry.example.json` | `~/.claude/dashboard/registry.json` | Project registry (edit for your projects) |
 
 ## Per-Project Setup
@@ -150,6 +155,7 @@ git pull
 cp src/generate.py ~/.claude/dashboard/generate.py
 cp src/skills/dashboard/SKILL.md ~/.claude/skills/dashboard/SKILL.md
 cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md
+cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
 ```
 
 The registry is NOT overwritten on update (it contains your local project paths).

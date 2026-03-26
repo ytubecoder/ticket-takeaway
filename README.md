@@ -18,35 +18,37 @@
 
 > Markdown-native project board. Double-click. Paste. Build.
 
-Your project board lives in `PRODUCT_BACKLOG.md`. Ticket Takeaway renders it as a kanban dashboard — no database, no JSON intermediary. Double-click any ticket to copy a ready-made prompt, paste it into Claude Code, and take it away.
-<img width="1507" height="790" alt="image" src="https://github.com/user-attachments/assets/7a10b450-9f84-4c4b-9481-515d448cbe2f" />
+This is a tool for people who like to be on the tools — talking directly to their models. If you work in Claude Code (or similar), prompting your way through features one at a time, Ticket Takeaway adds the order you need to scale that up. It gives you a lightweight process so you can go from one feature to ten without losing track of what's specced, what's in progress, and what's waiting for review.
 
-## Project Structure
+Your project board lives in `PRODUCT_BACKLOG.md` — a plain markdown file in your project root. Ticket Takeaway renders it as a kanban dashboard. No database, no JSON intermediary. Double-click any ticket to copy a ready-made prompt, paste it into Claude Code, and take it away. Because it's just clipboard copy-paste, you can run the dashboard in a browser and have as many Claude Code windows open as you want — each one working on a different ticket. The board is the coordination layer.
 
-```
-ticket-takeaway/
-├── README.md                          # This file — quick reference for all constructs
-├── INSTALL.md                         # How to deploy the system to a new machine
-├── PRODUCT_BACKLOG.md                 # This project's own backlog (dogfooding)
-├── PRODUCT_SPECIFICATION.md           # This project's accepted features
-├── src/
-│   ├── generate.py                    # Dashboard HTML generator (Python)
-│   ├── registry.example.json          # Example project registry
-│   └── skills/
-│       ├── dashboard/SKILL.md         # /dashboard skill for Claude Code
-│       └── review/SKILL.md            # /review skill for Claude Code
-├── docs/
-│   ├── LIFECYCLE.md                   # Authoritative lifecycle spec (statuses, transitions, working files)
-│   ├── REVIEW_PROCESS.md             # Review process spec (batching, feedback, acceptance)
-│   ├── sdlc-dashboard.html           # Generated dashboard (do not edit)
-│   ├── sdlc-dashboard-spec.md        # Original dashboard design spec (historical)
-│   └── sdlc-methodology.md           # SDLC methodology reference (historical)
-```
+Two skills drive the process forward: **`/spec`** takes raw ideas and walks them into specced, backlog-ready tickets with acceptance criteria. **`/review`** takes completed features through structured review, creates bug sub-tickets from feedback, and handles the acceptance flow. Between those two gates — specification and review — you're free to build however you want.
 
-**Key docs:**
-- [`INSTALL.md`](INSTALL.md) — Deploy to a new machine
-- [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md) — Complete lifecycle spec (statuses, transitions, working files, acceptance flow)
-- [`docs/REVIEW_PROCESS.md`](docs/REVIEW_PROCESS.md) — Review process (batching, feedback→bugs, test criteria, acceptance)
+For things you don't want to be directly involved in — security reviews, marketing output, documentation updates, compliance checks — we intend to make this compatible with agent orchestrators like [Paperclip](https://github.com/anthropics/claude-code/blob/main/AGENTS.md) so those tasks can run autonomously while you stay hands-on with the parts that matter.
+
+<img width="1507" alt="Ticket Takeaway dashboard rendered in a browser" src="https://github.com/user-attachments/assets/7a10b450-9f84-4c4b-9481-515d448cbe2f" />
+
+### Stages and States
+
+The board uses a **stage-and-state** model — a pattern from Kanban methodology where workflow columns contain multiple work-item states.
+
+**Stages** are the columns on the board (Ideas, Backlog, WIP, For Review, Done). They're defined by the `## Section` headings in your `PRODUCT_BACKLOG.md` file. A stage tells you *where* a ticket sits in the overall workflow.
+
+**States** are the `Status:` values on individual tickets. They tell you *what needs to happen next* to move the ticket forward within its current stage. Multiple states live in the same stage — three tickets in Backlog might respectively be `proposed` (needs spec work), `specified` (has criteria but waiting on dependencies), and `ready` (good to go). Same column, different next actions.
+
+If you've used JIRA, this is the same distinction between board columns and workflow statuses. GitHub Projects has a similar split between column placement and the status field. The section heading is the lane; the status is the position within it.
+
+| Stage (Column) | States within it | What this stage means |
+|----------------|-----------------|----------------------|
+| **Ideas** | `proposed` | Unvetted — just a title or rough notion |
+| **Backlog** | `proposed`, `specified`, `ready` | Being specced and queued for work |
+| **WIP** | `in-progress`, `blocked` | Actively being built |
+| **For Review** | `for-review`, `rework` | Code complete, awaiting sign-off |
+| **Done** | `done`, `released` | Accepted or shipped |
+
+---
+
+# Part 1: Using Ticket Takeaway
 
 ## Getting Started
 
@@ -60,10 +62,11 @@ ticket-takeaway/
 
 ```bash
 # Copy the generator + skills into Claude Code's config directory
-mkdir -p ~/.claude/dashboard ~/.claude/skills/dashboard ~/.claude/skills/review
+mkdir -p ~/.claude/dashboard ~/.claude/skills/{dashboard,review,spec}
 cp src/generate.py ~/.claude/dashboard/generate.py
 cp src/skills/dashboard/SKILL.md ~/.claude/skills/dashboard/SKILL.md
 cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md
+cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
 cp src/registry.example.json ~/.claude/dashboard/registry.json
 ```
 
@@ -143,7 +146,109 @@ The system needs two things to operate:
 
 Everything else — priority, complexity, status, description, acceptance criteria — is optional and has defaults. But the more you fill in, the more useful the board becomes. Acceptance criteria (checkbox items) are what drive the review and acceptance workflow, so you'll want those before a ticket moves to WIP.
 
-## How It Works
+### Wiring It Into Your Other Projects
+
+Once Ticket Takeaway is installed, you need to tell Claude Code to follow the process in each project you track. Add this to your project's `CLAUDE.md`:
+
+```markdown
+## Product Backlog Rules
+
+`PRODUCT_BACKLOG.md` is the single source of truth for all active feature work.
+The Ticket Takeaway dashboard (`/dashboard`) reads directly from this file.
+
+**Closed-loop workflow — every feature status change must update PRODUCT_BACKLOG.md:**
+
+1. **Starting work on a feature:** Move the item from `## Backlog` to `## WIP`, set `Status: in-progress`
+2. **Feature blocked:** Update status to `Status: blocked` (stays in `## WIP`)
+3. **Code complete, ready for review:** Move from `## WIP` to `## For Review`, set `Status: for-review`
+4. **Feature accepted:** Run `/dashboard accept {project} {ID}` — moves item to `PRODUCT_SPECIFICATION.md`
+5. **New feature idea:** Add to `## Ideas` or `## Backlog` (or use `/dashboard add`)
+
+**This is mandatory.** Do not complete feature work without updating the backlog file.
+```
+
+This ensures that when Claude Code works on your project, it keeps the board in sync with what's actually being built. Without this, tickets will go stale.
+
+## The Process
+
+The core of Ticket Takeaway is a gated workflow. Every ticket progresses through stages, and each stage has requirements that must be met before a ticket can advance. This keeps you from starting work on something that isn't specced, or shipping something that hasn't been reviewed.
+
+### How a Ticket Progresses
+
+```
+  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+  │          │    │          │    │          │    │          │    │          │
+  │  IDEAS   │───▶│ BACKLOG  │───▶│   WIP    │───▶│  REVIEW  │───▶│   DONE   │
+  │          │    │          │    │          │    │          │    │          │
+  └──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘
+                                        │              │
+   States:         States:              │   States:    │          States:
+   proposed        proposed          ┌──┘   for-review └──┐      done
+                   specified         │      rework        │      released
+                   ready             ▼                    ▼
+                                  blocked             back to
+                                  (stays               WIP
+                                   in WIP)
+
+  ┌──────────┐    ┌──────────┐    ┌──────────┐
+  │  ICEBOX  │    │   BUGS   │    │ WON'T DO │    ◀── side lanes, reachable from any stage
+  └──────────┘    └──────────┘    └──────────┘
+```
+
+### Gates: What's Required at Each Transition
+
+Each transition has a gate — a condition that should be true before a ticket advances. These aren't enforced by software (it's your markdown file, you can do what you want), but they're what makes the process useful:
+
+| Step | Transition | Gate |
+|------|-----------|------|
+| **Specify** | `proposed` → `specified` | Ticket has a description and at least one acceptance criterion (`- [ ]` item) |
+| **Ready** | `specified` → `ready` | Criteria are specific enough to be testable, dependencies are identified |
+| **Start** | `ready` → `in-progress` | Ticket is picked up for work, moved to `## WIP` |
+| **Complete** | `in-progress` → `for-review` | Code addresses every acceptance criterion, moved to `## For Review` |
+| **Accept** | `for-review` → `done` | Review passes, all criteria verified, `/dashboard accept` run |
+| **Rework** | `for-review` → `rework` | Review found issues — ticket moves back to `## WIP` for fixes |
+
+**How changes are made in the file:**
+- **Stage change** = cut the entire `###` ticket block and paste it under a different `##` heading
+- **State change** = edit the `Status:` value on the ticket's metadata line
+
+### The Full Walk-Through
+
+**1. Idea enters the board.** Someone adds a ticket to `## Ideas` or `## Backlog`. At this point it only needs an ID and title. Status defaults to `proposed`.
+
+**2. Idea gets specified.** Run **`/spec`** (or `/spec {ID}` for a specific idea). The skill walks you through writing a description and acceptance criteria — checkboxes that define what "done" looks like. It'll suggest test cases you can use later with `/tdd`. Status becomes `specified`. The ticket moves to Backlog. Double-clicking an idea card on the dashboard copies `/spec {ID}` to your clipboard.
+
+**3. Ticket becomes ready.** Dependencies are identified and met. Criteria are actionable. Status becomes `ready`. Still in Backlog — queued, not started.
+
+**4. Work begins.** Double-click a card in Backlog or WIP to copy a build prompt. Paste it into Claude Code — or into multiple Claude Code windows if you're working on several tickets at once. The ticket moves from `## Backlog` to `## WIP`. Status becomes `in-progress`.
+
+**5. Work completes.** All acceptance criteria addressed. The ticket moves from `## WIP` to `## For Review`. Status becomes `for-review`.
+
+**6. Review and acceptance.** Run **`/review`** (or `/review {ID}`). The skill walks through criteria verification, creates bug sub-tickets from feedback, and handles acceptance. Double-clicking the For Review column header copies `/review` to your clipboard. Everything passes? `/dashboard accept` moves the ticket to `PRODUCT_SPECIFICATION.md` as a permanent record.
+
+**Side paths:** `blocked` (stays in WIP, waiting on something), `icebox` (parked from any stage, can return later), `wont-do` (decided against, terminal but revivable).
+
+For the complete transition spec including bug workflows and acceptance summaries, see [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md).
+
+## The Review Process
+
+Review is its own workflow, not just a checkbox. When tickets land in `## For Review`, you use the `/review` skill to walk through them:
+
+1. **Batch review.** `/review` reads all items in `## For Review`, groups related tickets, and presents them oldest-first. You walk through each batch with the model.
+
+2. **Verify against criteria.** For each ticket, the acceptance criteria (`- [ ]` items) are the checklist. The reviewer opens the dashboard (or uses Chrome DevTools MCP tools like `take_snapshot` and `take_screenshot` to inspect the running app) and checks that each criterion is met.
+
+3. **Feedback creates bug tickets.** If something's wrong, review feedback becomes a `BUG-` sub-ticket in `## Bugs` linked to the parent feature via a `Parent:` field. The parent ticket stays in For Review with status `rework`.
+
+4. **Bug resolution cycle.** Bug tickets get picked up like any other ticket — double-click to copy the prompt, fix it, mark `bug-fixed`. When all child bugs are resolved, the parent feature is ready for re-review.
+
+5. **Acceptance.** When review passes, run `/dashboard accept {project} {ID}`. This moves the ticket to `PRODUCT_SPECIFICATION.md` as a permanent record, summarizes development notes (bug count, key decisions), and cleans up the per-feature working files in `docs/features/{ID}/`.
+
+For the full review spec including batching rules and test integration, see [`docs/REVIEW_PROCESS.md`](docs/REVIEW_PROCESS.md).
+
+## The Dashboard
+
+The dashboard is the main interface — a self-contained HTML file generated from your markdown. You'll use it to scan progress, pick tickets, and stay oriented.
 
 ```
 PRODUCT_BACKLOG.md  ──┐
@@ -156,74 +261,79 @@ PRODUCT_SPECIFICATION.md ─┘
 - The generator script parses both files and renders a self-contained HTML dashboard
 - No drift — the files ARE the board
 
-## How the Process Works
+### Interactions
 
-### Stages and States
+| Action | What happens |
+|--------|-------------|
+| **Single click** a card | Expand/collapse — shows full description, acceptance criteria, complexity |
+| **Double click** a card | Copies `I want to work on {ID}: {Title}` to your clipboard — paste into Claude Code |
+| **Filter buttons** | Filter cards by column (All, Ideas, Backlog, WIP, For Review, Done, Won't Do, Icebox) |
+| **Search** | Real-time text search across titles and descriptions |
+| **Bottom sections** | Done, Won't Do, Icebox, and Bugs start collapsed — click to expand |
 
-Ticket Takeaway uses a **stage-and-state** model drawn from Kanban methodology. The board has two layers:
+### Layout
 
-- **Stages** are the `## Section` headings in your backlog file — they become the columns on your board. A stage represents *where* a ticket sits in the workflow: Ideas, Backlog, WIP, For Review, Done.
-- **States** are the `Status:` values on individual tickets — they represent *what's happening* within that stage. Multiple states can exist in the same stage. A ticket in the Backlog column might be `proposed` (just a title), `specified` (has acceptance criteria), or `ready` (fully specced and unblocked). They're all in the same column, but they tell you very different things about how close that ticket is to being worked on.
+- **Header** (scrolls away): project name, inline stats (Total/WIP/Review counts), version + code health badges
+- **Filter bar** (sticky): status filters + search — the only persistent chrome
+- **Kanban columns**: Ideas | Backlog | WIP | For Review — starts at viewport top on load
+- **Bugs section**: collapsible below the board
 
-If you've used JIRA, this maps to the distinction between board columns and workflow statuses. If you've used GitHub Projects, it's the difference between which column a card sits in and its Status field value. The section heading is the physical lane; the status is the logical position within it.
+### Commands
 
-| Stage (Column) | States within it | What this stage means |
-|----------------|-----------------|----------------------|
-| **Ideas** | `proposed` | Unvetted — just a title or rough notion |
-| **Backlog** | `proposed`, `specified`, `ready` | Being specced and queued for work |
-| **WIP** | `in-progress`, `blocked` | Actively being built |
-| **For Review** | `for-review`, `rework` | Code complete, awaiting sign-off |
-| **Done** | `done`, `released` | Accepted or shipped |
-| **Bugs** | `bug`, `bug-fixed` | Defects tracked separately |
-| **Icebox** | `icebox` | Parked — not rejected, not active |
-| **Won't Do** | `wont-do` | Decided against |
+| Command | What it does |
+|---------|-------------|
+| `/spec` | Walk through Ideas, write descriptions + acceptance criteria, move to Backlog |
+| `/spec {ID}` | Specify a single idea by ID |
+| `/review` | Walk through For Review tickets — verify, give feedback, or accept |
+| `/review {ID}` | Review a single ticket by ID |
+| `/dashboard` | Parse backlog + spec → render HTML → open browser |
+| `/dashboard status {project} {ID} {section}` | Move item between sections in the markdown |
+| `/dashboard accept {project} {ID}` | Move item from backlog to PRODUCT_SPECIFICATION.md |
+| `/dashboard add {project} "{title}"` | Add new entry to PRODUCT_BACKLOG.md |
+| `/dashboard show` | Print summary table to terminal |
 
-To move a ticket between **stages**: cut the entire `###` block and paste it under a different `##` heading.
-To change **state** within a stage: edit the `Status:` value on the ticket's metadata line.
+### Keeping the Board Current
 
-### Lifecycle: A Ticket from Idea to Release
+Each project's `CLAUDE.md` includes rules ensuring the backlog stays in sync with actual work:
 
-**1. Idea enters the board.** Someone adds a ticket to `## Ideas` or `## Backlog`. At this point it only needs an ID and title. Status defaults to `proposed`.
+1. **Start work** → move item to `## WIP`, set `Status: in-progress`
+2. **Blocked** → update to `Status: blocked` (stays in WIP)
+3. **Code complete** → move to `## For Review`, set `Status: for-review`
+4. **Accepted** → run `/dashboard accept` to move to PRODUCT_SPECIFICATION.md
+5. **New feature** → add to `## Ideas` or `## Backlog`
 
-**2. Idea gets specified.** A description and acceptance criteria are written — checkboxes that define what "done" looks like. Status becomes `specified`. The ticket is still in Backlog.
+This prevents drift between what's built and what the dashboard shows.
 
-*Gate: ticket must have a description and at least one acceptance criterion (`- [ ]` item) to be considered specified.*
+---
 
-**3. Ticket becomes ready.** Dependencies are identified and met. Acceptance criteria are specific enough to be testable. Status becomes `ready`. Still in Backlog — it's queued, not started.
+# Part 2: Reference
 
-*Gate: criteria are actionable, nothing is blocking the start of work.*
+## Project Structure
 
-**4. Work begins.** The ticket moves from `## Backlog` to `## WIP`. Status becomes `in-progress`. If using per-feature working files, a `docs/features/{ID}/` directory is created for plans, notes, and test results.
+```
+ticket-takeaway/
+├── README.md                          # This file
+├── INSTALL.md                         # How to deploy the system to a new machine
+├── PRODUCT_BACKLOG.md                 # This project's own backlog (dogfooding)
+├── PRODUCT_SPECIFICATION.md           # This project's accepted features
+├── src/
+│   ├── generate.py                    # Dashboard HTML generator (Python)
+│   ├── registry.example.json          # Example project registry
+│   └── skills/
+│       ├── dashboard/SKILL.md         # /dashboard skill for Claude Code
+│       └── review/SKILL.md            # /review skill for Claude Code
+├── docs/
+│   ├── LIFECYCLE.md                   # Authoritative lifecycle spec (statuses, transitions, working files)
+│   ├── REVIEW_PROCESS.md             # Review process spec (batching, feedback, acceptance)
+│   ├── sdlc-dashboard.html           # Generated dashboard (do not edit)
+│   ├── sdlc-dashboard-spec.md        # Original dashboard design spec (historical)
+│   └── sdlc-methodology.md           # SDLC methodology reference (historical)
+```
 
-*Gate: ticket is `ready`, someone has picked it up.*
-
-**5. Work completes.** All acceptance criteria have been addressed in code. The ticket moves from `## WIP` to `## For Review`. Status becomes `for-review`.
-
-*Gate: implementation covers every acceptance criterion.*
-
-**6. Review and acceptance.** The reviewer walks through the criteria. If issues are found, status changes to `rework` and the ticket moves back to `## WIP` for fixes. Bug sub-tickets may be created in `## Bugs`. If everything passes, run `/dashboard accept` — this moves the ticket to `PRODUCT_SPECIFICATION.md` as a permanent record and cleans up working files.
-
-*Gate: all criteria verified, review passed.*
-
-**Side paths:**
-- **Blocked** — status changes to `blocked`, stays in `## WIP`. Unblocks by returning to `in-progress`.
-- **Icebox** — ticket moves to `## Icebox` from any stage. Can return to `## Backlog` later.
-- **Won't Do** — ticket moves to `## Won't Do`. Terminal, but can be revived.
-
-### Transition Quick Reference
-
-| From | To | What must be true |
-|------|----|-------------------|
-| `proposed` | `specified` | Has description + at least one acceptance criterion |
-| `specified` | `ready` | Criteria are testable, dependencies identified and met |
-| `ready` | `in-progress` | Picked up for work, ticket moved to `## WIP` |
-| `in-progress` | `for-review` | Code addresses all criteria, ticket moved to `## For Review` |
-| `for-review` | `done` | Review passed, `/dashboard accept` run |
-| `for-review` | `rework` | Review found issues, ticket moved back to `## WIP` |
-| Any | `icebox` | Parked for later, ticket moved to `## Icebox` |
-| Any | `wont-do` | Decided against, ticket moved to `## Won't Do` |
-
-For the complete transition spec including bug workflows and acceptance summaries, see [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md).
+**Key docs:**
+- [`INSTALL.md`](INSTALL.md) — Deploy to a new machine
+- [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md) — Complete lifecycle spec (statuses, transitions, working files, acceptance flow)
+- [`docs/REVIEW_PROCESS.md`](docs/REVIEW_PROCESS.md) — Review process (batching, feedback→bugs, test criteria, acceptance)
 
 ## File Layout
 
@@ -337,66 +447,6 @@ If `Status:` is omitted from a ticket, it defaults based on which section it's i
 - `## For Review` → `for-review`
 - `## Won't Do` → `wont-do`
 - `## Icebox` → `icebox`
-
-## Feature Lifecycle
-
-```
-proposed → specified → ready → in-progress → for-review → done/released
-                                    ↑              |
-                                    +--- rework ---+
-```
-
-**In terms of file moves:**
-```
-PRODUCT_BACKLOG.md                                    PRODUCT_SPECIFICATION.md
-  ## Ideas → ## Backlog → ## WIP → ## For Review → ## Done  ──→  moved here when accepted
-```
-
-Features stay in `PRODUCT_BACKLOG.md` until accepted/shipped. Then they move to `PRODUCT_SPECIFICATION.md` as the permanent record. Status changes within the backlog = moving the `###` block between `##` sections.
-
-## Dashboard Interactions
-
-| Action | Behavior |
-|--------|----------|
-| **Single click** card | Expand/collapse — shows full description, acceptance criteria, complexity |
-| **Double click** card | Copy `I want to work on {ID}: {Title}` to clipboard with green "Copied!" confirmation |
-| **Filter buttons** | Filter cards by column (All, Ideas, Backlog, WIP, For Review, Done, Won't Do, Icebox) |
-| **Search** | Real-time text search across titles and descriptions |
-| **Won't Do / Icebox columns** | Start collapsed, click header to expand |
-| **Bugs section** | Collapsible section below the board, click header to expand/collapse |
-
-## Dashboard Layout
-
-The board is designed to maximize visible content:
-
-- **Header block** (scrolls away): project name, inline stats (Total/WIP/Review counts), info strip with version + code health badges
-- **Filter bar** (sticky at top): status filter buttons + search — only persistent chrome
-- **Kanban columns**: Ideas | Backlog | WIP | For Review | Done | Won't Do | Icebox — starts at viewport top on load
-- **Bugs section**: collapsible below the board, starts collapsed, fully interactive cards
-
-## Claude Code Integration
-
-### Commands
-
-| Command | What it does |
-|---------|-------------|
-| `/dashboard` | Parse backlog + spec → render HTML → open browser |
-| `/dashboard status {project} {ID} {section}` | Move item between sections in the markdown |
-| `/dashboard accept {project} {ID}` | Move item from backlog to PRODUCT_SPECIFICATION.md |
-| `/dashboard add {project} "{title}"` | Add new entry to PRODUCT_BACKLOG.md |
-| `/dashboard show` | Print summary table to terminal |
-
-### Closed-Loop Workflow
-
-Each project's `CLAUDE.md` includes rules ensuring the backlog stays current:
-
-1. **Start work** → move item to `## WIP`, set `Status: in-progress`
-2. **Blocked** → update to `Status: blocked` (stays in WIP)
-3. **Code complete** → move to `## For Review`, set `Status: for-review`
-4. **Accepted** → run `/dashboard accept` to move to PRODUCT_SPECIFICATION.md
-5. **New feature** → add to `## Ideas` or `## Backlog`
-
-This prevents drift between what's built and what the dashboard shows.
 
 ## Registry
 

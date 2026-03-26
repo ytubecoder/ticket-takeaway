@@ -597,13 +597,13 @@ a {{ color: var(--accent); text-decoration: none; }}
 .status-badge.in-progress {{ background: var(--status-wip-bg); color: var(--status-wip); }}
 .status-badge.blocked {{ background: rgba(239,68,68,0.12); color: var(--priority-high); }}
 .status-badge.for-review {{ background: var(--status-review-bg); color: var(--status-review); }}
-.status-badge.reviewed {{ background: var(--status-done-bg); color: var(--status-done); }}
 .status-badge.released {{ background: var(--status-done-bg); color: var(--status-done); }}
 .status-badge.done {{ background: var(--status-done-bg); color: var(--status-done); }}
 .status-badge.rework {{ background: rgba(239,68,68,0.12); color: var(--priority-high); }}
 .status-badge.icebox {{ background: var(--status-icebox-bg); color: var(--status-icebox); }}
 .status-badge.bug {{ background: rgba(239,68,68,0.12); color: var(--priority-high); }}
 .status-badge.bug-fixed {{ background: rgba(34,197,94,0.12); color: var(--status-done); }}
+.status-badge.wont-do {{ background: rgba(75,85,99,0.15); color: var(--status-wontdo); }}
 .status-badge.wontdo {{ background: rgba(75,85,99,0.15); color: var(--status-wontdo); }}
 
 .card-desc {{ font-size: 11px; color: var(--text-secondary); line-height: 1.3; margin-top: 6px; display: none; }}
@@ -727,7 +727,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   <!-- Ideas -->
   <div class="column" data-col="ideas" id="col-ideas">
-    <div class="column-header" data-prompt="Review ideas and help prioritize what should move to backlog">
+    <div class="column-header" data-prompt="/spec">
       <div class="column-dot" style="background: var(--status-idea)"></div>
       <span class="column-name">Ideas</span>
       <span class="column-count">{count_ideas}</span>
@@ -954,7 +954,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       var col = this.dataset.column;
       var text;
       if (col === 'ideas') {{
-        text = 'I want to explore the idea ' + id + ': ' + title + ' — help me think through whether this is worth speccing';
+        text = '/spec ' + id;
       }} else if (col === 'backlog') {{
         text = 'I want to spec out ' + id + ': ' + title + ' — write the description and acceptance criteria';
       }} else if (col === 'review') {{

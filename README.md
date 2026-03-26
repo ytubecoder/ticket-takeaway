@@ -63,11 +63,11 @@ If you've used JIRA, this is the same distinction between board columns and work
 ```bash
 # Copy the generator + skills into Claude Code's config directory
 mkdir -p ~/.claude/dashboard ~/.claude/skills/{dashboard,review,spec}
-cp src/generate.py ~/.claude/dashboard/generate.py
-cp src/skills/dashboard/SKILL.md ~/.claude/skills/dashboard/SKILL.md
+cp src/generate.py ~/.claude/ticket-takeaway/generate.py
+cp src/skills/ticket-takeaway/SKILL.md ~/.claude/skills/ticket-takeaway/SKILL.md
 cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md
 cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
-cp src/registry.example.json ~/.claude/dashboard/registry.json
+cp src/registry.example.json ~/.claude/ticket-takeaway/registry.json
 ```
 
 See [`INSTALL.md`](INSTALL.md) for the full deployment map and update instructions.
@@ -121,7 +121,7 @@ If you're starting from scratch with nothing to import, create the file with jus
 /dashboard add myproject "My first feature"
 ```
 
-**Step 3 — Register your project.** Edit `~/.claude/dashboard/registry.json` — three fields are required:
+**Step 3 — Register your project.** Edit `~/.claude/ticket-takeaway/registry.json` — three fields are required:
 
 ```json
 {
@@ -135,14 +135,14 @@ If you're starting from scratch with nothing to import, create the file with jus
 }
 ```
 
-**Step 4 — Generate and verify.** Run `/dashboard` from your project directory (or `python3 ~/.claude/dashboard/generate.py`). The dashboard should open in your browser with your tickets visible on the board.
+**Step 4 — Generate and verify.** Run `/dashboard` from your project directory (or `python3 ~/.claude/ticket-takeaway/generate.py`). The dashboard should open in your browser with your tickets visible on the board.
 
 ### Minimum Requirements
 
 The system needs two things to operate:
 
 1. A `PRODUCT_BACKLOG.md` in your project root with at least one `###` ticket under a `##` section
-2. A registry entry in `~/.claude/dashboard/registry.json` with `id`, `name`, and `path`
+2. A registry entry in `~/.claude/ticket-takeaway/registry.json` with `id`, `name`, and `path`
 
 Everything else — priority, complexity, status, description, acceptance criteria — is optional and has defaults. But the more you fill in, the more useful the board becomes. Acceptance criteria (checkbox items) are what drive the review and acceptance workflow, so you'll want those before a ticket moves to WIP.
 
@@ -345,7 +345,7 @@ ticket-takeaway/
     sdlc-dashboard.html           # Generated output (open in browser)
     features/{ID}/                # Per-feature working files (ephemeral)
 
-~/.claude/dashboard/
+~/.claude/ticket-takeaway/
   registry.json                   # Which projects to track
   generate.py                     # Generator script
 ```
@@ -450,7 +450,7 @@ If `Status:` is omitted from a ticket, it defaults based on which section it's i
 
 ## Registry
 
-`~/.claude/dashboard/registry.json` tracks which projects to include:
+`~/.claude/ticket-takeaway/registry.json` tracks which projects to include:
 
 ```json
 {

@@ -12,9 +12,9 @@ This document defines the complete ticket lifecycle, all statuses, file structur
 | `PRODUCT_SPECIFICATION.md` | `{project}/` | Permanent record of accepted/shipped features | Developer |
 | `docs/sdlc-dashboard.html` | `{project}/docs/` | Generated dashboard (do not edit manually) | `generate.py` |
 | `docs/features/{ID}/` | `{project}/docs/features/` | Per-feature working files during development | Claude (cleaned up on acceptance) |
-| `registry.json` | `~/.claude/dashboard/` | Project list for the generator | Developer |
-| `generate.py` | `~/.claude/dashboard/` | Dashboard generator script | Developer |
-| `SKILL.md` | `~/.claude/skills/dashboard/` | Claude Code skill instructions | Developer |
+| `registry.json` | `~/.claude/ticket-takeaway/` | Project list for the generator | Developer |
+| `generate.py` | `~/.claude/ticket-takeaway/` | Dashboard generator script | Developer |
+| `SKILL.md` | `~/.claude/skills/ticket-takeaway/` | Claude Code skill instructions | Developer |
 
 ---
 
@@ -279,10 +279,10 @@ To prevent drift between actual work and the dashboard:
 │       └── B-02/
 │           └── ...
 
-~/.claude/dashboard/
+~/.claude/ticket-takeaway/
 ├── registry.json               # Project list
 └── generate.py                 # Generator script
 
-~/.claude/skills/dashboard/
+~/.claude/skills/ticket-takeaway/
 └── SKILL.md                    # Claude Code skill
 ```

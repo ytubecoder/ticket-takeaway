@@ -34,7 +34,7 @@ The core insight: when you're running 3 agents on different features across 2 pr
   ┌───────────────────────────────────────────────────────────────────┐
   │                     SKILLS LAYER                                  │
   │                                                                   │
-  │   ~/.claude/skills/dashboard/SKILL.md    (5 modes)                │
+  │   ~/.claude/skills/ticket-takeaway/SKILL.md    (5 modes)                │
   │   ┌─────────────────────────────────────────────────────────┐     │
   │   │  generate  │  status  │  accept  │  add  │  show        │     │
   │   └─────────────────────────────────────────────────────────┘     │
@@ -76,7 +76,7 @@ The core insight: when you're running 3 agents on different features across 2 pr
   ┌───────────────────────────────────────────────────────────────────┐
   │                  REGISTRY + GENERATOR                             │
   │                                                                   │
-  │   ~/.claude/dashboard/registry.json                               │
+  │   ~/.claude/ticket-takeaway/registry.json                               │
   │   ┌─────────────────────────────────────────────────────────┐     │
   │   │ { "projects": [                                         │     │
   │   │     { "id": "proj-a", "path": "~/projects/proj-a" },   │     │
@@ -86,7 +86,7 @@ The core insight: when you're running 3 agents on different features across 2 pr
   │   └─────────────────────────────────────────────────────────┘     │
   │                          │                                        │
   │                          ▼                                        │
-  │   ~/.claude/dashboard/generate.py                                 │
+  │   ~/.claude/ticket-takeaway/generate.py                                 │
   │   ┌─────────────────────────────────────────────────────────┐     │
   │   │  1. Read registry → find all projects                  │     │
   │   │  2. Parse each PRODUCT_BACKLOG.md → Ticket objects      │     │
@@ -221,8 +221,8 @@ End of day:
 | **Claude Code** | CLI sessions | Multiple terminals | Execute features, call skills |
 | **Skills** | SKILL.md files | `~/.claude/skills/` | Instructions for how Claude edits state |
 | **Markdown** | PRODUCT_BACKLOG.md | Each project root | Source of truth for all work items |
-| **Generator** | generate.py | `~/.claude/dashboard/` | Stateless markdown -> HTML renderer |
-| **Registry** | registry.json | `~/.claude/dashboard/` | Which projects to track |
+| **Generator** | generate.py | `~/.claude/ticket-takeaway/` | Stateless markdown -> HTML renderer |
+| **Registry** | registry.json | `~/.claude/ticket-takeaway/` | Which projects to track |
 | **Dashboard** | HTML file | `{project}/docs/` | Read-only visual snapshot |
 
 ---

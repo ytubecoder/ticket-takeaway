@@ -13,12 +13,12 @@ This document explains how to deploy the Ticket Takeaway system from this reposi
 ```bash
 # 1. Copy the generator script
 mkdir -p ~/.claude/dashboard
-cp src/generate.py ~/.claude/dashboard/generate.py
-chmod +x ~/.claude/dashboard/generate.py
+cp src/generate.py ~/.claude/ticket-takeaway/generate.py
+chmod +x ~/.claude/ticket-takeaway/generate.py
 
 # 2. Install the dashboard skill
 mkdir -p ~/.claude/skills/dashboard
-cp src/skills/dashboard/SKILL.md ~/.claude/skills/dashboard/SKILL.md
+cp src/skills/ticket-takeaway/SKILL.md ~/.claude/skills/ticket-takeaway/SKILL.md
 
 # 3. Install the review skill
 mkdir -p ~/.claude/skills/review
@@ -29,19 +29,19 @@ mkdir -p ~/.claude/skills/spec
 cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
 
 # 5. Create a registry (edit paths for your machine)
-cp src/registry.example.json ~/.claude/dashboard/registry.json
-# Then edit ~/.claude/dashboard/registry.json to set your project paths
+cp src/registry.example.json ~/.claude/ticket-takeaway/registry.json
+# Then edit ~/.claude/ticket-takeaway/registry.json to set your project paths
 ```
 
 ## File Deployment Map
 
 | Source (in this repo) | Deployed Location | Purpose |
 |----------------------|-------------------|---------|
-| `src/generate.py` | `~/.claude/dashboard/generate.py` | Dashboard HTML generator script |
-| `src/skills/dashboard/SKILL.md` | `~/.claude/skills/dashboard/SKILL.md` | `/dashboard` skill for Claude Code |
+| `src/generate.py` | `~/.claude/ticket-takeaway/generate.py` | Dashboard HTML generator script |
+| `src/skills/ticket-takeaway/SKILL.md` | `~/.claude/skills/ticket-takeaway/SKILL.md` | `/dashboard` skill for Claude Code |
 | `src/skills/review/SKILL.md` | `~/.claude/skills/review/SKILL.md` | `/review` skill for Claude Code |
 | `src/skills/spec/SKILL.md` | `~/.claude/skills/spec/SKILL.md` | `/spec` skill for Claude Code |
-| `src/registry.example.json` | `~/.claude/dashboard/registry.json` | Project registry (edit for your projects) |
+| `src/registry.example.json` | `~/.claude/ticket-takeaway/registry.json` | Project registry (edit for your projects) |
 
 ## Per-Project Setup
 
@@ -49,7 +49,7 @@ For each project you want to track:
 
 ### 1. Add to registry
 
-Edit `~/.claude/dashboard/registry.json`:
+Edit `~/.claude/ticket-takeaway/registry.json`:
 
 ```json
 {
@@ -120,7 +120,7 @@ Accepted and shipped features.
 
 ```bash
 cd /path/to/myproject
-python3 ~/.claude/dashboard/generate.py
+python3 ~/.claude/ticket-takeaway/generate.py
 # Opens docs/sdlc-dashboard.html in browser
 ```
 
@@ -136,7 +136,7 @@ After installation, verify everything works:
 ```bash
 # Should generate HTML and open browser
 cd /path/to/your/project
-python3 ~/.claude/dashboard/generate.py
+python3 ~/.claude/ticket-takeaway/generate.py
 
 # Should show the dashboard skill
 claude /dashboard
@@ -152,8 +152,8 @@ To update the system, pull latest from this repo and re-copy:
 ```bash
 cd ~/projects/ticket-takeaway
 git pull
-cp src/generate.py ~/.claude/dashboard/generate.py
-cp src/skills/dashboard/SKILL.md ~/.claude/skills/dashboard/SKILL.md
+cp src/generate.py ~/.claude/ticket-takeaway/generate.py
+cp src/skills/ticket-takeaway/SKILL.md ~/.claude/skills/ticket-takeaway/SKILL.md
 cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md
 cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
 ```

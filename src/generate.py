@@ -22,7 +22,7 @@ from typing import Optional
 # Constants
 # ---------------------------------------------------------------------------
 
-DASHBOARD_DIR = Path.home() / ".claude" / "dashboard"
+DASHBOARD_DIR = Path.home() / ".claude" / "ticket-takeaway"
 REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 # OUTPUT_PATH is now per-project: {project.path}/docs/sdlc-dashboard.html
 
@@ -78,6 +78,10 @@ class Ticket:
     description: str = ""
     acceptance_criteria: list = field(default_factory=list)
     parent: Optional[str] = None
+    rationale: str = ""
+    depends: list = field(default_factory=list)
+    summary: str = ""
+    archived: bool = False
 
 
 @dataclass
@@ -182,6 +186,20 @@ def parse_backlog(filepath: str) -> list[Ticket]:
                 current_ticket.parent = parent_value
             continue
 
+        # Detect Rationale: field
+        if current_ticket and line_stripped.startswith("Rationale:"):
+            rationale_value = line_stripped.split(":", 1)[1].strip()
+            if rationale_value:
+                current_ticket.rationale = rationale_value
+            continue
+
+        # Detect Depends: field (comma-separated ticket IDs)
+        if current_ticket and line_stripped.startswith("Depends:"):
+            deps_value = line_stripped.split(":", 1)[1].strip()
+            if deps_value:
+                current_ticket.depends = [d.strip() for d in deps_value.split(",") if d.strip()]
+            continue
+
         # Acceptance criteria (checkbox lines)
         if current_ticket and re.match(r"^- \[[ xX]\]", line_stripped):
             checked = line_stripped[3] in ("x", "X")
@@ -230,29 +248,81 @@ def _parse_metadata_line(line: str) -> dict:
 
 
 def parse_spec_for_done(filepath: str) -> list[Ticket]:
-    """Parse PRODUCT_SPECIFICATION.md for done items (### headings with IDs)."""
+    """Parse PRODUCT_SPECIFICATION.md for done items (### headings with IDs).
+
+    Supports an optional ## Archive section — tickets below it get archived=True.
+    Captures description text as summary for each entry.
+    """
     path = Path(filepath)
     if not path.exists():
         return []
 
     text = path.read_text(encoding="utf-8")
     tickets: list[Ticket] = []
+    current_ticket: Ticket | None = None
+    in_archive = False
 
     for line in text.splitlines():
         line_stripped = line.strip()
+
+        # Section detection (## Archive)
+        if line_stripped.startswith("## "):
+            section_name = line_stripped[3:].strip()
+            in_archive = section_name.lower() == "archive"
+            if current_ticket:
+                tickets.append(current_ticket)
+                current_ticket = None
+            continue
+
+        # Ticket heading
         if line_stripped.startswith("### ") and ":" in line_stripped[4:]:
+            if current_ticket:
+                tickets.append(current_ticket)
             header = line_stripped[4:].strip()
             ticket_id, title = _parse_ticket_header(header)
             if ticket_id:
-                tickets.append(Ticket(
+                current_ticket = Ticket(
                     id=ticket_id,
                     title=title,
                     status="released",
                     section="Done",
                     column="done",
-                ))
+                    archived=in_archive,
+                )
+            else:
+                current_ticket = None
+            continue
+
+        # Skip metadata/release lines, capture description as summary
+        if current_ticket and line_stripped:
+            if line_stripped.startswith("Priority:") or line_stripped.startswith("Released:"):
+                continue
+            if line_stripped.startswith("#") or line_stripped.startswith("---"):
+                continue
+            if current_ticket.summary:
+                current_ticket.summary += " " + line_stripped
+            else:
+                current_ticket.summary = line_stripped
+
+    if current_ticket:
+        tickets.append(current_ticket)
 
     return tickets
+
+
+def compute_dependency_state(tickets: list[Ticket]) -> dict[str, dict]:
+    """For each ticket, compute whether its dependencies are resolved."""
+    status_by_id = {t.id: t.status for t in tickets}
+    DONE_STATUSES = {"done", "released", "wont-do"}
+    result = {}
+    for t in tickets:
+        if not t.depends:
+            result[t.id] = {"deps_resolved": True, "blocking_deps": []}
+            continue
+        blocking = [dep for dep in t.depends
+                    if status_by_id.get(dep, "unknown") not in DONE_STATUSES]
+        result[t.id] = {"deps_resolved": len(blocking) == 0, "blocking_deps": blocking}
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -408,15 +478,18 @@ def generate_html(projects: list[Project]) -> str:
         if t.parent:
             bug_children.setdefault(t.parent, []).append(t)
 
+    # Compute dependency state
+    dep_state = compute_dependency_state(all_tickets)
+
     # Build card HTML
-    backlog_cards = _render_cards(by_column["backlog"], "backlog", bug_children)
-    wip_cards = _render_cards(by_column["wip"], "wip", bug_children)
-    ideas_cards = _render_cards(by_column["ideas"], "ideas", bug_children)
-    wontdo_cards = _render_cards(by_column["wontdo"], "wontdo", bug_children)
-    review_cards = _render_cards(by_column["review"], "review", bug_children)
-    done_cards = _render_cards(by_column["done"], "done", bug_children)
-    icebox_cards = _render_cards(by_column["icebox"], "icebox", bug_children)
-    bugs_cards = _render_cards(by_column["bugs"], "bugs", bug_children)
+    backlog_cards = _render_cards(by_column["backlog"], "backlog", bug_children, dep_state)
+    wip_cards = _render_cards(by_column["wip"], "wip", bug_children, dep_state)
+    ideas_cards = _render_cards(by_column["ideas"], "ideas", bug_children, dep_state)
+    wontdo_cards = _render_cards(by_column["wontdo"], "wontdo", bug_children, dep_state)
+    review_cards = _render_cards(by_column["review"], "review", bug_children, dep_state)
+    done_cards = _render_cards(by_column["done"], "done", bug_children, dep_state)
+    icebox_cards = _render_cards(by_column["icebox"], "icebox", bug_children, dep_state)
+    bugs_cards = _render_cards(by_column["bugs"], "bugs", bug_children, dep_state)
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
 
@@ -627,6 +700,18 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 9px; color: var(--text-tertiary); font-family: var(--font-mono);
   margin-bottom: 4px;
 }}
+.card-rationale {{ font-size: 11px; color: var(--text-tertiary); line-height: 1.3; margin-top: 4px; font-style: italic; display: none; }}
+.card.expanded .card-rationale {{ display: block; }}
+.card-deps {{
+  font-size: 9px; color: var(--text-tertiary); font-family: var(--font-mono);
+  margin-bottom: 4px;
+}}
+.card-blocked-badge {{
+  font-size: 9px; padding: 1px 6px; border-radius: 10px;
+  background: rgba(251,146,60,0.15); color: #fb923c;
+  font-weight: 600; display: inline-block; margin-top: 2px;
+}}
+.card.blocked {{ opacity: 0.7; border-left: 3px solid #fb923c; }}
 .card-linked-bugs {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle); display: none; }}
 .card.expanded .card-linked-bugs {{ display: block; }}
 .linked-bug {{ font-size: 10px; color: var(--text-secondary); padding: 2px 0; padding-left: 12px; }}
@@ -1002,10 +1087,12 @@ a {{ color: var(--accent); text-decoration: none; }}
     return html
 
 
-def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, list] = None) -> str:
+def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, list] = None, dep_state: dict = None) -> str:
     """Render full-size kanban cards."""
     if bug_children is None:
         bug_children = {}
+    if dep_state is None:
+        dep_state = {}
     card_class = CARD_CLASS_BY_COLUMN.get(column, "")
     lines = []
     for t in tickets:
@@ -1013,6 +1100,10 @@ def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, li
         id_esc = escape(t.id)
         desc_esc = escape(t.description) if t.description else ""
         status_class = t.status.replace(" ", "-").lower()
+
+        # Blocked-by-deps class
+        dep_info = dep_state.get(t.id, {})
+        blocked_class = " blocked" if dep_info.get("blocking_deps") else ""
 
         # Bug count badge for parent tickets
         bug_badge_html = ""
@@ -1026,10 +1117,24 @@ def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, li
         if t.parent:
             parent_link_html = f'        <div class="card-parent-link">\u21b3 {escape(t.parent)}</div>\n'
 
+        # Dependency badges
+        deps_html = ""
+        if t.depends:
+            dep_list = ", ".join(escape(d) for d in t.depends)
+            deps_html = f'        <div class="card-deps">&#10547; {dep_list}</div>\n'
+            blocking = dep_info.get("blocking_deps", [])
+            if blocking:
+                deps_html += f'        <span class="card-blocked-badge">blocked by: {escape(", ".join(blocking))}</span>\n'
+
         # Build description and criteria HTML
         desc_html = ""
         if t.description:
             desc_html = f'        <div class="card-desc">{desc_esc}</div>\n'
+
+        # Rationale (collapsed, shown when expanded)
+        rationale_html = ""
+        if t.rationale:
+            rationale_html = f'        <div class="card-rationale"><em>Rationale:</em> {escape(t.rationale)}</div>\n'
 
         criteria_html = ""
         if t.acceptance_criteria:
@@ -1053,14 +1158,14 @@ def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, li
             linked_bugs_html = '        <div class="card-linked-bugs">\n' + "\n".join(bug_items) + "\n        </div>\n"
 
         lines.append(
-            f'      <div class="card {card_class}" data-column="{column}" '
+            f'      <div class="card {card_class}{blocked_class}" data-column="{column}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}">\n'
             f'        <div class="copied-toast">Copied!</div>\n'
             f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
             f'<span class="card-title">{title_esc}</span>{bug_badge_html}</div>\n'
             f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
             f'<span class="status-badge {status_class}">{status_class}</span></div>\n'
-            f'{parent_link_html}{desc_html}{criteria_html}{linked_bugs_html}'
+            f'{parent_link_html}{deps_html}{desc_html}{rationale_html}{criteria_html}{linked_bugs_html}'
             f'        <div class="card-footer"><span class="complexity-badge">{escape(t.complexity)}</span></div>\n'
             f'      </div>'
         )
@@ -1073,9 +1178,70 @@ def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, li
 # Main
 # ---------------------------------------------------------------------------
 
+def generate_json_output(projects: list[Project]) -> str:
+    """Generate structured JSON output of all project/ticket data."""
+    all_tickets = []
+    for proj in projects:
+        all_tickets.extend(proj.tickets)
+    dep_state = compute_dependency_state(all_tickets)
+
+    output = {
+        "generated_at": datetime.now().isoformat(),
+        "projects": [],
+    }
+
+    for proj in projects:
+        proj_tickets = []
+        for t in proj.tickets:
+            dep_info = dep_state.get(t.id, {"deps_resolved": True, "blocking_deps": []})
+            proj_tickets.append({
+                "id": t.id,
+                "title": t.title,
+                "priority": t.priority,
+                "complexity": t.complexity,
+                "status": t.status,
+                "section": t.section,
+                "column": t.column,
+                "description": t.description,
+                "acceptance_criteria": [
+                    {"checked": c, "text": txt} for c, txt in t.acceptance_criteria
+                ],
+                "parent": t.parent,
+                "depends": t.depends,
+                "rationale": t.rationale,
+                "summary": t.summary,
+                "archived": t.archived,
+                "deps_resolved": dep_info["deps_resolved"],
+                "blocking_deps": dep_info["blocking_deps"],
+            })
+
+        cs = proj.code_stats
+        output["projects"].append({
+            "id": proj.id,
+            "name": proj.name,
+            "path": proj.path,
+            "description": proj.description,
+            "active": proj.active,
+            "code_stats": {
+                "files": cs.files,
+                "loc": cs.loc,
+                "deps": cs.deps,
+                "last_commit": cs.last_commit,
+                "releases": cs.releases,
+                "version": cs.version,
+            },
+            "tickets": proj_tickets,
+        })
+
+    return json.dumps(output, indent=2)
+
+
 def main():
     # Ensure output directory exists
     DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Output mode
+    json_mode = "--json" in sys.argv
 
     # Determine which project to generate for
     # --project <id> flag, or auto-detect from cwd, or all
@@ -1105,7 +1271,7 @@ def main():
     if filter_project is None and "--all" not in sys.argv:
         cwd = os.path.realpath(os.getcwd())
         for entry in projects_data.get("projects", []):
-            proj_path = os.path.realpath(entry.get("path", ""))
+            proj_path = os.path.realpath(os.path.expanduser(entry.get("path", "")))
             if cwd == proj_path or cwd.startswith(proj_path + os.sep):
                 filter_project = entry.get("id")
                 break
@@ -1121,7 +1287,7 @@ def main():
         proj = Project(
             id=entry.get("id", "unknown"),
             name=entry.get("name", entry.get("id", "Unknown")),
-            path=entry.get("path", ""),
+            path=os.path.expanduser(entry.get("path", "")),
             description=entry.get("description", ""),
             active=entry.get("active", True),
         )
@@ -1158,6 +1324,11 @@ def main():
                 t.column = "icebox"
             elif t.section == "Bugs":
                 t.column = "bugs"
+
+    # JSON output mode: print and exit
+    if json_mode:
+        print(generate_json_output(projects))
+        return
 
     # Generate HTML and write to each project's docs/ folder
     html = generate_html(projects)

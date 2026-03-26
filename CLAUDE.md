@@ -10,7 +10,7 @@ Ticket Takeaway is a markdown-native project board system. It reads `PRODUCT_BAC
 
 ```bash
 # Generate the dashboard (opens in browser)
-python3 ~/.claude/dashboard/generate.py
+python3 ~/.claude/ticket-takeaway/generate.py
 
 # Or via Claude Code skill
 /dashboard
@@ -34,7 +34,7 @@ PRODUCT_SPECIFICATION.md ─┘
 ```
 
 **`src/generate.py`** (~1200 lines, Python 3.10+, no external deps) is the core of the project. It:
-1. Reads `~/.claude/dashboard/registry.json` for project paths
+1. Reads `~/.claude/ticket-takeaway/registry.json` for project paths
 2. Parses `PRODUCT_BACKLOG.md` — `##` headings = sections/columns, `###` headings = tickets
 3. Parses `PRODUCT_SPECIFICATION.md` for accepted features
 4. Collects git/code stats via shell commands

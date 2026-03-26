@@ -1,7 +1,7 @@
 # Claude Code local settings
 .claude/
 
-# Generated dashboard output (rebuild with: python3 ~/.claude/dashboard/generate.py)
+# Generated dashboard output (rebuild with: python3 ~/.claude/ticket-takeaway/generate.py)
 docs/sdlc-dashboard.html
 
 # OS files

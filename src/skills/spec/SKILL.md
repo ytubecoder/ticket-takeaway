@@ -25,7 +25,7 @@ Take raw ideas and turn them into specified, backlog-ready tickets. Walk through
 
 ### Step 1: Read the Backlog
 
-Read `PRODUCT_BACKLOG.md` in the current project directory. If not found in cwd, look up the project via `~/.claude/dashboard/registry.json` and use the registered path.
+Read `PRODUCT_BACKLOG.md` in the current project directory. If not found in cwd, look up the project via `~/.claude/ticket-takeaway/registry.json` and use the registered path.
 
 **Always read fresh — never use cached content.**
 
@@ -149,7 +149,7 @@ Proceed to the next idea. Repeat until all are processed or the user says stop.
 ### Step 7: Regenerate Dashboard
 
 ```bash
-python3 ~/.claude/dashboard/generate.py
+python3 ~/.claude/ticket-takeaway/generate.py
 ```
 
 Report summary:
@@ -193,7 +193,7 @@ That's the minimum. The more the user invests in the spec, the better the build 
 - **Case-insensitive ID matching** — `i-01` matches `I-01`
 - **After any changes to PRODUCT_BACKLOG.md**, regenerate the dashboard:
   ```bash
-  python3 ~/.claude/dashboard/generate.py
+  python3 ~/.claude/ticket-takeaway/generate.py
   ```
 - **Status values**: `proposed` (just an idea), `specified` (has description + criteria), `ready` (fully specced + unblocked)
 - **Moving from Ideas to Backlog is optional** — the user may want to keep it in Ideas until they're sure. Ask, don't assume.

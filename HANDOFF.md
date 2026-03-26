@@ -14,14 +14,14 @@ The directory is currently `~/projects/software-dashboard` but the project has b
 
 ### Next Steps
 1. User renames directory: `mv ~/projects/software-dashboard ~/projects/ticket-takeaway`
-2. Update registry path: `~/.claude/dashboard/registry.json` — change path from software-dashboard to ticket-takeaway
+2. Update registry path: `~/.claude/ticket-takeaway/registry.json` — change path from software-dashboard to ticket-takeaway
 3. `git init` in the renamed directory
 4. Initial commit with all files
 5. Create GitHub repo and push
 
 ### Key Files
-- `src/generate.py` — the generator script (also deployed at `~/.claude/dashboard/generate.py`)
-- `src/skills/dashboard/SKILL.md` — the /dashboard skill (deployed at `~/.claude/skills/dashboard/SKILL.md`)
+- `src/generate.py` — the generator script (also deployed at `~/.claude/ticket-takeaway/generate.py`)
+- `src/skills/ticket-takeaway/SKILL.md` — the /dashboard skill (deployed at `~/.claude/skills/ticket-takeaway/SKILL.md`)
 - `src/skills/review/SKILL.md` — the /review skill (deployed at `~/.claude/skills/review/SKILL.md`)
 - `docs/LIFECYCLE.md` — authoritative lifecycle spec
 - `docs/REVIEW_PROCESS.md` — review process spec

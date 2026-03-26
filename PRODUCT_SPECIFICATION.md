@@ -38,3 +38,9 @@ Comprehensive lifecycle document (`docs/LIFECYCLE.md`) serving as the authoritat
 Development notes:
 - Per-feature working files concept added to support ephemeral dev artifacts without polluting permanent docs
 - /sync step before cleanup ensures learnings are extracted before deletion
+
+---
+
+## Archive
+
+_Retired features are summarized here. See git history for full details._

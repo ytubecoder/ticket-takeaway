@@ -25,7 +25,7 @@ Orchestrate structured review of completed features. Walk through For Review tic
 
 ### Step 1: Read the Backlog
 
-Read `PRODUCT_BACKLOG.md` in the current project directory. If not found in cwd, look up the project via `~/.claude/dashboard/registry.json` and use the registered path.
+Read `PRODUCT_BACKLOG.md` in the current project directory. If not found in cwd, look up the project via `~/.claude/ticket-takeaway/registry.json` and use the registered path.
 
 **Always read fresh — never use cached content.**
 
@@ -218,7 +218,7 @@ feat: accept {ID}: {Title}
 ### 8. Regenerate Dashboard
 
 ```bash
-python3 ~/.claude/dashboard/generate.py
+python3 ~/.claude/ticket-takeaway/generate.py
 ```
 
 ### 9. Report
@@ -244,7 +244,7 @@ No changes. Move to the next batch.
 - **If `docs/features/{ID}/` doesn't exist, that's fine** — not all tickets have working files
 - **After any changes to PRODUCT_BACKLOG.md**, regenerate the dashboard:
   ```bash
-  python3 ~/.claude/dashboard/generate.py
+  python3 ~/.claude/ticket-takeaway/generate.py
   ```
 - **Present review batches oldest first**, grouped by proximity
 - **Case-insensitive ID matching** — `b-05` matches `B-05`

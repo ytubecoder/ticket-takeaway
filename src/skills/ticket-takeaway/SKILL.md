@@ -1,5 +1,5 @@
 ---
-name: dashboard
+name: ticket-takeaway
 description: Ticket Takeaway dashboard — track features from ideation to release. Generate visual dashboard, update item status in real-time, review completed features, add new items. Cross-project.
 user_invocable: true
 ---

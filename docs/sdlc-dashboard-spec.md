@@ -8,7 +8,7 @@
 
 1. **Read the methodology first**: `sdlc-methodology.md` — defines the process the dashboard visualizes
 2. **Read this spec** — data schema, layout, CSS, skill definitions
-3. **Check what's been built**: `ls ~/.claude/dashboard/ ~/.claude/skills/dashboard/ ~/.claude/commands/dashboard.md`
+3. **Check what's been built**: `ls ~/.claude/ticket-takeaway/ ~/.claude/skills/ticket-takeaway/ ~/.claude/commands/dashboard.md`
 4. **Implementation plan**: `~/.claude/plans/moonlit-watching-aho.md` (wave-based parallel execution)
 5. **Key source file to parse**: `{project-path}/PRODUCT_SPECIFICATION.md`
 6. **Existing patterns to follow**: `~/.claude/skills/sync/SKILL.md` (skill format), `~/.claude/commands/tdd.md` (command format)
@@ -96,7 +96,7 @@ The `/sync` skill still does a full reconciliation (re-parsing PRODUCT_SPECIFICA
 
 ## Data Schema
 
-### Project Registry (`~/.claude/dashboard/registry.json`)
+### Project Registry (`~/.claude/ticket-takeaway/registry.json`)
 
 ```json
 {
@@ -114,7 +114,7 @@ The `/sync` skill still does a full reconciliation (re-parsing PRODUCT_SPECIFICA
 }
 ```
 
-### Per-Project Data (`~/.claude/dashboard/data/{id}.json`)
+### Per-Project Data (`~/.claude/ticket-takeaway/data/{id}.json`)
 
 ```json
 {
@@ -548,15 +548,15 @@ Override CSS variables to light palette in `@media print`:
 ### `/dashboard` Skill Modes
 
 **Mode 1: `generate` (default)**
-1. Read `~/.claude/dashboard/registry.json`
+1. Read `~/.claude/ticket-takeaway/registry.json`
 2. For each active project with a `specFile`:
    a. Parse PRODUCT_SPECIFICATION.md sections into structured items
    b. Merge with existing JSON data (preserving current status, review state, notes — spec only adds NEW items)
    c. Run git commands to collect code stats (sparkline, hotspots, LOC, etc.)
    d. Read `package.json` for dependency counts
-   e. Write `~/.claude/dashboard/data/{id}.json`
+   e. Write `~/.claude/ticket-takeaway/data/{id}.json`
 3. Aggregate all project JSON files
-4. Render `~/.claude/dashboard/sdlc-dashboard.html` with inline CSS/JS
+4. Render `~/.claude/ticket-takeaway/sdlc-dashboard.html` with inline CSS/JS
 5. Report: "Dashboard updated: X backlog, Y WIP, Z for-review, W done"
 
 **Mode 2: `status <project> <item-id> <new-status>`**
@@ -591,14 +591,14 @@ Add step 2.7 to `~/.claude/skills/sync/SKILL.md` between steps 2.6 and 3:
 ```markdown
 ## 2.7 Update Ticket Takeaway
 
-If `~/.claude/dashboard/registry.json` exists:
+If `~/.claude/ticket-takeaway/registry.json` exists:
 1. Check if the current project is registered (match by working directory path)
 2. If registered and has a specFile:
    a. Parse PRODUCT_SPECIFICATION.md for feature definitions
    b. MERGE with existing JSON — preserve current status, review state, and notes for known items; only ADD items that are new in the spec
    c. Collect fresh code stats via git log / find / package.json
-   d. Write to `~/.claude/dashboard/data/{project-id}.json`
-3. Regenerate `~/.claude/dashboard/sdlc-dashboard.html`
+   d. Write to `~/.claude/ticket-takeaway/data/{project-id}.json`
+3. Regenerate `~/.claude/ticket-takeaway/sdlc-dashboard.html`
 4. Report: "Dashboard updated: X backlog, Y WIP, Z for-review, W done"
 
 If the current project is NOT registered, skip silently.
@@ -669,20 +669,20 @@ Collected at `/sync` time from git and filesystem. All computable in <5 seconds.
 
 | Step | What | Files Created/Modified |
 |------|------|----------------------|
-| 1 | Create directory structure | `~/.claude/dashboard/`, `~/.claude/dashboard/data/` |
-| 2 | Write registry.json with your project | `~/.claude/dashboard/registry.json` |
-| 3 | Create /dashboard skill | `~/.claude/skills/dashboard/SKILL.md` |
+| 1 | Create directory structure | `~/.claude/ticket-takeaway/`, `~/.claude/ticket-takeaway/data/` |
+| 2 | Write registry.json with your project | `~/.claude/ticket-takeaway/registry.json` |
+| 3 | Create /dashboard skill | `~/.claude/skills/ticket-takeaway/SKILL.md` |
 | 4 | Create /dashboard command | `~/.claude/commands/dashboard.md` |
-| 5 | Parse project PRODUCT_SPECIFICATION.md | `~/.claude/dashboard/data/myproject.json` |
+| 5 | Parse project PRODUCT_SPECIFICATION.md | `~/.claude/ticket-takeaway/data/myproject.json` |
 | 6 | Collect project code stats | Updates `myproject.json` |
-| 7 | Generate HTML dashboard | `~/.claude/dashboard/sdlc-dashboard.html` |
+| 7 | Generate HTML dashboard | `~/.claude/ticket-takeaway/sdlc-dashboard.html` |
 | 8 | Verify: open in browser | (verification) |
 | 9 | Extend /sync with step 2.7 | `~/.claude/skills/sync/SKILL.md` |
 | 10 | Test close-out workflow | (verification) |
 
 ## Verification
 
-1. `open ~/.claude/dashboard/sdlc-dashboard.html` — renders dark kanban with project data
+1. `open ~/.claude/ticket-takeaway/sdlc-dashboard.html` — renders dark kanban with project data
 2. Spot-check 3-5 items match PRODUCT_SPECIFICATION.md
 3. Filters work: click status badges, module pills, search box
 4. Code stats strip shows sparkline and badges

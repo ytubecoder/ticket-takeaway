@@ -13,7 +13,7 @@
    | o o |  |    |  |  │ ░░░░  │ │ ░░░░░ │ │ ▓▓▓▓▓ │ │ ████  │     |  /      ───▶
     \ _ /   |    |  |  │ ░░    │ │ ░░░   │ │ ▓▓▓   │ │       │     | /      /review
      |||    '----'  |  └───────┘ └───────┘ └───────┘ └───────┘     |/      ───▶
-    /   \           |_______________________________________________|       DONE
+    /   \           |_______________________________________________|      /accept
 ```
 
 > Markdown-native project board. Double-click. Paste. Build.
@@ -58,7 +58,7 @@ Side lanes: **Bugs** (`bug`, `bug-fixed`), **Icebox** (`icebox`), **Won't Do** (
 | **4. Build** | Double-click the card, paste into Claude Code. Ticket moves to `## WIP`. | Ticket is `ready` |
 | **5. Complete** | All criteria addressed. Ticket moves to `## For Review`. | Implementation covers every criterion |
 | **6. Review** | Run `/review` — walks through criteria, creates bug sub-tickets if needed. | All criteria verified |
-| **7. Accept** | `/dashboard accept` moves ticket to `PRODUCT_SPECIFICATION.md`. | Review passed |
+| **7. Accept** | `/accept` moves ticket to `PRODUCT_SPECIFICATION.md`. | Review passed |
 
 **Stage change** = cut the `###` block, paste under a different `##` heading. **State change** = edit the `Status:` line.
 
@@ -82,7 +82,7 @@ Run `/review` to walk through all completed work, or `/review {ID}` for one tick
 2. Verifies each acceptance criterion (use Chrome DevTools MCP tools to inspect the running app)
 3. Creates `BUG-` sub-tickets from feedback, linked to the parent via `Parent:` field
 4. Bugs get fixed and verified before the parent can be re-reviewed
-5. On acceptance: `/dashboard accept` moves the ticket to `PRODUCT_SPECIFICATION.md`, summarizes development notes, and cleans up working files
+5. On acceptance: `/accept` moves the ticket to `PRODUCT_SPECIFICATION.md`, summarizes development notes, and cleans up working files
 
 Double-clicking the For Review column header copies `/review` to your clipboard.
 
@@ -91,7 +91,7 @@ Double-clicking the For Review column header copies `/review` to your clipboard.
 ### One-liner
 
 ```bash
-git clone https://github.com/ytubecoder/ticket-takeaway.git ~/projects/ticket-takeaway && cd ~/projects/ticket-takeaway && mkdir -p ~/.claude/ticket-takeaway ~/.claude/skills/{ticket-takeaway,review,spec} && cp src/generate.py ~/.claude/ticket-takeaway/generate.py && cp src/skills/ticket-takeaway/SKILL.md ~/.claude/skills/ticket-takeaway/SKILL.md && cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md && cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md && cp src/registry.example.json ~/.claude/ticket-takeaway/registry.json && echo "Done. Edit ~/.claude/ticket-takeaway/registry.json with your project paths, then run /dashboard."
+git clone https://github.com/ytubecoder/ticket-takeaway.git ~/projects/ticket-takeaway && cd ~/projects/ticket-takeaway && mkdir -p ~/.claude/ticket-takeaway ~/.claude/skills/{ticket-takeaway,review,spec,accept} && cp src/generate.py ~/.claude/ticket-takeaway/generate.py && cp src/skills/ticket-takeaway/SKILL.md ~/.claude/skills/ticket-takeaway/SKILL.md && cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md && cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md && cp src/skills/accept/SKILL.md ~/.claude/skills/accept/SKILL.md && cp src/registry.example.json ~/.claude/ticket-takeaway/registry.json && echo "Done. Edit ~/.claude/ticket-takeaway/registry.json with your project paths, then run /dashboard."
 ```
 
 ### Or tell your agent

@@ -28,7 +28,11 @@ cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md
 mkdir -p ~/.claude/skills/spec
 cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
 
-# 5. Create a registry (edit paths for your machine)
+# 5. Install the accept skill
+mkdir -p ~/.claude/skills/accept
+cp src/skills/accept/SKILL.md ~/.claude/skills/accept/SKILL.md
+
+# 6. Create a registry (edit paths for your machine)
 cp src/registry.example.json ~/.claude/ticket-takeaway/registry.json
 # Then edit ~/.claude/ticket-takeaway/registry.json to set your project paths
 ```
@@ -41,6 +45,7 @@ cp src/registry.example.json ~/.claude/ticket-takeaway/registry.json
 | `src/skills/ticket-takeaway/SKILL.md` | `~/.claude/skills/ticket-takeaway/SKILL.md` | `/dashboard` skill for Claude Code |
 | `src/skills/review/SKILL.md` | `~/.claude/skills/review/SKILL.md` | `/review` skill for Claude Code |
 | `src/skills/spec/SKILL.md` | `~/.claude/skills/spec/SKILL.md` | `/spec` skill for Claude Code |
+| `src/skills/accept/SKILL.md` | `~/.claude/skills/accept/SKILL.md` | `/accept` skill for Claude Code |
 | `src/registry.example.json` | `~/.claude/ticket-takeaway/registry.json` | Project registry (edit for your projects) |
 
 ## Per-Project Setup
@@ -102,7 +107,7 @@ The Ticket Takeaway dashboard (`/dashboard`) reads directly from this file.
 1. **Starting work on a feature:** Move the item from `## Backlog` to `## WIP`, set `Status: in-progress`
 2. **Feature blocked:** Update status to `Status: blocked` (stays in `## WIP`)
 3. **Code complete, ready for review:** Move from `## WIP` to `## For Review`, set `Status: for-review`
-4. **Feature accepted:** Run `/dashboard accept {project} {ID}` — moves item to `PRODUCT_SPECIFICATION.md`
+4. **Feature accepted:** Run `/accept {ID}` — moves item to `PRODUCT_SPECIFICATION.md`
 5. **New feature idea:** Add to `## Ideas` or `## Backlog` in `PRODUCT_BACKLOG.md` (or use `/dashboard add`)
 
 **This is mandatory.** Do not complete feature work without updating the backlog file.
@@ -156,6 +161,7 @@ cp src/generate.py ~/.claude/ticket-takeaway/generate.py
 cp src/skills/ticket-takeaway/SKILL.md ~/.claude/skills/ticket-takeaway/SKILL.md
 cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md
 cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md
+cp src/skills/accept/SKILL.md ~/.claude/skills/accept/SKILL.md
 ```
 
 The registry is NOT overwritten on update (it contains your local project paths).

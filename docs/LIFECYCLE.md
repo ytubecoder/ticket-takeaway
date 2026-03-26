@@ -157,7 +157,7 @@ PRODUCT_BACKLOG.md                                        PRODUCT_SPECIFICATION.
 | `in-progress` → `for-review` | For Review | Code complete, move to `## For Review` | Claude (auto on feature complete) |
 | `for-review` → `rework` | For Review | Review found issues | Developer |
 | `rework` → `in-progress` | WIP | Fixes started, move back to `## WIP` | Claude |
-| `for-review` → `done` | Done | Review passed → `/sync` → summarize → `/dashboard accept` → clean up working files | Developer |
+| `for-review` → `done` | Done | Review passed → `/sync` → summarize → `/accept` → clean up working files | Developer |
 | `done` → `released` | Done | Shipped in a version tag | Developer |
 | Any → `icebox` | Icebox | Parked for later, move to `## Icebox` | Developer |
 | Any → `wont-do` | Won't Do | Decided against, move to `## Won't Do` | Developer |
@@ -184,7 +184,7 @@ During development, each feature gets a working directory for ephemeral developm
 
 - **Created**: When a feature moves to `## WIP` (status: `in-progress`)
 - **Active during**: Development and review phases
-- **Cleaned up**: When the feature is accepted (`/dashboard accept`), following this sequence:
+- **Cleaned up**: When the feature is accepted (`/accept`), following this sequence:
   1. **Run `/sync`** first — this extracts learnings, decisions, and stable patterns from the working files into session logs and CLAUDE.md. This ensures nothing valuable is lost.
   2. **Summarize into PRODUCT_SPECIFICATION.md** — key findings, bug count, notable decisions get written into the accepted feature entry
   3. **Delete `docs/features/{ID}/`** — the working directory is removed. The knowledge has been preserved in the spec and session logs.
@@ -240,7 +240,7 @@ Development notes:
 |---------|-------------|
 | `/dashboard` | Run `generate.py` → render HTML → open browser |
 | `/dashboard status {project} {ID} {section}` | Move ticket between sections in PRODUCT_BACKLOG.md |
-| `/dashboard accept {project} {ID}` | Run `/sync` first, then move ticket to PRODUCT_SPECIFICATION.md with summary, then clean up `docs/features/{ID}/` |
+| `/accept {ID}` | Run `/sync` first, then move ticket to PRODUCT_SPECIFICATION.md with summary, then clean up `docs/features/{ID}/` |
 | `/dashboard add {project} "{title}"` | Add new ticket to PRODUCT_BACKLOG.md |
 | `/dashboard show` | Print summary table to terminal |
 

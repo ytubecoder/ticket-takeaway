@@ -148,7 +148,7 @@ Submit button unresponsive on iOS Safari when keyboard is open.
 **Closed-loop requirement:** Each project's `CLAUDE.md` must include rules requiring that feature work updates `PRODUCT_BACKLOG.md` at every status transition. This prevents drift between what's built and what the dashboard shows. The key transitions:
 - Start work → move to `## WIP` with `Status: in-progress`
 - Code complete → move to `## For Review` with `Status: for-review`
-- Accepted → `/dashboard accept` moves to `PRODUCT_SPECIFICATION.md`
+- Accepted → `/accept` moves to `PRODUCT_SPECIFICATION.md`
 - New feature → add to `## Backlog` or `## Ideas`
 
 ---
@@ -180,7 +180,7 @@ Submit button unresponsive on iOS Safari when keyboard is open.
 | `/dashboard` (no args) | **generate** |
 | `/dashboard generate` | **generate** |
 | `/dashboard status <project> <item-id> <new-section>` | **status** — move item between sections |
-| `/dashboard accept <project> <item-id>` | **accept** — move from backlog to PRODUCT_SPECIFICATION.md |
+| `/accept <item-id>` | **accept** — now a separate skill, see `/accept` |
 | `/dashboard add <project> "<title>" [--section S] [--priority P] [--complexity C]` | **add** — add new entry |
 | `/dashboard show [project]` | **show** — terminal summary |
 
@@ -554,34 +554,7 @@ Moves an item between sections in `PRODUCT_BACKLOG.md`.
 
 ---
 
-## Mode 3: accept <project> <item-id>
-
-Moves a completed feature from `PRODUCT_BACKLOG.md` to `PRODUCT_SPECIFICATION.md`.
-
-### Steps
-
-1. **Run `/sync` first** — extract learnings, decisions, and stable patterns from `docs/features/{ID}/` into session logs and CLAUDE.md before cleanup
-2. Read `{project.path}/PRODUCT_BACKLOG.md`
-3. Find the item by ID
-4. Summarize the item with development notes (bug count, key decisions from `docs/features/{ID}/NOTES.md` if it exists)
-5. Append the summary to `{project.path}/PRODUCT_SPECIFICATION.md`
-6. Remove the item from `PRODUCT_BACKLOG.md`
-7. Delete `{project.path}/docs/features/{ID}/` if it exists (working files are now captured by sync + spec summary)
-8. Write both files
-9. Regenerate HTML and open browser
-10. Report: `{item-id} accepted → PRODUCT_SPECIFICATION.md`
-
-**Important:** Never skip the `/sync` step. It prevents knowledge loss when working files are cleaned up.
-
-### Example
-
-```
-/dashboard accept myproject B-05
-```
-
----
-
-## Mode 4: add <project> "<title>" [--section S] [--priority P] [--complexity C]
+## Mode 3: add <project> "<title>" [--section S] [--priority P] [--complexity C]
 
 Adds a new entry to `PRODUCT_BACKLOG.md`.
 

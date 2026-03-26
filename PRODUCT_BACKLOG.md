@@ -28,7 +28,7 @@ Depends: B-01
 Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include PLAN.md, NOTES.md, BUGS.md, TESTS.md, REVIEW.md templates. Clean up on acceptance after /sync.
 - [ ] Create directory structure on WIP transition
 - [ ] Template files with section headers
-- [ ] Cleanup step integrated into /dashboard accept
+- [ ] Cleanup step integrated into /accept
 - [ ] /sync integration before cleanup
 
 ### B-03: Dashboard Skill Simplification

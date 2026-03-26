@@ -19,7 +19,7 @@ python3 ~/.claude/ticket-takeaway/generate.py
 /dashboard status ticket-takeaway B-01 for-review
 
 # Accept a feature (moves to PRODUCT_SPECIFICATION.md)
-/dashboard accept ticket-takeaway B-01
+/accept ticket-takeaway B-01
 
 # Add a new ticket
 /dashboard add ticket-takeaway "New feature title"
@@ -77,7 +77,7 @@ Sections (`## WIP`, `## Backlog`, `## Ideas`, etc.) map directly to dashboard co
 1. **Starting work:** Move item to `## WIP`, set `Status: in-progress`
 2. **Blocked:** Update to `Status: blocked` (stays in `## WIP`)
 3. **Code complete:** Move to `## For Review`, set `Status: for-review`
-4. **Accepted:** Run `/dashboard accept {project} {ID}`
+4. **Accepted:** Run `/accept {project} {ID}`
 5. **New idea:** Add to `## Ideas` or `## Backlog`
 
 ## Generated Files (Do Not Edit)

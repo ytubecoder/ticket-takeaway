@@ -1,0 +1,11 @@
+{
+  "projects": [
+    {
+      "id": "myproject",
+      "name": "My Project",
+      "path": "~/projects/myproject",
+      "description": "EDIT: What this project does",
+      "active": true
+    }
+  ]
+}

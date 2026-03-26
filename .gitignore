@@ -1,0 +1,19 @@
+# Claude Code local settings
+.claude/
+
+# Generated dashboard output (rebuild with: python3 ~/.claude/dashboard/generate.py)
+docs/sdlc-dashboard.html
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Per-feature working files (ephemeral)
+docs/features/
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

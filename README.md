@@ -24,7 +24,7 @@ Python html rendering engine should support direct edits to files too, so you ca
 
 Two skills gate the process: **`/spec`** turns ideas into specced tickets. **`/review`** verifies completed work and handles acceptance. Between those gates, you build however you want.
 
-For tasks that don't need your hands on the keyboard — security reviews, docs, compliance — we intend to make this compatible with agent orchestrators like [Paperclip](https://github.com/anthropics/claude-code/blob/main/AGENTS.md).
+For tasks that don't need your hands on the keyboard — security reviews, docs, compliance — we intend to make this compatible with agent orchestrators like [Paperclip](https://github.com/paperclipai/paperclip).
 
 <img width="1507" alt="Ticket Takeaway dashboard rendered in a browser" src="https://github.com/user-attachments/assets/7a10b450-9f84-4c4b-9481-515d448cbe2f" />
 

@@ -17,3 +17,4 @@ docs/features/
 *~
 .vscode/
 .idea/
+src/__pycache__/

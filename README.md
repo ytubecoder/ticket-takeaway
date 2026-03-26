@@ -18,7 +18,9 @@
 
 > Markdown-native project board. Double-click. Paste. Build.
 
-A lightweight process for people who work directly with their models. Your board is a markdown file. Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Code, and build. Run as many windows as you want — the board is the coordination layer.
+A lightweight process for people who work directly with their models to create software. Your kanban board is a generated from markdown files. Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Code, and build. Run as many windows as you want — the board is the coordination layer.
+
+Python html rendering engine should support direct edits to files too, so you can see your features tracked in real time.
 
 Two skills gate the process: **`/spec`** turns ideas into specced tickets. **`/review`** verifies completed work and handles acceptance. Between those gates, you build however you want.
 

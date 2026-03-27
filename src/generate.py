@@ -445,21 +445,6 @@ def generate_html(projects: list[Project]) -> str:
         if col in by_column:
             by_column[col].append(t)
 
-    # Count totals
-    count_backlog = len(by_column["backlog"])
-    count_wip = len(by_column["wip"])
-    count_ideas = len(by_column["ideas"])
-    count_wontdo = len(by_column["wontdo"])
-    count_review = len(by_column["review"])
-    count_done = len(by_column["done"])
-    count_icebox = len(by_column["icebox"])
-    count_bugs = len(by_column["bugs"])
-    count_total = count_backlog + count_wip + count_review + count_ideas + count_done
-
-    # Progress: done items / (done + remaining)
-    total_all = count_total + count_wontdo + count_icebox
-    progress_pct = round((count_done / total_all * 100)) if total_all > 0 else 0
-
     # Code stats
     cs = primary.code_stats if primary else CodeStats()
 
@@ -478,6 +463,40 @@ def generate_html(projects: list[Project]) -> str:
         if t.parent:
             bug_children.setdefault(t.parent, []).append(t)
 
+    # Remove child tickets from column lists — they render nested under their parent
+    parented_ids = {t.id for t in all_tickets if t.parent}
+    for col in by_column:
+        by_column[col] = [t for t in by_column[col] if t.id not in parented_ids]
+
+    # Auto-promote parents to review when all child bugs are resolved
+    review_statuses = {"for-review", "bug-fixed", "done"}
+    promoted_ids: set[str] = set()
+    for parent_id, children in bug_children.items():
+        if all(c.status in review_statuses for c in children):
+            # Find the parent ticket in non-review columns and move it to review
+            for col in ("wip", "backlog", "bugs"):
+                for t in by_column[col]:
+                    if t.id == parent_id:
+                        by_column[col].remove(t)
+                        by_column["review"].append(t)
+                        promoted_ids.add(t.id)
+                        break
+
+    # Count totals (after filtering parented tickets and promotions)
+    count_backlog = len(by_column["backlog"])
+    count_wip = len(by_column["wip"])
+    count_ideas = len(by_column["ideas"])
+    count_wontdo = len(by_column["wontdo"])
+    count_review = len(by_column["review"])
+    count_done = len(by_column["done"])
+    count_icebox = len(by_column["icebox"])
+    count_bugs = len(by_column["bugs"])
+    count_total = count_backlog + count_wip + count_review + count_ideas + count_done
+
+    # Progress: done items / (done + remaining)
+    total_all = count_total + count_wontdo + count_icebox
+    progress_pct = round((count_done / total_all * 100)) if total_all > 0 else 0
+
     # Compute dependency state
     dep_state = compute_dependency_state(all_tickets)
 
@@ -485,11 +504,11 @@ def generate_html(projects: list[Project]) -> str:
     backlog_cards = _render_cards(by_column["backlog"], "backlog", bug_children, dep_state)
     wip_cards = _render_cards(by_column["wip"], "wip", bug_children, dep_state)
     ideas_cards = _render_cards(by_column["ideas"], "ideas", bug_children, dep_state)
-    wontdo_cards = _render_cards(by_column["wontdo"], "wontdo", bug_children, dep_state)
+    wontdo_cards = _render_list_rows(by_column["wontdo"], "wontdo", bug_children, dep_state)
     review_cards = _render_cards(by_column["review"], "review", bug_children, dep_state)
-    done_cards = _render_cards(by_column["done"], "done", bug_children, dep_state)
-    icebox_cards = _render_cards(by_column["icebox"], "icebox", bug_children, dep_state)
-    bugs_cards = _render_cards(by_column["bugs"], "bugs", bug_children, dep_state)
+    done_cards = _render_list_rows(by_column["done"], "done", bug_children, dep_state)
+    icebox_cards = _render_list_rows(by_column["icebox"], "icebox", bug_children, dep_state)
+    bugs_cards = _render_list_rows(by_column["bugs"], "bugs", bug_children, dep_state)
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
 
@@ -712,10 +731,21 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-weight: 600; display: inline-block; margin-top: 2px;
 }}
 .card.blocked {{ opacity: 0.7; border-left: 3px solid #fb923c; }}
-.card-linked-bugs {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle); display: none; }}
-.card.expanded .card-linked-bugs {{ display: block; }}
-.linked-bug {{ font-size: 10px; color: var(--text-secondary); padding: 2px 0; padding-left: 12px; }}
-.linked-bug::before {{ content: '\21B3 '; color: var(--text-tertiary); }}
+.card-linked-bugs {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle); display: none; gap: 2px; flex-direction: column; }}
+.card.expanded .card-linked-bugs {{ display: flex; }}
+.linked-bugs-label {{
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--priority-high); margin-bottom: 2px; padding-left: 2px;
+}}
+.linked-bug-card {{
+  display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-secondary);
+  padding: 5px 8px; border-radius: 4px; cursor: default; user-select: none;
+  border: 1px solid rgba(239,68,68,0.2); background: rgba(239,68,68,0.04); position: relative;
+}}
+.linked-bug-card:hover {{ background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.35); }}
+.linked-bug-card .priority-dot {{ width: 5px; height: 5px; margin-top: 0; }}
+.linked-bug-card .card-id {{ font-size: 9px; }}
+.linked-bug-title {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }}
 
 /* Bug section below kanban */
 /* Collapsible bottom sections (Done, Won't Do, Bugs) */
@@ -737,12 +767,28 @@ a {{ color: var(--accent); text-decoration: none; }}
   background: var(--bg-card); padding: 1px 6px; border-radius: 8px;
 }}
 .bottom-section-body {{
-  padding: 8px;
+  padding: 4px 8px;
 }}
 .bottom-section:not(.expanded) .bottom-section-body {{ display: none; }}
 .bottom-section.expanded .bottom-section-body {{
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px;
+  display: flex; flex-direction: column; gap: 1px;
 }}
+
+/* List rows — compact single-line items for bottom sections */
+.list-row {{
+  background: transparent; border: none; border-radius: 4px; padding: 4px 8px;
+  border-left: none !important;
+}}
+.list-row:hover {{ background: var(--bg-hover); }}
+.list-row-main {{
+  display: flex; align-items: center; gap: 8px; min-height: 24px;
+}}
+.list-row-main .priority-dot {{ margin-top: 0; }}
+.list-row-main .card-id {{ min-width: 50px; }}
+.list-row-main .card-title {{ font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.list-row-main .complexity-badge {{ font-size: 8px; padding: 0 4px; }}
+.list-row-detail {{ display: none; padding: 6px 8px 4px 22px; }}
+.list-row.expanded .list-row-detail {{ display: block; }}
 
 /* Copied toast */
 .copied-toast {{
@@ -1059,6 +1105,26 @@ a {{ color: var(--accent); text-decoration: none; }}
     }});
   }});
 
+  // Linked bug cards — double click copies bug-specific prompt, click does nothing (prevent parent toggle)
+  document.querySelectorAll('.linked-bug-card').forEach(function(el) {{
+    el.addEventListener('click', function(e) {{
+      e.stopPropagation();
+    }});
+    el.addEventListener('dblclick', function(e) {{
+      e.stopPropagation();
+      var id = this.dataset.itemId;
+      var title = this.dataset.title;
+      var text = 'We need to come up with a plan to fix this bug ' + id + ': ' + title;
+      navigator.clipboard.writeText(text).then(function() {{
+        var toast = el.querySelector('.copied-toast');
+        if (toast) {{
+          toast.classList.add('show');
+          setTimeout(function() {{ toast.classList.remove('show'); }}, 1200);
+        }}
+      }});
+    }});
+  }});
+
   // Auto-refresh on file change
   (function() {{
     var currentTs = document.querySelector('meta[name="gen-ts"]').content;
@@ -1145,17 +1211,24 @@ def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, li
                 criteria_items.append(f'          <div{cls}>{marker} {escape(text)}</div>')
             criteria_html = '        <div class="card-criteria">\n' + "\n".join(criteria_items) + "\n        </div>\n"
 
-        # Linked bugs (only for review column, shown when expanded)
+        # Linked bugs (shown when expanded on any column with child bugs)
         linked_bugs_html = ""
-        if column == "review" and child_bugs:
+        if child_bugs:
             bug_items = []
             for bug in child_bugs:
                 bug_status_class = bug.status.replace(" ", "-").lower()
+                bug_desc_esc = escape(bug.description) if bug.description else ""
                 bug_items.append(
-                    f'          <div class="linked-bug">{escape(bug.id)}: {escape(bug.title)} '
+                    f'          <div class="linked-bug-card" data-column="bugs" '
+                    f'data-item-id="{escape(bug.id)}" data-title="{escape(bug.title)}" data-desc="{bug_desc_esc}">'
+                    f'<div class="copied-toast">Copied!</div>'
+                    f'<span class="priority-dot {bug.priority}"></span>'
+                    f'<span class="card-id">{escape(bug.id)}</span> '
+                    f'<span class="linked-bug-title">{escape(bug.title)}</span> '
                     f'<span class="status-badge {bug_status_class}">{bug_status_class}</span></div>'
                 )
-            linked_bugs_html = '        <div class="card-linked-bugs">\n' + "\n".join(bug_items) + "\n        </div>\n"
+            bug_label = f'          <div class="linked-bugs-label">{len(child_bugs)} linked bug{"s" if len(child_bugs) != 1 else ""}</div>'
+            linked_bugs_html = '        <div class="card-linked-bugs">\n' + bug_label + "\n" + "\n".join(bug_items) + "\n        </div>\n"
 
         lines.append(
             f'      <div class="card {card_class}{blocked_class}" data-column="{column}" '
@@ -1172,6 +1245,75 @@ def _render_cards(tickets: list[Ticket], column: str, bug_children: dict[str, li
     return "\n".join(lines)
 
 
+def _render_list_rows(tickets: list[Ticket], column: str, bug_children: dict[str, list] = None, dep_state: dict = None) -> str:
+    """Render compact list rows for bottom sections (bugs, done, icebox, won't do)."""
+    if bug_children is None:
+        bug_children = {}
+    if dep_state is None:
+        dep_state = {}
+    lines = []
+    for t in tickets:
+        title_esc = escape(t.title)
+        id_esc = escape(t.id)
+        desc_esc = escape(t.description) if t.description else ""
+        status_class = t.status.replace(" ", "-").lower()
+
+        # Bug count badge
+        child_bugs = bug_children.get(t.id, [])
+        bug_badge_html = ""
+        if child_bugs:
+            bug_word = "bug" if len(child_bugs) == 1 else "bugs"
+            bug_badge_html = f'<span class="bug-count-badge">{len(child_bugs)} {bug_word}</span>'
+
+        # Expandable detail panel
+        detail_parts = []
+        if t.description:
+            detail_parts.append(f'          <div class="card-desc" style="display:block">{desc_esc}</div>')
+        if t.rationale:
+            detail_parts.append(f'          <div class="card-rationale" style="display:block"><em>Rationale:</em> {escape(t.rationale)}</div>')
+        if t.acceptance_criteria:
+            criteria_items = []
+            for checked, text in t.acceptance_criteria:
+                cls = ' class="criterion checked"' if checked else ' class="criterion"'
+                marker = "&#9745;" if checked else "&#9744;"
+                criteria_items.append(f'            <div{cls}>{marker} {escape(text)}</div>')
+            detail_parts.append('          <div class="card-criteria" style="display:block">\n' + "\n".join(criteria_items) + "\n          </div>")
+        if child_bugs:
+            bug_items = []
+            for bug in child_bugs:
+                bug_status_class = bug.status.replace(" ", "-").lower()
+                bug_desc_esc = escape(bug.description) if bug.description else ""
+                bug_items.append(
+                    f'            <div class="linked-bug-card" data-column="bugs" '
+                    f'data-item-id="{escape(bug.id)}" data-title="{escape(bug.title)}" data-desc="{bug_desc_esc}">'
+                    f'<div class="copied-toast">Copied!</div>'
+                    f'<span class="priority-dot {bug.priority}"></span>'
+                    f'<span class="card-id">{escape(bug.id)}</span> '
+                    f'<span class="linked-bug-title">{escape(bug.title)}</span> '
+                    f'<span class="status-badge {bug_status_class}">{bug_status_class}</span></div>'
+                )
+            bug_label = f'            <div class="linked-bugs-label">{len(child_bugs)} linked bug{"s" if len(child_bugs) != 1 else ""}</div>'
+            detail_parts.append('          <div class="card-linked-bugs" style="display:flex">\n' + bug_label + "\n" + "\n".join(bug_items) + "\n          </div>")
+
+        detail_html = ""
+        if detail_parts:
+            detail_html = '        <div class="list-row-detail">\n' + "\n".join(detail_parts) + "\n        </div>\n"
+
+        lines.append(
+            f'      <div class="list-row card" data-column="{column}" '
+            f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}">\n'
+            f'        <div class="copied-toast">Copied!</div>\n'
+            f'        <div class="list-row-main">'
+            f'<span class="priority-dot {t.priority}"></span>'
+            f'<span class="card-id">{id_esc}</span>'
+            f'<span class="card-title">{title_esc}</span>'
+            f'<span class="status-badge {status_class}">{status_class}</span>'
+            f'<span class="complexity-badge">{escape(t.complexity)}</span>'
+            f'{bug_badge_html}</div>\n'
+            f'{detail_html}'
+            f'      </div>'
+        )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

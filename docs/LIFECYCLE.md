@@ -163,7 +163,25 @@ PRODUCT_BACKLOG.md                                        PRODUCT_SPECIFICATION.
 | Any → `wont-do` | Won't Do | Decided against, move to `## Won't Do` | Developer |
 | `icebox` → `proposed` | Backlog | Revived, move back to `## Backlog` | Developer |
 | `bug` → `bug-fixed` | Bugs | Fix implemented | Claude |
+| `bug-fixed` (all siblings done) | Parent auto-moves WIP → For Review | All bugs for parent are `bug-fixed` | Auto (dashboard skill) |
 | `bug-fixed` → removed | — | Verified fixed, remove from backlog | Developer |
+
+### Auto-Promote: Parent Returns to For Review
+
+When a bug sub-ticket is marked `bug-fixed`, the bug stays in `## Bugs` under its parent. But if **all** bug sub-tickets sharing that parent are now `bug-fixed`, the parent ticket automatically moves from `## WIP` (Status: rework) back to `## For Review` (Status: for-review).
+
+This ensures the parent doesn't sit in WIP after all its rework is done — it flows back to review automatically.
+
+```
+BUG-01 (Parent: B-05) → bug-fixed  ✓
+BUG-02 (Parent: B-05) → bug-fixed  ✓
+  → All bugs for B-05 fixed → B-05 auto-moves: WIP (rework) → For Review (for-review)
+```
+
+**Rules:**
+- Only triggers when the parent is in `## WIP` with `Status: rework`
+- Only triggers when ALL sibling bugs (same parent) have `Status: bug-fixed`
+- Bug sub-tickets remain in `## Bugs` — they don't move with the parent
 
 ---
 

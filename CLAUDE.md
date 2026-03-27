@@ -36,7 +36,7 @@ PRODUCT_BACKLOG.md  ──┐
 PRODUCT_SPECIFICATION.md ─┘
 ```
 
-**`src/generate.py`** (~1200 lines, Python 3.10+, no external deps) is the core of the project. It:
+**`src/generate.py`** (~1500 lines, Python 3.10+, no external deps) is the core of the project. It:
 1. Reads `~/.claude/ticket-takeaway/registry.json` for project paths
 2. Parses `PRODUCT_BACKLOG.md` — `##` headings = sections/columns, `###` headings = tickets
 3. Parses `PRODUCT_SPECIFICATION.md` for accepted features
@@ -50,6 +50,12 @@ Data model: `Ticket` dataclass (id, title, priority, complexity, status, section
 - `review/SKILL.md` — the `/review` skill for acceptance workflow
 
 Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime use (see `INSTALL.md` for the deployment map).
+
+**Deployment gotcha:** The script must be deployed to **two** runtime locations:
+- `~/.claude/ticket-takeaway/generate.py` — used when invoked directly
+- `~/.claude/dashboard/generate.py` — used by the `/dashboard` skill
+
+The only difference is `DASHBOARD_DIR` (line 25). After editing `src/generate.py`, copy to both locations and adjust the path constant. Missing this causes `/dashboard` to run a stale version.
 
 ## Ticket Format in PRODUCT_BACKLOG.md
 
@@ -79,6 +85,19 @@ Sections (`## WIP`, `## Backlog`, `## Ideas`, etc.) map directly to dashboard co
 3. **Code complete:** Move to `## For Review`, set `Status: for-review`
 4. **Accepted:** Run `/accept {project} {ID}`
 5. **New idea:** Add to `## Ideas` or `## Backlog`
+
+## Parent-Child Ticket Behavior
+
+Bug sub-tickets with a `Parent: {ID}` field are **never shown as standalone cards**. They are:
+1. Filtered out of all column lists (WIP, Backlog, Review, Bugs, Done, etc.)
+2. Rendered as clickable boxes nested inside their parent card (visible on expand)
+3. Each linked bug has its own double-click → clipboard prompt
+
+**Auto-promotion:** If all child bugs of a parent have status `for-review`, `bug-fixed`, or `done`, the parent card automatically moves to the For Review column (keeping its original status badge like `rework`).
+
+## Bottom List Sections
+
+The bottom sections (Bugs, Done, Icebox, Won't Do) render as **compact list rows** instead of full kanban cards. Same click/dblclick behavior, different visual style. Orphan bugs (no parent) appear in the Bug Backlog list; parented bugs only appear nested under their parent.
 
 ## Generated Files (Do Not Edit)
 

@@ -1,7 +1,7 @@
 # Ticket Takeaway
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![License: Source Available](https://img.shields.io/badge/license-Source%20Available-yellow)
 ![GitHub release](https://img.shields.io/github/v/release/ytubecoder/ticket-takeaway)
 ![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-blueviolet)
 ![Works with Codex CLI](https://img.shields.io/badge/works%20with-Codex%20CLI-orange)

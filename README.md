@@ -22,11 +22,11 @@
     /   \           |_______________________________________________|      /accept
 ```
 
-> Markdown-native project board. Double-click. Paste. Build.
+> SQLite-backed project board. Double-click. Paste. Build.
 
-A lightweight process for people who work directly with their models to create software. Your kanban board is generated from markdown files. Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Code, the prompt will take into account the status and aim to do the next step to keep your feature flowing. Run as many windows as you want — the board is the coordination layer.
+A lightweight process for people who work directly with their models to create software. Your kanban board is backed by SQLite and auto-generates markdown files. Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Code, the prompt will take into account the status and aim to do the next step to keep your feature flowing. Run as many windows as you want — the board is the coordination layer.
 
-Python html rendering engine should support direct edits to files too, so you can see your features tracked in real time.
+Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via read-before-write sync. No data loss either way.
 
 Two skills gate the process: **`/spec`** turns ideas into specced tickets. **`/review`** verifies completed work and handles acceptance. Between those gates, you build however you want.
 
@@ -68,7 +68,7 @@ Side lanes: **Bugs** (`bug`, `bug-fixed`), **Icebox** (`icebox`), **Won't Do** (
 | **6. Review** | Run `/review` — walks through criteria, creates bug sub-tickets if needed. | All criteria verified |
 | **7. Accept** | `/accept` moves ticket to `PRODUCT_SPECIFICATION.md`. | Review passed |
 
-**Stage change** = cut the `###` block, paste under a different `##` heading. **State change** = edit the `Status:` line.
+**Stage change** = `tickets-cli.py move <project> <id> <section>`. **State change** = `tickets-cli.py update <project> <id> --status <status>`. Or just edit the markdown — the CLI absorbs direct edits.
 
 ## `/spec` — Ideas to Backlog
 
@@ -98,21 +98,30 @@ Double-clicking the For Review column header copies `/review` to your clipboard.
 
 ## Install
 
-### One-liner
+### One-liner (from your project directory)
 
 ```bash
-git clone https://github.com/ytubecoder/ticket-takeaway.git ~/projects/ticket-takeaway && cd ~/projects/ticket-takeaway && mkdir -p ~/.claude/ticket-takeaway ~/.claude/skills/{ticket-takeaway,review,spec,accept} && cp src/generate.py ~/.claude/ticket-takeaway/generate.py && cp src/skills/ticket-takeaway/SKILL.md ~/.claude/skills/ticket-takeaway/SKILL.md && cp src/skills/review/SKILL.md ~/.claude/skills/review/SKILL.md && cp src/skills/spec/SKILL.md ~/.claude/skills/spec/SKILL.md && cp src/skills/accept/SKILL.md ~/.claude/skills/accept/SKILL.md && cp src/registry.example.json ~/.claude/ticket-takeaway/registry.json && echo "Done. Edit ~/.claude/ticket-takeaway/registry.json with your project paths, then run /dashboard."
+git clone https://github.com/ytubecoder/ticket-takeaway.git ~/projects/ticket-takeaway && python3 ~/projects/ticket-takeaway/install.py --register
 ```
+
+This installs the CLI, generator, and skills, registers your project, and seeds the DB from your existing `PRODUCT_BACKLOG.md` (if you have one).
 
 ### Or tell your agent
 
-> Clone ticket-takeaway from https://github.com/ytubecoder/ticket-takeaway and install it. Follow the instructions in INSTALL.md.
+> Clone https://github.com/ytubecoder/ticket-takeaway to ~/projects/ticket-takeaway and run `python3 ~/projects/ticket-takeaway/install.py --register`. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically.
+
+### Upgrade
+
+```bash
+cd ~/projects/ticket-takeaway && git pull && python3 install.py
+```
+
+The installer copies the latest CLI, generator, and skills. The registry and DB are preserved — only system files are updated. If upgrading from the markdown-only version (v0.1.x), the `seed` step runs automatically and imports your existing tickets.
 
 ### After install
 
-1. Edit `~/.claude/ticket-takeaway/registry.json` — add your project's `id`, `name`, and `path`
-2. Create a `PRODUCT_BACKLOG.md` in your project root (or run `/dashboard add {project} "First feature"`)
-3. Add the [backlog rules](INSTALL.md#3-add-backlog-rules-to-the-projects-claudemd) to your project's `CLAUDE.md`
-4. Run `/dashboard` to generate and open the board
+1. Run `/dashboard` to generate and open the board
+2. Add tickets: `python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "First feature"`
+3. Or just add `### B-01: My Feature` to `PRODUCT_BACKLOG.md` — the CLI will pick it up
 
-Full deployment map and update instructions: [`INSTALL.md`](INSTALL.md)
+Full deployment map: [`INSTALL.md`](INSTALL.md)

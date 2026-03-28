@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Ticket Takeaway installer/upgrader.
+
+Usage:
+    python3 install.py                    # Install/upgrade system files + skills
+    python3 install.py --register         # Also register current project
+    python3 install.py --register --id myproject --name "My Project"
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO_DIR = Path(__file__).resolve().parent
+INSTALL_DIR = Path.home() / ".claude" / "ticket-takeaway"
+DASHBOARD_DIR = Path.home() / ".claude" / "dashboard"
+SKILLS_DIR = Path.home() / ".claude" / "skills"
+DB_PATH = INSTALL_DIR / "tickets.db"
+REGISTRY_PATH = INSTALL_DIR / "registry.json"
+
+
+def copy_file(src: Path, dst: Path, label: str = ""):
+    """Copy a file, creating parent dirs as needed."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    if label:
+        print(f"  {label}: {dst}")
+
+
+def install_system_files():
+    """Copy CLI, generator, and skills to runtime locations."""
+    print("Installing system files...")
+
+    # Core files
+    copy_file(REPO_DIR / "src" / "tickets-cli.py", INSTALL_DIR / "tickets-cli.py", "CLI")
+    copy_file(REPO_DIR / "src" / "generate.py", INSTALL_DIR / "generate.py", "Generator")
+
+    # Dashboard copy (needs DASHBOARD_DIR path fix)
+    dashboard_gen = DASHBOARD_DIR / "generate.py"
+    copy_file(REPO_DIR / "src" / "generate.py", dashboard_gen, "Generator (dashboard)")
+    # Patch DASHBOARD_DIR in the dashboard copy
+    text = dashboard_gen.read_text(encoding="utf-8")
+    text = text.replace(
+        'DASHBOARD_DIR = Path.home() / ".claude" / "ticket-takeaway"',
+        'DASHBOARD_DIR = Path.home() / ".claude" / "dashboard"',
+    )
+    dashboard_gen.write_text(text, encoding="utf-8")
+
+    # Skills
+    skills = [
+        ("ticket-takeaway", "src/skills/ticket-takeaway/SKILL.md"),
+        ("review", "src/skills/review/SKILL.md"),
+        ("spec", "src/skills/spec/SKILL.md"),
+        ("accept", "src/skills/accept/SKILL.md"),
+    ]
+    for skill_name, src_path in skills:
+        src = REPO_DIR / src_path
+        if src.exists():
+            dst = SKILLS_DIR / skill_name / "SKILL.md"
+            copy_file(src, dst, f"Skill: /{skill_name}")
+
+    # Registry template (only if registry doesn't exist yet)
+    example = REPO_DIR / "src" / "registry.example.json"
+    if not REGISTRY_PATH.exists() and example.exists():
+        copy_file(example, REGISTRY_PATH, "Registry (new)")
+    elif REGISTRY_PATH.exists():
+        print(f"  Registry: kept existing {REGISTRY_PATH}")
+
+    print("System files installed.")
+
+
+def register_project(project_id: str = None, project_name: str = None, project_path: str = None):
+    """Register the current (or specified) project in the registry."""
+    if project_path is None:
+        project_path = os.getcwd()
+
+    # Auto-detect id and name from the directory
+    if project_id is None:
+        project_id = os.path.basename(project_path).lower().replace(" ", "-")
+    if project_name is None:
+        project_name = os.path.basename(project_path)
+
+    # Load or create registry
+    if REGISTRY_PATH.exists():
+        with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+            registry = json.load(f)
+    else:
+        registry = {"projects": []}
+
+    # Check if already registered
+    for p in registry["projects"]:
+        if p["id"] == project_id:
+            # Update path if changed
+            p["path"] = project_path
+            p["name"] = project_name
+            print(f"Updated existing registration: {project_id} -> {project_path}")
+            with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                json.dump(registry, f, indent=2)
+            return
+
+    # Add new entry
+    registry["projects"].append({
+        "id": project_id,
+        "name": project_name,
+        "path": project_path,
+        "description": "",
+        "active": True,
+    })
+
+    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+        json.dump(registry, f, indent=2)
+
+    print(f"Registered: {project_id} ({project_name}) -> {project_path}")
+
+
+def seed_project(project_id: str = None):
+    """Seed the DB from existing PRODUCT_BACKLOG.md."""
+    cli = str(INSTALL_DIR / "tickets-cli.py")
+    cmd = [sys.executable, cli, "seed"]
+    if project_id:
+        cmd.extend(["--project", project_id])
+    subprocess.run(cmd, check=False)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Install or upgrade Ticket Takeaway"
+    )
+    parser.add_argument("--register", action="store_true",
+                        help="Register the current project in the registry")
+    parser.add_argument("--id", help="Project ID (default: directory name)")
+    parser.add_argument("--name", help="Project display name (default: directory name)")
+    parser.add_argument("--path", help="Project path (default: current directory)")
+    parser.add_argument("--no-seed", action="store_true",
+                        help="Skip seeding the DB from markdown")
+
+    args = parser.parse_args()
+
+    # Always install/upgrade system files
+    install_system_files()
+    print()
+
+    # Register if requested
+    if args.register:
+        register_project(args.id, args.name, args.path)
+
+        # Seed the DB from markdown
+        if not args.no_seed:
+            print()
+            project_id = args.id or os.path.basename(args.path or os.getcwd()).lower().replace(" ", "-")
+            seed_project(project_id)
+
+    print()
+    print("Done. Run /dashboard to generate the board.")
+
+
+if __name__ == "__main__":
+    main()

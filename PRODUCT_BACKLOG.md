@@ -3,7 +3,7 @@
 ## WIP
 
 ### B-01: Python Generator Script
-Priority: high | Complexity: L | Status: in-progress
+Priority: high | Complexity: L | Status: blocked
 Self-contained Python script that parses PRODUCT_BACKLOG.md + PRODUCT_SPECIFICATION.md and generates a dark-theme HTML kanban dashboard. Runs in <1 second, outputs to {project}/docs/.
 - [x] Parse PRODUCT_BACKLOG.md sections into tickets
 - [x] Parse PRODUCT_SPECIFICATION.md for done items
@@ -18,18 +18,18 @@ Self-contained Python script that parses PRODUCT_BACKLOG.md + PRODUCT_SPECIFICAT
 - [x] Multi-project support (tabs when >1 project)
 - [x] Handle edge cases in markdown parsing
 
-## For Review
-
-## Backlog
-
 ### B-02: Per-Feature Working Files
-Priority: medium | Complexity: M | Status: specified
+Priority: medium | Complexity: M | Status: in-progress
 Depends: B-01
 Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include PLAN.md, NOTES.md, BUGS.md, TESTS.md, REVIEW.md templates. Clean up on acceptance after /sync.
 - [ ] Create directory structure on WIP transition
 - [ ] Template files with section headers
 - [ ] Cleanup step integrated into /accept
 - [ ] /sync integration before cleanup
+
+## For Review
+
+## Backlog
 
 ### B-03: Dashboard Skill Simplification
 Priority: medium | Complexity: S | Status: specified

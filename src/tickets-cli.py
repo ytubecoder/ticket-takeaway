@@ -1041,6 +1041,49 @@ def cmd_sync(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: watch
+# ---------------------------------------------------------------------------
+
+def cmd_watch(args):
+    """Watch PRODUCT_BACKLOG.md files for changes and auto-regenerate dashboard."""
+    import time
+
+    projects = load_registry()
+    target = resolve_project_id(projects, args.project)
+    interval = args.interval
+
+    # Build initial mtime map
+    mtimes = {}
+    for proj in target:
+        path = Path(os.path.expanduser(proj.get("path", ""))) / "PRODUCT_BACKLOG.md"
+        mtimes[proj["id"]] = path.stat().st_mtime if path.exists() else 0
+
+    print(f"Watching {len(target)} project(s) for changes (every {interval}s). Ctrl+C to stop.")
+
+    try:
+        while True:
+            time.sleep(interval)
+            for proj in target:
+                path = Path(os.path.expanduser(proj.get("path", ""))) / "PRODUCT_BACKLOG.md"
+                current_mtime = path.stat().st_mtime if path.exists() else 0
+
+                if current_mtime != mtimes[proj["id"]]:
+                    mtimes[proj["id"]] = current_mtime
+                    print(f"[{proj['id']}] PRODUCT_BACKLOG.md changed — syncing...")
+
+                    conn = get_db()
+                    init_db(conn)
+                    ingest_markdown(conn, proj)
+                    sync_to_markdown(conn, proj)
+                    regenerate_dashboard(proj)
+                    conn.close()
+
+                    print(f"[{proj['id']}] Dashboard updated.")
+    except KeyboardInterrupt:
+        print("\nStopped watching.")
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -1106,6 +1149,11 @@ def main():
     p_sync = sub.add_parser("sync", help="Regenerate PRODUCT_BACKLOG.md from DB")
     p_sync.add_argument("--project", help="Project ID (default: auto-detect or all)")
 
+    # watch
+    p_watch = sub.add_parser("watch", help="Watch markdown for changes, auto-regenerate dashboard")
+    p_watch.add_argument("--project", help="Project ID (default: auto-detect or all)")
+    p_watch.add_argument("--interval", type=int, default=2, help="Poll interval in seconds (default: 2)")
+
     args = parser.parse_args()
 
     commands = {
@@ -1116,6 +1164,7 @@ def main():
         "move": cmd_move,
         "accept": cmd_accept,
         "sync": cmd_sync,
+        "watch": cmd_watch,
     }
 
     commands[args.command](args)

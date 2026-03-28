@@ -37,7 +37,10 @@ If no ID was given, list all tickets in `## For Review` and ask: "Which ticket t
 
 ### 3. Check for Open Bugs
 
-Search `## Bugs` section for entries with `Parent: {ID}` that do NOT have `Status: bug-fixed`.
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py list --project <project> --section bugs
+```
+Look for entries with parent matching {ID} that do NOT have `Status: bug-fixed`.
 
 If open bugs exist:
 ```
@@ -51,51 +54,36 @@ If `docs/features/{ID}/` exists, run `/sync` to extract learnings before cleanup
 
 ### 5. Verify Acceptance Criteria
 
-- Check `- [ ]` items in the ticket — note any unchecked criteria
+- Check unchecked criteria in the ticket
 - Run tests if available (search for test files related to the feature)
 - Report verification status to the user
 
-### 6. Move to Done
+### 6. Accept the Ticket
 
-In `PRODUCT_BACKLOG.md`:
-- Remove the ticket from `## For Review`
-- Add it under `## Done` with `Status: done`
-
-### 7. Summarize to PRODUCT_SPECIFICATION.md
-
-Append a summary to `PRODUCT_SPECIFICATION.md`:
-
-```markdown
-### {ID}: {Title}
-Priority: {priority} | Complexity: {complexity} | Status: released
-Released: {date}
-{Description}
-
-Development notes:
-- {N} bugs found and fixed during development
-- Key decision: {notable architectural decision, if any}
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py accept <project> <ID>
 ```
 
-Pull context from `docs/features/{ID}/REVIEW.md` and `docs/features/{ID}/NOTES.md` if they exist.
+This moves the ticket to Done, appends to PRODUCT_SPECIFICATION.md, and syncs the markdown.
 
-### 8. Clean Up
+### 7. Clean Up
 
 Delete `docs/features/{ID}/` directory if it exists (working files are captured by sync + spec summary).
 
-### 9. Commit
+### 8. Commit
 
 Stage changes and commit:
 ```
 feat: accept {ID}: {Title}
 ```
 
-### 10. Regenerate Dashboard
+### 9. Regenerate Dashboard
 
 ```bash
 python3 ~/.claude/ticket-takeaway/generate.py
 ```
 
-### 11. Report
+### 10. Report
 
 ```
 {ID} accepted → Done. Committed.

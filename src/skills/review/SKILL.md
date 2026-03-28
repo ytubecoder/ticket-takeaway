@@ -121,16 +121,13 @@ Ask the user to describe the issue if they haven't already.
 
 ### 2. Create Bug Sub-Ticket
 
-Auto-generate bug ID: scan all `### BUG-{N}` entries in PRODUCT_BACKLOG.md, find the highest N, increment by 1.
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<Brief description>" --section bugs --parent <parent-ID> --priority <priority> --complexity S --description "<User's feedback description>"
+```
 
-Add the bug entry to the `## Bugs` section of PRODUCT_BACKLOG.md:
-
-```markdown
-### BUG-{N}: {Brief description}
-Priority: {priority} | Complexity: S | Status: bug
-Parent: {parent-ticket-ID}
-{User's feedback description}
-- [ ] {Fix criterion derived from feedback}
+Then add acceptance criteria:
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py update <project> <BUG-ID> --add-criteria "<Fix criterion derived from feedback>"
 ```
 
 **Priority inference:** Default to the parent ticket's priority. If the user specifies severity, use that instead.
@@ -150,11 +147,10 @@ If the file already exists, append a new session entry.
 
 ### 4. Update Parent Status
 
-In PRODUCT_BACKLOG.md:
-
-1. Remove the parent ticket from `## For Review`
-2. Move it to `## WIP`
-3. Change `Status: for-review` to `Status: rework`
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> <parent-ID> wip
+python3 ~/.claude/ticket-takeaway/tickets-cli.py update <project> <parent-ID> --status rework
+```
 
 The ticket goes back to WIP because it needs active work — rework is a WIP state, not a review state.
 
@@ -176,7 +172,11 @@ When the user accepts a ticket:
 
 ### 1. Check for Open Bugs
 
-Search `## Bugs` section for entries with `Parent: {ID}` that do NOT have `Status: bug-fixed`.
+Check for open bugs linked to the ticket:
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py list --project <project> --section bugs
+```
+Look for entries with `Parent: {ID}` that do NOT have `Status: bug-fixed`.
 
 If open bugs exist:
 ```
@@ -191,24 +191,19 @@ If `docs/features/{ID}/` exists, run `/sync` to extract learnings before cleanup
 ### 3. Verify Acceptance Criteria
 
 - The test criteria should already be confirmed from step 4c of the review walk-through (they were saved to the ticket)
-- Check `- [ ]` items in the ticket — note any unchecked criteria
+- Check unchecked criteria in the ticket
 - Run tests if available (search for test files related to the feature)
 - Report verification status to the user
 
-### 4. Move to Done
+### 4. Accept the Ticket
 
-In PRODUCT_BACKLOG.md:
-- Remove the ticket from `## For Review`
-- Add it under `## Done` with `Status: done`
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py accept <project> <ID>
+```
 
-### 5. Summarize to PRODUCT_SPECIFICATION.md
+This moves the ticket to Done, appends to PRODUCT_SPECIFICATION.md, and syncs the markdown.
 
-Append a summary to `PRODUCT_SPECIFICATION.md` including:
-- Feature description
-- Development notes: bug count during development, key decisions
-- Pull from `docs/features/{ID}/REVIEW.md` and `docs/features/{ID}/NOTES.md` if they exist
-
-### 6. Clean Up
+### 5. Clean Up
 
 Delete `docs/features/{ID}/` directory if it exists (working files are captured by sync + spec summary).
 

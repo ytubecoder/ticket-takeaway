@@ -72,3 +72,4 @@ Priority: high | Complexity: L | Status: released
 Comprehensive lifecycle document (docs/LIFECYCLE.md) defining all 13 statuses, transition rules, per-feature working files, and closed-loop guarantee.
 
 ## Won't Do
+

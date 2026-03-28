@@ -8,20 +8,23 @@ user_invocable: true
 
 Track features across all projects from ideation through release. Generates a self-contained dark-theme HTML kanban dashboard.
 
-**Architecture:** `PRODUCT_BACKLOG.md` --parse--> `HTML dashboard`
+**Architecture:** `SQLite DB` → `tickets-cli.py` → `PRODUCT_BACKLOG.md` + `HTML dashboard`
 
-- `PRODUCT_BACKLOG.md` is the **single source of truth** for all active work. It lives in each project's root directory.
-- Features stay in `PRODUCT_BACKLOG.md` until they are **accepted/shipped**, then they get moved to `PRODUCT_SPECIFICATION.md` as the permanent record.
-- **No JSON intermediary.** The dashboard parses the markdown directly each time.
-- HTML is regenerated after every change and opened in the browser.
+- **SQLite DB** at `~/.claude/ticket-takeaway/tickets.db` is the **source of truth** for all active work.
+- **`tickets-cli.py`** is the CLI for all CRUD operations. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
+- `PRODUCT_BACKLOG.md` is a **derived artifact** — auto-generated from the DB. Do NOT edit it directly.
+- Features stay in the DB until **accepted/shipped**, then they get moved to `PRODUCT_SPECIFICATION.md` as the permanent record.
+- HTML dashboard reads from the DB directly (with markdown fallback).
 
 **File layout:**
 ```
-{project}/PRODUCT_BACKLOG.md       # Active work: ideas, backlog, WIP, for review, done, won't do, icebox, bugs
-{project}/PRODUCT_SPECIFICATION.md # Shipped features (permanent record)
-~/.claude/dashboard/
+~/.claude/ticket-takeaway/
+  tickets.db                       # SQLite database (source of truth)
+  tickets-cli.py                   # CLI for all ticket operations
   registry.json                    # Which projects to track
-  generate.py                      # Generator script
+  generate.py                      # Dashboard generator script
+{project}/PRODUCT_BACKLOG.md       # Auto-generated from DB (do not edit directly)
+{project}/PRODUCT_SPECIFICATION.md # Shipped features (permanent record, plain markdown)
 {project}/docs/
   sdlc-dashboard.html             # Generated output (open in browser)
 ```
@@ -141,15 +144,15 @@ Submit button unresponsive on iOS Safari when keyboard is open.
 | Icebox | `icebox` | `icebox` |
 | Bugs | `bug`, `bug-fixed` | `bug` |
 
-**Status changes = moving entries between sections.** To move B-01 to WIP, cut it from `## Backlog` and paste under `## WIP`.
+**Status changes = CLI move command.** To move B-01 to WIP: `python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> B-01 wip`
 
-**Acceptance = move to PRODUCT_SPECIFICATION.md.** When a feature passes review, remove it from `PRODUCT_BACKLOG.md` and add it to `PRODUCT_SPECIFICATION.md` as a permanent record.
+**Acceptance = CLI accept command.** When a feature passes review: `python3 ~/.claude/ticket-takeaway/tickets-cli.py accept <project> <id>`
 
-**Closed-loop requirement:** Each project's `CLAUDE.md` must include rules requiring that feature work updates `PRODUCT_BACKLOG.md` at every status transition. This prevents drift between what's built and what the dashboard shows. The key transitions:
-- Start work → move to `## WIP` with `Status: in-progress`
-- Code complete → move to `## For Review` with `Status: for-review`
-- Accepted → `/accept` moves to `PRODUCT_SPECIFICATION.md`
-- New feature → add to `## Backlog` or `## Ideas`
+**Closed-loop requirement:** Each project's `CLAUDE.md` must include rules requiring that feature work updates the DB at every status transition. The key transitions:
+- Start work → `tickets-cli.py move <project> <id> wip`
+- Code complete → `tickets-cli.py move <project> <id> review`
+- Accepted → `tickets-cli.py accept <project> <id>`
+- New feature → `tickets-cli.py add <project> "title"`
 
 ---
 
@@ -533,50 +536,43 @@ Output: ~/projects/myproject/docs/sdlc-dashboard.html
 
 ## Mode 2: status <project> <item-id> <new-section>
 
-Moves an item between sections in `PRODUCT_BACKLOG.md`.
+Moves an item between sections.
 
 ### Steps
 
-1. Read `{project.path}/PRODUCT_BACKLOG.md`
-2. Find the item by ID (case-insensitive match on the `### {ID}:` pattern)
-3. Validate `new-section` is one of: `backlog`, `wip`, `review`, `ideas`, `done`, `wontdo`, `icebox`
-4. Cut the entire item block (from `###` to next `###` or `##`)
-5. Paste it under the target section header
-6. Write the updated file
-7. Regenerate HTML and open browser
-8. Report: `{item-id} → {new-section}`
+1. Run: `python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> <item-id> <new-section>`
+   - This updates the DB, sets the default status for the target section, and auto-syncs PRODUCT_BACKLOG.md
+2. Regenerate HTML: `python3 ~/.claude/ticket-takeaway/generate.py`
+3. Open browser
+4. Report: `{item-id} → {new-section}`
 
 ### Example
 
 ```
 /dashboard status myproject B-01 wip
+→ python3 ~/.claude/ticket-takeaway/tickets-cli.py move myproject B-01 wip
 ```
 
 ---
 
 ## Mode 3: add <project> "<title>" [--section S] [--priority P] [--complexity C]
 
-Adds a new entry to `PRODUCT_BACKLOG.md`.
+Adds a new ticket.
 
 ### Steps
 
-1. Read `{project.path}/PRODUCT_BACKLOG.md`
-2. Parse optional flags (defaults: `section=backlog`, `priority=medium`, `complexity=M`)
-3. **Auto-generate ID**: scan existing `###` headings for the highest number with the matching prefix letter (`B` for backlog, `I` for ideas, `W` for wontdo), increment by 1
-4. Append the new entry under the target section:
-   ```markdown
-   ### {ID}: {title}
-   Priority: {priority} | Complexity: {complexity}
-   {description — leave blank for user to fill in}
-   ```
-5. Write the file
-6. Regenerate HTML and open browser
-7. Report: `Added {ID}: "{title}" to {section}`
+1. Run: `python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<title>" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D]`
+   - Auto-generates ID (B- for backlog, I- for ideas, BUG- for bugs, etc.)
+   - Auto-syncs PRODUCT_BACKLOG.md
+2. Regenerate HTML: `python3 ~/.claude/ticket-takeaway/generate.py`
+3. Open browser
+4. Report: `Added {ID}: "{title}" to {section}`
 
 ### Example
 
 ```
 /dashboard add myproject "New Feature" --section wip --priority high --complexity M
+→ python3 ~/.claude/ticket-takeaway/tickets-cli.py add myproject "New Feature" --section wip --priority high --complexity M
 ```
 
 ---
@@ -587,33 +583,18 @@ Prints a summary table to the terminal. No browser needed.
 
 ### Steps
 
-1. Read `{project.path}/PRODUCT_BACKLOG.md` (or all projects from registry)
-2. Parse sections and items
-3. Print a formatted table:
-
-```
-Ticket Takeaway — {project name}
-
-Section      | ID    | Title                        | Priority | Complexity
--------------|-------|------------------------------|----------|----------
-WIP          | B-10  | Landing Page Polish          | medium   | M
-WIP          | B-11  | Geo-Located Screenshots      | low      | L
-For Review   | B-05  | Security Hardening           | high     | L
-Backlog      | B-01  | Contact Panel + Worker Info  | high     | M
-...
-
-Summary: 2 WIP, 1 For Review, 8 Backlog, 3 Ideas
-Total: 14 active items
-```
+1. Run: `python3 ~/.claude/ticket-takeaway/tickets-cli.py list [--project <project>]`
+2. Optionally filter: `--section wip`, `--status blocked`, etc.
 
 ---
 
 ## Rules
 
-- **`PRODUCT_BACKLOG.md` is the source of truth** — no JSON intermediary. The dashboard parses markdown directly.
-- **Always regenerate HTML** after any data change (modes 2, 3, 4 all regenerate — just parse markdown, render HTML)
+- **SQLite DB is the source of truth** — `~/.claude/ticket-takeaway/tickets.db`. All writes go through `tickets-cli.py`.
+- **PRODUCT_BACKLOG.md is auto-generated** — do NOT edit it directly. The CLI syncs DB → markdown after every write.
+- **Always regenerate HTML** after data changes: `python3 ~/.claude/ticket-takeaway/generate.py`
 - **Always open the dashboard in the browser** after regenerating HTML (use `open` on macOS, `xdg-open` on Linux)
 - **Case-insensitive ID matching** — `b-01` matches `B-01`
 - **Acceptance = move to PRODUCT_SPECIFICATION.md** — features only leave the backlog when accepted
-- **If PRODUCT_BACKLOG.md doesn't exist**, create it with empty section headers
-- **If registry doesn't exist**, report error: "No registry found. Create ~/.claude/dashboard/registry.json first."
+- **If DB doesn't exist**, run `python3 ~/.claude/ticket-takeaway/tickets-cli.py seed` to create it from existing markdown
+- **If registry doesn't exist**, report error: "No registry found. Create ~/.claude/ticket-takeaway/registry.json first."

@@ -134,13 +134,20 @@ Priority: {priority} | Complexity: {complexity} | Status: specified
 
 Ask: **"Good to save? Move to Backlog?"**
 
-### Step 5: Update the File
+### Step 5: Update the DB
 
 On confirmation:
 
-1. **Update the ticket in PRODUCT_BACKLOG.md** — replace the existing `###` block with the fully specced version
-2. **Move to `## Backlog`** if the user agreed (remove from `## Ideas`, add to `## Backlog`)
-3. **Set status to `specified`**
+1. **Update the ticket via CLI:**
+   ```bash
+   python3 ~/.claude/ticket-takeaway/tickets-cli.py update <project> <ID> --description "<description>" --status specified --add-criteria "<criterion 1>" --add-criteria "<criterion 2>"
+   ```
+2. **Move to Backlog** if the user agreed:
+   ```bash
+   python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> <ID> backlog
+   python3 ~/.claude/ticket-takeaway/tickets-cli.py update <project> <ID> --status specified
+   ```
+   (The move sets default status; the update overrides to `specified`)
 
 ### Step 6: Continue
 

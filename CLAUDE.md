@@ -9,20 +9,20 @@ Ticket Takeaway is a markdown-native project board system. It reads `PRODUCT_BAC
 ## Key Commands
 
 ```bash
+# Ticket CLI (all writes go through here)
+python3 ~/.claude/ticket-takeaway/tickets-cli.py list --project ticket-takeaway
+python3 ~/.claude/ticket-takeaway/tickets-cli.py add ticket-takeaway "New feature"
+python3 ~/.claude/ticket-takeaway/tickets-cli.py move ticket-takeaway B-01 wip
+python3 ~/.claude/ticket-takeaway/tickets-cli.py update ticket-takeaway B-01 --status blocked
+python3 ~/.claude/ticket-takeaway/tickets-cli.py accept ticket-takeaway B-01
+python3 ~/.claude/ticket-takeaway/tickets-cli.py seed    # Rebuild DB from markdown
+python3 ~/.claude/ticket-takeaway/tickets-cli.py sync    # Regenerate markdown from DB
+
 # Generate the dashboard (opens in browser)
 python3 ~/.claude/ticket-takeaway/generate.py
 
 # Or via Claude Code skill
 /dashboard
-
-# Move a ticket between sections
-/dashboard status ticket-takeaway B-01 for-review
-
-# Accept a feature (moves to PRODUCT_SPECIFICATION.md)
-/accept ticket-takeaway B-01
-
-# Add a new ticket
-/dashboard add ticket-takeaway "New feature title"
 
 # JSON output (for programmatic agent queries)
 python3 ~/.claude/ticket-takeaway/generate.py --json
@@ -31,14 +31,18 @@ python3 ~/.claude/ticket-takeaway/generate.py --json
 ## Architecture
 
 ```
-PRODUCT_BACKLOG.md  ──┐
-                      ├──→  src/generate.py  ──→  docs/sdlc-dashboard.html
-PRODUCT_SPECIFICATION.md ─┘
+tickets.db (SQLite)  ──→  tickets-cli.py  ──→  PRODUCT_BACKLOG.md (auto-generated)
+                     ──→  generate.py     ──→  docs/sdlc-dashboard.html
+PRODUCT_SPECIFICATION.md (plain markdown, not in DB)
 ```
 
-**`src/generate.py`** (~1500 lines, Python 3.10+, no external deps) is the core of the project. It:
+**Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `tickets-cli.py`.
+
+**`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
+
+**`src/generate.py`** (~1600 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
 1. Reads `~/.claude/ticket-takeaway/registry.json` for project paths
-2. Parses `PRODUCT_BACKLOG.md` — `##` headings = sections/columns, `###` headings = tickets
+2. Loads tickets from SQLite (falls back to parsing PRODUCT_BACKLOG.md if no DB)
 3. Parses `PRODUCT_SPECIFICATION.md` for accepted features
 4. Collects git/code stats via shell commands
 5. Renders a self-contained HTML file with inline CSS/JS (dark theme kanban)
@@ -51,11 +55,11 @@ Data model: `Ticket` dataclass (id, title, priority, complexity, status, section
 
 Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime use (see `INSTALL.md` for the deployment map).
 
-**Deployment gotcha:** The script must be deployed to **two** runtime locations:
-- `~/.claude/ticket-takeaway/generate.py` — used when invoked directly
-- `~/.claude/dashboard/generate.py` — used by the `/dashboard` skill
+**Deployment:** Source files in `src/` deploy to `~/.claude/` for runtime use:
+- `src/generate.py` → `~/.claude/ticket-takeaway/generate.py` AND `~/.claude/dashboard/generate.py` (fix DASHBOARD_DIR line 25)
+- `src/tickets-cli.py` → `~/.claude/ticket-takeaway/tickets-cli.py`
 
-The only difference is `DASHBOARD_DIR` (line 25). After editing `src/generate.py`, copy to both locations and adjust the path constant. Missing this causes `/dashboard` to run a stale version.
+**DB recovery:** If `tickets.db` is lost, run `tickets-cli.py seed` to reconstruct from PRODUCT_BACKLOG.md.
 
 ## Ticket Format in PRODUCT_BACKLOG.md
 

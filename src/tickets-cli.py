@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -594,11 +595,28 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def regenerate_dashboard(project: dict):
+    """Regenerate the HTML dashboard after a data change."""
+    gen_script = DASHBOARD_DIR / "generate.py"
+    if not gen_script.exists():
+        gen_script = Path.home() / ".claude" / "dashboard" / "generate.py"
+    if not gen_script.exists():
+        return
+    project_path = os.path.expanduser(project.get("path", ""))
+    if project_path:
+        subprocess.run(
+            [sys.executable, str(gen_script)],
+            cwd=project_path,
+            capture_output=True,
+        )
+
+
 def sync_all(conn: sqlite3.Connection, projects: list[dict]):
     """Ingest markdown edits, then sync DB to markdown for a list of projects."""
     for proj in projects:
         ingest_markdown(conn, proj)
         sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
         print(f"Synced {proj['name']}: {proj['path']}/PRODUCT_BACKLOG.md")
 
 
@@ -756,8 +774,9 @@ def cmd_add(args):
     ))
     conn.commit()
 
-    # Sync markdown
+    # Sync markdown and regenerate dashboard
     sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
     conn.close()
 
     print(f"Added {ticket_id}: \"{args.title}\" to {section}")
@@ -861,6 +880,7 @@ def cmd_update(args):
 
     conn.commit()
     sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
     conn.close()
     print(f"Updated {tid}")
 
@@ -932,6 +952,7 @@ def cmd_move(args):
 
     conn.commit()
     sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
     conn.close()
     print(f"{tid} \u2192 {section}")
 
@@ -997,8 +1018,9 @@ def cmd_accept(args):
     else:
         spec_path.write_text(f"# Product Specification \u2014 {proj['name']}\n{entry}\n", encoding="utf-8")
 
-    # Sync markdown
+    # Sync markdown and regenerate dashboard
     sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
     conn.close()
     print(f"{tid} accepted \u2192 Done")
 

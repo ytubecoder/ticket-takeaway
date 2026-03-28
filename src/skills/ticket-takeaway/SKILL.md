@@ -144,15 +144,150 @@ Submit button unresponsive on iOS Safari when keyboard is open.
 | Icebox | `icebox` | `icebox` |
 | Bugs | `bug`, `bug-fixed` | `bug` |
 
-**Status changes = CLI move command.** To move B-01 to WIP: `python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> B-01 wip`
+---
 
-**Acceptance = CLI accept command.** When a feature passes review: `python3 ~/.claude/ticket-takeaway/tickets-cli.py accept <project> <id>`
+## CLI Quick Reference
 
-**Closed-loop requirement:** Each project's `CLAUDE.md` must include rules requiring that feature work updates the DB at every status transition. The key transitions:
-- Start work → `tickets-cli.py move <project> <id> wip`
-- Code complete → `tickets-cli.py move <project> <id> review`
-- Accepted → `tickets-cli.py accept <project> <id>`
-- New feature → `tickets-cli.py add <project> "title"`
+All ticket changes go through `tickets-cli.py`. The CLI shorthand used below:
+```
+CLI=~/.claude/ticket-takeaway/tickets-cli.py
+```
+
+### `move` vs `update` — IMPORTANT DISTINCTION
+
+**`move`** changes the **section** (column on the board) AND sets the default status for that section. Use this for all section transitions.
+
+**`update --status`** changes ONLY the **status label** within the current section. Use this for fine-grained status changes where the ticket stays in the same column (e.g., `in-progress` → `blocked` within WIP, or `proposed` → `specified` within Backlog).
+
+**WRONG:** `python3 $CLI update goodform B-02 --status wontdo` — This changes the status text but leaves B-02 in its current section. The ticket disappears from the expected column.
+
+**RIGHT:** `python3 $CLI move goodform B-02 wontdo` — This moves B-02 to the Won't Do section and sets status to `wontdo`.
+
+### Common workflows with examples
+
+**Start work on a ticket:**
+```bash
+python3 $CLI move goodform B-05 wip
+# B-05 → WIP section, status = in-progress
+```
+
+**Ticket is blocked (stays in WIP):**
+```bash
+python3 $CLI update goodform B-05 --status blocked
+# B-05 stays in WIP, status changes to blocked
+```
+
+**Unblock and resume:**
+```bash
+python3 $CLI update goodform B-05 --status in-progress
+# B-05 stays in WIP, status changes back to in-progress
+```
+
+**Code complete — move to review:**
+```bash
+python3 $CLI move goodform B-05 review
+# B-05 → For Review section, status = for-review
+```
+
+**Review found issues — send back to WIP for rework:**
+```bash
+python3 $CLI move goodform B-05 wip
+python3 $CLI update goodform B-05 --status rework
+# B-05 → WIP section, status = rework
+```
+
+**Accept a feature (moves to Done + appends to PRODUCT_SPECIFICATION.md):**
+```bash
+python3 $CLI accept goodform B-05
+# B-05 → Done section, status = done, summary appended to PRODUCT_SPECIFICATION.md
+```
+
+**Shelve a ticket for later:**
+```bash
+python3 $CLI move goodform B-05 icebox
+# B-05 → Icebox section, status = icebox
+```
+
+**Won't do this ticket:**
+```bash
+python3 $CLI move goodform B-05 wontdo
+# B-05 → Won't Do section, status = wontdo
+```
+
+**Mark as done (without full acceptance flow):**
+```bash
+python3 $CLI move goodform B-05 done
+# B-05 → Done section, status = done (no PRODUCT_SPECIFICATION.md entry — use /accept for that)
+```
+
+**Spec a ticket (update description and criteria within Backlog):**
+```bash
+python3 $CLI update goodform B-05 --description "New description text" --status specified
+python3 $CLI update goodform B-05 --add-criteria "First acceptance criterion"
+python3 $CLI update goodform B-05 --add-criteria "Second acceptance criterion"
+# B-05 stays in current section, gets description + criteria + specified status
+```
+
+**Move from Ideas to Backlog:**
+```bash
+python3 $CLI move goodform I-03 backlog
+python3 $CLI update goodform I-03 --status specified
+# I-03 → Backlog section, status = specified (move sets default 'proposed', update overrides)
+```
+
+**Add a new ticket:**
+```bash
+python3 $CLI add goodform "New feature idea" --section ideas
+python3 $CLI add goodform "Ready to build" --section backlog --priority high --complexity M
+python3 $CLI add goodform "Bug found" --section bugs --parent B-05 --description "Description of the bug"
+```
+
+**Create a bug sub-ticket linked to a parent:**
+```bash
+python3 $CLI add goodform "Login button broken on mobile" --section bugs --parent B-12 --priority high --complexity S
+# Creates BUG-XX in Bugs section, linked to parent B-12
+```
+
+**Check/uncheck acceptance criteria:**
+```bash
+python3 $CLI update goodform B-05 --check-criteria 1    # Check the 1st criterion
+python3 $CLI update goodform B-05 --uncheck-criteria 2  # Uncheck the 2nd criterion
+python3 $CLI update goodform B-05 --remove-criteria 3   # Remove the 3rd criterion
+```
+
+**Add/remove dependencies:**
+```bash
+python3 $CLI update goodform B-05 --add-depends B-03
+python3 $CLI update goodform B-05 --remove-depends B-03
+```
+
+**List tickets:**
+```bash
+python3 $CLI list --project goodform                  # All tickets
+python3 $CLI list --project goodform --section wip    # WIP only
+python3 $CLI list --project goodform --status blocked  # Blocked tickets across all sections
+```
+
+**Watch for live dashboard updates (run in background):**
+```bash
+python3 $CLI watch --project goodform &
+# Polls PRODUCT_BACKLOG.md every 2s, absorbs direct edits, regenerates dashboard
+```
+
+### Valid section targets for `move`
+
+| Target | Section | Default status |
+|--------|---------|---------------|
+| `wip` | WIP | in-progress |
+| `review` | For Review | for-review |
+| `backlog` | Backlog | proposed |
+| `ideas` | Ideas | proposed |
+| `bugs` | Bugs | bug |
+| `icebox` | Icebox | icebox |
+| `done` | Done | done |
+| `wontdo` | Won't Do | wontdo |
+
+**Closed-loop requirement:** Each project's `CLAUDE.md` should include rules requiring that feature work updates the DB at every status transition.
 
 ---
 
@@ -536,83 +671,45 @@ Output: ~/projects/myproject/docs/sdlc-dashboard.html
 
 ## Mode 2: status <project> <item-id> <new-section>
 
-Moves an item between sections.
+Moves an item between sections. See **CLI Quick Reference** above for the full `move` vs `update` distinction and examples.
 
-### Steps
-
-1. Run: `python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> <item-id> <new-section>`
-   - This updates the DB, sets the default status for the target section, auto-syncs PRODUCT_BACKLOG.md, and regenerates the HTML dashboard
-2. Open browser (if not already open — the page auto-refreshes within 2 seconds)
-3. Report: `{item-id} → {new-section}`
-
-### Valid section targets
-
-| Target | Section | Default status |
-|--------|---------|---------------|
-| `wip` | WIP | in-progress |
-| `review` | For Review | for-review |
-| `backlog` | Backlog | proposed |
-| `ideas` | Ideas | proposed |
-| `bugs` | Bugs | bug |
-| `icebox` | Icebox | icebox |
-| `done` | Done | done |
-| `wontdo` | Won't Do | wontdo |
-
-### Examples
-
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> <item-id> <new-section>
 ```
-/dashboard status myproject B-01 wip
-→ python3 ~/.claude/ticket-takeaway/tickets-cli.py move myproject B-01 wip
 
-/dashboard status myproject B-01 icebox
-→ python3 ~/.claude/ticket-takeaway/tickets-cli.py move myproject B-01 icebox
-
-/dashboard status myproject B-01 wontdo
-→ python3 ~/.claude/ticket-takeaway/tickets-cli.py move myproject B-01 wontdo
-```
+The CLI updates the DB, sets the default status, syncs PRODUCT_BACKLOG.md, and regenerates the HTML dashboard. The browser auto-refreshes within 2 seconds.
 
 ---
 
-## Mode 3: add <project> "<title>" [--section S] [--priority P] [--complexity C]
+## Mode 3: add <project> "<title>" [options]
 
-Adds a new ticket.
+Adds a new ticket. See **CLI Quick Reference** above for examples.
 
-### Steps
-
-1. Run: `python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<title>" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D]`
-   - Auto-generates ID (B- for backlog, I- for ideas, BUG- for bugs, etc.)
-   - Auto-syncs PRODUCT_BACKLOG.md
-2. Regenerate HTML: `python3 ~/.claude/ticket-takeaway/generate.py`
-3. Open browser
-4. Report: `Added {ID}: "{title}" to {section}`
-
-### Example
-
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<title>" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D]
 ```
-/dashboard add myproject "New Feature" --section wip --priority high --complexity M
-→ python3 ~/.claude/ticket-takeaway/tickets-cli.py add myproject "New Feature" --section wip --priority high --complexity M
-```
+
+Auto-generates the ID (B- for backlog, I- for ideas, BUG- for bugs, etc.).
 
 ---
 
 ## Mode 5: show [project]
 
-Prints a summary table to the terminal. No browser needed.
+Prints a summary table to the terminal. See **CLI Quick Reference** above for filter examples.
 
-### Steps
-
-1. Run: `python3 ~/.claude/ticket-takeaway/tickets-cli.py list [--project <project>]`
-2. Optionally filter: `--section wip`, `--status blocked`, etc.
+```bash
+python3 ~/.claude/ticket-takeaway/tickets-cli.py list [--project <project>] [--section S] [--status S]
+```
 
 ---
 
 ## Rules
 
-- **SQLite DB is the source of truth** — `~/.claude/ticket-takeaway/tickets.db`. All writes go through `tickets-cli.py`.
-- **PRODUCT_BACKLOG.md is auto-generated** — do NOT edit it directly. The CLI syncs DB → markdown after every write.
-- **Always regenerate HTML** after data changes: `python3 ~/.claude/ticket-takeaway/generate.py`
-- **Always open the dashboard in the browser** after regenerating HTML (use `open` on macOS, `xdg-open` on Linux)
+- **Use `move` to change sections, `update --status` to change status within a section.** Never use `update --status` to move a ticket to a different column — it will disappear from the expected view.
+- **SQLite DB is the source of truth** — `~/.claude/ticket-takeaway/tickets.db`. Preferred writes go through `tickets-cli.py`.
+- **PRODUCT_BACKLOG.md is auto-generated** from the DB. You can edit it directly — the CLI absorbs changes via read-before-write sync — but the CLI is preferred.
+- **The dashboard auto-refreshes** — the CLI regenerates HTML after every write, and the browser polls every 2 seconds.
 - **Case-insensitive ID matching** — `b-01` matches `B-01`
-- **Acceptance = move to PRODUCT_SPECIFICATION.md** — features only leave the backlog when accepted
+- **Acceptance = move to PRODUCT_SPECIFICATION.md** — use `tickets-cli.py accept` for the full flow
 - **If DB doesn't exist**, run `python3 ~/.claude/ticket-takeaway/tickets-cli.py seed` to create it from existing markdown
 - **If registry doesn't exist**, report error: "No registry found. Create ~/.claude/ticket-takeaway/registry.json first."

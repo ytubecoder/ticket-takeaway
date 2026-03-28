@@ -414,6 +414,106 @@ def _extract_preserved_content(filepath: Path) -> tuple[list[str], list[str]]:
     return preamble, custom_sections
 
 
+def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath: Path):
+    """Read current PRODUCT_BACKLOG.md and merge any direct edits into the DB.
+
+    If an agent (or human) edited the markdown directly, this picks up those
+    changes before the DB overwrites the file. Markdown wins for conflicts.
+    """
+    if not filepath.exists():
+        return
+
+    md_tickets = parse_backlog(str(filepath))
+    if not md_tickets:
+        return
+
+    # Index DB tickets by ID for comparison
+    db_rows = conn.execute(
+        "SELECT id FROM tickets WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    db_ids = {r["id"] for r in db_rows}
+
+    for t in md_tickets:
+        tid = t["id"]
+        if not tid:
+            continue
+
+        if tid in db_ids:
+            # Existing ticket — update fields from markdown (markdown wins)
+            conn.execute("""
+                UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
+                    section=?, column=?, description=?, parent=?, rationale=?,
+                    sort_order=?, updated_at=?
+                WHERE id=? AND project_id=?
+            """, (
+                t["title"], t["priority"], t["complexity"], t["status"],
+                t["section"], t["column"], t["description"], t["parent"],
+                t["rationale"], t["sort_order"], datetime.now().isoformat(),
+                tid, project_id,
+            ))
+
+            # Replace acceptance criteria
+            conn.execute(
+                "DELETE FROM acceptance_criteria WHERE ticket_id=? AND project_id=?",
+                (tid, project_id)
+            )
+            for i, (checked, text) in enumerate(t["acceptance_criteria"]):
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
+                    (tid, project_id, text, int(checked), i)
+                )
+
+            # Replace depends
+            conn.execute(
+                "DELETE FROM depends WHERE ticket_id=? AND project_id=?",
+                (tid, project_id)
+            )
+            for dep_id in t["depends"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
+                    (tid, project_id, dep_id)
+                )
+        else:
+            # New ticket added directly to markdown — insert into DB
+            conn.execute("""
+                INSERT INTO tickets (id, project_id, title, priority, complexity, status,
+                                     section, column, description, parent, rationale, sort_order)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                tid, project_id, t["title"], t["priority"], t["complexity"],
+                t["status"], t["section"], t["column"], t["description"],
+                t["parent"], t["rationale"], t["sort_order"],
+            ))
+            for i, (checked, text) in enumerate(t["acceptance_criteria"]):
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
+                    (tid, project_id, text, int(checked), i)
+                )
+            for dep_id in t["depends"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
+                    (tid, project_id, dep_id)
+                )
+
+    # Detect tickets removed from markdown (deleted by agent)
+    md_ids = {t["id"] for t in md_tickets if t["id"]}
+    removed = db_ids - md_ids
+    for rid in removed:
+        conn.execute("DELETE FROM tickets WHERE id=? AND project_id=?", (rid, project_id))
+
+    conn.commit()
+
+
+def ingest_markdown(conn: sqlite3.Connection, project: dict):
+    """Absorb any direct markdown edits into the DB. Call before making DB writes."""
+    project_id = project["id"]
+    project_path = os.path.expanduser(project.get("path", ""))
+    if not project_path:
+        return
+    out_path = Path(project_path) / "PRODUCT_BACKLOG.md"
+    _ingest_markdown_changes(conn, project_id, out_path)
+
+
 def sync_to_markdown(conn: sqlite3.Connection, project: dict):
     """Regenerate PRODUCT_BACKLOG.md from database, preserving non-ticket content."""
     project_id = project["id"]
@@ -495,8 +595,9 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
 
 
 def sync_all(conn: sqlite3.Connection, projects: list[dict]):
-    """Sync DB to markdown for a list of projects."""
+    """Ingest markdown edits, then sync DB to markdown for a list of projects."""
     for proj in projects:
+        ingest_markdown(conn, proj)
         sync_to_markdown(conn, proj)
         print(f"Synced {proj['name']}: {proj['path']}/PRODUCT_BACKLOG.md")
 
@@ -634,6 +735,7 @@ def cmd_add(args):
 
     conn = get_db()
     init_db(conn)
+    ingest_markdown(conn, proj)
 
     ticket_id = auto_generate_id(conn, project_id, section)
 
@@ -673,6 +775,7 @@ def cmd_update(args):
 
     conn = get_db()
     init_db(conn)
+    ingest_markdown(conn, proj)
 
     # Verify ticket exists
     ticket = conn.execute(
@@ -802,6 +905,7 @@ def cmd_move(args):
 
     conn = get_db()
     init_db(conn)
+    ingest_markdown(conn, proj)
 
     # Find ticket (case-insensitive)
     ticket = conn.execute(
@@ -845,6 +949,7 @@ def cmd_accept(args):
 
     conn = get_db()
     init_db(conn)
+    ingest_markdown(conn, proj)
 
     # Find ticket
     ticket = conn.execute(

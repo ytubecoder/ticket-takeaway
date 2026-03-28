@@ -87,30 +87,30 @@ Sections (`## WIP`, `## Backlog`, `## Ideas`, etc.) map directly to dashboard co
 ```bash
 CLI=~/.claude/ticket-takeaway/tickets-cli.py
 
-# Starting work on a ticket
-python3 $CLI move <project> <ID> wip
+# Move tickets between sections (valid targets: wip, review, backlog, ideas, bugs, icebox, done, wontdo)
+python3 $CLI move <project> <ID> wip        # Start work
+python3 $CLI move <project> <ID> review     # Code complete
+python3 $CLI move <project> <ID> icebox     # Shelve for later
+python3 $CLI move <project> <ID> wontdo     # Won't do
+python3 $CLI move <project> <ID> done       # Mark done (use /accept for full acceptance flow)
 
-# Ticket is blocked
+# Update status within a section
 python3 $CLI update <project> <ID> --status blocked
+python3 $CLI update <project> <ID> --status rework
 
-# Code complete — ready for review
-python3 $CLI move <project> <ID> review
-
-# Accept a feature
+# Accept a feature (moves to Done + appends to PRODUCT_SPECIFICATION.md)
 python3 $CLI accept <project> <ID>
 
-# Add a new idea or ticket
+# Add tickets
 python3 $CLI add <project> "Title" --section ideas
-
-# Create a bug sub-ticket
+python3 $CLI add <project> "Title" --section backlog --priority high
 python3 $CLI add <project> "Bug description" --section bugs --parent <parent-ID>
 
 # Update description, criteria, or metadata
 python3 $CLI update <project> <ID> --description "..." --add-criteria "..."
 
-# Set rework status after review feedback
-python3 $CLI move <project> <ID> wip
-python3 $CLI update <project> <ID> --status rework
+# Watch for live dashboard updates (detects direct markdown edits too)
+python3 $CLI watch &
 ```
 
 Every CLI write auto-syncs the DB back to PRODUCT_BACKLOG.md. The sync preserves the file's preamble and any custom `##` sections not managed by the DB — only the ticket sections are regenerated.

@@ -541,16 +541,34 @@ Moves an item between sections.
 ### Steps
 
 1. Run: `python3 ~/.claude/ticket-takeaway/tickets-cli.py move <project> <item-id> <new-section>`
-   - This updates the DB, sets the default status for the target section, and auto-syncs PRODUCT_BACKLOG.md
-2. Regenerate HTML: `python3 ~/.claude/ticket-takeaway/generate.py`
-3. Open browser
-4. Report: `{item-id} → {new-section}`
+   - This updates the DB, sets the default status for the target section, auto-syncs PRODUCT_BACKLOG.md, and regenerates the HTML dashboard
+2. Open browser (if not already open — the page auto-refreshes within 2 seconds)
+3. Report: `{item-id} → {new-section}`
 
-### Example
+### Valid section targets
+
+| Target | Section | Default status |
+|--------|---------|---------------|
+| `wip` | WIP | in-progress |
+| `review` | For Review | for-review |
+| `backlog` | Backlog | proposed |
+| `ideas` | Ideas | proposed |
+| `bugs` | Bugs | bug |
+| `icebox` | Icebox | icebox |
+| `done` | Done | done |
+| `wontdo` | Won't Do | wontdo |
+
+### Examples
 
 ```
 /dashboard status myproject B-01 wip
 → python3 ~/.claude/ticket-takeaway/tickets-cli.py move myproject B-01 wip
+
+/dashboard status myproject B-01 icebox
+→ python3 ~/.claude/ticket-takeaway/tickets-cli.py move myproject B-01 icebox
+
+/dashboard status myproject B-01 wontdo
+→ python3 ~/.claude/ticket-takeaway/tickets-cli.py move myproject B-01 wontdo
 ```
 
 ---

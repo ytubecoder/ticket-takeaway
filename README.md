@@ -24,7 +24,9 @@
 
 > SQLite-backed project board. Double-click. Paste. Build.
 
-A lightweight process for people who work directly with their models to create software. Your kanban board is backed by SQLite and auto-generates markdown files. Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Code, the prompt will take into account the status and aim to do the next step to keep your feature flowing. Run as many windows as you want — the board is the coordination layer.
+A lightweight process for people who work directly with their models to create software. Your kanban board is backed by SQLite and auto-generates markdown files.
+
+Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Code, the prompt will take into account the status and aim to do the next step to keep your feature flowing. Run as many windows as you want — the board is the coordination layer.
 
 Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via read-before-write sync. No data loss either way.
 

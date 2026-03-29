@@ -111,7 +111,7 @@ This installs the CLI, generator, and skills, registers your project, and seeds 
 
 ### Or tell your agent
 
-> Clone https://github.com/ytubecoder/ticket-takeaway to ~/projects/ticket-takeaway and run `python3 ~/projects/ticket-takeaway/install.py --register`. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically.
+> Clone https://github.com/ytubecoder/ticket-takeaway to my current project directory and run `python3 install.py --register` in the directory you install in. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically. If our features are stored elsewhere we should collect all of them and write a PRODUCT_BACKLOG.md
 
 ### Upgrade
 

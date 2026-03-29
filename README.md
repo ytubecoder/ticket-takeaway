@@ -32,6 +32,7 @@ Two skills gate the process: **`/spec`** turns ideas into specced tickets. **`/r
 
 For tasks that don't need your hands on the keyboard — security reviews, docs, compliance — we intend to make this compatible with agent orchestrators like [Paperclip](https://github.com/paperclipai/paperclip).
 
+Screenshot from early build
 <img width="1507" alt="Ticket Takeaway dashboard rendered in a browser" src="https://github.com/user-attachments/assets/7a10b450-9f84-4c4b-9481-515d448cbe2f" />
 
 ## Stages and States

@@ -54,6 +54,12 @@ For each batch, in order:
 
 #### 4a. Present the Tickets
 
+**Check for feedbacks sessions** (if feedbacks is installed):
+- Look for `.feedbacks/{ticket-id}/` in the project root
+- If session directories exist, run `/feedbacks analyze` on the latest one
+- Present the analysis as additional review context alongside the ticket details
+- If no `.feedbacks/` directory or feedbacks not installed, skip silently
+
 Show each ticket's full content:
 - ID and title
 - Priority, complexity, status
@@ -118,6 +124,21 @@ When the user provides feedback on a ticket:
 ### 1. Collect the Issue
 
 Ask the user to describe the issue if they haven't already.
+
+### 1b. Offer Visual Feedback Capture (Optional)
+
+Check if feedbacks is available:
+```bash
+ls /home/user/projects/feedbacks/start.sh 2>/dev/null
+```
+
+If available **and the user hasn't already provided a detailed description**, offer:
+> "Want to record visual feedback with `/feedbacks`? You can point at the UI and narrate the issue."
+
+- If yes: invoke `/feedbacks start` — the feedbacks skill auto-detects the ticket context and saves to `.feedbacks/{ticket-id}/`
+- When the user returns after their session, run `/feedbacks analyze` on the latest session in `.feedbacks/{ticket-id}/`
+- Use the analysis findings (screenshots, marker references, action items) to enrich the bug sub-ticket description and acceptance criteria in step 2
+- If feedbacks is not installed, skip this step entirely — do not mention it
 
 ### 2. Create Bug Sub-Ticket
 

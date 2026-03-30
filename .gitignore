@@ -11,6 +11,9 @@ Thumbs.db
 # Per-feature working files (ephemeral)
 docs/features/
 
+# Feedbacks sessions (screenshots + transcripts from visual feedback capture)
+.feedbacks/
+
 # Editor
 *.swp
 *.swo

@@ -57,6 +57,7 @@ def install_system_files():
         ("review", "src/skills/review/SKILL.md"),
         ("spec", "src/skills/spec/SKILL.md"),
         ("accept", "src/skills/accept/SKILL.md"),
+        ("feedbacks", "src/skills/feedbacks/SKILL.md"),
     ]
     for skill_name, src_path in skills:
         src = REPO_DIR / src_path

@@ -131,6 +131,13 @@ def init_db(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_depends_ticket ON depends(ticket_id, project_id);
     """)
 
+    # Migrate: add commit_hash and release_tag columns if missing
+    for col, default in [("commit_hash", "''"), ("release_tag", "''")]:
+        try:
+            conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
 
 # ---------------------------------------------------------------------------
 # Registry helpers
@@ -248,6 +255,8 @@ def parse_backlog(filepath: str) -> list[dict]:
                 "depends": [],
                 "acceptance_criteria": [],
                 "sort_order": sort_order,
+                "commit_hash": "",
+                "release_tag": "",
             }
             sort_order += 1
             continue
@@ -282,6 +291,20 @@ def parse_backlog(filepath: str) -> list[dict]:
             val = line_stripped.split(":", 1)[1].strip()
             if val:
                 current_ticket["depends"] = [d.strip() for d in val.split(",") if d.strip()]
+            continue
+
+        # Commit hash
+        if current_ticket and line_stripped.startswith("Commit:"):
+            val = line_stripped.split(":", 1)[1].strip()
+            if val:
+                current_ticket["commit_hash"] = val
+            continue
+
+        # Release tag
+        if current_ticket and line_stripped.startswith("Release:"):
+            val = line_stripped.split(":", 1)[1].strip()
+            if val:
+                current_ticket["release_tag"] = val
             continue
 
         # Acceptance criteria
@@ -444,12 +467,15 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
             conn.execute("""
                 UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
                     section=?, column=?, description=?, parent=?, rationale=?,
-                    sort_order=?, updated_at=?
+                    sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
+                    release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
             """, (
                 t["title"], t["priority"], t["complexity"], t["status"],
                 t["section"], t["column"], t["description"], t["parent"],
-                t["rationale"], t["sort_order"], datetime.now().isoformat(),
+                t["rationale"], t["sort_order"],
+                t.get("commit_hash", ""), t.get("release_tag", ""),
+                datetime.now().isoformat(),
                 tid, project_id,
             ))
 
@@ -478,12 +504,14 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
             # New ticket added directly to markdown — insert into DB
             conn.execute("""
                 INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, column, description, parent, rationale, sort_order)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                                     section, column, description, parent, rationale, sort_order,
+                                     commit_hash, release_tag)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 tid, project_id, t["title"], t["priority"], t["complexity"],
                 t["status"], t["section"], t["column"], t["description"],
                 t["parent"], t["rationale"], t["sort_order"],
+                t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
                 conn.execute(
@@ -496,11 +524,9 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                     (tid, project_id, dep_id)
                 )
 
-    # Detect tickets removed from markdown (deleted by agent)
-    md_ids = {t["id"] for t in md_tickets if t["id"]}
-    removed = db_ids - md_ids
-    for rid in removed:
-        conn.execute("DELETE FROM tickets WHERE id=? AND project_id=?", (rid, project_id))
+    # DB is the single source of truth. Tickets only in the DB (not in markdown)
+    # are preserved — they may have been added via CLI or direct DB insert.
+    # To delete a ticket, use the CLI explicitly.
 
     conn.commit()
 
@@ -571,6 +597,12 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             if deps:
                 dep_ids = ", ".join(d["depends_on_id"] for d in deps)
                 lines.append(f"Depends: {dep_ids}")
+
+            # Commit hash and release tag
+            if t["commit_hash"]:
+                lines.append(f"Commit: {t['commit_hash']}")
+            if t["release_tag"]:
+                lines.append(f"Release: {t['release_tag']}")
 
             # Description
             if t["description"]:
@@ -648,12 +680,14 @@ def cmd_seed(args):
         for t in tickets:
             conn.execute("""
                 INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, column, description, parent, rationale, sort_order)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     section, column, description, parent, rationale, sort_order,
+                                     commit_hash, release_tag)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 t["id"], project_id, t["title"], t["priority"], t["complexity"],
                 t["status"], t["section"], t["column"], t["description"],
                 t["parent"], t["rationale"], t["sort_order"],
+                t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
 
             # Acceptance criteria
@@ -945,10 +979,30 @@ def cmd_move(args):
         (project_id, section)
     ).fetchone()
 
-    conn.execute("""
-        UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?
-        WHERE id = ? AND project_id = ?
-    """, (section, column, status, row["next_order"], datetime.now().isoformat(), tid, project_id))
+    # Capture commit hash when moving to Done
+    commit_hash_val = ""
+    if section == "Done":
+        project_path = os.path.expanduser(proj.get("path", ""))
+        if project_path:
+            try:
+                result = subprocess.run(
+                    ["git", "log", "-1", "--format=%h"],
+                    cwd=project_path, capture_output=True, text=True, timeout=5
+                )
+                commit_hash_val = result.stdout.strip() if result.returncode == 0 else ""
+            except Exception:
+                pass
+
+    if commit_hash_val:
+        conn.execute("""
+            UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?, commit_hash = ?
+            WHERE id = ? AND project_id = ?
+        """, (section, column, status, row["next_order"], datetime.now().isoformat(), commit_hash_val, tid, project_id))
+    else:
+        conn.execute("""
+            UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?
+            WHERE id = ? AND project_id = ?
+        """, (section, column, status, row["next_order"], datetime.now().isoformat(), tid, project_id))
 
     conn.commit()
     sync_to_markdown(conn, proj)
@@ -984,6 +1038,18 @@ def cmd_accept(args):
 
     tid = ticket["id"]
 
+    # Capture commit hash from the project repo
+    commit_hash_val = ""
+    if project_path:
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%h"],
+                cwd=project_path, capture_output=True, text=True, timeout=5
+            )
+            commit_hash_val = result.stdout.strip() if result.returncode == 0 else ""
+        except Exception:
+            pass
+
     # Move to Done
     row = conn.execute(
         "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = 'Done'",
@@ -992,9 +1058,9 @@ def cmd_accept(args):
 
     conn.execute("""
         UPDATE tickets SET section = 'Done', column = 'done', status = 'done',
-                           sort_order = ?, updated_at = ?
+                           sort_order = ?, updated_at = ?, commit_hash = ?
         WHERE id = ? AND project_id = ?
-    """, (row["next_order"], datetime.now().isoformat(), tid, project_id))
+    """, (row["next_order"], datetime.now().isoformat(), commit_hash_val, tid, project_id))
 
     conn.commit()
 
@@ -1003,7 +1069,8 @@ def cmd_accept(args):
     today = datetime.now().strftime("%Y-%m-%d")
     entry = f"\n### {tid}: {ticket['title']}\n"
     entry += f"Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: released\n"
-    entry += f"Released: {today}\n"
+    commit_info = f" | Commit: {commit_hash_val}" if commit_hash_val else ""
+    entry += f"Released: {today}{commit_info}\n"
     if ticket["description"]:
         entry += f"{ticket['description']}\n"
 

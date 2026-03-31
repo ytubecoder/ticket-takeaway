@@ -82,6 +82,8 @@ class Ticket:
     depends: list = field(default_factory=list)
     summary: str = ""
     archived: bool = False
+    commit_hash: str = ""
+    release_tag: str = ""
 
 
 @dataclass
@@ -274,6 +276,16 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         ).fetchall()
         depends = [d["depends_on_id"] for d in dep_rows]
 
+        # Safe access for columns that may not exist in older DBs
+        try:
+            commit_hash = r["commit_hash"]
+        except (IndexError, KeyError):
+            commit_hash = ""
+        try:
+            release_tag = r["release_tag"]
+        except (IndexError, KeyError):
+            release_tag = ""
+
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -289,6 +301,8 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             depends=depends,
             summary=r["summary"],
             archived=bool(r["archived"]),
+            commit_hash=commit_hash,
+            release_tag=release_tag,
         ))
 
     conn.close()
@@ -566,6 +580,7 @@ def generate_html(projects: list[Project]) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="gen-ts" content="{gen_ts}">
+<meta name="schema-version" content="2">
 <title>Ticket Takeaway — {escape(project_short)}</title>
 <style>
 :root {{
@@ -845,6 +860,22 @@ a {{ color: var(--accent); text-decoration: none; }}
 .list-row-main .card-id {{ min-width: 50px; }}
 .list-row-main .card-title {{ font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .list-row-main .complexity-badge {{ font-size: 8px; padding: 0 4px; }}
+.commit-badge {{
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-tertiary);
+  background: var(--bg-hover); padding: 0 4px; border-radius: 3px;
+}}
+.release-badge {{
+  font-size: 9px; color: var(--status-done); background: var(--status-done-bg);
+  padding: 0 4px; border-radius: 3px; font-weight: 600;
+}}
+.list-row-main .commit-badge, .list-row-main .release-badge {{ font-size: 8px; }}
+/* Quick-edit cursors (active only when edit-api meta tag is present) */
+.edit-enabled .priority-dot {{ cursor: pointer; }}
+.edit-enabled .status-badge {{ cursor: pointer; }}
+.edit-enabled .criterion {{ cursor: pointer; }}
+.edit-enabled .priority-dot:hover {{ transform: scale(1.5); transition: transform 0.15s; }}
+.edit-enabled .status-badge:hover {{ filter: brightness(1.3); transition: filter 0.15s; }}
+.status-dropdown-opt:hover {{ background: var(--bg-hover); }}
 .list-row-detail {{ display: none; padding: 6px 8px 4px 22px; }}
 .list-row.expanded .list-row-detail {{ display: block; }}
 
@@ -861,8 +892,32 @@ a {{ color: var(--accent); text-decoration: none; }}
   0% {{ box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent); transform: scale(1.02); }}
   100% {{ box-shadow: none; transform: scale(1); }}
 }}
-.card.just-moved {{
+.card.just-moved, .list-row.just-moved {{
   animation: card-moved 1.5s ease-out forwards;
+}}
+
+/* Live-update enter/exit */
+.card.card-enter, .list-row.card-enter {{
+  animation: card-enter 0.3s ease-out forwards;
+}}
+@keyframes card-enter {{
+  from {{ opacity: 0; transform: translateY(4px); }}
+  to {{ opacity: 1; transform: translateY(0); }}
+}}
+.card.card-exit, .list-row.card-exit {{
+  animation: card-exit 0.3s ease-out forwards;
+}}
+@keyframes card-exit {{
+  from {{ opacity: 1; }}
+  to {{ opacity: 0; transform: translateY(-4px); }}
+}}
+/* Highlight changed content in-place */
+.card.content-changed {{
+  animation: content-flash 0.8s ease-out;
+}}
+@keyframes content-flash {{
+  0% {{ background: rgba(59,130,246,0.08); }}
+  100% {{ background: var(--bg-card); }}
 }}
 
 /* Column collapse (unused but kept for safety) */
@@ -1030,29 +1085,7 @@ a {{ color: var(--accent); text-decoration: none; }}
     sparkWrap.appendChild(bar);
   }});
 
-  // Highlight cards that moved since last view
-  (function() {{
-    var prev = localStorage.getItem('dashboard-prev-positions');
-    if (!prev) return;
-    localStorage.removeItem('dashboard-prev-positions');
-    try {{
-      var positions = JSON.parse(prev);
-      var firstMoved = null;
-      document.querySelectorAll('.card').forEach(function(card) {{
-        var id = card.dataset.itemId;
-        var oldCol = positions[id];
-        if (oldCol && oldCol !== card.dataset.column) {{
-          card.classList.add('just-moved');
-          if (!firstMoved) firstMoved = card;
-        }}
-      }});
-      if (firstMoved) {{
-        setTimeout(function() {{
-          firstMoved.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-        }}, 200);
-      }}
-    }} catch(e) {{}}
-  }})();
+  // (Moved-card highlighting now handled by live-update diffing below)
 
   // Auto-scroll to filter bar
   setTimeout(function() {{
@@ -1128,6 +1161,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   // Single click to expand, double click to copy — all cards everywhere
   document.querySelectorAll('.card').forEach(function(el) {{
+    el._bound = true;
     el.addEventListener('click', function(e) {{
       e.stopPropagation(); // prevent bubbling to bottom-section-header
       if (e.detail === 1) {{
@@ -1165,6 +1199,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   // Linked child cards — double click copies context-aware prompt, click does nothing (prevent parent toggle)
   document.querySelectorAll('.linked-child-card').forEach(function(el) {{
+    el._bound = true;
     el.addEventListener('click', function(e) {{
       e.stopPropagation();
     }});
@@ -1189,25 +1224,315 @@ a {{ color: var(--accent); text-decoration: none; }}
     }});
   }});
 
-  // Auto-refresh on file change
+  // Live in-place update — fetch, diff, patch (no full reload)
   (function() {{
     var currentTs = document.querySelector('meta[name="gen-ts"]').content;
+    var currentSchema = (document.querySelector('meta[name="schema-version"]') || {{}}).content || '0';
     var url = location.href;
-    var interval = setInterval(function() {{
-      fetch(url).then(function(r) {{ return r.text(); }}).then(function(html) {{
-        var match = html.match(/<meta name="gen-ts" content="(\\d+)">/);
-        if (match && match[1] !== currentTs) {{
-          var positions = {{}};
-          document.querySelectorAll('.card').forEach(function(c) {{
-            positions[c.dataset.itemId] = c.dataset.column;
-          }});
-          localStorage.setItem('dashboard-prev-positions', JSON.stringify(positions));
-          location.reload();
+
+    function getCardMap(root) {{
+      var map = {{}};
+      root.querySelectorAll('[data-item-id]').forEach(function(el) {{ map[el.dataset.itemId] = el; }});
+      return map;
+    }}
+
+    function findContainerSel(el, root) {{
+      var p = el;
+      while (p && p !== root) {{
+        if (p.classList && (p.classList.contains('column-body') || p.classList.contains('bottom-section-body'))) {{
+          var sec = p.parentNode;
+          if (sec && sec.id) return '#' + sec.id + ' > .' + (p.classList.contains('column-body') ? 'column-body' : 'bottom-section-body');
+          break;
         }}
-      }}).catch(function() {{
-        clearInterval(interval);
+        p = p.parentNode;
+      }}
+      return null;
+    }}
+
+    function patchCards(newDoc) {{
+      var oldMap = getCardMap(document);
+      var newMap = getCardMap(newDoc);
+      var firstMoved = null;
+
+      Object.keys(oldMap).forEach(function(id) {{
+        if (!newMap[id]) {{
+          var el = oldMap[id];
+          el.classList.add('card-exit');
+          setTimeout(function() {{ if (el.parentNode) el.remove(); }}, 300);
+        }}
       }});
+
+      Object.keys(newMap).forEach(function(id) {{
+        var oldEl = oldMap[id], newEl = newMap[id];
+        if (!oldEl) return;
+        // Skip cards being edited — don't overwrite in-progress edits
+        if (oldEl.dataset.editing === 'true') return;
+        var oldCol = oldEl.dataset.column, newCol = newEl.dataset.column;
+        var wasExpanded = oldEl.classList.contains('expanded');
+
+        if (oldCol !== newCol) {{
+          var sel = findContainerSel(newEl, newDoc);
+          if (sel) {{
+            var target = document.querySelector(sel);
+            if (target) {{
+              oldEl.dataset.column = newCol;
+              oldEl.dataset.title = newEl.dataset.title || '';
+              oldEl.dataset.desc = newEl.dataset.desc || '';
+              oldEl.className = newEl.className;
+              if (wasExpanded) oldEl.classList.add('expanded');
+              while (oldEl.firstChild) oldEl.removeChild(oldEl.firstChild);
+              Array.from(newEl.childNodes).forEach(function(n) {{ oldEl.appendChild(n.cloneNode(true)); }});
+              target.appendChild(oldEl);
+              oldEl.classList.add('just-moved');
+              oldEl._bound = false;
+              if (!firstMoved) firstMoved = oldEl;
+            }}
+          }}
+        }} else if (oldEl.textContent !== newEl.textContent || oldEl.className !== newEl.className) {{
+          oldEl.dataset.title = newEl.dataset.title || '';
+          oldEl.dataset.desc = newEl.dataset.desc || '';
+          oldEl.className = newEl.className;
+          if (wasExpanded) oldEl.classList.add('expanded');
+          while (oldEl.firstChild) oldEl.removeChild(oldEl.firstChild);
+          Array.from(newEl.childNodes).forEach(function(n) {{ oldEl.appendChild(n.cloneNode(true)); }});
+          oldEl.classList.add('content-changed');
+          oldEl._bound = false;
+          setTimeout(function() {{ oldEl.classList.remove('content-changed'); }}, 800);
+        }}
+      }});
+
+      Object.keys(newMap).forEach(function(id) {{
+        if (oldMap[id]) return;
+        var newEl = newMap[id];
+        var sel = findContainerSel(newEl, newDoc);
+        if (sel) {{
+          var target = document.querySelector(sel);
+          if (target) {{
+            var clone = newEl.cloneNode(true);
+            clone.classList.add('card-enter');
+            target.appendChild(clone);
+            if (!firstMoved) firstMoved = clone;
+          }}
+        }}
+      }});
+
+      return firstMoved;
+    }}
+
+    function patchCounters(newDoc) {{
+      ['.header-stat', '.column-count', '.filter-btn .count', '.bottom-section-count'].forEach(function(sel) {{
+        var oldEls = document.querySelectorAll(sel);
+        var newEls = newDoc.querySelectorAll(sel);
+        oldEls.forEach(function(el, i) {{
+          if (newEls[i] && el.textContent !== newEls[i].textContent) el.textContent = newEls[i].textContent;
+        }});
+      }});
+      var oldFill = document.querySelector('.progress-fill'), newFill = newDoc.querySelector('.progress-fill');
+      if (oldFill && newFill) oldFill.style.width = newFill.style.width;
+      var oldPct = document.querySelector('.progress-pct'), newPct = newDoc.querySelector('.progress-pct');
+      if (oldPct && newPct && oldPct.textContent !== newPct.textContent) oldPct.textContent = newPct.textContent;
+      var oldDate = document.querySelector('.header-date'), newDate = newDoc.querySelector('.header-date');
+      if (oldDate && newDate && oldDate.textContent !== newDate.textContent) oldDate.textContent = newDate.textContent;
+    }}
+
+    setInterval(function() {{
+      fetch(url).then(function(r) {{ return r.text(); }}).then(function(html) {{
+        var tsMatch = html.match(/<meta name="gen-ts" content="(\\d+)">/);
+        if (!tsMatch || tsMatch[1] === currentTs) return;
+        var svMatch = html.match(/<meta name="schema-version" content="(\\d+)">/);
+        if ((svMatch ? svMatch[1] : '0') !== currentSchema) {{ location.reload(); return; }}
+        currentTs = tsMatch[1];
+        var newDoc = new DOMParser().parseFromString(html, 'text/html');
+
+        var scrollY = window.scrollY;
+        var searchVal = document.getElementById('searchInput').value;
+        var activeBtn = document.querySelector('.filter-btn.active');
+        var activeFilter = activeBtn ? activeBtn.dataset.filter : 'all';
+        var expandedIds = [];
+        document.querySelectorAll('.bottom-section.expanded').forEach(function(s) {{ expandedIds.push(s.id); }});
+
+        var firstChanged = patchCards(newDoc);
+        patchCounters(newDoc);
+
+        window.scrollTo(0, scrollY);
+        document.getElementById('searchInput').value = searchVal;
+        if (searchVal) document.getElementById('searchInput').dispatchEvent(new Event('input'));
+        if (activeFilter !== 'all') {{ var fb = document.querySelector('.filter-btn[data-filter="' + activeFilter + '"]'); if (fb) fb.click(); }}
+        expandedIds.forEach(function(sid) {{ var sec = document.getElementById(sid); if (sec && !sec.classList.contains('expanded')) sec.classList.add('expanded'); }});
+        rebindCardListeners();
+        if (firstChanged) setTimeout(function() {{ firstChanged.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); }}, 100);
+      }}).catch(function() {{}});
     }}, 2000);
+
+    function rebindCardListeners() {{
+      document.querySelectorAll('.card').forEach(function(el) {{
+        if (el._bound) return;
+        el._bound = true;
+        el.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          if (e.detail === 1) {{ var self = this; this._clickTimer = setTimeout(function() {{ self.classList.toggle('expanded'); }}, 200); }}
+        }});
+        el.addEventListener('dblclick', function(e) {{
+          e.stopPropagation(); clearTimeout(this._clickTimer);
+          var id = this.dataset.itemId, title = this.dataset.title, col = this.dataset.column, text;
+          if (col === 'ideas') text = '/spec ' + id;
+          else if (col === 'backlog') text = 'I want to spec out ' + id + ': ' + title + ' — write the description and acceptance criteria';
+          else if (col === 'review') text = '/review ' + id;
+          else if (col === 'bugs') text = 'We need to come up with a plan to fix this bug ' + id + ': ' + title;
+          else text = 'I want to work on ' + id + ': ' + title;
+          navigator.clipboard.writeText(text).then(function() {{
+            var toast = el.querySelector('.copied-toast');
+            if (toast) {{ toast.classList.add('show'); setTimeout(function() {{ toast.classList.remove('show'); }}, 1200); }}
+          }});
+        }});
+      }});
+      document.querySelectorAll('.linked-child-card').forEach(function(el) {{
+        if (el._bound) return;
+        el._bound = true;
+        el.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+        el.addEventListener('dblclick', function(e) {{
+          e.stopPropagation();
+          var id = this.dataset.itemId, title = this.dataset.title, col = this.dataset.column, text;
+          if (col === 'bugs' || this.classList.contains('is-bug')) text = 'We need to come up with a plan to fix this bug ' + id + ': ' + title;
+          else text = 'I want to work on ' + id + ': ' + title;
+          navigator.clipboard.writeText(text).then(function() {{
+            var toast = el.querySelector('.copied-toast');
+            if (toast) {{ toast.classList.add('show'); setTimeout(function() {{ toast.classList.remove('show'); }}, 1200); }}
+          }});
+        }});
+      }});
+    }}
+    rebindCardListeners();
+
+    // --- Quick-edit support (only active when served via serve.py) ---
+    var editApiMeta = document.querySelector('meta[name="edit-api"]');
+    var EDIT_API = editApiMeta ? editApiMeta.content : null;
+    if (EDIT_API) document.body.classList.add('edit-enabled');
+
+    function apiPut(ticketId, body) {{
+      if (!EDIT_API) return Promise.reject('No API');
+      return fetch(EDIT_API + '/tickets/' + ticketId, {{
+        method: 'PUT',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(body)
+      }}).then(function(r) {{ return r.json(); }});
+    }}
+
+    function apiMove(ticketId, section) {{
+      if (!EDIT_API) return Promise.reject('No API');
+      return fetch(EDIT_API + '/tickets/' + ticketId + '/move', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ section: section }})
+      }}).then(function(r) {{ return r.json(); }});
+    }}
+
+    function showToast(el, text) {{
+      var toast = el.querySelector('.copied-toast');
+      if (toast) {{
+        var orig = toast.textContent;
+        toast.textContent = text || 'Saved!';
+        toast.classList.add('show');
+        setTimeout(function() {{ toast.classList.remove('show'); toast.textContent = orig; }}, 1200);
+      }}
+    }}
+
+    // Priority dot click — cycle high > medium > low > high
+    if (EDIT_API) {{
+      document.addEventListener('click', function(e) {{
+        var dot = e.target.closest('.priority-dot');
+        if (!dot) return;
+        var card = dot.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        e.stopPropagation();
+        e.preventDefault();
+        clearTimeout(card._clickTimer);
+        var cycle = ['high', 'medium', 'low'];
+        var current = dot.classList.contains('high') ? 'high' : dot.classList.contains('medium') ? 'medium' : 'low';
+        var next = cycle[(cycle.indexOf(current) + 1) % 3];
+        dot.className = 'priority-dot ' + next;
+        apiPut(card.dataset.itemId, {{ priority: next }}).then(function() {{
+          showToast(card, next);
+        }});
+      }}, true);
+
+      // Status badge click — show dropdown
+      document.addEventListener('click', function(e) {{
+        var badge = e.target.closest('.status-badge');
+        if (!badge) return;
+        var card = badge.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        // Don't trigger on status badges inside child cards
+        if (e.target.closest('.linked-child-card')) return;
+        e.stopPropagation();
+        e.preventDefault();
+        clearTimeout(card._clickTimer);
+        // Remove any existing dropdown
+        var existing = document.querySelector('.status-dropdown');
+        if (existing) existing.remove();
+        // Create dropdown
+        var statuses = ['proposed','specified','ready','in-progress','blocked','rework','for-review','done','bug','bug-fixed','icebox','wont-do'];
+        var dd = document.createElement('div');
+        dd.className = 'status-dropdown';
+        dd.style.cssText = 'position:absolute;z-index:100;background:var(--bg-card);border:1px solid var(--border-main);border-radius:6px;padding:4px 0;min-width:130px;box-shadow:0 4px 12px rgba(0,0,0,.4);';
+        statuses.forEach(function(s) {{
+          var opt = document.createElement('div');
+          opt.className = 'status-dropdown-opt';
+          opt.textContent = s;
+          opt.style.cssText = 'padding:3px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);';
+          opt.addEventListener('mouseenter', function() {{ this.style.background = 'var(--bg-hover)'; }});
+          opt.addEventListener('mouseleave', function() {{ this.style.background = ''; }});
+          opt.addEventListener('click', function(ev) {{
+            ev.stopPropagation();
+            dd.remove();
+            badge.className = 'status-badge ' + s;
+            badge.textContent = s;
+            apiPut(card.dataset.itemId, {{ status: s }}).then(function() {{
+              showToast(card, s);
+            }});
+          }});
+          dd.appendChild(opt);
+        }});
+        badge.style.position = 'relative';
+        badge.parentElement.style.position = 'relative';
+        badge.parentElement.appendChild(dd);
+        // Close on outside click
+        setTimeout(function() {{
+          document.addEventListener('click', function closer() {{
+            dd.remove();
+            document.removeEventListener('click', closer);
+          }}, {{ once: true }});
+        }}, 0);
+      }}, true);
+
+      // Acceptance criteria checkbox click — toggle
+      document.addEventListener('click', function(e) {{
+        var criterion = e.target.closest('.criterion');
+        if (!criterion) return;
+        var card = criterion.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        e.stopPropagation();
+        e.preventDefault();
+        clearTimeout(card._clickTimer);
+        var criteriaContainer = criterion.closest('.card-criteria');
+        if (!criteriaContainer) return;
+        var allCriteria = criteriaContainer.querySelectorAll('.criterion');
+        var idx = Array.prototype.indexOf.call(allCriteria, criterion);
+        if (idx < 0) return;
+        // Toggle visual state
+        var isChecked = criterion.classList.contains('checked');
+        criterion.classList.toggle('checked');
+        // Update the marker text safely (replace first character entity)
+        var textNode = criterion.firstChild;
+        if (textNode) {{
+          var newMarker = isChecked ? '\u2610 ' : '\u2611 ';
+          criterion.textContent = newMarker + criterion.textContent.substring(2);
+        }}
+        apiPut(card.dataset.itemId, {{ toggle_criterion: idx }}).then(function() {{
+          showToast(card, isChecked ? 'unchecked' : 'checked');
+        }});
+      }}, true);
+    }}
   }})();
 }})();
 </script>
@@ -1399,6 +1724,14 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
         if detail_parts:
             detail_html = '        <div class="list-row-detail">\n' + "\n".join(detail_parts) + "\n        </div>\n"
 
+        # Git traceability badges
+        commit_badge = ""
+        if t.commit_hash:
+            commit_badge = f'<span class="commit-badge">{escape(t.commit_hash)}</span>'
+        release_badge = ""
+        if t.release_tag:
+            release_badge = f'<span class="release-badge">{escape(t.release_tag)}</span>'
+
         lines.append(
             f'      <div class="list-row card" data-column="{column}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}">\n'
@@ -1409,6 +1742,7 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
             f'<span class="card-title">{title_esc}</span>'
             f'<span class="status-badge {status_class}">{status_class}</span>'
             f'<span class="complexity-badge">{escape(t.complexity)}</span>'
+            f'{commit_badge}{release_badge}'
             f'{child_badge_html}</div>\n'
             f'{detail_html}'
             f'      </div>'
@@ -1453,6 +1787,8 @@ def generate_json_output(projects: list[Project]) -> str:
                 "rationale": t.rationale,
                 "summary": t.summary,
                 "archived": t.archived,
+                "commit_hash": t.commit_hash,
+                "release_tag": t.release_tag,
                 "deps_resolved": dep_info["deps_resolved"],
                 "blocking_deps": dep_info["blocking_deps"],
             })
@@ -1544,13 +1880,17 @@ def main():
             backlog_path = os.path.join(proj.path, "PRODUCT_BACKLOG.md")
             proj.tickets = parse_backlog(backlog_path)
 
-        # Parse PRODUCT_SPECIFICATION.md for any done items not already in backlog
-        spec_path = os.path.join(proj.path, "PRODUCT_SPECIFICATION.md")
-        spec_done = parse_spec_for_done(spec_path)
-        existing_ids = {t.id for t in proj.tickets}
-        for t in spec_done:
-            if t.id not in existing_ids:
-                proj.tickets.append(t)
+        # DB is the single source of truth for tickets.
+        # PRODUCT_SPECIFICATION.md is read-only output (written by /accept).
+        # Spec items must be seeded into the DB via tickets-cli.py.
+
+        # Enrich tickets with release tags from git
+        if proj.path:
+            for t in proj.tickets:
+                if t.commit_hash and not t.release_tag:
+                    tag = run_cmd(f"git tag --contains {t.commit_hash} --sort=-creatordate | head -1", cwd=proj.path)
+                    if tag:
+                        t.release_tag = tag
 
         # Collect code stats
         proj.code_stats = collect_code_stats(proj.path)

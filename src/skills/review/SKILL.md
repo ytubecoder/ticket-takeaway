@@ -54,11 +54,13 @@ For each batch, in order:
 
 #### 4a. Present the Tickets
 
-**Check for feedbacks sessions** (if feedbacks is installed):
-- Look for `.feedbacks/{ticket-id}/` in the project root
-- If session directories exist, run `/feedbacks analyze` on the latest one
+**Check for feedbacks sessions:**
+```bash
+ls -dt {project_root}/.feedbacks/{ticket-id}/feedbacks-*/session.md 2>/dev/null | head -1
+```
+- If a session directory is found, invoke `/feedbacks analyze {session_path}` on the latest one
 - Present the analysis as additional review context alongside the ticket details
-- If no `.feedbacks/` directory or feedbacks not installed, skip silently
+- If no `.feedbacks/{ticket-id}/` directory exists, skip silently — do not mention feedbacks
 
 Show each ticket's full content:
 - ID and title
@@ -132,13 +134,19 @@ Check if feedbacks is available:
 ls /home/user/projects/feedbacks/start.sh 2>/dev/null
 ```
 
-If available **and the user hasn't already provided a detailed description**, offer:
-> "Want to record visual feedback with `/feedbacks`? You can point at the UI and narrate the issue."
+If not found, skip this step entirely — do not mention feedbacks.
 
-- If yes: invoke `/feedbacks start` — the feedbacks skill auto-detects the ticket context and saves to `.feedbacks/{ticket-id}/`
-- When the user returns after their session, run `/feedbacks analyze` on the latest session in `.feedbacks/{ticket-id}/`
-- Use the analysis findings (screenshots, marker references, action items) to enrich the bug sub-ticket description and acceptance criteria in step 2
-- If feedbacks is not installed, skip this step entirely — do not mention it
+If available **and the user hasn't already provided a detailed description**, offer:
+> "Want to record visual feedback? You can point at the UI and narrate the issue."
+
+If yes:
+1. Invoke `/feedbacks start {ticket-id}` — this sets `FEEDBACKS_OUTPUT_DIR={project_root}/.feedbacks/{ticket-id}/` and opens the capture app with the ticket pre-filled
+2. Wait for the user to return after their capture session
+3. Invoke `/feedbacks analyze` on the latest session in `.feedbacks/{ticket-id}/`
+4. Use the analysis findings (screenshots, action items, interpretation notes) to enrich the bug sub-ticket:
+   - Add specific UI references from the analysis to the bug description
+   - Derive acceptance criteria from the suggested action items
+   - Reference screenshot numbers in the description for traceability
 
 ### 2. Create Bug Sub-Ticket
 

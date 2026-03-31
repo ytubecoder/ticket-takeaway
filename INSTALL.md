@@ -46,6 +46,7 @@ python3 ~/projects/ticket-takeaway/install.py
 | `src/skills/review/SKILL.md` | `~/.claude/skills/review/SKILL.md` | `/review` skill |
 | `src/skills/spec/SKILL.md` | `~/.claude/skills/spec/SKILL.md` | `/spec` skill |
 | `src/skills/accept/SKILL.md` | `~/.claude/skills/accept/SKILL.md` | `/accept` skill |
+| `src/skills/feedbacks/SKILL.md` | `~/.claude/skills/feedbacks/SKILL.md` | `/feedbacks` wrapper skill (superset of base feedbacks skill) |
 
 Runtime data (not overwritten on upgrade):
 | File | Purpose |

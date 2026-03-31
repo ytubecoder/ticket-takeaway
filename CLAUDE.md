@@ -33,25 +33,28 @@ python3 ~/.claude/ticket-takeaway/generate.py --json
 ```
 tickets.db (SQLite)  ──→  tickets-cli.py  ──→  PRODUCT_BACKLOG.md (auto-generated)
                      ──→  generate.py     ──→  docs/sdlc-dashboard.html
-PRODUCT_SPECIFICATION.md (plain markdown, not in DB)
+PRODUCT_SPECIFICATION.md (write-only output from /accept, not read by generator)
 ```
+
+**Data flow is one-directional:** DB → markdown → dashboard. The generator does NOT merge tickets from PRODUCT_SPECIFICATION.md — all tickets must exist in the DB. The `ingest_markdown` step in sync absorbs direct markdown edits into the DB but never deletes DB-only records.
 
 **Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `tickets-cli.py`.
 
 **`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
 
-**`src/generate.py`** (~1600 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
+**`src/generate.py`** (~1700 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
 1. Reads `~/.claude/ticket-takeaway/registry.json` for project paths
 2. Loads tickets from SQLite (falls back to parsing PRODUCT_BACKLOG.md if no DB)
-3. Parses `PRODUCT_SPECIFICATION.md` for accepted features
-4. Collects git/code stats via shell commands
-5. Renders a self-contained HTML file with inline CSS/JS (dark theme kanban)
+3. Collects git/code stats via shell commands
+4. Renders a self-contained HTML file with inline CSS/JS (dark theme kanban)
+5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
 
 Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, column, description, acceptance_criteria, parent, rationale, depends, summary, archived) → `Project` dataclass (tickets + CodeStats) → HTML or JSON.
 
 **`src/skills/`** contains Claude Code skill definitions:
 - `dashboard/SKILL.md` — the `/dashboard` skill
 - `review/SKILL.md` — the `/review` skill for acceptance workflow
+- `feedbacks/SKILL.md` — the `/feedbacks` wrapper skill (superset of base feedbacks skill, adds ticket-takeaway context)
 
 Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime use (see `INSTALL.md` for the deployment map).
 
@@ -136,12 +139,27 @@ The bottom sections (Bugs, Done, Icebox, Won't Do) render as **compact list rows
 
 ## Feedbacks Integration (Optional)
 
-Ticket Takeaway integrates with [feedbacks](https://github.com/user/feedbacks) — a browser-based screen recording + voice annotation tool for visual UI feedback. **Feedbacks is optional; ticket-takeaway works fully without it.**
+Ticket Takeaway integrates with [feedbacks](https://github.com/ytubecoder/feedbacks) — a browser-based screen recording + voice annotation tool for visual UI feedback. **Feedbacks is optional; ticket-takeaway works fully without it.**
 
-**How it works:**
-- During `/review`, if `.feedbacks/{ticket-id}/` exists with prior sessions, they are analyzed as additional review context
-- When giving feedback on a ticket, if feedbacks is installed (`~/projects/feedbacks/`), the reviewer is offered visual capture via `/feedbacks start`
-- Feedbacks sessions save to `.feedbacks/{ticket-id}/feedbacks-{timestamp}/` in the project root (gitignored)
-- Each session contains `session.md` (annotated transcript), `player.html` (playback), and `images/` (annotated screenshots)
+**Architecture:** One-way dependency — ticket-takeaway depends on feedbacks, never the reverse. Feedbacks is a standalone capture tool; ticket-takeaway is the orchestrator that layers SDLC context on top.
 
-**Detection:** The `/review` skill checks for `~/projects/feedbacks/start.sh` — if absent, all feedbacks-related steps are silently skipped.
+**Skills:** Both repos ship a skill to `~/.claude/skills/feedbacks/`:
+- **feedbacks repo** ships the base skill (`skills/feedbacks/SKILL.md`) — setup, start, analyze
+- **ticket-takeaway repo** ships a wrapper skill (`src/skills/feedbacks/SKILL.md`) — superset of base, adds ticket-linked output dirs and context push after analysis
+- If both installed, ticket-takeaway's wrapper overwrites the base (it's a superset)
+
+**Two use cases:**
+
+1. **Review stage** (`/review`):
+   - Step 4a: checks `.feedbacks/{ticket-id}/` for prior sessions, auto-analyzes latest as review context
+   - Step 1b: when giving feedback, offers `/feedbacks start {ticket-id}` for visual capture — saves directly to `.feedbacks/{ticket-id}/`
+
+2. **General feedback** (`/feedbacks` standalone):
+   - Sessions save to feedbacks' default location (`~/projects/feedbacks/sessions/`)
+   - After analysis, session path + summary are pushed into agent context (informational only)
+   - Agent decides what to do — create ticket, link to existing, or nothing
+
+**Session format:** Each session in `.feedbacks/{ticket-id}/feedbacks-{timestamp}/` contains:
+- `session.md` (timestamped transcript + screenshot refs), `player.html` (playback), `images/` (screenshots with cursor), `meta.json`, `summary.json`
+
+**Detection:** Skills check for `~/projects/feedbacks/start.sh` — if absent, all feedbacks-related steps are silently skipped.

@@ -1,5 +1,19 @@
 # Session Log
 
+## 2026-04-02 — Fix drag-and-drop column highlighting
+
+### Summary
+- Fixed drag-drop highlight to cover entire column (header + body + empty space), not just the card container area
+- Moved drag event listeners from `.column-body` to `.column` element and updated section lookup logic
+- Changed kanban container from `align-items: flex-start` to `align-items: stretch` so columns fill full available height
+
+### Lessons Learned
+- **Gotcha:** `align-items: flex-start` on the kanban flex container made columns only as tall as their content — dead space below cards wasn't part of any element, so drag events couldn't fire there. `stretch` makes columns fill the container height.
+- **Accepted:** Attaching drag listeners to the `.column` wrapper (not `.column-body`) means the header is part of the drop zone too, giving a much clearer visual indication of the target.
+
+### Decisions
+- Column highlight uses accent border-color + box-shadow glow (consistent with card drag-target style) rather than dashed border — looks cleaner on the full column
+
 ## 2026-04-02 — New ticket creation UI + overlay panel fix
 
 ### Summary

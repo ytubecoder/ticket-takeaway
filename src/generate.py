@@ -724,7 +724,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 /* Kanban */
 .kanban {{
   display: flex; gap: 12px; padding: 16px 20px; overflow-x: auto;
-  align-items: flex-start;
+  align-items: stretch;
 }}
 .column {{
   flex: 0 0 280px; min-width: 280px; background: var(--bg-surface);
@@ -1180,6 +1180,7 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
 .detail-save-btn:hover {{ opacity: 0.9; }}
 .detail-toast {{ position: absolute; top: 14px; right: 60px; font-size: 11px; font-weight: 600; color: var(--status-done); background: var(--status-done-bg); padding: 3px 10px; border-radius: 4px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }}
 .detail-toast.show {{ opacity: 1; }}
+.detail-tab.needs-work {{ color: #eab308 !important; border-color: rgba(234,179,8,0.4); }}
 
 .status-dropdown-opt:hover {{ background: var(--bg-hover); }}
 .list-row-detail {{ display: none; padding: 6px 8px 4px 22px; }}
@@ -1797,211 +1798,39 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
 
     function setCardGateChecking(card, checking) {{
       if (checking) {{
-        card.classList.add('gate-checking', 'expanded');
+        card.classList.add('gate-checking');
       }} else {{
         card.classList.remove('gate-checking');
       }}
     }}
 
-    function removeGatePanel(card) {{
-      var panel = card.querySelector('.gate-panel');
-      if (panel) panel.remove();
-      card.classList.remove('gate-checking');
-    }}
-
     function startGateCheck(ticketId, targetSection) {{
       var card = document.querySelector('[data-item-id="' + ticketId + '"]');
-      if (!card) return;
-      removeGatePanel(card);
-      setCardGateChecking(card, true);
+      if (card) setCardGateChecking(card, true);
       apiGateCheck(ticketId, targetSection).then(function(data) {{
-        setCardGateChecking(card, false);
-        renderGatePanel(card, data, ticketId, targetSection);
-      }}).catch(function(err) {{
-        setCardGateChecking(card, false);
-        showToast(card, 'Gate check failed');
-      }});
-    }}
-
-    function renderGatePanel(card, data, ticketId, targetSection) {{
-      removeGatePanel(card);
-      card.classList.add('expanded');
-      var panel = document.createElement('div');
-      panel.className = 'gate-panel';
-
-      // Verdict header — safe DOM construction
-      var verdict = data.verdict || 'needs-work';
-      var verdictDiv = document.createElement('div');
-      verdictDiv.className = 'gate-verdict';
-      var badge = document.createElement('span');
-      badge.className = 'gate-verdict-badge ' + verdict;
-      badge.textContent = verdict.replace(/-/g, ' ');
-      var summarySpan = document.createElement('span');
-      summarySpan.className = 'gate-verdict-summary';
-      summarySpan.textContent = data.summary || '';
-      verdictDiv.appendChild(badge);
-      verdictDiv.appendChild(summarySpan);
-      panel.appendChild(verdictDiv);
-
-      // Category rows
-      var catOrder = ['D', 'C', 'T', 'R', 'S'];
-      var catLabels = {{ D: 'Description', C: 'Criteria', T: 'Tests', R: 'Reviewed', S: 'Smoke Tested' }};
-      var cats = data.categories || {{}};
-
-      catOrder.forEach(function(key) {{
-        var cat = cats[key] || {{}};
-        var status = cat.status || 'ok';
-        var row = document.createElement('div');
-        row.className = 'gate-category ' + status;
-        row.dataset.cat = key;
-
-        // Header
-        var header = document.createElement('div');
-        header.className = 'gate-cat-header';
-        var label = document.createElement('span');
-        label.className = 'gate-cat-label';
-        label.textContent = key + ' \\u2014 ' + catLabels[key];
-        var statusEl = document.createElement('span');
-        statusEl.className = 'gate-cat-status ' + status;
-        statusEl.textContent = status.replace(/-/g, ' ');
-        header.appendChild(label);
-        header.appendChild(statusEl);
-        row.appendChild(header);
-
-        // Summary
-        var summaryDiv = document.createElement('div');
-        summaryDiv.className = 'gate-cat-summary';
-        summaryDiv.textContent = cat.current_summary || '';
-        row.appendChild(summaryDiv);
-
-        // Suggestion
-        if (cat.suggestion) {{
-          var sugDiv = document.createElement('div');
-          sugDiv.className = 'gate-cat-suggestion';
-          sugDiv.textContent = cat.suggestion;
-          row.appendChild(sugDiv);
-        }}
-
-        // Editable field for Description
-        if (key === 'D') {{
-          var ta = document.createElement('textarea');
-          ta.className = 'gate-cat-edit';
-          ta.dataset.field = 'description';
-          ta.placeholder = 'Edit description...';
-          ta.value = card.dataset.desc || '';
-          row.appendChild(ta);
-        }}
-
-        // Suggested new criteria for C
-        if (key === 'C') {{
-          var addCriteria = cat.add_criteria || [];
-          if (addCriteria.length > 0) {{
-            var hint = document.createElement('div');
-            hint.style.cssText = 'margin-top:3px;font-size:10px;color:var(--text-tertiary)';
-            hint.textContent = 'Suggested additions:';
-            row.appendChild(hint);
-            addCriteria.forEach(function(c, i) {{
-              var cta = document.createElement('textarea');
-              cta.className = 'gate-cat-edit';
-              cta.dataset.field = 'add_criteria';
-              cta.dataset.index = String(i);
-              cta.style.cssText = 'min-height:22px;margin-top:2px';
-              cta.value = c;
-              row.appendChild(cta);
-            }});
-          }}
-        }}
-
-        // Save button for D and C
-        if (key === 'D' || (key === 'C' && (cat.add_criteria || []).length > 0)) {{
-          var saveBtn = document.createElement('button');
-          saveBtn.className = 'gate-save-btn';
-          saveBtn.dataset.cat = key;
-          saveBtn.textContent = 'Save ' + catLabels[key];
-          row.appendChild(saveBtn);
-        }}
-
-        panel.appendChild(row);
-      }});
-
-      // Footer
-      var footer = document.createElement('div');
-      footer.className = 'gate-footer';
-      var confirmBtn = document.createElement('button');
-      confirmBtn.className = 'gate-confirm-btn';
-      confirmBtn.textContent = 'Confirm Move \\u2192 ' + targetSection;
-      var cancelBtn = document.createElement('button');
-      cancelBtn.className = 'gate-cancel-btn';
-      cancelBtn.textContent = 'Cancel';
-      footer.appendChild(confirmBtn);
-      footer.appendChild(cancelBtn);
-      panel.appendChild(footer);
-
-      // Wire up per-section Save buttons
-      panel.querySelectorAll('.gate-save-btn').forEach(function(btn) {{
-        btn.addEventListener('click', function(e) {{
-          e.stopPropagation();
-          var catKey = btn.dataset.cat;
-          var catRow = btn.closest('.gate-category');
-
-          if (catKey === 'D') {{
-            var textarea = catRow.querySelector('textarea[data-field="description"]');
-            if (textarea) {{
-              apiPut(ticketId, {{ description: textarea.value }}).then(function() {{
-                btn.textContent = 'Saved \\u2714';
-                btn.classList.add('saved');
-              }});
-            }}
-          }} else if (catKey === 'C') {{
-            var fields = catRow.querySelectorAll('textarea[data-field="add_criteria"]');
-            var promises = [];
-            fields.forEach(function(f) {{
-              var text = f.value.trim();
-              if (text) {{
-                promises.push(apiPut(ticketId, {{ add_criteria: text }}));
-              }}
-            }});
-            Promise.all(promises).then(function() {{
-              btn.textContent = 'Saved \\u2714';
-              btn.classList.add('saved');
-            }});
+        if (card) setCardGateChecking(card, false);
+        // Find first needs-work category to focus on
+        var cats = data.categories || {{}};
+        var catRMap = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
+        var focusTab = 'description';
+        ['D','C','T','R','S'].forEach(function(k) {{
+          if (cats[k] && cats[k].status === 'needs-work' && focusTab === 'description') {{
+            focusTab = catRMap[k];
           }}
         }});
-      }});
-
-      // Wire up Confirm Move
-      confirmBtn.addEventListener('click', function(e) {{
-        e.stopPropagation();
-        if (targetSection === 'Done') {{
-          fetch(EDIT_API + '/tickets/' + ticketId + '/accept', {{
-            method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: '{{}}'
-          }}).then(function(r) {{ return r.json(); }}).then(function() {{
-            removeGatePanel(card);
-            showToast(card, 'Accepted!');
-          }});
-        }} else {{
-          apiMove(ticketId, targetSection).then(function() {{
-            removeGatePanel(card);
-            showToast(card, 'Moved!');
-          }});
+        // Open detail overlay with assessment results and gate banner
+        if (window.openDetailOverlay) {{
+          window.openDetailOverlay(ticketId, focusTab);
+          // Small delay to let overlay populate before adding assessment data
+          setTimeout(function() {{
+            if (window.populateAssessment) window.populateAssessment(data);
+            if (window.showGateBanner) window.showGateBanner(data, targetSection);
+          }}, 100);
         }}
+      }}).catch(function() {{
+        if (card) setCardGateChecking(card, false);
+        showToast(card || document.body, 'Gate check failed');
       }});
-
-      // Wire up Cancel
-      cancelBtn.addEventListener('click', function(e) {{
-        e.stopPropagation();
-        removeGatePanel(card);
-      }});
-
-      // Insert panel into card (before action buttons if present)
-      var actions = card.querySelector('.card-actions');
-      if (actions) {{
-        card.insertBefore(panel, actions);
-      }} else {{
-        card.appendChild(panel);
-      }}
     }}
 
     function showToast(el, text) {{
@@ -2313,10 +2142,14 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
       }}
     }}
   }})();
+
+  // Expose showToast for overlay gate-check integration
+  window.showToast = showToast;
+  window.startGateCheck = startGateCheck;
 }})();
 </script>
 
-<!-- Detail overlay for readiness flag editing -->
+<!-- Ticket detail screen -->
 <div id="ticket-detail-overlay" class="detail-overlay hidden">
   <div class="detail-backdrop"></div>
   <div class="detail-panel">
@@ -2327,6 +2160,7 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
       <button class="detail-close">&times;</button>
     </div>
     <div class="detail-tabs">
+      <button class="detail-tab" data-section="properties" style="font-size:14px" title="Properties">&#9881;</button>
       <button class="detail-tab" data-section="description">D</button>
       <button class="detail-tab" data-section="criteria">C</button>
       <button class="detail-tab" data-section="tests">T</button>
@@ -2334,54 +2168,133 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
       <button class="detail-tab" data-section="smoke">S</button>
     </div>
     <div class="detail-body">
+      <!-- Gate banner (shown during column moves) -->
+      <div class="detail-gate-banner hidden" id="detail-gate-banner">
+        <div class="detail-gate-verdict">
+          <span class="gate-verdict-badge" id="gate-banner-badge"></span>
+          <span class="detail-gate-summary" id="gate-banner-summary"></span>
+        </div>
+        <div class="detail-gate-actions">
+          <button class="detail-gate-confirm" id="gate-banner-confirm"></button>
+          <button class="detail-gate-cancel" id="gate-banner-cancel">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Properties tab -->
+      <div class="detail-section" data-section="properties">
+        <div class="detail-section-header"><h3>Properties</h3></div>
+        <div class="detail-props-grid">
+          <div class="detail-prop-field full-width">
+            <label class="detail-prop-label">Title</label>
+            <input type="text" class="detail-prop-input" data-prop="title">
+          </div>
+          <div class="detail-prop-field">
+            <label class="detail-prop-label">Priority</label>
+            <select class="detail-prop-input" data-prop="priority">
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+          <div class="detail-prop-field">
+            <label class="detail-prop-label">Complexity</label>
+            <select class="detail-prop-input" data-prop="complexity">
+              <option value="S">S</option>
+              <option value="M">M</option>
+              <option value="L">L</option>
+              <option value="XL">XL</option>
+            </select>
+          </div>
+          <div class="detail-prop-field">
+            <label class="detail-prop-label">Status</label>
+            <select class="detail-prop-input" data-prop="status">
+              <option value="proposed">Proposed</option>
+              <option value="in-progress">In Progress</option>
+              <option value="blocked">Blocked</option>
+              <option value="rework">Rework</option>
+              <option value="for-review">For Review</option>
+              <option value="done">Done</option>
+            </select>
+          </div>
+          <div class="detail-prop-field">
+            <label class="detail-prop-label">Parent</label>
+            <input type="text" class="detail-prop-input" data-prop="parent" placeholder="e.g. B-01">
+          </div>
+          <div class="detail-prop-field full-width">
+            <label class="detail-prop-label">Rationale</label>
+            <textarea class="detail-prop-input" data-prop="rationale" placeholder="Why this ticket exists..."></textarea>
+          </div>
+        </div>
+        <div class="detail-save-row"><button class="detail-save-btn" data-field="properties">Save Properties</button></div>
+      </div>
+
+      <!-- D tab -->
       <div class="detail-section" data-section="description">
         <div class="detail-section-header"><h3>Description</h3>
           <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn" data-action="create" data-flag="description">Create New</button>
-            <button class="detail-clip-btn" data-action="review" data-flag="description">Review Existing</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="description" data-cat="D">Create New</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="description" data-cat="D">Review Existing</button>
           </div>
         </div>
+        <div class="detail-assess-loading hidden" data-cat-loading="D">Assessing description...</div>
+        <div class="detail-assessment hidden" data-cat-result="D"></div>
         <textarea class="detail-editor" data-field="description" placeholder="Ticket description..."></textarea>
         <div class="detail-save-row"><button class="detail-save-btn" data-field="description">Save</button></div>
       </div>
+
+      <!-- C tab -->
       <div class="detail-section" data-section="criteria">
         <div class="detail-section-header"><h3>Acceptance Criteria</h3>
           <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn" data-action="create" data-flag="criteria">Create New</button>
-            <button class="detail-clip-btn" data-action="review" data-flag="criteria">Review Existing</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="criteria" data-cat="C">Create New</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="criteria" data-cat="C">Review Existing</button>
           </div>
         </div>
+        <div class="detail-assess-loading hidden" data-cat-loading="C">Assessing criteria...</div>
+        <div class="detail-assessment hidden" data-cat-result="C"></div>
         <ul class="detail-criteria-list"></ul>
         <textarea class="detail-editor" data-field="criteria" placeholder="Add new criteria (one per line)..." style="min-height:80px"></textarea>
         <div class="detail-save-row"><button class="detail-save-btn" data-field="criteria">Add Criteria</button></div>
       </div>
+
+      <!-- T tab -->
       <div class="detail-section" data-section="tests">
         <div class="detail-section-header"><h3>Tests</h3>
           <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn" data-action="create" data-flag="tests">Create New</button>
-            <button class="detail-clip-btn" data-action="review" data-flag="tests">Review Existing</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="tests" data-cat="T">Create New</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="tests" data-cat="T">Review Existing</button>
           </div>
         </div>
+        <div class="detail-assess-loading hidden" data-cat-loading="T">Assessing tests...</div>
+        <div class="detail-assessment hidden" data-cat-result="T"></div>
         <textarea class="detail-editor" data-field="tests" placeholder="Test definitions, TDD plan, coverage notes..."></textarea>
         <div class="detail-save-row"><button class="detail-save-btn" data-field="tests">Save</button></div>
       </div>
+
+      <!-- R tab -->
       <div class="detail-section" data-section="reviewed">
         <div class="detail-section-header"><h3>Review</h3>
           <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn" data-action="create" data-flag="reviewed">Create New</button>
-            <button class="detail-clip-btn" data-action="review" data-flag="reviewed">Review Existing</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="reviewed" data-cat="R">Create New</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="reviewed" data-cat="R">Review Existing</button>
           </div>
         </div>
+        <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
+        <div class="detail-assessment hidden" data-cat-result="R"></div>
         <textarea class="detail-editor" data-field="reviewed" placeholder="Review notes: decisions, bugs found, feature implications, /sync output..."></textarea>
         <div class="detail-save-row"><button class="detail-save-btn" data-field="reviewed">Save</button></div>
       </div>
+
+      <!-- S tab -->
       <div class="detail-section" data-section="smoke">
         <div class="detail-section-header"><h3>Smoke Tests</h3>
           <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn" data-action="create" data-flag="smoke">Create New</button>
-            <button class="detail-clip-btn" data-action="review" data-flag="smoke">Review Existing</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="smoke" data-cat="S">Create New</button>
+            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="smoke" data-cat="S">Review Existing</button>
           </div>
         </div>
+        <div class="detail-assess-loading hidden" data-cat-loading="S">Assessing smoke tests...</div>
+        <div class="detail-assessment hidden" data-cat-result="S"></div>
         <textarea class="detail-editor" data-field="smoke" placeholder="Smoke test plan: manual verification steps, pass/fail results..."></textarea>
         <div class="detail-save-row"><button class="detail-save-btn" data-field="smoke">Save</button></div>
       </div>
@@ -2404,31 +2317,18 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
   var secEls = overlay.querySelectorAll('.detail-section');
   var currentTicketId = null;
   var currentData = null;
+  var _hasAssessmentData = false;
+  var _gateContext = null;
 
   var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Review', smoke:'Smoke Tests' }};
+  var CAT_MAP = {{ description:'D', criteria:'C', tests:'T', reviewed:'R', smoke:'S' }};
+  var CAT_RMAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
 
-  var PROMPTS = {{
-    description: {{
-      create: function(t) {{ return 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.'; }},
-      review: function(t) {{ return 'Review the description for ' + t.id + ': "' + t.title + '". Check clarity, completeness, feasibility.\\n\\nDescription:\\n' + (t.description || '(empty)'); }}
-    }},
-    criteria: {{
-      create: function(t) {{ return 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then or checkbox format. Cover happy path, errors, edge cases.\\n\\nDescription:\\n' + (t.description || '(empty)'); }},
-      review: function(t) {{ return 'Review acceptance criteria for ' + t.id + ': "' + t.title + '". Check testability, completeness, clarity.\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }}
-    }},
-    tests: {{
-      create: function(t) {{ return 'Using TDD, write test definitions for ' + t.id + ': "' + t.title + '". Start with failing tests that define expected behavior.\\n\\nAcceptance criteria:\\n' + (t.criteria_text || '(none)'); }},
-      review: function(t) {{ var c = (t.readiness_flags && t.readiness_flags.tests) || ''; return 'Review test definitions for ' + t.id + ': "' + t.title + '". Check coverage gaps, edge cases, alignment with criteria.\\n\\nTests:\\n' + (c || '(empty)'); }}
-    }},
-    reviewed: {{
-      create: function(t) {{ return 'Perform a review for ' + t.id + ': "' + t.title + '". Capture: decisions made, bugs found, feature implications, architectural trade-offs. Run /sync to collect session context.\\n\\nDescription:\\n' + (t.description || '(empty)'); }},
-      review: function(t) {{ var c = (t.readiness_flags && t.readiness_flags.reviewed) || ''; return 'Review the review notes for ' + t.id + ': "' + t.title + '". Verify all items addressed, no regressions, approval criteria met.\\n\\nReview notes:\\n' + (c || '(empty)'); }}
-    }},
-    smoke: {{
-      create: function(t) {{ return 'Create a smoke test plan for ' + t.id + ': "' + t.title + '". Define manual verification steps: happy path, error cases, browser/device matrix.\\n\\nAcceptance criteria:\\n' + (t.criteria_text || '(none)'); }},
-      review: function(t) {{ var c = (t.readiness_flags && t.readiness_flags.smoke) || ''; return 'Review smoke test results for ' + t.id + ': "' + t.title + '". Verify all cases executed, pass/fail documented.\\n\\nSmoke test notes:\\n' + (c || '(empty)'); }}
-    }}
-  }};
+  var gateBanner = document.getElementById('detail-gate-banner');
+  var gateBadge = document.getElementById('gate-banner-badge');
+  var gateSummary = document.getElementById('gate-banner-summary');
+  var gateConfirm = document.getElementById('gate-banner-confirm');
+  var gateCancel = document.getElementById('gate-banner-cancel');
 
   function toast(msg) {{ toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(function() {{ toastEl.classList.remove('show'); }}, 1500); }}
 
@@ -2442,17 +2342,221 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     var fl = currentData.readiness_flags || {{}};
     tabEls.forEach(function(t) {{
       var s = t.dataset.section;
+      if (s === 'properties') return;
       var ok = s === 'description' ? !!(currentData.description) : s === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[s]);
       t.classList.toggle('filled', ok);
     }});
   }}
 
-  function populate(data) {{
-    currentData = data;
-    idEl.textContent = data.id;
-    titleEl.textContent = data.title;
-    overlay.querySelector('[data-field="description"]').value = data.description || '';
+  function populateProperties(data) {{
+    var props = ['title', 'priority', 'complexity', 'status', 'parent', 'rationale'];
+    props.forEach(function(p) {{
+      var el = overlay.querySelector('[data-prop="'+p+'"]');
+      if (el) el.value = data[p] || '';
+    }});
+  }}
 
+  function saveProperties() {{
+    if (!currentTicketId) return;
+    var props = ['title', 'priority', 'complexity', 'status', 'parent', 'rationale'];
+    var chain = Promise.resolve();
+    var saved = 0;
+    props.forEach(function(p) {{
+      var el = overlay.querySelector('[data-prop="'+p+'"]');
+      if (!el) return;
+      var val = el.value;
+      var orig = (currentData && currentData[p]) || '';
+      if (val !== orig) {{
+        saved++;
+        chain = chain.then(function() {{
+          var body = {{}}; body[p] = val;
+          return fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(body)}}).then(function(r){{return r.json();}});
+        }});
+      }}
+    }});
+    chain.then(function(lastResult) {{
+      if (lastResult) currentData = lastResult;
+      if (currentData) {{
+        idEl.textContent = currentData.id;
+        titleEl.textContent = currentData.title;
+      }}
+      toast(saved > 0 ? 'Properties saved' : 'No changes');
+      refreshTabs();
+    }});
+  }}
+
+  function clearAssessments() {{
+    overlay.querySelectorAll('.detail-assessment').forEach(function(el) {{
+      el.classList.add('hidden');
+      el.className = 'detail-assessment hidden';
+      while (el.firstChild) el.removeChild(el.firstChild);
+    }});
+    overlay.querySelectorAll('.detail-assess-loading').forEach(function(el) {{
+      el.classList.add('hidden');
+    }});
+    tabEls.forEach(function(t) {{ t.classList.remove('needs-work'); }});
+    _hasAssessmentData = false;
+  }}
+
+  function renderCategoryAssessment(cat, result) {{
+    var el = overlay.querySelector('[data-cat-result="'+cat+'"]');
+    if (!el) return;
+    var status = result.status || 'needs-work';
+    el.className = 'detail-assessment ' + status;
+    while (el.firstChild) el.removeChild(el.firstChild);
+
+    var header = document.createElement('div');
+    header.className = 'assessment-header';
+    var badge = document.createElement('span');
+    badge.className = 'assessment-status ' + status;
+    badge.textContent = status.replace(/-/g, ' ');
+    header.appendChild(badge);
+    var dismiss = document.createElement('button');
+    dismiss.className = 'assessment-dismiss';
+    dismiss.textContent = '\\u00d7';
+    dismiss.addEventListener('click', function() {{ el.classList.add('hidden'); }});
+    header.appendChild(dismiss);
+    el.appendChild(header);
+
+    if (result.current_summary) {{
+      var sum = document.createElement('div');
+      sum.className = 'assessment-summary';
+      sum.textContent = result.current_summary;
+      el.appendChild(sum);
+    }}
+
+    if (result.suggestion) {{
+      var sug = document.createElement('div');
+      sug.className = 'assessment-suggestion';
+      sug.textContent = result.suggestion;
+      el.appendChild(sug);
+    }}
+
+    if (result.content) {{
+      var applyBtn = document.createElement('button');
+      applyBtn.className = 'assessment-apply-btn';
+      applyBtn.textContent = 'Apply Generated Content';
+      applyBtn.addEventListener('click', function() {{
+        var section = CAT_RMAP[cat];
+        var editor = overlay.querySelector('[data-field="'+section+'"]');
+        if (editor) {{
+          editor.value = result.content;
+          toast('Content applied \\u2014 click Save to persist');
+        }}
+        applyBtn.textContent = 'Applied \\u2714';
+        applyBtn.style.pointerEvents = 'none';
+      }});
+      el.appendChild(applyBtn);
+    }}
+
+    if (cat === 'C' && result.add_criteria && result.add_criteria.length > 0) {{
+      var list = document.createElement('ul');
+      list.className = 'assessment-add-criteria';
+      result.add_criteria.forEach(function(criterion) {{
+        var li = document.createElement('li');
+        var span = document.createElement('span');
+        span.textContent = criterion;
+        var addBtn = document.createElement('button');
+        addBtn.textContent = '+ Add';
+        addBtn.addEventListener('click', function() {{
+          fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{add_criteria:criterion}})}})
+            .then(function(r){{return r.json();}})
+            .then(function(u) {{
+              if (u) {{ currentData = u; populateCriteria(u); }}
+              addBtn.textContent = 'Added \\u2714';
+              addBtn.className = 'added';
+            }});
+        }});
+        li.appendChild(span);
+        li.appendChild(addBtn);
+        list.appendChild(li);
+      }});
+      el.appendChild(list);
+    }}
+
+    el.classList.remove('hidden');
+    _hasAssessmentData = true;
+  }}
+
+  function runCategoryAssess(cat, action) {{
+    var loading = overlay.querySelector('[data-cat-loading="'+cat+'"]');
+    var resultEl = overlay.querySelector('[data-cat-result="'+cat+'"]');
+    if (loading) loading.classList.remove('hidden');
+    if (resultEl) resultEl.classList.add('hidden');
+
+    fetch(EDIT_API + '/tickets/' + currentTicketId + '/assess/' + cat, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ action: action }})
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (loading) loading.classList.add('hidden');
+      renderCategoryAssessment(cat, data);
+    }})
+    .catch(function() {{
+      if (loading) loading.classList.add('hidden');
+      toast('Assessment failed');
+    }});
+  }}
+
+  function showGateBanner(data, targetSection) {{
+    _gateContext = {{ targetSection: targetSection, ticketId: currentTicketId }};
+    var verdict = data.verdict || 'needs-work';
+    gateBadge.className = 'gate-verdict-badge ' + verdict;
+    gateBadge.textContent = verdict.replace(/-/g, ' ');
+    gateSummary.textContent = data.summary || '';
+    gateConfirm.textContent = 'Confirm Move \\u2192 ' + targetSection;
+    gateBanner.classList.remove('hidden');
+  }}
+
+  function hideGateBanner() {{
+    gateBanner.classList.add('hidden');
+    _gateContext = null;
+  }}
+
+  gateConfirm.addEventListener('click', function() {{
+    if (!_gateContext) return;
+    var tid = _gateContext.ticketId;
+    var section = _gateContext.targetSection;
+    if (section === 'Done') {{
+      fetch(EDIT_API + '/tickets/' + tid + '/accept', {{
+        method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: '{{}}'
+      }}).then(function(r) {{ return r.json(); }}).then(function() {{
+        hideGateBanner(); closeOverlay();
+        var card = document.querySelector('[data-item-id="' + tid + '"]');
+        if (card && window.showToast) window.showToast(card, 'Accepted!');
+      }});
+    }} else {{
+      fetch(EDIT_API + '/tickets/' + tid + '/move', {{
+        method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ section: section }})
+      }}).then(function(r) {{ return r.json(); }}).then(function() {{
+        hideGateBanner(); closeOverlay();
+        var card = document.querySelector('[data-item-id="' + tid + '"]');
+        if (card && window.showToast) window.showToast(card, 'Moved!');
+      }});
+    }}
+  }});
+
+  gateCancel.addEventListener('click', function() {{ hideGateBanner(); }});
+
+  function populateAssessment(data) {{
+    var cats = data.categories || {{}};
+    ['D', 'C', 'T', 'R', 'S'].forEach(function(key) {{
+      if (cats[key]) renderCategoryAssessment(key, cats[key]);
+    }});
+    tabEls.forEach(function(t) {{
+      var cat = CAT_MAP[t.dataset.section];
+      if (cat && cats[cat] && cats[cat].status === 'needs-work') {{
+        t.classList.add('needs-work');
+      }} else {{
+        t.classList.remove('needs-work');
+      }}
+    }});
+  }}
+
+  function populateCriteria(data) {{
     var list = overlay.querySelector('.detail-criteria-list');
     while (list.firstChild) list.removeChild(list.firstChild);
     (data.acceptance_criteria || []).forEach(function(c, i) {{
@@ -2465,22 +2569,32 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
       var sp = document.createElement('span'); sp.textContent = c.text;
       li.appendChild(cb); li.appendChild(sp); list.appendChild(li);
     }});
-    var ce = overlay.querySelector('[data-field="criteria"]'); if(ce) ce.value='';
+  }}
 
+  function populate(data) {{
+    currentData = data;
+    idEl.textContent = data.id;
+    titleEl.textContent = data.title;
+    overlay.querySelector('[data-field="description"]').value = data.description || '';
+    populateCriteria(data);
+    var ce = overlay.querySelector('[data-field="criteria"]'); if(ce) ce.value='';
     var fl = data.readiness_flags || {{}};
     ['tests','reviewed','smoke'].forEach(function(f) {{
       var ed = overlay.querySelector('[data-field="'+f+'"]');
       if(ed) ed.value = fl[f] || '';
     }});
+    populateProperties(data);
     refreshTabs();
   }}
 
   function openOverlay(tid, section) {{
     currentTicketId = tid;
+    if (!_hasAssessmentData) clearAssessments();
+    hideGateBanner();
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
     fetch(EDIT_API+'/tickets/'+tid).then(function(r){{return r.json();}}).then(function(d){{
-      populate(d); activateTab(section||'description');
+      populate(d); activateTab(section||'properties');
     }});
   }}
 
@@ -2488,18 +2602,20 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
     currentTicketId = null; currentData = null;
+    _hasAssessmentData = false; _gateContext = null;
+    clearAssessments(); hideGateBanner();
   }}
 
   overlay.querySelector('.detail-backdrop').addEventListener('click', closeOverlay);
   overlay.querySelector('.detail-close').addEventListener('click', closeOverlay);
   document.addEventListener('keydown', function(e) {{ if(e.key==='Escape' && !overlay.classList.contains('hidden')) closeOverlay(); }});
-
   tabEls.forEach(function(tab) {{ tab.addEventListener('click', function() {{ activateTab(tab.dataset.section); }}); }});
 
   // Save buttons
   overlay.querySelectorAll('.detail-save-btn').forEach(function(btn) {{
     btn.addEventListener('click', function() {{
       var field = btn.dataset.field;
+      if (field === 'properties') {{ saveProperties(); return; }}
       var ed = overlay.querySelector('[data-field="'+field+'"]');
       if(!ed || !currentTicketId) return;
       var val = ed.value;
@@ -2527,13 +2643,33 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     }});
   }});
 
-  // Clipboard buttons
-  overlay.querySelectorAll('.detail-clip-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-      if(!currentData) return;
-      var fn = PROMPTS[btn.dataset.flag] && PROMPTS[btn.dataset.flag][btn.dataset.action];
-      if(!fn) return;
-      navigator.clipboard.writeText(fn(currentData)).then(function(){{ toast('Copied!'); }});
+  // Assessment buttons (Create New / Review Existing) — runs AI assessment
+  overlay.querySelectorAll('.detail-assess-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function(e) {{
+      if(!currentData || !currentTicketId) return;
+      var cat = btn.dataset.cat;
+      var action = btn.dataset.action;
+      if (!cat) return;
+      // Shift+click copies prompt to clipboard as fallback
+      if (e.shiftKey) {{
+        var t = currentData;
+        var prompts = {{
+          D: {{ create: 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.',
+                review: 'Review the description for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)') }},
+          C: {{ create: 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'),
+                review: 'Review acceptance criteria for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)') }},
+          T: {{ create: 'Write test definitions for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
+                review: 'Review test definitions for ' + t.id + ': "' + t.title + '".' }},
+          R: {{ create: 'Perform a review for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)'),
+                review: 'Review the review notes for ' + t.id + ': "' + t.title + '".' }},
+          S: {{ create: 'Create a smoke test plan for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
+                review: 'Review smoke test results for ' + t.id + ': "' + t.title + '".' }}
+        }};
+        var p = prompts[cat] && prompts[cat][action];
+        if (p) navigator.clipboard.writeText(p).then(function(){{ toast('Prompt copied'); }});
+        return;
+      }}
+      runCategoryAssess(cat, action);
     }});
   }});
 
@@ -2557,7 +2693,12 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     openOverlay(card.dataset.itemId, dot.dataset.flag);
   }}, true);
 
+  // Expose for gate-check integration
   window.DETAIL_OVERLAY_OPEN = function() {{ return currentTicketId; }};
+  window.openDetailOverlay = openOverlay;
+  window.populateAssessment = populateAssessment;
+  window.showGateBanner = showGateBanner;
+  window.closeDetailOverlay = closeOverlay;
 }})();
 </script>
 </body>

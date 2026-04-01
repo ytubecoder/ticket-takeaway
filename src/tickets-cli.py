@@ -126,9 +126,20 @@ def init_db(conn: sqlite3.Connection):
             FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS readiness_flags (
+            ticket_id   TEXT NOT NULL,
+            project_id  TEXT NOT NULL,
+            flag        TEXT NOT NULL,
+            set_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            set_by      TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (ticket_id, project_id, flag),
+            FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tickets_project_section ON tickets(project_id, section);
         CREATE INDEX IF NOT EXISTS idx_criteria_ticket ON acceptance_criteria(ticket_id, project_id);
         CREATE INDEX IF NOT EXISTS idx_depends_ticket ON depends(ticket_id, project_id);
+        CREATE INDEX IF NOT EXISTS idx_readiness_ticket ON readiness_flags(ticket_id, project_id);
     """)
 
     # Migrate: add commit_hash and release_tag columns if missing
@@ -137,6 +148,12 @@ def init_db(conn: sqlite3.Connection):
             conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
         except sqlite3.OperationalError:
             pass  # Column already exists
+
+    # Migrate: add content column to readiness_flags if missing
+    try:
+        conn.execute("ALTER TABLE readiness_flags ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +274,7 @@ def parse_backlog(filepath: str) -> list[dict]:
                 "sort_order": sort_order,
                 "commit_hash": "",
                 "release_tag": "",
+                "readiness_content": {},  # {flag: content} for Tests/Reviewed/Smoke
             }
             sort_order += 1
             continue
@@ -312,6 +330,20 @@ def parse_backlog(filepath: str) -> list[dict]:
             checked = line_stripped[3] in ("x", "X")
             text_content = line_stripped[5:].strip()
             current_ticket["acceptance_criteria"].append((checked, text_content))
+            continue
+
+        # Readiness content: Tests, Reviewed, Smoke
+        if current_ticket and line_stripped.startswith(("Tests:", "Reviewed:", "Smoke:")):
+            flag_label, _, val = line_stripped.partition(":")
+            flag_key = {"Tests": "tests", "Reviewed": "reviewed", "Smoke": "smoke"}[flag_label]
+            current_ticket["readiness_content"][flag_key] = val.strip()
+            continue
+
+        # Indented continuation of readiness content (4-space indent)
+        if current_ticket and line.startswith("    ") and current_ticket.get("readiness_content"):
+            # Append to the most recently set readiness flag
+            last_flag = list(current_ticket["readiness_content"].keys())[-1]
+            current_ticket["readiness_content"][last_flag] += "\n" + line_stripped
             continue
 
         # Description
@@ -500,6 +532,21 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
                     (tid, project_id, dep_id)
                 )
+
+            # Upsert readiness content from markdown
+            for flag, content in t.get("readiness_content", {}).items():
+                if content:
+                    conn.execute("""
+                        INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                        VALUES (?, ?, ?, ?, 'markdown')
+                        ON CONFLICT (ticket_id, project_id, flag)
+                        DO UPDATE SET content = excluded.content
+                    """, (tid, project_id, flag, content))
+                else:
+                    conn.execute(
+                        "DELETE FROM readiness_flags WHERE ticket_id=? AND project_id=? AND flag=?",
+                        (tid, project_id, flag)
+                    )
         else:
             # New ticket added directly to markdown — insert into DB
             conn.execute("""
@@ -523,6 +570,14 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
                     (tid, project_id, dep_id)
                 )
+
+            # Insert readiness content for new tickets
+            for flag, content in t.get("readiness_content", {}).items():
+                if content:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                        VALUES (?, ?, ?, ?, 'markdown')
+                    """, (tid, project_id, flag, content))
 
     # DB is the single source of truth. Tickets only in the DB (not in markdown)
     # are preserved — they may have been added via CLI or direct DB insert.
@@ -617,6 +672,19 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
                 check = "x" if c["checked"] else " "
                 lines.append(f"- [{check}] {c['text']}")
 
+            # Readiness content (Tests, Reviewed, Smoke)
+            flags = conn.execute(
+                "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND content != '' ORDER BY flag",
+                (t["id"], project_id)
+            ).fetchall()
+            for f in flags:
+                label = {"tests": "Tests", "reviewed": "Reviewed", "smoke": "Smoke"}.get(f["flag"])
+                if label and f["content"]:
+                    content_lines = f["content"].split("\n")
+                    lines.append(f"{label}: {content_lines[0]}")
+                    for continuation in content_lines[1:]:
+                        lines.append(f"    {continuation}")
+
             lines.append("")
 
     # Append any custom sections that aren't managed by the DB
@@ -703,6 +771,14 @@ def cmd_seed(args):
                     INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id)
                     VALUES (?, ?, ?)
                 """, (t["id"], project_id, dep_id))
+
+            # Readiness content
+            for flag, content in t.get("readiness_content", {}).items():
+                if content:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                        VALUES (?, ?, ?, ?, 'seed')
+                    """, (t["id"], project_id, flag, content))
 
         conn.commit()
         print(f"Seeded {len(tickets)} tickets for {proj['name']}")
@@ -1096,6 +1172,79 @@ def cmd_accept(args):
 # Subcommand: sync
 # ---------------------------------------------------------------------------
 
+VALID_FLAGS = {"tests", "reviewed", "smoke"}
+
+
+def cmd_flag(args):
+    """Set a readiness flag on a ticket."""
+    projects = load_registry()
+    target = resolve_project_id(projects, args.project)
+    project_id = target[0]["id"]
+    flag = args.flag.lower()
+
+    if flag not in VALID_FLAGS:
+        print(f"Invalid flag '{flag}'. Valid: {', '.join(sorted(VALID_FLAGS))}")
+        sys.exit(1)
+
+    conn = get_db()
+    init_db(conn)
+
+    row = conn.execute(
+        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+        (args.ticket_id, project_id)
+    ).fetchone()
+    if not row:
+        print(f"Ticket {args.ticket_id} not found")
+        conn.close()
+        sys.exit(1)
+
+    tid = row["id"]
+    conn.execute(
+        "INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, set_by) VALUES (?, ?, ?, ?)",
+        (tid, project_id, flag, args.by or "cli")
+    )
+    conn.commit()
+    print(f"Set {flag} on {tid}")
+
+    proj = find_project(target, project_id)
+    sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
+    conn.close()
+
+
+def cmd_unflag(args):
+    """Clear a readiness flag on a ticket."""
+    projects = load_registry()
+    target = resolve_project_id(projects, args.project)
+    project_id = target[0]["id"]
+    flag = args.flag.lower()
+
+    conn = get_db()
+    init_db(conn)
+
+    row = conn.execute(
+        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+        (args.ticket_id, project_id)
+    ).fetchone()
+    if not row:
+        print(f"Ticket {args.ticket_id} not found")
+        conn.close()
+        sys.exit(1)
+
+    tid = row["id"]
+    conn.execute(
+        "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+        (tid, project_id, flag)
+    )
+    conn.commit()
+    print(f"Cleared {flag} on {tid}")
+
+    proj = find_project(target, project_id)
+    sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
+    conn.close()
+
+
 def cmd_sync(args):
     """Regenerate PRODUCT_BACKLOG.md from DB."""
     projects = load_registry()
@@ -1221,6 +1370,17 @@ def main():
     p_watch.add_argument("--project", help="Project ID (default: auto-detect or all)")
     p_watch.add_argument("--interval", type=int, default=2, help="Poll interval in seconds (default: 2)")
 
+    p_flag = sub.add_parser("flag", help="Set a readiness flag on a ticket")
+    p_flag.add_argument("project", help="Project ID")
+    p_flag.add_argument("ticket_id", help="Ticket ID")
+    p_flag.add_argument("flag", help=f"Flag name: {', '.join(sorted(VALID_FLAGS))}")
+    p_flag.add_argument("--by", help="Who set this flag (default: cli)", default="")
+
+    p_unflag = sub.add_parser("unflag", help="Clear a readiness flag on a ticket")
+    p_unflag.add_argument("project", help="Project ID")
+    p_unflag.add_argument("ticket_id", help="Ticket ID")
+    p_unflag.add_argument("flag", help="Flag name to clear")
+
     args = parser.parse_args()
 
     commands = {
@@ -1232,6 +1392,8 @@ def main():
         "accept": cmd_accept,
         "sync": cmd_sync,
         "watch": cmd_watch,
+        "flag": cmd_flag,
+        "unflag": cmd_unflag,
     }
 
     commands[args.command](args)

@@ -5,11 +5,44 @@
 ### I-07: UI Inline Editing with Field-Level Updates
 Priority: medium | Complexity: M | Status: in-progress
 Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
-- [ ] Phase 1: serve.py HTTP server + quick-edit (priority cycle, status dropdown, criteria checkbox)
 - [ ] Phase 2: full expand-to-edit with form rendering for all 12 editable fields
 - [ ] Phase 3: new ticket creation + drag-and-drop column moves
 - [ ] data-editing guard in patchCards() prevents poll from overwriting edits
 - [ ] file:// mode still works read-only — editing requires serve.py
+- [ ] B-06: serve.py HTTP server + quick-edit controls (Phase 1)
+- [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
+- [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
+
+### B-06: serve.py HTTP Server + Quick-Edit Controls
+Priority: medium | Complexity: M | Status: in-progress
+Parent: I-07
+Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashboard with REST API. Quick-edit: click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. data-editing guard in patchCards(). file:// mode still read-only.
+- [ ] serve.py starts and serves dashboard at localhost:8787
+- [ ] GET /api/tickets returns JSON ticket data
+- [ ] PUT /api/tickets/<id> updates individual fields in DB
+- [ ] POST /api/tickets/<id>/move moves ticket between sections
+- [ ] Click priority dot cycles high/medium/low and persists
+- [ ] Click status badge shows dropdown, selection persists
+- [ ] Click acceptance criteria checkbox toggles and persists
+- [ ] data-editing guard in patchCards() skips cards being edited
+- [ ] file:// mode works read-only with no edit controls
+
+### I-10: touch bronwyn (test ticket)
+Priority: medium | Complexity: M | Status: in-progress
+
+### B-08: Readiness Detail View — click D/C/T/R/S to edit section content
+Priority: high | Complexity: L | Status: in-progress
+Clicking any readiness dot (D/C/T/R/S) opens a full ticket detail overlay with all 5 sections as navigable tabs. The clicked dot's section is auto-focused. Each section shows editable text content with 'Create New' and 'Review Existing' clipboard buttons that copy customized prompts for Claude Code CLI. Requires: DB content column on readiness_flags, new PUT API endpoint, detail overlay UI in generate.py.
+- [ ] Click any readiness dot opens full ticket detail overlay
+- [ ] Overlay has 5 navigable tabs (D C T R S) with auto-scroll to clicked section
+- [ ] D tab edits ticket description
+- [ ] C tab edits acceptance criteria with checkboxes
+- [ ] T/R/S tabs edit new content field stored in readiness_flags DB table
+- [ ] Auto-fill: saving content fills dot, clearing empties it
+- [ ] Create New clipboard button copies customized prompt per flag type
+- [ ] Review Existing clipboard button copies prompt with existing content
+- [ ] Content syncs to PRODUCT_BACKLOG.md as Tests:/Reviewed:/Smoke: lines
+- [ ] Roundtrip: seed from markdown preserves readiness content
 
 ## For Review
 
@@ -30,6 +63,20 @@ Replace the full-page-reload polling with in-place DOM diffing. When the dashboa
 - [ ] No visible flicker or layout shift during normal updates
 - [ ] Falls back to full reload if DOM structure changes drastically (major generator version bump)
 
+### B-09: Column Move Gate Check — AI-Powered Readiness Analysis
+Priority: high | Complexity: M | Status: for-review
+When a ticket is moved to a top kanban column (Ideas, Backlog, WIP, For Review, Done), the move is intercepted and a Claude CLI agent analyzes the ticket's DCTRS readiness. Results are shown in an expandable panel with per-section editable fields and independent Save buttons. Users can edit suggestions, save per-section, then Confirm Move or Cancel. Bottom sections (Bugs, Icebox, Won't Do) remain ungated.
+- [ ] POST /api/tickets/{id}/gate-check endpoint spawns Claude CLI and returns structured JSON
+- [ ] Drag-drop moves to top columns are intercepted (not immediate)
+- [ ] Action button moves to top columns are intercepted (not immediate)
+- [ ] Card shows pulsing state while agent is thinking
+- [ ] Gate panel renders with verdict badge and per-DCTRS category rows
+- [ ] Per-section Save buttons persist edits independently of move decision
+- [ ] Confirm Move executes the column move
+- [ ] Cancel dismisses panel without moving, saved edits persist
+- [ ] Moves to Bugs/Icebox/Won't Do bypass the gate (immediate)
+- [ ] add_criteria PUT support for saving suggested new criteria
+
 ## Backlog
 
 ### B-02: Per-Feature Working Files
@@ -40,6 +87,12 @@ Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include P
 - [ ] Template files with section headers
 - [ ] Cleanup step integrated into /accept
 - [ ] /sync integration before cleanup
+- [ ] Test criterion from gate panel
+
+### B-07: Expand-to-Edit: Full Form Editing for All Fields
+Priority: medium | Complexity: L | Status: proposed
+Parent: I-07
+Phase 2 of I-07. Pencil icon on expanded cards transforms read-only text into form fields. Per-field auto-save on blur. All 12 editable fields: title, description, acceptance criteria list, priority, complexity, status, section, parent, depends, rationale, commit_hash, release_tag. Keyboard: ESC cancel, Ctrl+Enter save.
 
 ### B-04: Registry Auto-Discovery
 Priority: low | Complexity: S | Status: proposed
@@ -90,6 +143,64 @@ Render SVG connector lines between cards that have Depends: relationships. Curre
 - [ ] Toggle button in filter bar to show/hide dependency overlay
 - [ ] Lines work across columns (e.g. WIP card depending on Backlog card)
 - [ ] No lines rendered when dependency target card is hidden by filter
+
+### I-08: New Ticket Creation + Drag-and-Drop
+Priority: medium | Complexity: M | Status: proposed
+Parent: I-07
+Phase 3 of I-07. Plus button per column header for new tickets. POST /api/tickets endpoint. Inline new-ticket form at top of column. Drag-and-drop between columns maps to move API. Undo toast (5s window after each edit).
+
+### I-09: test ticket with nothing on it
+Priority: medium | Complexity: M | Status: proposed
+This is just a test but the feature should be to add a text file called hello.txt
+
+### I-11: Gate panel: unique URLs per screen/state
+Priority: medium | Complexity: M | Status: proposed
+Parent: B-09
+Each gate-check state should have a unique URL fragment (e.g. #gate/B-05/review) so the user can share or bookmark a specific gate-check screen. Browser back/forward should navigate between gate states. URL should encode ticket ID, target column, and panel state.
+- [ ] Gate-check panel sets URL hash when opened (e.g. #gate/B-05/WIP)
+- [ ] Navigating to a gate URL re-opens that gate-check panel
+- [ ] Browser back button closes the panel / returns to previous state
+- [ ] Multiple gate panels don't clobber each other's URL state
+
+### I-12: Gate panel: Claude CLI round-trip with diff-style merge UI
+Priority: high | Complexity: M | Status: proposed
+Parent: B-09
+When creating new content or reviewing existing content in the gate panel (e.g. editing description, criteria, review notes), the edited text should be sent to Claude CLI for enrichment/validation and returned. The UI should show a diff-style display comparing current vs suggested, with point-by-point accept/reject for each change. Use a pattern that doesn't clobber existing content — insertions and updates are presented as discrete merge operations the user controls.
+- [ ] Edited text can be sent to Claude CLI for enrichment via a 'Review with AI' button
+- [ ] Response is shown as a diff: current content vs suggested content
+- [ ] Each change (addition, modification, deletion) is individually accept/reject-able
+- [ ] Accepted changes merge into the field without clobbering unmodified content
+- [ ] User can accept all or reject all in bulk
+- [ ] Works for description, criteria, and any future DCTRS category content
+
+### I-13: Gate panel: verify all edits persist to DB and sync to markdown
+Priority: medium | Complexity: M | Status: proposed
+Parent: B-09
+Verify that all edits made through the gate panel (description changes, new criteria, flag toggles, review notes) are persisted to the SQLite database and then synced to PRODUCT_BACKLOG.md. This is a verification/hardening sub-ticket, not new functionality.
+- [ ] Description edits via gate panel Save are in tickets table
+- [ ] New criteria via gate panel Save are in acceptance_criteria table
+- [ ] Flag toggles during gate review are in readiness_flags table
+- [ ] All DB changes trigger sync_to_markdown and regenerate_dashboard
+- [ ] PRODUCT_BACKLOG.md reflects all gate panel edits after sync
+
+### I-14: Gate panel: show output directory path with click-to-copy
+Priority: low | Complexity: M | Status: proposed
+Parent: B-09
+The gate panel should display the ticket's output directory path (e.g. docs/features/B-05/) in the panel. Clicking it copies the path to clipboard and shows a 'Path copied' acknowledgment toast.
+- [ ] Output directory path is visible in the gate panel
+- [ ] Clicking the path copies it to clipboard
+- [ ] Toast shows 'Path copied' on successful copy
+- [ ] Path is derived from ticket ID using the project's docs/features/ convention
+
+### I-15: Gate panel: DCTRS icons and expanded action buttons
+Priority: medium | Complexity: M | Status: proposed
+Parent: B-09
+Replace the plain D/C/T/R/S letter dots in the gate panel category rows with meaningful icons (e.g. document icon for D, checklist for C, flask for T, eye for R, smoke/cloud for S). When expanded, show full action buttons for each category (e.g. 'Write Description', 'Add Criteria', 'Run Tests', 'Start Review', 'Run Smoke Test') that trigger the appropriate workflow.
+- [ ] Each DCTRS category has a recognizable icon (not just a letter)
+- [ ] Icons are consistent between the readiness row on cards and the gate panel
+- [ ] Expanded gate panel shows contextual action buttons per category
+- [ ] Action buttons trigger appropriate workflows (clipboard prompts or direct actions)
+- [ ] Icons work in both light and dark themes
 
 ## Bugs
 

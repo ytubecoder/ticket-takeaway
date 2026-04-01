@@ -42,7 +42,7 @@ PRODUCT_SPECIFICATION.md (write-only output from /accept, not read by generator)
 
 **`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
 
-**`src/generate.py`** (~1700 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
+**`src/generate.py`** (~3000 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
 1. Reads `~/.claude/ticket-takeaway/registry.json` for project paths
 2. Loads tickets from SQLite (falls back to parsing PRODUCT_BACKLOG.md if no DB)
 3. Collects git/code stats via shell commands
@@ -50,7 +50,12 @@ PRODUCT_SPECIFICATION.md (write-only output from /accept, not read by generator)
 5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
-Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, column, description, acceptance_criteria, parent, rationale, depends, summary, archived) → `Project` dataclass (tickets + CodeStats) → HTML or JSON.
+Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, column, description, acceptance_criteria, parent, rationale, depends, summary, archived, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON.
+
+**Three-layer hierarchy** (see `docs/LIFECYCLE.md` Section 3b):
+- **Section** (column) = where the work is (Ideas → Backlog → WIP → Review → Done)
+- **Status** (badge) = how the work is going (proposed, in-progress, blocked, etc.)
+- **Readiness Flags** (D C T R S) = what's been done (Description, Criteria, Tests, Reviewed, Smoke)
 
 **`src/skills/`** contains Claude Code skill definitions:
 - `dashboard/SKILL.md` — the `/dashboard` skill
@@ -63,6 +68,9 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 - **Priority cycling** (click the colored dot), **Status dropdown** (click badge), **Criteria toggle** (click checkboxes)
 - **Drag-to-move** (drag cards between columns), **Inline text editing** (dblclick title/description when expanded)
 - **Workflow buttons** (Start, Done, Accept — shown when expanded), **Create/Delete** via API
+- **New ticket panel** ("+ New" in filter bar) — overlay panel with title input, section dropdown, and expandable "Full ticket form" (coming soon placeholder)
+- **Gate-check on column moves** — dragging/moving a ticket to a top column triggers an AI-powered readiness analysis (DCTRS flags), showing results in an expandable panel with per-section editable fields
+- **Readiness detail overlay** — clicking any D/C/T/R/S dot opens a full ticket detail overlay with 5 tabbed sections, editable text, and clipboard prompt buttons (Create New / Review Existing)
 
 Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
 
@@ -86,6 +94,9 @@ Depends: {id1}, {id2}     (optional — inter-ticket dependencies)
 {Description}
 - [ ] Acceptance criterion
 - [x] Completed criterion
+Tests: {test notes}       (optional — readiness flag content)
+Reviewed: {review notes}  (optional — readiness flag content)
+Smoke: {smoke notes}      (optional — readiness flag content)
 ```
 
 ID prefixes: `B-` (backlog), `R-` (released), `I-` (idea), `W-` (won't do), `Z-` (icebox), `BUG-` (bug).

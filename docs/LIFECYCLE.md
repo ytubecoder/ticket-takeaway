@@ -97,6 +97,20 @@ Active work sections (WIP, For Review, Backlog) appear first. Archival sections 
 
 ---
 
+## 3b. The Three-Layer Hierarchy
+
+Every ticket is described by three independent layers, each answering a different question:
+
+| Layer | Code Name | Field | Question It Answers |
+|-------|-----------|-------|---------------------|
+| **Section** | `section` / `column` | `Ticket.section`, `Ticket.column` | **Where is the work?** — which kanban column (Ideas → Backlog → WIP → For Review → Done) |
+| **Status** | `status` | `Ticket.status` | **How is the work going?** — lifecycle state within a column (proposed, in-progress, blocked, rework, etc.) |
+| **Readiness Flags** | `readiness_flags` | `Ticket.readiness_flags` | **What's been done?** — workflow checkpoints tracking completeness (D C T R S) |
+
+These layers are orthogonal: a ticket in WIP (section) can be `blocked` (status) with 3/5 readiness flags filled.
+
+---
+
 ## 4. Statuses
 
 Each ticket has a `Status:` value. The section determines the dashboard column; the status provides finer detail within that column.
@@ -116,6 +130,62 @@ Each ticket has a `Status:` value. The section determines the dashboard column; 
 | `icebox` | Parked for later — not rejected, not active | Icebox |
 | `bug` | Active bug report | Bugs |
 | `bug-fixed` | Bug has been fixed, awaiting verification | Bugs |
+
+---
+
+## 4b. Readiness Flags (D C T R S)
+
+Readiness flags are workflow checkpoints displayed as 5 dots on each card. Each flag tracks whether a specific aspect of the feature has been addressed. Flags have associated **content** — the actual text/notes for that checkpoint — stored in the database.
+
+### The Five Flags
+
+| Letter | Name | Type | Content Source | Where Content Lives |
+|--------|------|------|---------------|---------------------|
+| **D** | Description | Auto-computed | Ticket description field | DB `tickets.description` + `PRODUCT_BACKLOG.md` (inline) |
+| **C** | Criteria | Auto-computed | Acceptance criteria list | DB `tickets.acceptance_criteria` + `PRODUCT_BACKLOG.md` (checkboxes) |
+| **T** | Tests | Manual + content | Test definitions & plan | DB `readiness_flags.content` + `docs/features/{ID}/TESTS.md` |
+| **R** | Reviewed | Manual + content | Collective review output | DB `readiness_flags.content` + `docs/features/{ID}/REVIEW.md` + `.feedbacks/{ID}/` |
+| **S** | Smoke tested | Manual + content | Verification checklist & results | DB `readiness_flags.content` |
+
+### Auto vs Manual
+
+- **D and C** are auto-computed: the dot fills when the ticket has a description or criteria. No explicit toggle needed.
+- **T, R, S** are manual flags with content: the dot auto-fills when content is saved, auto-empties when content is cleared.
+
+### Review (R) — Definition
+
+"Reviewed" is a qualitative checkpoint distinct from Tests and Smoke (which are mechanical/repeatable). A reviewed feature has been through a structured process capturing:
+
+- **`/sync` output** — session learnings, decisions made during development
+- **Bugs found** — and their resolution status
+- **Feature implications** — what else this change affects
+- **Architectural decisions** — trade-offs and rationale
+- **Feedback sessions** — visual feedback via `/feedbacks` if used
+
+The R flag content aggregates these into a single record. The `/review` skill orchestrates this process.
+
+### Markdown Format
+
+In `PRODUCT_BACKLOG.md`, readiness content appears as labeled lines after acceptance criteria:
+
+```markdown
+### B-05: Feature Title
+Priority: high | Complexity: L | Status: in-progress
+Description text here.
+- [x] Criterion 1
+- [ ] Criterion 2
+Tests: Test plan and definitions
+Reviewed: Review notes and decisions
+Smoke: Verification checklist and results
+```
+
+Multi-line content uses 4-space indented continuation:
+
+```
+Tests: First line of test content
+    Continuation line 2
+    Continuation line 3
+```
 
 ---
 

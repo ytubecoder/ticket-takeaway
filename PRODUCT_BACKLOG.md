@@ -13,24 +13,10 @@ Add inline editing to dashboard cards via a local HTTP server (stdlib http.serve
 - [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
 - [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
 
-### B-06: serve.py HTTP Server + Quick-Edit Controls
-Priority: medium | Complexity: M | Status: in-progress
-Parent: I-07
-Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashboard with REST API. Quick-edit: click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. data-editing guard in patchCards(). file:// mode still read-only.
-- [ ] serve.py starts and serves dashboard at localhost:8787
-- [ ] GET /api/tickets returns JSON ticket data
-- [ ] PUT /api/tickets/<id> updates individual fields in DB
-- [ ] POST /api/tickets/<id>/move moves ticket between sections
-- [ ] Click priority dot cycles high/medium/low and persists
-- [ ] Click status badge shows dropdown, selection persists
-- [ ] Click acceptance criteria checkbox toggles and persists
-- [ ] data-editing guard in patchCards() skips cards being edited
-- [ ] file:// mode works read-only with no edit controls
-
-### I-10: touch bronwyn (test ticket)
-Priority: medium | Complexity: M | Status: in-progress
-
-## For Review
+### I-10: touch bronwyn (test ticket) ..
+Priority: medium | Complexity: M | Status: for-review
+just get off the pc and go touch
+- [ ] touching has occurred and she provides feedback
 
 ### B-09: Column Move Gate Check — AI-Powered Readiness Analysis
 Priority: high | Complexity: M | Status: for-review
@@ -46,6 +32,81 @@ When a ticket is moved to a top kanban column (Ideas, Backlog, WIP, For Review, 
 - [ ] Moves to Bugs/Icebox/Won't Do bypass the gate (immediate)
 - [ ] add_criteria PUT support for saving suggested new criteria
 
+## For Review
+
+### I-14: Gate panel: show output directory path with click-to-copy
+Priority: low | Complexity: M | Status: done
+Parent: B-09
+The gate panel should display the ticket's output directory path (e.g. docs/features/B-05/) in the panel. Clicking it copies the path to clipboard and shows a 'Path copied' acknowledgment toast.
+- [x] Output directory path is visible in the gate panel
+- [x] Clicking the path copies it to clipboard
+- [x] Toast shows 'Path copied' on successful copy
+- [x] Path is derived from ticket ID using the project's docs/features/ convention
+
+### I-15: Gate panel: DCTRS icons and expanded action buttons
+Priority: medium | Complexity: M | Status: for-review
+Parent: B-09
+Replace the plain D/C/T/R/S letter dots in the gate panel category rows with meaningful icons (e.g. document icon for D, checklist for C, flask for T, eye for R, smoke/cloud for S). When expanded, show full action buttons for each category (e.g. 'Write Description', 'Add Criteria', 'Run Tests', 'Start Review', 'Run Smoke Test') that trigger the appropriate workflow.
+- [x] Each DCTRS category has a recognizable icon (not just a letter)
+- [ ] Icons are consistent between the readiness row on cards and the gate panel
+- [ ] Expanded gate panel shows contextual action buttons per category
+- [ ] Action buttons trigger appropriate workflows (clipboard prompts or direct actions)
+- [ ] Icons work in both light and dark themes
+- [ ] Icons degrade gracefully if custom font/SVG fails to load (fallback to letter)
+
+### I-12: Gate panel: Claude CLI round-trip with diff-style merge UI
+Priority: high | Complexity: M | Status: for-review
+Parent: B-09
+When creating new content or reviewing existing content in the gate panel (e.g. editing description, criteria, review notes), the edited text should be sent to Claude CLI for enrichment/validation and returned. The UI should show a diff-style display comparing current vs suggested, with point-by-point accept/reject for each change. Use a pattern that doesn't clobber existing content — insertions and updates are presented as discrete merge operations the user controls.
+- [ ] Edited text can be sent to Claude CLI for enrichment via a 'Review with AI' button
+- [ ] Response is shown as a diff: current content vs suggested content
+- [ ] Each change (addition, modification, deletion) is individually accept/reject-able
+- [ ] Accepted changes merge into the field without clobbering unmodified content
+- [ ] User can accept all or reject all in bulk
+- [ ] Works for description, criteria, and any future DCTRS category content
+
+### I-13: Gate panel: verify all edits persist to DB and sync to markdown
+Priority: medium | Complexity: M | Status: for-review
+Parent: B-09
+Verify that all edits made through the gate panel (description changes, new criteria, flag toggles, review notes) are persisted to the SQLite database and then synced to PRODUCT_BACKLOG.md. This is a verification/hardening sub-ticket, not new functionality.
+- [ ] Description edits via gate panel Save are in tickets table
+- [ ] New criteria via gate panel Save are in acceptance_criteria table
+- [ ] Flag toggles during gate review are in readiness_flags table
+- [ ] All DB changes trigger sync_to_markdown and regenerate_dashboard
+- [ ] PRODUCT_BACKLOG.md reflects all gate panel edits after sync
+
+### B-06: serve.py HTTP Server + Quick-Edit Controls
+Priority: medium | Complexity: M | Status: for-review
+Parent: I-07
+Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashboard with REST API. Quick-edit: click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. data-editing guard in patchCards(). file:// mode still read-only.
+- [ ] serve.py starts and serves dashboard at localhost:8787
+- [ ] GET /api/tickets returns JSON ticket data
+- [ ] PUT /api/tickets/<id> updates individual fields in DB
+- [ ] POST /api/tickets/<id>/move moves ticket between sections
+- [ ] Click priority dot cycles high/medium/low and persists
+- [ ] Click status badge shows dropdown, selection persists
+- [ ] Click acceptance criteria checkbox toggles and persists
+- [ ] data-editing guard in patchCards() skips cards being edited
+- [ ] file:// mode works read-only with no edit controls
+
+### B-07: Expand-to-Edit: Full Form Editing for All Fields
+Priority: medium | Complexity: L | Status: done
+Parent: I-07
+Phase 2 of I-07. Click any text field on an expanded kanban card to edit it in-place — title becomes input, description becomes textarea, rationale becomes textarea, etc. Single-click transforms the element, blur saves via apiPut(). No pencil icon, no edit mode toggle. Each field is independently clickable and editable. Select dropdowns for enums (priority, complexity, status, section). Criteria rows: click text to edit, click checkbox to toggle, plus add/remove buttons. Parent and depends fields get autocomplete from existing ticket IDs. Keyboard: ESC reverts, Tab moves to next field. Only in server mode (gated behind EDIT_API check).
+
+### I-08: Undo System — Toast Countdown + Ctrl+Z
+Priority: medium | Complexity: M | Status: for-review
+Parent: I-07
+Phase 3 of I-07. Undo system: toast with countdown after each edit (5s window to revert), plus Ctrl+Z to reverse the last action.
+- [ ] Toast bar appears at bottom-center after every edit action
+- [ ] Toast shows what changed (e.g. 'B-05 priority → high') with 5s countdown
+- [ ] Clicking Undo button reverts the change via API
+- [ ] Ctrl+Z / Cmd+Z reverts the last action within the 5s window
+- [ ] New edit replaces previous undo opportunity (depth of 1)
+- [ ] Toast disappears after 5s if no undo clicked
+- [ ] Undo works for: priority, status, complexity, criteria toggle, text edits, moves
+- [ ] Ctrl+Z does not fire when focused on input/textarea fields
+
 ## Backlog
 
 ### B-02: Per-Feature Working Files
@@ -57,11 +118,6 @@ Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include P
 - [ ] Cleanup step integrated into /accept
 - [ ] /sync integration before cleanup
 - [ ] Test criterion from gate panel
-
-### B-07: Expand-to-Edit: Full Form Editing for All Fields
-Priority: medium | Complexity: L | Status: proposed
-Parent: I-07
-Phase 2 of I-07. Pencil icon on expanded cards transforms read-only text into form fields. Per-field auto-save on blur. All 12 editable fields: title, description, acceptance criteria list, priority, complexity, status, section, parent, depends, rationale, commit_hash, release_tag. Keyboard: ESC cancel, Ctrl+Enter save.
 
 ### B-04: Registry Auto-Discovery
 Priority: low | Complexity: S | Status: proposed
@@ -113,63 +169,9 @@ Render SVG connector lines between cards that have Depends: relationships. Curre
 - [ ] Lines work across columns (e.g. WIP card depending on Backlog card)
 - [ ] No lines rendered when dependency target card is hidden by filter
 
-### I-08: New Ticket Creation + Drag-and-Drop
-Priority: medium | Complexity: M | Status: proposed
-Parent: I-07
-Phase 3 of I-07. Plus button per column header for new tickets. POST /api/tickets endpoint. Inline new-ticket form at top of column. Drag-and-drop between columns maps to move API. Undo toast (5s window after each edit).
-
 ### I-09: test ticket with nothing on it
 Priority: medium | Complexity: M | Status: proposed
 This is just a test but the feature should be to add a text file called hello.txt
-
-### I-11: Gate panel: unique URLs per screen/state
-Priority: medium | Complexity: M | Status: proposed
-Parent: B-09
-Each gate-check state should have a unique URL fragment (e.g. #gate/B-05/review) so the user can share or bookmark a specific gate-check screen. Browser back/forward should navigate between gate states. URL should encode ticket ID, target column, and panel state.
-- [ ] Gate-check panel sets URL hash when opened (e.g. #gate/B-05/WIP)
-- [ ] Navigating to a gate URL re-opens that gate-check panel
-- [ ] Browser back button closes the panel / returns to previous state
-- [ ] Multiple gate panels don't clobber each other's URL state
-
-### I-12: Gate panel: Claude CLI round-trip with diff-style merge UI
-Priority: high | Complexity: M | Status: proposed
-Parent: B-09
-When creating new content or reviewing existing content in the gate panel (e.g. editing description, criteria, review notes), the edited text should be sent to Claude CLI for enrichment/validation and returned. The UI should show a diff-style display comparing current vs suggested, with point-by-point accept/reject for each change. Use a pattern that doesn't clobber existing content — insertions and updates are presented as discrete merge operations the user controls.
-- [ ] Edited text can be sent to Claude CLI for enrichment via a 'Review with AI' button
-- [ ] Response is shown as a diff: current content vs suggested content
-- [ ] Each change (addition, modification, deletion) is individually accept/reject-able
-- [ ] Accepted changes merge into the field without clobbering unmodified content
-- [ ] User can accept all or reject all in bulk
-- [ ] Works for description, criteria, and any future DCTRS category content
-
-### I-13: Gate panel: verify all edits persist to DB and sync to markdown
-Priority: medium | Complexity: M | Status: proposed
-Parent: B-09
-Verify that all edits made through the gate panel (description changes, new criteria, flag toggles, review notes) are persisted to the SQLite database and then synced to PRODUCT_BACKLOG.md. This is a verification/hardening sub-ticket, not new functionality.
-- [ ] Description edits via gate panel Save are in tickets table
-- [ ] New criteria via gate panel Save are in acceptance_criteria table
-- [ ] Flag toggles during gate review are in readiness_flags table
-- [ ] All DB changes trigger sync_to_markdown and regenerate_dashboard
-- [ ] PRODUCT_BACKLOG.md reflects all gate panel edits after sync
-
-### I-14: Gate panel: show output directory path with click-to-copy
-Priority: low | Complexity: M | Status: proposed
-Parent: B-09
-The gate panel should display the ticket's output directory path (e.g. docs/features/B-05/) in the panel. Clicking it copies the path to clipboard and shows a 'Path copied' acknowledgment toast.
-- [ ] Output directory path is visible in the gate panel
-- [ ] Clicking the path copies it to clipboard
-- [ ] Toast shows 'Path copied' on successful copy
-- [ ] Path is derived from ticket ID using the project's docs/features/ convention
-
-### I-15: Gate panel: DCTRS icons and expanded action buttons
-Priority: medium | Complexity: M | Status: proposed
-Parent: B-09
-Replace the plain D/C/T/R/S letter dots in the gate panel category rows with meaningful icons (e.g. document icon for D, checklist for C, flask for T, eye for R, smoke/cloud for S). When expanded, show full action buttons for each category (e.g. 'Write Description', 'Add Criteria', 'Run Tests', 'Start Review', 'Run Smoke Test') that trigger the appropriate workflow.
-- [ ] Each DCTRS category has a recognizable icon (not just a letter)
-- [ ] Icons are consistent between the readiness row on cards and the gate panel
-- [ ] Expanded gate panel shows contextual action buttons per category
-- [ ] Action buttons trigger appropriate workflows (clipboard prompts or direct actions)
-- [ ] Icons work in both light and dark themes
 
 ## Bugs
 
@@ -282,6 +284,17 @@ Replace the full-page-reload polling with in-place DOM diffing. When the dashboa
 - [ ] Progress bars update width smoothly (existing 0.3s transition suffices)
 - [ ] No visible flicker or layout shift during normal updates
 - [ ] Falls back to full reload if DOM structure changes drastically (major generator version bump)
+
+### I-11: Gate panel: unique URLs per screen/state
+Priority: medium | Complexity: M | Status: done
+Parent: B-09
+Commit: fbf8e4e
+Each gate-check state should have a unique URL fragment (e.g. #gate/B-05/review) so the user can share or bookmark a specific gate-check screen. Browser back/forward should navigate between gate states. URL should encode ticket ID, target column, and panel state.
+- [ ] Gate-check panel sets URL hash when opened (e.g. #gate/B-05/WIP)
+- [ ] Navigating to a gate URL re-opens that gate-check panel
+- [ ] Browser back button closes the panel / returns to previous state
+- [ ] Multiple gate panels don't clobber each other's URL state
+Tests: When the readiness gating screen (ill call it ticket view) is open, the URL should change in the browser to reflect the exact screen. There should be a URL always in the browser so that bookmarks and back and forward navigation works in the browser and the user knows where they are.
 
 ## Won't Do
 

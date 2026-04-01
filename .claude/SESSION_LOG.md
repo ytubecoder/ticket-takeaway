@@ -1,5 +1,26 @@
 # Session Log
 
+## 2026-04-02 — Redesign ticket detail overlay: tabs → single scrollable card
+
+### Summary
+- Replaced 6-tab ticket detail overlay with a single scrollable card layout — all DCTRS sections + rationale visible at once
+- Added meta strip with clickable chips (priority cycles, status dropdown, complexity cycles, parent inline-edit, column badge)
+- Made title contenteditable in header, DCTRS dots scroll to sections, all textareas auto-save on blur
+- Removed all Save buttons, tab switching, Properties form, and Create New/Review Existing button pairs
+- Replaced criteria checkboxes with bullet + inline-editable text + × delete button + Enter-to-add input
+- Collapsed two assess buttons per section into single "Assess"/"Re-assess" ghost button (visible on hover)
+
+### Lessons Learned
+- **Accepted:** Auto-save on blur eliminates Save buttons entirely — reduces mouse clicks and cognitive load. Toast confirms save happened.
+- **Accepted:** Single "Assess" button that auto-detects create vs review (based on content presence) removes a decision the user shouldn't need to make.
+- **Accepted:** Criteria are a spec (accept/reject/edit), not a todo list (check/uncheck). Checkboxes were the wrong affordance.
+- **Gotcha:** When replacing tabs with stacked sections, `scrollToSection()` needs to account for the fixed header offset — using `el.offsetTop - body.offsetTop` for correct scroll position.
+
+### Decisions
+- Criteria checkboxes removed per user feedback — criteria are specification items, not completion trackers
+- Shift+click on Assess copies prompt to clipboard (power-user fallback) — preserved from old UI but hidden
+- Hash routing changed from `#ticket/{id}/{tabName}` to `#ticket/{id}/{flagLetter}` with backward compat map
+
 ## 2026-04-02 — Fix drag-and-drop column highlighting
 
 ### Summary

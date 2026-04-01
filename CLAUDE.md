@@ -65,12 +65,12 @@ Data model: `Ticket` dataclass (id, title, priority, complexity, status, section
 Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime use (see `INSTALL.md` for the deployment map).
 
 **`src/serve.py`** is the interactive dashboard server. Serves the generated HTML over HTTP, injecting an `edit-api` meta tag that activates editing features:
-- **Priority cycling** (click the colored dot), **Status dropdown** (click badge), **Criteria toggle** (click checkboxes)
+- **Priority cycling** (click the colored dot), **Status dropdown** (click badge)
 - **Drag-to-move** (drag cards between columns), **Inline text editing** (dblclick title/description when expanded)
 - **Workflow buttons** (Start, Done, Accept — shown when expanded), **Create/Delete** via API
 - **New ticket panel** ("+ New" in filter bar) — overlay panel with title input, section dropdown, and expandable "Full ticket form" (coming soon placeholder)
 - **Gate-check on column moves** — dragging/moving a ticket to a top column triggers an AI-powered readiness analysis (DCTRS flags), showing results in an expandable panel with per-section editable fields
-- **Readiness detail overlay** — clicking any D/C/T/R/S dot opens a full ticket detail overlay with 5 tabbed sections, editable text, and clipboard prompt buttons (Create New / Review Existing)
+- **Ticket detail overlay** — single scrollable card (no tabs). Header: ID + contenteditable title + DCTRS readiness dots (click to scroll). Meta strip: priority/status/complexity chips (click to cycle/dropdown), parent (click to edit), column badge. Body: all DCTRS sections + rationale stacked and always visible with inline auto-save on blur. Single "Assess"/"Re-assess" ghost button per section (visible on hover). Criteria: bullet + editable text + × delete, Enter-to-add input.
 
 Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
 

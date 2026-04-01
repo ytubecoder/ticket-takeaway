@@ -840,13 +840,13 @@ a {{ color: var(--accent); text-decoration: none; }}
 /* Child card groups — parent + indented children with connector */
 .child-group {{
   display: flex; flex-direction: column; gap: 4px;
-  margin-left: 20px; padding-left: 12px;
+  margin-left: 8px; padding-left: 10px;
   border-left: 1px solid var(--border-default);
 }}
 .child-group .card {{ margin-left: 0; position: relative; }}
 .child-group .card::before {{
-  content: ''; position: absolute; left: -13px; top: 12px;
-  width: 8px; border-top: 1px solid var(--border-default);
+  content: ''; position: absolute; left: -11px; top: 12px;
+  width: 6px; border-top: 1px solid var(--border-default);
 }}
 .child-group.collapsed {{ display: none; }}
 /* Parent toggle */
@@ -911,8 +911,54 @@ a {{ color: var(--accent); text-decoration: none; }}
 .edit-enabled .priority-dot {{ cursor: pointer; }}
 .edit-enabled .status-badge {{ cursor: pointer; }}
 .edit-enabled .criterion {{ cursor: pointer; }}
+.edit-enabled .complexity-badge {{ cursor: pointer; }}
 .edit-enabled .priority-dot:hover {{ transform: scale(1.5); transition: transform 0.15s; }}
 .edit-enabled .status-badge:hover {{ filter: brightness(1.3); transition: filter 0.15s; }}
+.edit-enabled .complexity-badge:hover {{ filter: brightness(1.3); transition: filter 0.15s; }}
+/* Click-to-edit text fields */
+.edit-enabled .card-title {{ cursor: text; }}
+.edit-enabled .card.expanded .card-desc,
+.edit-enabled .card.expanded .card-rationale {{ cursor: text; }}
+.edit-enabled .card-title:hover,
+.edit-enabled .card.expanded .card-desc:hover,
+.edit-enabled .card.expanded .card-rationale:hover {{ background: var(--bg-hover); border-radius: 3px; }}
+/* Empty field placeholders (only visible on expanded cards) */
+.card-parent-link.empty, .card-deps.empty, .card-desc.empty, .card-rationale.empty {{
+  display: none; color: var(--text-tertiary); font-size: 10px; cursor: pointer;
+  opacity: 0.5; font-style: italic;
+}}
+.card.expanded .card-parent-link.empty,
+.card.expanded .card-deps.empty,
+.card.expanded .card-desc.empty,
+.card.expanded .card-rationale.empty {{ display: block; }}
+.edit-enabled .card-parent-link.empty:hover,
+.edit-enabled .card-deps.empty:hover,
+.edit-enabled .card-desc.empty:hover,
+.edit-enabled .card-rationale.empty:hover {{ opacity: 1; background: var(--bg-hover); border-radius: 3px; }}
+.edit-enabled .card-parent-link {{ cursor: pointer; }}
+.edit-enabled .card-deps {{ cursor: pointer; }}
+/* Add criterion button */
+.add-criterion-btn {{
+  display: none; font-size: 10px; color: var(--accent); background: none;
+  border: 1px dashed var(--border-default); border-radius: 4px; padding: 2px 8px;
+  cursor: pointer; margin-top: 4px;
+}}
+.edit-enabled .card.expanded .add-criterion-btn {{ display: inline-block; }}
+.add-criterion-btn:hover {{ border-color: var(--accent); background: var(--bg-hover); }}
+/* Git traceability on expanded cards */
+.card-commit, .card-release {{ display: none; margin-top: 4px; }}
+.card.expanded .card-commit, .card.expanded .card-release {{ display: block; }}
+/* Undo toast */
+#undo-toast {{
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+  background: var(--bg-card); border: 1px solid var(--border-default);
+  border-radius: 8px; padding: 8px 16px; z-index: 9999;
+  box-shadow: 0 4px 20px rgba(0,0,0,.5); font-size: 12px; color: var(--text-secondary);
+  opacity: 0; transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none; max-width: 500px; white-space: nowrap;
+}}
+#undo-toast.visible {{ opacity: 1; transform: translateX(-50%) translateY(0); }}
+#undo-toast.undo-fail {{ color: #ef4444; }}
 
 /* Drag-drop (edit mode) */
 .edit-enabled .card {{ cursor: grab; }}
@@ -984,25 +1030,76 @@ a {{ color: var(--accent); text-decoration: none; }}
 }}
 .detail-gate-cancel:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
 
-/* Properties tab */
-.detail-props-grid {{
-  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+/* Diff panel (AI enrich round-trip) */
+.diff-panel {{
+  margin-bottom: 12px; border-radius: 8px; border: 1px solid var(--border-default);
+  background: var(--bg-card); overflow: hidden; animation: panelSlide 0.2s ease-out;
 }}
-.detail-prop-field {{ display: flex; flex-direction: column; gap: 4px; }}
-.detail-prop-field.full-width {{ grid-column: 1 / -1; }}
-.detail-prop-label {{
-  font-size: 11px; font-weight: 600; color: var(--text-tertiary);
-  text-transform: uppercase; letter-spacing: 0.3px;
+.diff-panel.hidden {{ display: none; }}
+.diff-header {{
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  background: rgba(59,130,246,0.06); border-bottom: 1px solid var(--border-default);
 }}
-.detail-prop-input {{
-  font-size: 13px; padding: 8px 10px; border-radius: 6px;
-  border: 1px solid var(--border-default); background: var(--bg-card);
-  color: var(--text-primary); font-family: var(--font-sans); outline: none;
-  box-sizing: border-box; width: 100%;
+.diff-header span {{ flex: 1; font-size: 12px; font-weight: 600; color: var(--text-secondary); }}
+.diff-accept-all, .diff-reject-all {{
+  font-size: 11px; padding: 3px 10px; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--border-default); background: none; font-family: var(--font-sans);
+  transition: all 0.15s;
 }}
-.detail-prop-input:focus {{ border-color: var(--accent); }}
-select.detail-prop-input {{ cursor: pointer; }}
-textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: var(--font-mono); }}
+.diff-accept-all {{ color: #22c55e; border-color: rgba(34,197,94,0.4); }}
+.diff-accept-all:hover {{ background: rgba(34,197,94,0.1); }}
+.diff-reject-all {{ color: #ef4444; border-color: rgba(239,68,68,0.4); }}
+.diff-reject-all:hover {{ background: rgba(239,68,68,0.1); }}
+.diff-hunks {{ padding: 8px 0; max-height: 320px; overflow-y: auto; }}
+.diff-hunk {{
+  padding: 4px 12px; display: flex; align-items: flex-start; gap: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.04); font-family: var(--font-mono); font-size: 12px;
+  transition: background 0.15s;
+}}
+.diff-hunk:last-child {{ border-bottom: none; }}
+.diff-hunk.accepted {{ background: rgba(34,197,94,0.06); }}
+.diff-hunk.rejected {{ background: rgba(239,68,68,0.04); opacity: 0.6; }}
+.diff-hunk-lines {{ flex: 1; min-width: 0; }}
+.diff-hunk-old {{
+  color: #ef4444; background: rgba(239,68,68,0.08); padding: 2px 6px; border-radius: 3px;
+  margin-bottom: 2px; white-space: pre-wrap; word-break: break-all; line-height: 1.4;
+}}
+.diff-hunk-old:empty {{ display: none; }}
+.diff-hunk-new {{
+  color: #22c55e; background: rgba(34,197,94,0.08); padding: 2px 6px; border-radius: 3px;
+  white-space: pre-wrap; word-break: break-all; line-height: 1.4;
+}}
+.diff-hunk-new:empty {{ display: none; }}
+.diff-hunk-actions {{ display: flex; gap: 4px; flex-shrink: 0; padding-top: 2px; }}
+.diff-accept, .diff-reject {{
+  width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border-default);
+  background: none; cursor: pointer; font-size: 12px; display: flex; align-items: center;
+  justify-content: center; transition: all 0.15s; padding: 0; line-height: 1;
+}}
+.diff-accept {{ color: #22c55e; }}
+.diff-accept:hover, .diff-hunk.accepted .diff-accept {{ background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.5); }}
+.diff-reject {{ color: #ef4444; }}
+.diff-reject:hover, .diff-hunk.rejected .diff-reject {{ background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.5); }}
+.diff-footer {{
+  padding: 8px 12px; border-top: 1px solid var(--border-default);
+  display: flex; gap: 8px; align-items: center;
+}}
+.diff-apply {{
+  font-size: 12px; padding: 6px 16px; border-radius: 6px; border: none;
+  background: var(--accent); color: #fff; cursor: pointer; font-weight: 600;
+  font-family: var(--font-sans); transition: background 0.15s;
+}}
+.diff-apply:hover {{ background: #2563eb; }}
+.diff-apply:disabled {{ background: var(--border-default); color: var(--text-tertiary); cursor: not-allowed; }}
+.diff-discard {{
+  font-size: 12px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: none;
+  color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans); transition: all 0.15s;
+}}
+.diff-discard:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
+.diff-status {{ font-size: 11px; color: var(--text-tertiary); flex: 1; }}
+
+/* (Properties moved to meta-strip chips) */
 
 /* Assessment results area */
 .detail-assessment {{
@@ -1051,6 +1148,14 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
   font-weight: 600; margin-top: 4px;
 }}
 .assessment-apply-btn:hover {{ background: rgba(59,130,246,0.2); }}
+.assessment-action-row {{ margin-top: 8px; }}
+.assessment-action-btn {{
+  font-size: 11px; padding: 5px 12px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-hover);
+  color: var(--text-secondary); cursor: pointer; font-weight: 600;
+  transition: all 0.15s; display: inline-flex; align-items: center; gap: 4px;
+}}
+.assessment-action-btn:hover {{ border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.08); }}
 
 /* Assessment loading indicator */
 .detail-assess-loading {{
@@ -1133,9 +1238,9 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
 /* Readiness indicator dots */
 .readiness-row {{ display: flex; gap: 3px; margin: 3px 0; }}
 .readiness-dot {{
-  width: 16px; height: 16px; border-radius: 50%; font-size: 8px; font-weight: 700;
+  width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-mono); line-height: 1; cursor: default;
+  font-family: var(--font-sans); line-height: 1; cursor: default;
 }}
 .readiness-dot.filled {{
   background: rgba(34,197,94,0.15); color: var(--status-done); border: 1px solid rgba(34,197,94,0.3);
@@ -1151,36 +1256,82 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
 .detail-overlay {{ position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }}
 .detail-overlay.hidden {{ display: none; }}
 .detail-backdrop {{ position: absolute; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }}
-.detail-panel {{ position: relative; width: 90vw; max-width: 820px; max-height: 88vh; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,0.5); }}
+.detail-panel {{ position: relative; width: 92vw; max-width: 760px; max-height: 90vh; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,0.5); }}
+/* Header strip — fixed */
 .detail-header {{ display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--border-subtle); }}
-.detail-header .detail-id {{ font-family: var(--font-mono); font-size: 13px; color: var(--accent); font-weight: 700; }}
-.detail-header .detail-title {{ font-size: 15px; font-weight: 600; color: var(--text-primary); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.detail-close {{ background: none; border: none; color: var(--text-tertiary); font-size: 22px; cursor: pointer; padding: 0 4px; line-height: 1; }}
+.detail-header .detail-id {{ font-family: var(--font-mono); font-size: 13px; color: var(--accent); font-weight: 700; flex-shrink: 0; }}
+.detail-header .detail-title {{ font-size: 15px; font-weight: 600; color: var(--text-primary); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.detail-header .detail-title[contenteditable] {{ cursor: text; border-bottom: 1px solid transparent; transition: border-color 0.15s; outline: none; }}
+.detail-header .detail-title[contenteditable]:hover {{ border-bottom-color: var(--border-subtle); }}
+.detail-header .detail-title[contenteditable]:focus {{ border-bottom-color: var(--accent); white-space: normal; overflow: visible; text-overflow: clip; }}
+.detail-header .detail-path {{ font-family: var(--font-mono); font-size: 11px; color: #888; cursor: pointer; padding: 2px 6px; border-radius: 3px; white-space: nowrap; flex-shrink: 0; }}
+.detail-header .detail-path:hover {{ background: rgba(255,255,255,0.1); }}
+.detail-dctrs-strip {{ display: flex; gap: 4px; align-items: center; flex-shrink: 0; }}
+.detail-dctrs-strip .readiness-dot {{ cursor: pointer; }}
+.detail-dctrs-strip .readiness-dot:hover {{ opacity: 1; border-color: var(--accent); }}
+.detail-close {{ background: none; border: none; color: var(--text-tertiary); font-size: 22px; cursor: pointer; padding: 0 4px; line-height: 1; flex-shrink: 0; }}
 .detail-close:hover {{ color: var(--text-primary); }}
-.detail-tabs {{ display: flex; gap: 4px; padding: 10px 20px; border-bottom: 1px solid var(--border-subtle); }}
-.detail-tab {{ width: 36px; height: 28px; border-radius: 6px; font-size: 12px; font-weight: 700; font-family: var(--font-mono); display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); transition: all 0.15s; }}
-.detail-tab.active {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
-.detail-tab.filled {{ color: var(--status-done); border-color: rgba(34,197,94,0.3); }}
-.detail-tab.active.filled {{ background: var(--accent); color: #fff; }}
+/* Meta strip — fixed below header */
+.detail-meta-strip {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); }}
+.meta-chip {{ display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; font-family: var(--font-sans); background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); cursor: pointer; color: var(--text-secondary); transition: all 0.15s; user-select: none; white-space: nowrap; }}
+.meta-chip:hover {{ background: rgba(255,255,255,0.10); color: var(--text-primary); }}
+.meta-chip .chip-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
+.meta-chip--priority .chip-dot.high {{ background: #ef4444; }}
+.meta-chip--priority .chip-dot.medium {{ background: #eab308; }}
+.meta-chip--priority .chip-dot.low {{ background: #22c55e; }}
+.meta-chip--status {{ }}
+.meta-chip--column {{ cursor: default; color: var(--text-tertiary); border-color: transparent; background: transparent; }}
+.meta-chip--column:hover {{ background: transparent; color: var(--text-tertiary); }}
+.meta-chip--parent {{ }}
+.meta-chip--parent .chip-label {{ color: var(--text-tertiary); }}
+.meta-chip--parent .chip-value {{ color: var(--accent); font-family: var(--font-mono); }}
+.meta-chip--parent input {{ width: 60px; font-size: 11px; background: var(--bg-card); border: 1px solid var(--accent); color: var(--text-primary); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); outline: none; }}
+/* Status dropdown for meta chip */
+.meta-status-dropdown {{ position: absolute; z-index: 1010; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); min-width: 140px; }}
+.meta-status-opt {{ display: block; width: 100%; text-align: left; font-size: 12px; padding: 6px 10px; border: none; background: none; color: var(--text-secondary); cursor: pointer; border-radius: 4px; font-family: var(--font-sans); }}
+.meta-status-opt:hover {{ background: var(--bg-hover); color: var(--text-primary); }}
+.meta-status-opt.active {{ color: var(--accent); font-weight: 600; }}
+/* Scroll body */
 .detail-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
-.detail-section {{ display: none; }}
-.detail-section.active {{ display: block; }}
-.detail-section-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }}
-.detail-section-header h3 {{ margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }}
-.detail-clipboard-btns {{ display: flex; gap: 6px; }}
-.detail-clip-btn {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-family: var(--font-mono); transition: all 0.15s; }}
-.detail-clip-btn:hover {{ border-color: var(--accent); color: var(--text-primary); }}
-.detail-editor {{ width: 100%; min-height: 180px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 6px; padding: 12px; font-family: var(--font-mono); font-size: 13px; resize: vertical; line-height: 1.5; box-sizing: border-box; }}
-.detail-editor:focus {{ outline: none; border-color: var(--accent); }}
-.detail-criteria-list {{ list-style: none; padding: 0; margin: 0 0 10px 0; }}
-.detail-criteria-item {{ display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--text-secondary); }}
-.detail-criteria-item input[type="checkbox"] {{ margin-top: 3px; }}
-.detail-save-row {{ display: flex; justify-content: flex-end; margin-top: 10px; gap: 8px; }}
-.detail-save-btn {{ font-size: 12px; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; font-weight: 600; }}
-.detail-save-btn:hover {{ opacity: 0.9; }}
-.detail-toast {{ position: absolute; top: 14px; right: 60px; font-size: 11px; font-weight: 600; color: var(--status-done); background: var(--status-done-bg); padding: 3px 10px; border-radius: 4px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }}
+/* Sections — always visible, stacked */
+.detail-section {{ display: block; margin-bottom: 20px; }}
+.detail-section:last-child {{ margin-bottom: 0; }}
+.detail-section-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border-subtle); }}
+.detail-section-header h3 {{ margin: 0; font-size: 13px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.3px; display: flex; align-items: center; gap: 6px; }}
+.detail-section-header h3 .section-flag {{ font-size: 11px; width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-subtle); color: var(--text-tertiary); font-weight: 700; font-family: var(--font-mono); }}
+.detail-section-header h3 .section-flag.filled {{ background: rgba(34,197,94,0.15); color: #22c55e; border-color: rgba(34,197,94,0.3); }}
+.section-assess-btn {{ font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: none; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); transition: all 0.15s; opacity: 0; }}
+.detail-section:hover .section-assess-btn, .section-assess-btn:focus {{ opacity: 1; }}
+.section-assess-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+.section-assess-btn.loading {{ opacity: 1; color: var(--accent); pointer-events: none; }}
+/* Editors */
+.detail-editor {{ width: 100%; min-height: 80px; background: var(--bg-card); color: var(--text-primary); border: 1px solid transparent; border-radius: 6px; padding: 10px 12px; font-family: var(--font-mono); font-size: 13px; resize: vertical; line-height: 1.5; box-sizing: border-box; transition: border-color 0.15s; }}
+.detail-editor:hover {{ border-color: var(--border-default); }}
+.detail-editor:focus {{ outline: none; border-color: var(--accent); background: var(--bg-surface); }}
+.detail-editor.desc-editor {{ min-height: 120px; }}
+.detail-editor-empty {{ color: var(--text-tertiary); font-style: italic; }}
+/* Criteria */
+.detail-criteria-list {{ list-style: none; padding: 0; margin: 0 0 8px 0; }}
+.detail-criteria-item {{ display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 13px; color: var(--text-secondary); }}
+.detail-criteria-item .criteria-bullet {{ color: var(--text-tertiary); font-size: 11px; flex-shrink: 0; user-select: none; }}
+.detail-criteria-item .criteria-text {{ flex: 1; cursor: text; padding: 2px 4px; border-radius: 3px; transition: background 0.15s; line-height: 1.4; }}
+.detail-criteria-item .criteria-text:hover {{ background: rgba(255,255,255,0.04); }}
+.detail-criteria-item .criteria-text[contenteditable="true"] {{ background: var(--bg-card); outline: none; border: 1px solid var(--accent); padding: 1px 3px; }}
+.detail-criteria-item .criteria-delete {{ background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; padding: 0 2px; line-height: 1; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; }}
+.detail-criteria-item:hover .criteria-delete {{ opacity: 1; }}
+.detail-criteria-item .criteria-delete:hover {{ color: #ef4444; }}
+.criteria-add-input {{ width: 100%; font-size: 13px; padding: 8px 12px; background: var(--bg-card); border: 1px solid transparent; border-radius: 6px; color: var(--text-primary); font-family: var(--font-mono); outline: none; box-sizing: border-box; transition: border-color 0.15s; }}
+.criteria-add-input:hover {{ border-color: var(--border-default); }}
+.criteria-add-input:focus {{ border-color: var(--accent); background: var(--bg-surface); }}
+.criteria-add-input::placeholder {{ color: var(--text-tertiary); font-style: italic; }}
+/* Toast */
+.detail-toast {{ position: absolute; top: 14px; right: 60px; font-size: 11px; font-weight: 600; color: var(--status-done); background: var(--status-done-bg); padding: 3px 10px; border-radius: 4px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 1020; }}
 .detail-toast.show {{ opacity: 1; }}
-.detail-tab.needs-work {{ color: #eab308 !important; border-color: rgba(234,179,8,0.4); }}
+@media (max-width: 560px) {{
+  .detail-panel {{ max-width: 100vw; max-height: 100vh; border-radius: 0; inset: 0; }}
+  .detail-meta-strip {{ gap: 6px; }}
+  .detail-dctrs-strip {{ order: 10; width: 100%; justify-content: center; padding-top: 4px; }}
+}}
 
 .status-dropdown-opt:hover {{ background: var(--bg-hover); }}
 .list-row-detail {{ display: none; padding: 6px 8px 4px 22px; }}
@@ -1583,7 +1734,7 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
 
     function getCardMap(root) {{
       var map = {{}};
-      root.querySelectorAll('[data-item-id]').forEach(function(el) {{ map[el.dataset.itemId] = el; }});
+      root.querySelectorAll('[data-item-id]').forEach(function(el) {{ if (!el.closest('.child-group')) map[el.dataset.itemId] = el; }});
       return map;
     }}
 
@@ -1825,10 +1976,10 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
           setTimeout(function() {{
             if (window.populateAssessment) window.populateAssessment(data);
             if (window.showGateBanner) window.showGateBanner(data, targetSection);
-            // Set URL hash for gate state (I-11)
+            // Set URL hash for gate state (I-11) — replaceState to overwrite the #ticket/ hash from openOverlay
             var gateHash = '#gate/' + ticketId + '/' + encodeURIComponent(targetSection);
             if (window.location.hash !== gateHash) {{
-              history.pushState({{ gate: true, ticketId: ticketId, section: targetSection }}, '', gateHash);
+              history.replaceState({{ gate: true, ticketId: ticketId, section: targetSection }}, '', gateHash);
             }}
           }}, 100);
         }}
@@ -1848,6 +1999,87 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
       }}
     }}
 
+    // --- Undo/Redo system (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) ---
+    var undoStack = [];
+    var redoStack = [];
+    var MAX_UNDO = 50;
+    if (EDIT_API) {{
+      var undoEl = document.createElement('div');
+      undoEl.id = 'undo-toast';
+      undoEl.textContent = '';
+      document.body.appendChild(undoEl);
+    }}
+
+    function showUndoToast(text) {{
+      var el = document.getElementById('undo-toast');
+      if (!el) return;
+      el.classList.remove('undo-fail');
+      el.textContent = text;
+      el.classList.add('visible');
+      setTimeout(function() {{ el.classList.remove('visible'); }}, 2500);
+    }}
+
+    function pushUndo(ticketId, description, revertFn, redoFn) {{
+      if (!EDIT_API) return;
+      undoStack.push({{ ticketId: ticketId, description: description, revertFn: revertFn, redoFn: redoFn }});
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack = []; // new edit clears redo history
+      showUndoToast(description + '  (Ctrl+Z to undo)');
+    }}
+
+    function performUndo() {{
+      if (!undoStack.length) return;
+      var state = undoStack.pop();
+      state.revertFn().then(function() {{
+        redoStack.push(state);
+        showUndoToast('Undone: ' + state.description);
+      }}).catch(function() {{
+        var el = document.getElementById('undo-toast');
+        if (el) {{
+          el.classList.add('undo-fail');
+          el.textContent = 'Undo failed';
+          el.classList.add('visible');
+          setTimeout(function() {{ el.classList.remove('visible', 'undo-fail'); }}, 2000);
+        }}
+      }});
+    }}
+
+    function performRedo() {{
+      if (!redoStack.length) return;
+      var state = redoStack.pop();
+      if (state.redoFn) {{
+        state.redoFn().then(function() {{
+          undoStack.push(state);
+          showUndoToast('Redone: ' + state.description);
+        }}).catch(function() {{
+          var el = document.getElementById('undo-toast');
+          if (el) {{
+            el.classList.add('undo-fail');
+            el.textContent = 'Redo failed';
+            el.classList.add('visible');
+            setTimeout(function() {{ el.classList.remove('visible', 'undo-fail'); }}, 2000);
+          }}
+        }});
+      }}
+    }}
+
+    // Ctrl+Z = undo, Ctrl+Shift+Z or Ctrl+Y = redo
+    if (EDIT_API) {{
+      document.addEventListener('keydown', function(e) {{
+        var tag = document.activeElement && document.activeElement.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement && document.activeElement.contentEditable === 'true')) return;
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {{
+          if (!undoStack.length) return;
+          e.preventDefault();
+          performUndo();
+        }} else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {{
+          if (!redoStack.length) return;
+          e.preventDefault();
+          performRedo();
+        }}
+      }});
+    }}
+
     // Priority dot click — cycle high > medium > low > high
     if (EDIT_API) {{
       document.addEventListener('click', function(e) {{
@@ -1864,6 +2096,13 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         dot.className = 'priority-dot ' + next;
         apiPut(card.dataset.itemId, {{ priority: next }}).then(function() {{
           showToast(card, next);
+          pushUndo(card.dataset.itemId, card.dataset.itemId + ' priority \u2192 ' + next, function() {{
+            dot.className = 'priority-dot ' + current;
+            return apiPut(card.dataset.itemId, {{ priority: current }});
+          }}, function() {{
+            dot.className = 'priority-dot ' + next;
+            return apiPut(card.dataset.itemId, {{ priority: next }});
+          }});
         }});
       }}, true);
 
@@ -1880,6 +2119,7 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         // Remove any existing dropdown
         var existing = document.querySelector('.status-dropdown');
         if (existing) existing.remove();
+        var oldStatus = badge.textContent.trim();
         // Create dropdown
         var statuses = ['proposed','specified','ready','in-progress','blocked','rework','for-review','done','bug','bug-fixed','icebox','wont-do'];
         var dd = document.createElement('div');
@@ -1899,6 +2139,15 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
             badge.textContent = s;
             apiPut(card.dataset.itemId, {{ status: s }}).then(function() {{
               showToast(card, s);
+              pushUndo(card.dataset.itemId, card.dataset.itemId + ' status \u2192 ' + s, function() {{
+                badge.className = 'status-badge ' + oldStatus;
+                badge.textContent = oldStatus;
+                return apiPut(card.dataset.itemId, {{ status: oldStatus }});
+              }}, function() {{
+                badge.className = 'status-badge ' + s;
+                badge.textContent = s;
+                return apiPut(card.dataset.itemId, {{ status: s }});
+              }});
             }});
           }});
           dd.appendChild(opt);
@@ -1915,33 +2164,246 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         }}, 0);
       }}, true);
 
-      // Acceptance criteria checkbox click — toggle
+      // Acceptance criteria — checkbox toggle, text click-to-edit, add/remove
       document.addEventListener('click', function(e) {{
+        var card;
+        // Handle add criterion button
+        var addBtn = e.target.closest('.add-criterion-btn');
+        if (addBtn) {{
+          card = addBtn.closest('.card');
+          if (!card || !card.dataset.itemId) return;
+          e.stopPropagation(); e.preventDefault();
+          var input = document.createElement('input');
+          input.type = 'text';
+          input.placeholder = 'New criterion...';
+          input.style.cssText = 'font-size:11px;padding:2px 4px;border:1px solid var(--border-default);background:var(--bg-page);color:var(--text-primary);border-radius:3px;width:100%;outline:none;margin-bottom:4px;';
+          addBtn.parentElement.insertBefore(input, addBtn);
+          input.focus();
+          card.dataset.editing = 'true';
+          function addSave() {{
+            var text = input.value.trim();
+            card.dataset.editing = '';
+            if (text) {{
+              apiPut(card.dataset.itemId, {{ add_criteria: text }}).then(function() {{ showToast(card, 'Added'); }});
+            }}
+            if (input.parentNode) input.remove();
+          }}
+          input.addEventListener('blur', function() {{ setTimeout(addSave, 100); }});
+          input.addEventListener('keydown', function(ev) {{
+            if (ev.key === 'Enter') input.blur();
+            if (ev.key === 'Escape') {{ card.dataset.editing = ''; input.remove(); }}
+          }});
+          return;
+        }}
+        // Handle remove criterion button
+        var removeBtn = e.target.closest('.remove-criterion-btn');
+        if (removeBtn) {{
+          card = removeBtn.closest('.card');
+          if (!card || !card.dataset.itemId) return;
+          e.stopPropagation(); e.preventDefault();
+          var criteriaContainer = removeBtn.closest('.card-criteria');
+          var allCriteria = criteriaContainer.querySelectorAll('.criterion');
+          var criterion = removeBtn.closest('.criterion');
+          var idx = Array.prototype.indexOf.call(allCriteria, criterion);
+          if (idx >= 0) {{
+            criterion.style.opacity = '0.3';
+            apiPut(card.dataset.itemId, {{ remove_criterion: idx }}).then(function() {{
+              showToast(card, 'Removed');
+            }});
+          }}
+          return;
+        }}
+        // Handle criterion click
         var criterion = e.target.closest('.criterion');
         if (!criterion) return;
-        var card = criterion.closest('.card');
+        card = criterion.closest('.card');
         if (!card || !card.dataset.itemId) return;
-        e.stopPropagation();
-        e.preventDefault();
+        e.stopPropagation(); e.preventDefault();
         clearTimeout(card._clickTimer);
         var criteriaContainer = criterion.closest('.card-criteria');
         if (!criteriaContainer) return;
         var allCriteria = criteriaContainer.querySelectorAll('.criterion');
         var idx = Array.prototype.indexOf.call(allCriteria, criterion);
         if (idx < 0) return;
-        // Toggle visual state
-        var isChecked = criterion.classList.contains('checked');
-        criterion.classList.toggle('checked');
-        // Update the marker text safely (replace first character entity)
-        var textNode = criterion.firstChild;
-        if (textNode) {{
+        // Detect if click was on the checkbox marker (first 2 chars) or the text
+        var clickX = e.clientX - criterion.getBoundingClientRect().left;
+        if (clickX < 20) {{
+          // Checkbox toggle
+          var isChecked = criterion.classList.contains('checked');
+          criterion.classList.toggle('checked');
           var newMarker = isChecked ? '\u2610 ' : '\u2611 ';
           criterion.textContent = newMarker + criterion.textContent.substring(2);
+          apiPut(card.dataset.itemId, {{ toggle_criterion: idx }}).then(function() {{
+            showToast(card, isChecked ? 'unchecked' : 'checked');
+            pushUndo(card.dataset.itemId, card.dataset.itemId + ' criterion ' + (isChecked ? 'unchecked' : 'checked'), function() {{
+              criterion.classList.toggle('checked');
+              var revertMarker = !isChecked ? '\u2610 ' : '\u2611 ';
+              criterion.textContent = revertMarker + criterion.textContent.substring(2);
+              return apiPut(card.dataset.itemId, {{ toggle_criterion: idx }});
+            }}, function() {{
+              criterion.classList.toggle('checked');
+              var redoMarker = isChecked ? '\u2610 ' : '\u2611 ';
+              criterion.textContent = redoMarker + criterion.textContent.substring(2);
+              return apiPut(card.dataset.itemId, {{ toggle_criterion: idx }});
+            }});
+          }});
+        }} else {{
+          // Text click-to-edit
+          var origText = criterion.textContent.substring(2).trim();
+          var marker = criterion.textContent.substring(0, 2);
+          var input = document.createElement('input');
+          input.type = 'text';
+          input.value = origText;
+          input.style.cssText = 'font-size:11px;padding:1px 4px;border:1px solid var(--border-default);background:var(--bg-page);color:var(--text-primary);border-radius:3px;flex:1;outline:none;';
+          card.dataset.editing = 'true';
+          criterion.textContent = marker;
+          criterion.appendChild(input);
+          var removeBtn2 = document.createElement('span');
+          removeBtn2.className = 'remove-criterion-btn';
+          removeBtn2.textContent = '\u00d7';
+          removeBtn2.style.cssText = 'cursor:pointer;color:var(--text-tertiary);margin-left:4px;font-size:14px;';
+          criterion.appendChild(removeBtn2);
+          input.focus();
+          function textSave() {{
+            var val = input.value.trim();
+            card.dataset.editing = '';
+            criterion.textContent = marker + (val || origText);
+            if (val && val !== origText) {{
+              apiPut(card.dataset.itemId, {{ criterion_index: idx, criterion_text: val }}).then(function() {{
+                showToast(card, 'Saved');
+              }});
+            }}
+          }}
+          input.addEventListener('blur', function() {{ setTimeout(textSave, 100); }});
+          input.addEventListener('keydown', function(ev) {{
+            if (ev.key === 'Enter') input.blur();
+            if (ev.key === 'Escape') {{ criterion.textContent = marker + origText; card.dataset.editing = ''; }}
+          }});
         }}
-        apiPut(card.dataset.itemId, {{ toggle_criterion: idx }}).then(function() {{
-          showToast(card, isChecked ? 'unchecked' : 'checked');
+      }}, true);
+
+      // --- Complexity badge click — show S/M/L/XL select ---
+      document.addEventListener('click', function(e) {{
+        var badge = e.target.closest('.complexity-badge');
+        if (!badge) return;
+        var card = badge.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        if (e.target.closest('.linked-child-card')) return;
+        e.stopPropagation();
+        e.preventDefault();
+        clearTimeout(card._clickTimer);
+        var existing = document.querySelector('.complexity-dropdown');
+        if (existing) existing.remove();
+        var oldComplexity = badge.textContent.trim();
+        var sizes = ['S', 'M', 'L', 'XL'];
+        var dd = document.createElement('div');
+        dd.className = 'complexity-dropdown';
+        dd.style.cssText = 'position:absolute;z-index:100;background:var(--bg-card);border:1px solid var(--border-main);border-radius:6px;padding:4px 0;min-width:60px;box-shadow:0 4px 12px rgba(0,0,0,.4);';
+        sizes.forEach(function(sz) {{
+          var opt = document.createElement('div');
+          opt.textContent = sz;
+          opt.style.cssText = 'padding:3px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);text-align:center;';
+          opt.addEventListener('mouseenter', function() {{ this.style.background = 'var(--bg-hover)'; }});
+          opt.addEventListener('mouseleave', function() {{ this.style.background = ''; }});
+          opt.addEventListener('click', function(ev) {{
+            ev.stopPropagation();
+            dd.remove();
+            badge.textContent = sz;
+            card.dataset.complexity = sz;
+            apiPut(card.dataset.itemId, {{ complexity: sz }}).then(function() {{
+              showToast(card, sz);
+              pushUndo(card.dataset.itemId, card.dataset.itemId + ' complexity \u2192 ' + sz, function() {{
+                badge.textContent = oldComplexity;
+                card.dataset.complexity = oldComplexity;
+                return apiPut(card.dataset.itemId, {{ complexity: oldComplexity }});
+              }}, function() {{
+                badge.textContent = sz;
+                card.dataset.complexity = sz;
+                return apiPut(card.dataset.itemId, {{ complexity: sz }});
+              }});
+            }});
+          }});
+          dd.appendChild(opt);
+        }});
+        badge.parentElement.style.position = 'relative';
+        badge.parentElement.appendChild(dd);
+        setTimeout(function() {{
+          document.addEventListener('click', function closer() {{
+            dd.remove();
+            document.removeEventListener('click', closer);
+          }}, {{ once: true }});
+        }}, 0);
+      }}, true);
+
+      // --- Click-to-edit for parent link ---
+      document.addEventListener('click', function(e) {{
+        var parentEl = e.target.closest('.card-parent-link');
+        if (!parentEl) return;
+        var card = parentEl.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        e.stopPropagation();
+        e.preventDefault();
+        clearTimeout(card._clickTimer);
+        if (parentEl.querySelector('input')) return;
+        card.dataset.editing = 'true';
+        var currentVal = parentEl.classList.contains('empty') ? '' : (parentEl.textContent.replace(/^\u21b3\s*/, '').trim());
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentVal;
+        input.placeholder = 'Parent ticket ID...';
+        input.style.cssText = 'font-size:10px;padding:2px 4px;border:1px solid var(--border-default);background:var(--bg-page);color:var(--text-primary);border-radius:3px;width:80px;outline:none;';
+        parentEl.textContent = '';
+        parentEl.appendChild(input);
+        input.focus();
+        showAutocomplete(input, function(selId) {{ input.value = selId; input.blur(); }});
+        function save() {{
+          var val = input.value.trim();
+          parentEl.textContent = val ? '\u21b3 ' + val : '+ parent';
+          parentEl.classList.toggle('empty', !val);
+          card.dataset.editing = '';
+          apiPut(card.dataset.itemId, {{ parent: val || null }}).then(function() {{
+            showToast(card, val ? 'parent: ' + val : 'parent cleared');
+          }});
+        }}
+        input.addEventListener('blur', function() {{ setTimeout(save, 150); }});
+        input.addEventListener('keydown', function(ev) {{
+          if (ev.key === 'Enter') input.blur();
+          if (ev.key === 'Escape') {{ parentEl.textContent = currentVal ? '\u21b3 ' + currentVal : '+ parent'; parentEl.classList.toggle('empty', !currentVal); card.dataset.editing = ''; }};
         }});
       }}, true);
+
+      // --- Autocomplete utility ---
+      function showAutocomplete(input, onSelect) {{
+        var allIds = [];
+        document.querySelectorAll('[data-item-id]').forEach(function(el) {{
+          var id = el.dataset.itemId;
+          var title = el.dataset.title || '';
+          if (allIds.findIndex(function(x) {{ return x.id === id; }}) === -1) allIds.push({{id: id, title: title}});
+        }});
+        var dd = null;
+        function render(filter) {{
+          if (dd) dd.remove();
+          var matches = allIds.filter(function(x) {{ return x.id.toLowerCase().indexOf(filter) >= 0 || x.title.toLowerCase().indexOf(filter) >= 0; }}).slice(0, 8);
+          if (!matches.length || !filter) return;
+          dd = document.createElement('div');
+          dd.className = 'autocomplete-dropdown';
+          dd.style.cssText = 'position:absolute;z-index:200;background:var(--bg-card);border:1px solid var(--border-default);border-radius:6px;max-height:150px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.4);min-width:120px;';
+          matches.forEach(function(m) {{
+            var opt = document.createElement('div');
+            opt.className = 'autocomplete-opt';
+            opt.style.cssText = 'padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);';
+            opt.textContent = m.id + (m.title ? ' — ' + m.title.substring(0, 30) : '');
+            opt.addEventListener('mousedown', function(ev) {{ ev.preventDefault(); onSelect(m.id); if (dd) dd.remove(); dd = null; }});
+            opt.addEventListener('mouseenter', function() {{ this.style.background = 'var(--bg-hover)'; }});
+            opt.addEventListener('mouseleave', function() {{ this.style.background = ''; }});
+            dd.appendChild(opt);
+          }});
+          input.parentElement.style.position = 'relative';
+          input.parentElement.appendChild(dd);
+        }}
+        input.addEventListener('input', function() {{ render(input.value.trim().toLowerCase()); }});
+        input.addEventListener('blur', function() {{ setTimeout(function() {{ if (dd) dd.remove(); dd = null; }}, 200); }});
+      }}
 
       // --- Drag-to-move ---
       var dragId = null;
@@ -2028,49 +2490,68 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         }});
       }}, true);
 
-      // --- Inline text editing ---
-      document.addEventListener('dblclick', function(e) {{
+      // --- Click-to-edit for text fields (title, description, rationale) ---
+      document.addEventListener('click', function(e) {{
         var titleEl = e.target.closest('.card-title');
         var descEl = e.target.closest('.card-desc');
-        var target = titleEl || descEl;
+        var rationaleEl = e.target.closest('.card-rationale');
+        var target = titleEl || descEl || rationaleEl;
         if (!target) return;
         var card = target.closest('.card');
         if (!card || !card.dataset.itemId) return;
-        // Only in expanded cards
-        if (!card.classList.contains('expanded')) return;
+        // Title editable on collapsed cards; desc/rationale only when expanded
+        if ((descEl || rationaleEl) && !card.classList.contains('expanded')) return;
         e.stopPropagation();
         e.preventDefault();
         clearTimeout(card._clickTimer);
-        // Prevent starting edit if already editing
         if (target.contentEditable === 'true') return;
         card.dataset.editing = 'true';
         target.contentEditable = 'true';
         target.focus();
-        // Select all text
         var range = document.createRange();
         range.selectNodeContents(target);
         var sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
-        // Save on blur
+        var origValue = target.textContent.trim();
         function save() {{
           target.contentEditable = 'false';
           card.dataset.editing = '';
-          var field = titleEl ? 'title' : 'description';
+          var field = titleEl ? 'title' : descEl ? 'description' : 'rationale';
           var value = target.textContent.trim();
+          if (value === origValue) {{
+            target.removeEventListener('blur', save);
+            target.removeEventListener('keydown', keyHandler);
+            return;
+          }}
           if (field === 'title') card.dataset.title = value;
           if (field === 'description') card.dataset.desc = value;
           var body = {{}};
           body[field] = value;
           apiPut(card.dataset.itemId, body).then(function() {{
             showToast(card, 'Saved');
+            pushUndo(card.dataset.itemId, card.dataset.itemId + ' ' + field + ' updated', function() {{
+              target.textContent = origValue;
+              if (field === 'title') card.dataset.title = origValue;
+              if (field === 'description') card.dataset.desc = origValue;
+              var revertBody = {{}};
+              revertBody[field] = origValue;
+              return apiPut(card.dataset.itemId, revertBody);
+            }}, function() {{
+              target.textContent = value;
+              if (field === 'title') card.dataset.title = value;
+              if (field === 'description') card.dataset.desc = value;
+              var redoBody = {{}};
+              redoBody[field] = value;
+              return apiPut(card.dataset.itemId, redoBody);
+            }});
           }});
           target.removeEventListener('blur', save);
           target.removeEventListener('keydown', keyHandler);
         }}
         function keyHandler(ev) {{
           if (ev.key === 'Enter' && !ev.shiftKey) {{ ev.preventDefault(); target.blur(); }}
-          if (ev.key === 'Escape') {{ target.textContent = titleEl ? card.dataset.title : card.dataset.desc; target.blur(); }}
+          if (ev.key === 'Escape') {{ target.textContent = origValue; target.blur(); }}
         }}
         target.addEventListener('blur', save);
         target.addEventListener('keydown', keyHandler);
@@ -2154,22 +2635,29 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
 </script>
 
 <!-- Ticket detail screen -->
-<div id="ticket-detail-overlay" class="detail-overlay hidden">
+<div id="ticket-detail-overlay" class="detail-overlay hidden" role="dialog" aria-modal="true">
   <div class="detail-backdrop"></div>
   <div class="detail-panel">
     <div class="detail-header">
       <span class="detail-id"></span>
-      <span class="detail-title"></span>
-      <span class="detail-toast"></span>
-      <button class="detail-close">&times;</button>
+      <span class="detail-title" contenteditable="false" title="Click to rename"></span>
+      <span class="detail-path"></span>
+      <div class="detail-dctrs-strip">
+        <button class="readiness-dot" data-flag="description" title="Description">D</button>
+        <button class="readiness-dot" data-flag="criteria" title="Criteria">C</button>
+        <button class="readiness-dot" data-flag="tests" title="Tests">T</button>
+        <button class="readiness-dot" data-flag="reviewed" title="Review">R</button>
+        <button class="readiness-dot" data-flag="smoke" title="Smoke">S</button>
+      </div>
+      <span class="detail-toast" role="status" aria-live="polite"></span>
+      <button class="detail-close" aria-label="Close ticket detail">&times;</button>
     </div>
-    <div class="detail-tabs">
-      <button class="detail-tab" data-section="properties" style="font-size:14px" title="Properties">&#9881;</button>
-      <button class="detail-tab" data-section="description">D</button>
-      <button class="detail-tab" data-section="criteria">C</button>
-      <button class="detail-tab" data-section="tests">T</button>
-      <button class="detail-tab" data-section="reviewed">R</button>
-      <button class="detail-tab" data-section="smoke">S</button>
+    <div class="detail-meta-strip">
+      <span class="meta-chip meta-chip--priority" title="Click to change priority"><span class="chip-dot"></span><span class="chip-text"></span></span>
+      <span class="meta-chip meta-chip--status" title="Click to change status"><span class="chip-text"></span></span>
+      <span class="meta-chip meta-chip--complexity" title="Click to change complexity"><span class="chip-text"></span></span>
+      <span class="meta-chip meta-chip--parent"><span class="chip-label">Parent:</span> <span class="chip-value">None</span></span>
+      <span class="meta-chip meta-chip--column"><span class="chip-text"></span></span>
     </div>
     <div class="detail-body">
       <!-- Gate banner (shown during column moves) -->
@@ -2180,127 +2668,72 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         </div>
         <div class="detail-gate-actions">
           <button class="detail-gate-confirm" id="gate-banner-confirm"></button>
-          <button class="detail-gate-cancel" id="gate-banner-cancel">Cancel</button>
+          <button class="detail-gate-cancel" id="gate-banner-cancel">Keep here</button>
         </div>
       </div>
 
-      <!-- Properties tab -->
-      <div class="detail-section" data-section="properties">
-        <div class="detail-section-header"><h3>Properties</h3></div>
-        <div class="detail-props-grid">
-          <div class="detail-prop-field full-width">
-            <label class="detail-prop-label">Title</label>
-            <input type="text" class="detail-prop-input" data-prop="title">
-          </div>
-          <div class="detail-prop-field">
-            <label class="detail-prop-label">Priority</label>
-            <select class="detail-prop-input" data-prop="priority">
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-          <div class="detail-prop-field">
-            <label class="detail-prop-label">Complexity</label>
-            <select class="detail-prop-input" data-prop="complexity">
-              <option value="S">S</option>
-              <option value="M">M</option>
-              <option value="L">L</option>
-              <option value="XL">XL</option>
-            </select>
-          </div>
-          <div class="detail-prop-field">
-            <label class="detail-prop-label">Status</label>
-            <select class="detail-prop-input" data-prop="status">
-              <option value="proposed">Proposed</option>
-              <option value="in-progress">In Progress</option>
-              <option value="blocked">Blocked</option>
-              <option value="rework">Rework</option>
-              <option value="for-review">For Review</option>
-              <option value="done">Done</option>
-            </select>
-          </div>
-          <div class="detail-prop-field">
-            <label class="detail-prop-label">Parent</label>
-            <input type="text" class="detail-prop-input" data-prop="parent" placeholder="e.g. B-01">
-          </div>
-          <div class="detail-prop-field full-width">
-            <label class="detail-prop-label">Rationale</label>
-            <textarea class="detail-prop-input" data-prop="rationale" placeholder="Why this ticket exists..."></textarea>
-          </div>
-        </div>
-        <div class="detail-save-row"><button class="detail-save-btn" data-field="properties">Save Properties</button></div>
-      </div>
-
-      <!-- D tab -->
-      <div class="detail-section" data-section="description">
-        <div class="detail-section-header"><h3>Description</h3>
-          <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="description" data-cat="D">Create New</button>
-            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="description" data-cat="D">Review Existing</button>
-          </div>
+      <!-- Description -->
+      <div class="detail-section" data-section="description" id="section-description">
+        <div class="detail-section-header">
+          <h3><span class="section-flag" data-cat="D">D</span> Description</h3>
+          <button class="section-assess-btn" data-cat="D">Assess</button>
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="D">Assessing description...</div>
         <div class="detail-assessment hidden" data-cat-result="D"></div>
-        <textarea class="detail-editor" data-field="description" placeholder="Ticket description..."></textarea>
-        <div class="detail-save-row"><button class="detail-save-btn" data-field="description">Save</button></div>
+        <textarea class="detail-editor desc-editor" data-field="description" placeholder="No description yet. Click to write one."></textarea>
       </div>
 
-      <!-- C tab -->
-      <div class="detail-section" data-section="criteria">
-        <div class="detail-section-header"><h3>Acceptance Criteria</h3>
-          <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="criteria" data-cat="C">Create New</button>
-            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="criteria" data-cat="C">Review Existing</button>
-          </div>
+      <!-- Acceptance Criteria -->
+      <div class="detail-section" data-section="criteria" id="section-criteria">
+        <div class="detail-section-header">
+          <h3><span class="section-flag" data-cat="C">C</span> Acceptance Criteria</h3>
+          <button class="section-assess-btn" data-cat="C">Assess</button>
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="C">Assessing criteria...</div>
         <div class="detail-assessment hidden" data-cat-result="C"></div>
         <ul class="detail-criteria-list"></ul>
-        <textarea class="detail-editor" data-field="criteria" placeholder="Add new criteria (one per line)..." style="min-height:80px"></textarea>
-        <div class="detail-save-row"><button class="detail-save-btn" data-field="criteria">Add Criteria</button></div>
+        <input type="text" class="criteria-add-input" placeholder="+ Add criterion and press Enter">
       </div>
 
-      <!-- T tab -->
-      <div class="detail-section" data-section="tests">
-        <div class="detail-section-header"><h3>Tests</h3>
-          <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="tests" data-cat="T">Create New</button>
-            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="tests" data-cat="T">Review Existing</button>
-          </div>
+      <!-- Tests -->
+      <div class="detail-section" data-section="tests" id="section-tests">
+        <div class="detail-section-header">
+          <h3><span class="section-flag" data-cat="T">T</span> Tests</h3>
+          <button class="section-assess-btn" data-cat="T">Assess</button>
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="T">Assessing tests...</div>
         <div class="detail-assessment hidden" data-cat-result="T"></div>
-        <textarea class="detail-editor" data-field="tests" placeholder="Test definitions, TDD plan, coverage notes..."></textarea>
-        <div class="detail-save-row"><button class="detail-save-btn" data-field="tests">Save</button></div>
+        <textarea class="detail-editor" data-field="tests" placeholder="No test plan yet. Click to add one."></textarea>
       </div>
 
-      <!-- R tab -->
-      <div class="detail-section" data-section="reviewed">
-        <div class="detail-section-header"><h3>Review</h3>
-          <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="reviewed" data-cat="R">Create New</button>
-            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="reviewed" data-cat="R">Review Existing</button>
-          </div>
+      <!-- Review -->
+      <div class="detail-section" data-section="reviewed" id="section-reviewed">
+        <div class="detail-section-header">
+          <h3><span class="section-flag" data-cat="R">R</span> Review</h3>
+          <button class="section-assess-btn" data-cat="R">Assess</button>
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
         <div class="detail-assessment hidden" data-cat-result="R"></div>
-        <textarea class="detail-editor" data-field="reviewed" placeholder="Review notes: decisions, bugs found, feature implications, /sync output..."></textarea>
-        <div class="detail-save-row"><button class="detail-save-btn" data-field="reviewed">Save</button></div>
+        <textarea class="detail-editor" data-field="reviewed" placeholder="No review notes yet. Click to add them."></textarea>
       </div>
 
-      <!-- S tab -->
-      <div class="detail-section" data-section="smoke">
-        <div class="detail-section-header"><h3>Smoke Tests</h3>
-          <div class="detail-clipboard-btns">
-            <button class="detail-clip-btn detail-assess-btn" data-action="create" data-flag="smoke" data-cat="S">Create New</button>
-            <button class="detail-clip-btn detail-assess-btn" data-action="review" data-flag="smoke" data-cat="S">Review Existing</button>
-          </div>
+      <!-- Smoke -->
+      <div class="detail-section" data-section="smoke" id="section-smoke">
+        <div class="detail-section-header">
+          <h3><span class="section-flag" data-cat="S">S</span> Smoke</h3>
+          <button class="section-assess-btn" data-cat="S">Assess</button>
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="S">Assessing smoke tests...</div>
         <div class="detail-assessment hidden" data-cat-result="S"></div>
-        <textarea class="detail-editor" data-field="smoke" placeholder="Smoke test plan: manual verification steps, pass/fail results..."></textarea>
-        <div class="detail-save-row"><button class="detail-save-btn" data-field="smoke">Save</button></div>
+        <textarea class="detail-editor" data-field="smoke" placeholder="No smoke tests yet. Click to add them."></textarea>
+      </div>
+
+      <!-- Rationale -->
+      <div class="detail-section" data-section="rationale" id="section-rationale">
+        <div class="detail-section-header">
+          <h3>Rationale</h3>
+        </div>
+        <textarea class="detail-editor" data-field="rationale" placeholder="Why does this ticket exist? Click to explain."></textarea>
       </div>
     </div>
   </div>
@@ -2317,16 +2750,19 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
   var idEl = overlay.querySelector('.detail-id');
   var titleEl = overlay.querySelector('.detail-title');
   var toastEl = overlay.querySelector('.detail-toast');
-  var tabEls = overlay.querySelectorAll('.detail-tab');
-  var secEls = overlay.querySelectorAll('.detail-section');
   var currentTicketId = null;
   var currentData = null;
   var _hasAssessmentData = false;
   var _gateContext = null;
+  var _editingField = null;
 
   var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Review', smoke:'Smoke Tests' }};
   var CAT_MAP = {{ description:'D', criteria:'C', tests:'T', reviewed:'R', smoke:'S' }};
   var CAT_RMAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
+  var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', tests: 'T', reviewed: 'R', smoke: 'S' }};
+  var PRIORITY_CYCLE = ['high', 'medium', 'low'];
+  var COMPLEXITY_CYCLE = ['S', 'M', 'L', 'XL'];
+  var STATUS_OPTIONS = ['proposed', 'in-progress', 'blocked', 'rework', 'for-review', 'done'];
 
   var gateBanner = document.getElementById('detail-gate-banner');
   var gateBadge = document.getElementById('gate-banner-badge');
@@ -2336,58 +2772,177 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
 
   function toast(msg) {{ toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(function() {{ toastEl.classList.remove('show'); }}, 1500); }}
 
-  function activateTab(name) {{
-    tabEls.forEach(function(t) {{ t.classList.toggle('active', t.dataset.section === name); }});
-    secEls.forEach(function(s) {{ s.classList.toggle('active', s.dataset.section === name); }});
+  /* --- Auto-save helper --- */
+  function autosaveField(field, value) {{
+    if (!currentTicketId) return Promise.resolve();
+    var body = {{}}; body[field] = value;
+    return fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(body)}})
+      .then(function(r){{return r.json();}})
+      .then(function(u) {{
+        if(u) {{ currentData = u; idEl.textContent = u.id; titleEl.textContent = u.title; }}
+        return u;
+      }});
   }}
 
-  function refreshTabs() {{
+  /* --- DCTRS dots in header --- */
+  function refreshDCTRS(data) {{
+    if (!data) return;
+    var fl = data.readiness_flags || {{}};
+    var dots = overlay.querySelectorAll('.detail-dctrs-strip .readiness-dot');
+    dots.forEach(function(d) {{
+      var flag = d.dataset.flag;
+      var ok = flag === 'description' ? !!(data.description) : flag === 'criteria' ? (data.acceptance_criteria || []).length > 0 : !!(fl[flag]);
+      d.classList.toggle('filled', ok);
+    }});
+    // Also update section-header flag indicators
+    overlay.querySelectorAll('.section-flag').forEach(function(sf) {{
+      var cat = sf.dataset.cat;
+      var sec = CAT_RMAP[cat];
+      if (!sec) return;
+      var ok2 = sec === 'description' ? !!(data.description) : sec === 'criteria' ? (data.acceptance_criteria || []).length > 0 : !!(fl[sec]);
+      sf.classList.toggle('filled', ok2);
+    }});
+    // Update assess button labels
+    overlay.querySelectorAll('.section-assess-btn').forEach(function(btn) {{
+      var cat = btn.dataset.cat;
+      var sec = CAT_RMAP[cat];
+      if (!sec) return;
+      var hasContent = sec === 'description' ? !!(data.description) : sec === 'criteria' ? (data.acceptance_criteria || []).length > 0 : !!(fl[sec]);
+      btn.textContent = hasContent ? 'Re-assess' : 'Assess';
+    }});
+  }}
+
+  function scrollToSection(flag) {{
+    var sectionId = 'section-' + flag;
+    var el = document.getElementById(sectionId);
+    if (el) {{
+      var body = overlay.querySelector('.detail-body');
+      if (body) {{
+        var offset = el.offsetTop - body.offsetTop;
+        body.scrollTo({{ top: offset, behavior: 'smooth' }});
+      }}
+    }}
+  }}
+
+  /* --- Meta chips --- */
+  function populateMetaChips(data) {{
+    // Priority
+    var prioChip = overlay.querySelector('.meta-chip--priority');
+    var prioDot = prioChip.querySelector('.chip-dot');
+    var prioText = prioChip.querySelector('.chip-text');
+    prioDot.className = 'chip-dot ' + (data.priority || 'medium');
+    prioText.textContent = (data.priority || 'medium').charAt(0).toUpperCase() + (data.priority || 'medium').slice(1);
+
+    // Status
+    var statusText = overlay.querySelector('.meta-chip--status .chip-text');
+    statusText.textContent = (data.status || 'proposed').replace(/-/g, ' ').replace(/\\b\\w/g, function(c){{ return c.toUpperCase(); }});
+
+    // Complexity
+    var compText = overlay.querySelector('.meta-chip--complexity .chip-text');
+    compText.textContent = data.complexity || 'M';
+
+    // Parent
+    var parentChip = overlay.querySelector('.meta-chip--parent');
+    var parentVal = parentChip.querySelector('.chip-value');
+    parentVal.textContent = data.parent || 'None';
+
+    // Column
+    var colText = overlay.querySelector('.meta-chip--column .chip-text');
+    colText.textContent = (data.section || data.column || '').replace(/^\\w/, function(c){{ return c.toUpperCase(); }});
+  }}
+
+  // Priority cycling
+  overlay.querySelector('.meta-chip--priority').addEventListener('click', function() {{
     if (!currentData) return;
-    var fl = currentData.readiness_flags || {{}};
-    tabEls.forEach(function(t) {{
-      var s = t.dataset.section;
-      if (s === 'properties') return;
-      var ok = s === 'description' ? !!(currentData.description) : s === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[s]);
-      t.classList.toggle('filled', ok);
-    }});
-  }}
+    var idx = PRIORITY_CYCLE.indexOf(currentData.priority || 'medium');
+    var next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
+    autosaveField('priority', next).then(function() {{ populateMetaChips(currentData); toast('Priority updated'); }});
+  }});
 
-  function populateProperties(data) {{
-    var props = ['title', 'priority', 'complexity', 'status', 'parent', 'rationale'];
-    props.forEach(function(p) {{
-      var el = overlay.querySelector('[data-prop="'+p+'"]');
-      if (el) el.value = data[p] || '';
-    }});
-  }}
+  // Complexity cycling
+  overlay.querySelector('.meta-chip--complexity').addEventListener('click', function() {{
+    if (!currentData) return;
+    var idx = COMPLEXITY_CYCLE.indexOf(currentData.complexity || 'M');
+    var next = COMPLEXITY_CYCLE[(idx + 1) % COMPLEXITY_CYCLE.length];
+    autosaveField('complexity', next).then(function() {{ populateMetaChips(currentData); toast('Complexity updated'); }});
+  }});
 
-  function saveProperties() {{
-    if (!currentTicketId) return;
-    var props = ['title', 'priority', 'complexity', 'status', 'parent', 'rationale'];
-    var chain = Promise.resolve();
-    var saved = 0;
-    props.forEach(function(p) {{
-      var el = overlay.querySelector('[data-prop="'+p+'"]');
-      if (!el) return;
-      var val = el.value;
-      var orig = (currentData && currentData[p]) || '';
-      if (val !== orig) {{
-        saved++;
-        chain = chain.then(function() {{
-          var body = {{}}; body[p] = val;
-          return fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(body)}}).then(function(r){{return r.json();}});
-        }});
-      }}
+  // Status dropdown
+  var _statusDropdown = null;
+  function closeStatusDropdown() {{ if (_statusDropdown) {{ _statusDropdown.parentNode.removeChild(_statusDropdown); _statusDropdown = null; }} }}
+  overlay.querySelector('.meta-chip--status').addEventListener('click', function(e) {{
+    e.stopPropagation();
+    if (_statusDropdown) {{ closeStatusDropdown(); return; }}
+    var chip = this;
+    var rect = chip.getBoundingClientRect();
+    var dd = document.createElement('div');
+    dd.className = 'meta-status-dropdown';
+    dd.style.position = 'fixed';
+    dd.style.top = (rect.bottom + 4) + 'px';
+    dd.style.left = rect.left + 'px';
+    STATUS_OPTIONS.forEach(function(opt) {{
+      var btn = document.createElement('button');
+      btn.className = 'meta-status-opt' + (opt === (currentData && currentData.status) ? ' active' : '');
+      btn.textContent = opt.replace(/-/g, ' ').replace(/\\b\\w/g, function(c){{ return c.toUpperCase(); }});
+      btn.addEventListener('click', function(ev) {{
+        ev.stopPropagation();
+        closeStatusDropdown();
+        autosaveField('status', opt).then(function() {{ populateMetaChips(currentData); toast('Status updated'); }});
+      }});
+      dd.appendChild(btn);
     }});
-    chain.then(function(lastResult) {{
-      if (lastResult) currentData = lastResult;
-      if (currentData) {{
-        idEl.textContent = currentData.id;
-        titleEl.textContent = currentData.title;
+    document.body.appendChild(dd);
+    _statusDropdown = dd;
+  }});
+  document.addEventListener('click', function() {{ closeStatusDropdown(); }});
+
+  // Parent chip — click to edit inline
+  overlay.querySelector('.meta-chip--parent').addEventListener('click', function() {{
+    var chip = this;
+    var valEl = chip.querySelector('.chip-value');
+    if (chip.querySelector('input')) return; // already editing
+    var current = (currentData && currentData.parent) || '';
+    var inp = document.createElement('input');
+    inp.value = current;
+    inp.placeholder = 'e.g. B-01';
+    valEl.style.display = 'none';
+    chip.appendChild(inp);
+    inp.focus();
+    function finish() {{
+      var newVal = inp.value.trim();
+      if (chip.contains(inp)) chip.removeChild(inp);
+      valEl.style.display = '';
+      if (newVal !== current) {{
+        autosaveField('parent', newVal).then(function() {{ populateMetaChips(currentData); toast('Parent updated'); }});
       }}
-      toast(saved > 0 ? 'Properties saved' : 'No changes');
-      refreshTabs();
-    }});
-  }}
+    }}
+    inp.addEventListener('blur', finish);
+    inp.addEventListener('keydown', function(e) {{ if(e.key==='Enter') inp.blur(); if(e.key==='Escape'){{ inp.value=current; inp.blur(); }} }});
+  }});
+
+  /* --- Title inline editing --- */
+  titleEl.addEventListener('click', function() {{
+    if (titleEl.contentEditable === 'true') return;
+    titleEl.contentEditable = 'true';
+    titleEl.focus();
+    // Select all text
+    var range = document.createRange();
+    range.selectNodeContents(titleEl);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }});
+  titleEl.addEventListener('blur', function() {{
+    titleEl.contentEditable = 'false';
+    var newTitle = titleEl.textContent.trim();
+    if (currentData && newTitle && newTitle !== currentData.title) {{
+      autosaveField('title', newTitle).then(function() {{ toast('Title updated'); }});
+    }}
+  }});
+  titleEl.addEventListener('keydown', function(e) {{
+    if (e.key === 'Enter') {{ e.preventDefault(); titleEl.blur(); }}
+    if (e.key === 'Escape') {{ titleEl.textContent = currentData ? currentData.title : ''; titleEl.blur(); }}
+  }});
 
   function clearAssessments() {{
     overlay.querySelectorAll('.detail-assessment').forEach(function(el) {{
@@ -2398,7 +2953,6 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     overlay.querySelectorAll('.detail-assess-loading').forEach(function(el) {{
       el.classList.add('hidden');
     }});
-    tabEls.forEach(function(t) {{ t.classList.remove('needs-work'); }});
     _hasAssessmentData = false;
   }}
 
@@ -2436,6 +2990,38 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
       el.appendChild(sug);
     }}
 
+    // Contextual action buttons — copy workflow prompt to clipboard
+    var actionDefs = {{
+      D: {{ icon: '\U0001F4C4', label: 'Write Description',
+            prompt: function(t) {{ return 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.'; }} }},
+      C: {{ icon: '\\u2611', label: 'Add Criteria',
+            prompt: function(t) {{ return 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
+      T: {{ icon: '\U0001F52C', label: 'Run Tests',
+            prompt: function(t) {{ return 'Write test definitions for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }} }},
+      R: {{ icon: '\U0001F441', label: 'Start Review',
+            prompt: function(t) {{ return 'Perform a code review for ' + t.id + ': "' + t.title + '". Check correctness, edge cases, and document decisions.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
+      S: {{ icon: '\U0001F4A8', label: 'Run Smoke',
+            prompt: function(t) {{ return 'Create a smoke test checklist for ' + t.id + ': "' + t.title + '". List manual verification steps to confirm the feature works end-to-end.\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }} }}
+    }};
+    var actionDef = actionDefs[cat];
+    if (actionDef && currentData) {{
+      var actionRow = document.createElement('div');
+      actionRow.className = 'assessment-action-row';
+      var actionBtn = document.createElement('button');
+      actionBtn.className = 'assessment-action-btn';
+      actionBtn.textContent = actionDef.icon + ' ' + actionDef.label;
+      actionBtn.addEventListener('click', function() {{
+        var prompt = actionDef.prompt(currentData);
+        navigator.clipboard.writeText(prompt).then(function() {{
+          toast('Prompt copied \\u2014 paste into Claude');
+          actionBtn.textContent = actionDef.icon + ' Copied \\u2714';
+          setTimeout(function() {{ actionBtn.textContent = actionDef.icon + ' ' + actionDef.label; }}, 2000);
+        }});
+      }});
+      actionRow.appendChild(actionBtn);
+      el.appendChild(actionRow);
+    }}
+
     if (result.content) {{
       var applyBtn = document.createElement('button');
       applyBtn.className = 'assessment-apply-btn';
@@ -2445,7 +3031,7 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         var editor = overlay.querySelector('[data-field="'+section+'"]');
         if (editor) {{
           editor.value = result.content;
-          toast('Content applied \\u2014 click Save to persist');
+          toast('Content applied \\u2014 click outside to save');
         }}
         applyBtn.textContent = 'Applied \\u2714';
         applyBtn.style.pointerEvents = 'none';
@@ -2482,25 +3068,242 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     _hasAssessmentData = true;
   }}
 
+  // Field name mapping from cat key to data-field attribute on textarea
+  var CAT_FIELD_MAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
+
+  function _getFieldContent(cat) {{
+    if (cat === 'C') {{
+      var items = [];
+      overlay.querySelectorAll('.detail-criteria-list .criteria-item').forEach(function(li) {{
+        var cb = li.querySelector('input[type=checkbox]');
+        var txt = li.querySelector('.criteria-text');
+        if (txt) items.push((cb && cb.checked ? '[x] ' : '[ ] ') + txt.textContent.trim());
+      }});
+      return items.join('\\n');
+    }}
+    var field = CAT_FIELD_MAP[cat];
+    var ta = overlay.querySelector('[data-field="' + field + '"]');
+    return ta ? ta.value : '';
+  }}
+
+  function _findLine(lines, text) {{
+    for (var i = 0; i < lines.length; i++) {{
+      if (lines[i] === text) return i;
+    }}
+    return -1;
+  }}
+
+  function _applyDiffHunks(origLines, hunks, states) {{
+    var lines = origLines.slice();
+    hunks.forEach(function(hunk, i) {{
+      if (states[i] !== 'accepted') return;
+      if (hunk.type === 'modify') {{
+        var pos = _findLine(lines, hunk.original);
+        if (pos !== -1) lines[pos] = hunk.suggested;
+      }} else if (hunk.type === 'remove') {{
+        var pos = _findLine(lines, hunk.original);
+        if (pos !== -1) lines.splice(pos, 1);
+      }} else if (hunk.type === 'add') {{
+        lines.push(hunk.suggested);
+      }}
+    }});
+    return lines;
+  }}
+
+  function renderDiffUI(container, data, cat) {{
+    var existing = container.querySelector('.diff-panel');
+    if (existing) existing.parentNode.removeChild(existing);
+
+    var hunks = data.hunks || [];
+    var original = data.original || '';
+
+    if (!hunks.length) {{
+      // Build "no changes" notice using safe DOM methods
+      var noChange = document.createElement('div');
+      noChange.className = 'detail-assessment ok';
+      noChange.style.marginBottom = '12px';
+      var ncHeader = document.createElement('div');
+      ncHeader.className = 'assessment-header';
+      var ncBadge = document.createElement('span');
+      ncBadge.className = 'assessment-status ok';
+      ncBadge.textContent = 'no changes';
+      var ncDismiss = document.createElement('button');
+      ncDismiss.className = 'assessment-dismiss';
+      ncDismiss.textContent = '\\u00d7';
+      ncDismiss.addEventListener('click', function() {{ noChange.classList.add('hidden'); }});
+      ncHeader.appendChild(ncBadge);
+      ncHeader.appendChild(ncDismiss);
+      var ncSummary = document.createElement('div');
+      ncSummary.className = 'assessment-summary';
+      ncSummary.textContent = 'Content looks good \\u2014 no improvements suggested.';
+      noChange.appendChild(ncHeader);
+      noChange.appendChild(ncSummary);
+      container.insertBefore(noChange, container.firstChild);
+      return;
+    }}
+
+    var panel = document.createElement('div');
+    panel.className = 'diff-panel';
+
+    var header = document.createElement('div');
+    header.className = 'diff-header';
+    var titleSpan = document.createElement('span');
+    titleSpan.textContent = 'Suggested Changes (' + hunks.length + ')';
+    var acceptAll = document.createElement('button');
+    acceptAll.className = 'diff-accept-all';
+    acceptAll.textContent = 'Accept All';
+    var rejectAll = document.createElement('button');
+    rejectAll.className = 'diff-reject-all';
+    rejectAll.textContent = 'Reject All';
+    header.appendChild(titleSpan);
+    header.appendChild(acceptAll);
+    header.appendChild(rejectAll);
+    panel.appendChild(header);
+
+    var states = hunks.map(function() {{ return 'pending'; }});
+    var hunkContainer = document.createElement('div');
+    hunkContainer.className = 'diff-hunks';
+
+    var hunkEls = hunks.map(function(hunk, i) {{
+      var row = document.createElement('div');
+      row.className = 'diff-hunk';
+      row.dataset.index = i;
+
+      var linesEl = document.createElement('div');
+      linesEl.className = 'diff-hunk-lines';
+      if (hunk.type === 'remove' || hunk.type === 'modify') {{
+        var oldEl = document.createElement('div');
+        oldEl.className = 'diff-hunk-old';
+        oldEl.textContent = '\\u2212 ' + (hunk.original || '');
+        linesEl.appendChild(oldEl);
+      }}
+      if (hunk.type === 'add' || hunk.type === 'modify') {{
+        var newEl = document.createElement('div');
+        newEl.className = 'diff-hunk-new';
+        newEl.textContent = '+ ' + (hunk.suggested || '');
+        linesEl.appendChild(newEl);
+      }}
+
+      var actionsEl = document.createElement('div');
+      actionsEl.className = 'diff-hunk-actions';
+      var acceptBtn = document.createElement('button');
+      acceptBtn.className = 'diff-accept';
+      acceptBtn.title = 'Accept change';
+      acceptBtn.textContent = '\\u2713';
+      var rejectBtn = document.createElement('button');
+      rejectBtn.className = 'diff-reject';
+      rejectBtn.title = 'Reject change';
+      rejectBtn.textContent = '\\u00d7';
+      actionsEl.appendChild(acceptBtn);
+      actionsEl.appendChild(rejectBtn);
+      row.appendChild(linesEl);
+      row.appendChild(actionsEl);
+      hunkContainer.appendChild(row);
+
+      ;(function(idx, rowEl) {{
+        function setHunkState(newState) {{
+          if (states[idx] === newState) {{
+            states[idx] = 'pending';
+            rowEl.classList.remove('accepted', 'rejected');
+          }} else {{
+            states[idx] = newState;
+            rowEl.classList.remove('accepted', 'rejected');
+            if (newState !== 'pending') rowEl.classList.add(newState);
+          }}
+          updateStatus();
+        }}
+        acceptBtn.addEventListener('click', function() {{ setHunkState('accepted'); }});
+        rejectBtn.addEventListener('click', function() {{ setHunkState('rejected'); }});
+      }})(i, row);
+
+      return row;
+    }});
+
+    panel.appendChild(hunkContainer);
+
+    var footer = document.createElement('div');
+    footer.className = 'diff-footer';
+    var statusEl = document.createElement('span');
+    statusEl.className = 'diff-status';
+    var applyBtn = document.createElement('button');
+    applyBtn.className = 'diff-apply';
+    applyBtn.textContent = 'Apply Selected';
+    applyBtn.disabled = true;
+    var discardBtn = document.createElement('button');
+    discardBtn.className = 'diff-discard';
+    discardBtn.textContent = 'Discard';
+    footer.appendChild(statusEl);
+    footer.appendChild(discardBtn);
+    footer.appendChild(applyBtn);
+    panel.appendChild(footer);
+
+    function updateStatus() {{
+      var accepted = states.filter(function(s) {{ return s === 'accepted'; }}).length;
+      var rejected = states.filter(function(s) {{ return s === 'rejected'; }}).length;
+      statusEl.textContent = accepted + ' accepted, ' + rejected + ' rejected, ' + (hunks.length - accepted - rejected) + ' pending';
+      applyBtn.disabled = accepted === 0;
+    }}
+    updateStatus();
+
+    acceptAll.addEventListener('click', function() {{
+      for (var k = 0; k < states.length; k++) states[k] = 'accepted';
+      hunkEls.forEach(function(el) {{ el.classList.remove('rejected'); el.classList.add('accepted'); }});
+      updateStatus();
+    }});
+    rejectAll.addEventListener('click', function() {{
+      for (var k = 0; k < states.length; k++) states[k] = 'rejected';
+      hunkEls.forEach(function(el) {{ el.classList.remove('accepted'); el.classList.add('rejected'); }});
+      updateStatus();
+    }});
+
+    applyBtn.addEventListener('click', function() {{
+      var origLines = original.split('\\n');
+      var resultLines = _applyDiffHunks(origLines, hunks, states);
+      var merged = resultLines.join('\\n');
+      var field = CAT_FIELD_MAP[cat];
+      var ta = overlay.querySelector('[data-field="' + field + '"]');
+      if (ta) {{
+        ta.value = merged;
+        toast('Content applied \\u2014 click outside to save');
+      }}
+      panel.classList.add('hidden');
+    }});
+
+    discardBtn.addEventListener('click', function() {{
+      panel.classList.add('hidden');
+    }});
+
+    container.insertBefore(panel, container.firstChild);
+  }}
+
   function runCategoryAssess(cat, action) {{
     var loading = overlay.querySelector('[data-cat-loading="'+cat+'"]');
     var resultEl = overlay.querySelector('[data-cat-result="'+cat+'"]');
     if (loading) loading.classList.remove('hidden');
     if (resultEl) resultEl.classList.add('hidden');
 
-    fetch(EDIT_API + '/tickets/' + currentTicketId + '/assess/' + cat, {{
+    var content = _getFieldContent(cat);
+    var fieldName = CAT_FIELD_MAP[cat];
+
+    fetch(EDIT_API + '/tickets/' + currentTicketId + '/enrich', {{
       method: 'POST',
       headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{ action: action }})
+      body: JSON.stringify({{ field: fieldName, content: content, action: action }})
     }})
     .then(function(r) {{ return r.json(); }})
     .then(function(data) {{
       if (loading) loading.classList.add('hidden');
-      renderCategoryAssessment(cat, data);
+      if (data.error) {{
+        toast('Enrich error: ' + data.error);
+        return;
+      }}
+      var sectionKey = CAT_RMAP[cat];
+      var section = overlay.querySelector('[data-section="' + sectionKey + '"]');
+      if (section) renderDiffUI(section, data, cat);
     }})
     .catch(function() {{
       if (loading) loading.classList.add('hidden');
-      toast('Assessment failed');
+      toast('Enrich request failed');
     }});
   }}
 
@@ -2510,7 +3313,7 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     gateBadge.className = 'gate-verdict-badge ' + verdict;
     gateBadge.textContent = verdict.replace(/-/g, ' ');
     gateSummary.textContent = data.summary || '';
-    gateConfirm.textContent = 'Confirm Move \\u2192 ' + targetSection;
+    gateConfirm.textContent = 'Move to ' + targetSection;
     gateBanner.classList.remove('hidden');
   }}
 
@@ -2554,12 +3357,11 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     ['D', 'C', 'T', 'R', 'S'].forEach(function(key) {{
       if (cats[key]) renderCategoryAssessment(key, cats[key]);
     }});
-    tabEls.forEach(function(t) {{
-      var cat = CAT_MAP[t.dataset.section];
+    // Update section-flag indicators for needs-work
+    overlay.querySelectorAll('.section-flag').forEach(function(sf) {{
+      var cat = sf.dataset.cat;
       if (cat && cats[cat] && cats[cat].status === 'needs-work') {{
-        t.classList.add('needs-work');
-      }} else {{
-        t.classList.remove('needs-work');
+        sf.style.borderColor = '#eab308'; sf.style.color = '#eab308';
       }}
     }});
   }}
@@ -2569,13 +3371,76 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     while (list.firstChild) list.removeChild(list.firstChild);
     (data.acceptance_criteria || []).forEach(function(c, i) {{
       var li = document.createElement('li'); li.className = 'detail-criteria-item';
-      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = c.checked;
-      cb.addEventListener('change', function() {{
-        fetch(EDIT_API + '/tickets/' + data.id, {{ method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{toggle_criterion:i}}) }})
-          .then(function(r){{return r.json();}}).then(function(u){{ if(u&&u.acceptance_criteria) currentData=u; }});
+      var bullet = document.createElement('span'); bullet.className = 'criteria-bullet'; bullet.textContent = '\\u2022';
+      var sp = document.createElement('span'); sp.className = 'criteria-text'; sp.textContent = c.text;
+      // Click to edit criterion text inline
+      sp.addEventListener('click', function() {{
+        if (sp.contentEditable === 'true') return;
+        sp.contentEditable = 'true'; sp.focus();
+        var range = document.createRange(); range.selectNodeContents(sp);
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
       }});
-      var sp = document.createElement('span'); sp.textContent = c.text;
-      li.appendChild(cb); li.appendChild(sp); list.appendChild(li);
+      sp.addEventListener('blur', function() {{
+        sp.contentEditable = 'false';
+        var newText = sp.textContent.trim();
+        if (newText && newText !== c.text) {{
+          fetch(EDIT_API + '/tickets/' + data.id, {{ method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{criterion_index:i, criterion_text:newText}}) }})
+            .then(function(r){{return r.json();}}).then(function(u){{ if(u) {{ currentData=u; toast('Criterion updated'); }} }});
+        }}
+      }});
+      sp.addEventListener('keydown', function(e) {{ if(e.key==='Enter'){{ e.preventDefault(); sp.blur(); }} if(e.key==='Escape'){{ sp.textContent=c.text; sp.blur(); }} }});
+      var del = document.createElement('button'); del.className = 'criteria-delete'; del.textContent = '\\u00d7';
+      del.title = 'Remove criterion';
+      del.addEventListener('click', function() {{
+        fetch(EDIT_API + '/tickets/' + data.id, {{ method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{remove_criterion:i}}) }})
+          .then(function(r){{return r.json();}}).then(function(u){{
+            if(u) {{ currentData=u; populateCriteria(u); refreshDCTRS(u); toast('Criterion removed'); }}
+          }});
+      }});
+      li.appendChild(bullet); li.appendChild(sp); li.appendChild(del); list.appendChild(li);
+    }});
+  }}
+
+  /* --- Inline auto-save for textarea editors --- */
+  function setupInlineEditors() {{
+    overlay.querySelectorAll('.detail-editor').forEach(function(ed) {{
+      var field = ed.dataset.field;
+      ed._origValue = ed.value;
+      ed.addEventListener('focus', function() {{ _editingField = field; ed._origValue = ed.value; }});
+      ed.addEventListener('blur', function() {{
+        _editingField = null;
+        var val = ed.value;
+        if (val === ed._origValue) return;
+        ed._origValue = val;
+        if (field === 'description') {{
+          autosaveField('description', val).then(function() {{ toast('Description saved'); refreshDCTRS(currentData); }});
+        }} else if (field === 'rationale') {{
+          autosaveField('rationale', val).then(function() {{ toast('Rationale saved'); }});
+        }} else {{
+          // readiness flag: tests, reviewed, smoke
+          fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{content:val}})}})
+            .then(function(r){{return r.json();}}).then(function(u){{ if(u)currentData=u; toast(FLAG_NAMES[field]+' saved'); refreshDCTRS(currentData); }});
+        }}
+      }});
+    }});
+  }}
+  setupInlineEditors();
+
+  /* --- Criteria add input (Enter to commit) --- */
+  var criteriaInput = overlay.querySelector('.criteria-add-input');
+  if (criteriaInput) {{
+    criteriaInput.addEventListener('keydown', function(e) {{
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      var text = criteriaInput.value.trim();
+      if (!text || !currentTicketId) return;
+      criteriaInput.value = '';
+      fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{add_criteria:text}})}})
+        .then(function(r){{return r.json();}})
+        .then(function(u) {{
+          if (u) {{ currentData = u; populateCriteria(u); refreshDCTRS(u); }}
+          toast('Criterion added');
+        }});
     }});
   }}
 
@@ -2583,16 +3448,24 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     currentData = data;
     idEl.textContent = data.id;
     titleEl.textContent = data.title;
+    titleEl.contentEditable = 'false';
+    var pathEl = overlay.querySelector('.detail-path');
+    if (pathEl) pathEl.textContent = 'docs/features/' + data.id + '/';
     overlay.querySelector('[data-field="description"]').value = data.description || '';
     populateCriteria(data);
-    var ce = overlay.querySelector('[data-field="criteria"]'); if(ce) ce.value='';
     var fl = data.readiness_flags || {{}};
     ['tests','reviewed','smoke'].forEach(function(f) {{
       var ed = overlay.querySelector('[data-field="'+f+'"]');
-      if(ed) ed.value = fl[f] || '';
+      if(ed) {{ ed.value = fl[f] || ''; ed._origValue = ed.value; }}
     }});
-    populateProperties(data);
-    refreshTabs();
+    // Rationale
+    var ratEd = overlay.querySelector('[data-field="rationale"]');
+    if(ratEd) {{ ratEd.value = data.rationale || ''; ratEd._origValue = ratEd.value; }}
+    // Description orig value
+    var descEd = overlay.querySelector('[data-field="description"]');
+    if(descEd) descEd._origValue = descEd.value;
+    populateMetaChips(data);
+    refreshDCTRS(data);
   }}
 
   function openOverlay(tid, section) {{
@@ -2601,67 +3474,65 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     hideGateBanner();
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    // Resolve section — could be a flag letter or old tab name
+    var scrollFlag = null;
+    if (section) {{
+      if (TAB_COMPAT[section] !== undefined) scrollFlag = TAB_COMPAT[section]; // old tab name
+      else if (CAT_RMAP[section]) scrollFlag = section; // flag letter like 'D'
+      else scrollFlag = CAT_MAP[section] || null; // section name like 'description'
+    }}
     fetch(EDIT_API+'/tickets/'+tid).then(function(r){{return r.json();}}).then(function(d){{
-      populate(d); activateTab(section||'properties');
+      populate(d);
+      if (scrollFlag) {{ setTimeout(function() {{ scrollToSection(CAT_RMAP[scrollFlag]); }}, 50); }}
+      else {{ var body = overlay.querySelector('.detail-body'); if(body) body.scrollTop = 0; }}
+      // Set ticket hash (I-11)
+      if (!window.location.hash || window.location.hash.indexOf('#gate/') !== 0) {{
+        var ticketHash = '#ticket/' + tid + (scrollFlag ? '/' + scrollFlag : '');
+        if (window.location.hash !== ticketHash) {{
+          history.pushState({{ ticket: true, id: tid, flag: scrollFlag }}, '', ticketHash);
+        }}
+      }}
     }});
   }}
 
   function closeOverlay() {{
+    closeStatusDropdown();
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
     currentTicketId = null; currentData = null;
     _hasAssessmentData = false; _gateContext = null;
     clearAssessments(); hideGateBanner();
-    // Clear gate hash (I-11)
-    if (window.location.hash && window.location.hash.indexOf('#gate/') === 0) {{
+    if (window.location.hash && (window.location.hash.indexOf('#gate/') === 0 || window.location.hash.indexOf('#ticket/') === 0)) {{
       history.pushState({{ gate: false }}, '', window.location.pathname + window.location.search);
     }}
   }}
 
   overlay.querySelector('.detail-backdrop').addEventListener('click', closeOverlay);
   overlay.querySelector('.detail-close').addEventListener('click', closeOverlay);
+  overlay.querySelector('.detail-path').addEventListener('click', function(e) {{
+    e.stopPropagation();
+    navigator.clipboard.writeText(this.textContent).then(function() {{ toast('Path copied'); }});
+  }});
   document.addEventListener('keydown', function(e) {{ if(e.key==='Escape' && !overlay.classList.contains('hidden')) closeOverlay(); }});
-  tabEls.forEach(function(tab) {{ tab.addEventListener('click', function() {{ activateTab(tab.dataset.section); }}); }});
 
-  // Save buttons
-  overlay.querySelectorAll('.detail-save-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-      var field = btn.dataset.field;
-      if (field === 'properties') {{ saveProperties(); return; }}
-      var ed = overlay.querySelector('[data-field="'+field+'"]');
-      if(!ed || !currentTicketId) return;
-      var val = ed.value;
-
-      if(field === 'description') {{
-        fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{description:val}})}})
-          .then(function(r){{return r.json();}}).then(function(u){{ if(u)currentData=u; toast('Description saved'); refreshTabs(); }});
-      }} else if(field === 'criteria') {{
-        var lines = val.split('\\n').filter(function(l){{return l.trim();}});
-        if(!lines.length) return;
-        var chain = Promise.resolve();
-        lines.forEach(function(line) {{
-          var text = line.replace(/^-\\s*\\[[ xX]?\\]\\s*/, '').trim();
-          if(!text) return;
-          chain = chain.then(function() {{
-            return fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{add_criteria:text}})}}).then(function(r){{return r.json();}});
-          }});
-        }});
-        chain.then(function() {{ return fetch(EDIT_API+'/tickets/'+currentTicketId).then(function(r){{return r.json();}}); }})
-          .then(function(d) {{ populate(d); activateTab('criteria'); toast('Criteria added'); }});
-      }} else {{
-        fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{content:val}})}})
-          .then(function(r){{return r.json();}}).then(function(u){{ if(u)currentData=u; toast(FLAG_NAMES[field]+' saved'); refreshTabs(); }});
-      }}
+  // DCTRS dots in header — scroll to section
+  overlay.querySelectorAll('.detail-dctrs-strip .readiness-dot').forEach(function(dot) {{
+    dot.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      scrollToSection(dot.dataset.flag);
     }});
   }});
 
-  // Assessment buttons (Create New / Review Existing) — runs AI assessment
-  overlay.querySelectorAll('.detail-assess-btn').forEach(function(btn) {{
+  // Assess buttons (single button per section)
+  overlay.querySelectorAll('.section-assess-btn').forEach(function(btn) {{
     btn.addEventListener('click', function(e) {{
       if(!currentData || !currentTicketId) return;
       var cat = btn.dataset.cat;
-      var action = btn.dataset.action;
       if (!cat) return;
+      var sec = CAT_RMAP[cat];
+      var fl = currentData.readiness_flags || {{}};
+      var hasContent = sec === 'description' ? !!(currentData.description) : sec === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[sec]);
+      var action = hasContent ? 'review' : 'create';
       // Shift+click copies prompt to clipboard as fallback
       if (e.shiftKey) {{
         var t = currentData;
@@ -2681,23 +3552,33 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         if (p) navigator.clipboard.writeText(p).then(function(){{ toast('Prompt copied'); }});
         return;
       }}
+      btn.textContent = 'Assessing...'; btn.classList.add('loading');
+      var _origLabel = hasContent ? 'Re-assess' : 'Assess';
+      var _restore = function() {{ btn.textContent = _origLabel; btn.classList.remove('loading'); }};
+      // Use enrich endpoint for the assess
       runCategoryAssess(cat, action);
+      // Restore button after a delay (runCategoryAssess handles its own loading)
+      setTimeout(_restore, 2000);
     }});
   }});
 
-  // Ctrl+S saves active section
+  // Ctrl+S saves the focused textarea
   overlay.addEventListener('keydown', function(e) {{
     if((e.ctrlKey||e.metaKey) && e.key==='s') {{
       e.preventDefault();
-      var sec = overlay.querySelector('.detail-section.active');
-      if(sec) {{ var sb = sec.querySelector('.detail-save-btn'); if(sb) sb.click(); }}
+      var focused = document.activeElement;
+      if (focused && focused.classList && focused.classList.contains('detail-editor')) {{
+        focused.blur(); // triggers auto-save
+      }}
     }}
   }});
 
-  // Readiness dot click — open detail view
+  // Readiness dot click on cards — open detail view scrolled to section
   document.addEventListener('click', function(e) {{
     var dot = e.target.closest('.readiness-dot[data-flag]');
     if(!dot) return;
+    // Skip dots inside the overlay header strip
+    if (dot.closest('.detail-dctrs-strip')) return;
     var card = dot.closest('.card') || dot.closest('.list-row');
     if(!card || !card.dataset.itemId) return;
     e.stopPropagation(); e.preventDefault();
@@ -2712,7 +3593,7 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
   window.showGateBanner = showGateBanner;
   window.closeDetailOverlay = closeOverlay;
 
-  // --- URL hash routing for gate panel (I-11) ---
+  // --- URL hash routing (I-11) ---
   function _parseGateHash(hash) {{
     if (!hash || hash.indexOf('#gate/') !== 0) return null;
     var parts = hash.substring(6).split('/');
@@ -2720,32 +3601,53 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     return {{ ticketId: parts[0], section: decodeURIComponent(parts.slice(1).join('/')) }};
   }}
 
+  function _parseTicketHash(hash) {{
+    if (!hash || hash.indexOf('#ticket/') !== 0) return null;
+    var parts = hash.substring(8).split('/');
+    if (parts.length < 1 || !parts[0]) return null;
+    var rawFlag = parts[1] || '';
+    // Backward compat: old tab names → flag letters
+    var flag = TAB_COMPAT.hasOwnProperty(rawFlag) ? TAB_COMPAT[rawFlag] : rawFlag;
+    return {{ ticketId: parts[0], flag: flag || null }};
+  }}
+
   var _suppressPopstate = false;
 
   window.addEventListener('popstate', function() {{
     if (_suppressPopstate) {{ _suppressPopstate = false; return; }}
-    var parsed = _parseGateHash(window.location.hash);
-    if (parsed) {{
-      // Hash points to a gate state — open it
-      if (!overlay.classList.contains('hidden') && currentTicketId === parsed.ticketId) return;
-      if (window.startGateCheck) window.startGateCheck(parsed.ticketId, parsed.section);
-    }} else {{
-      // No gate hash — close overlay if open
-      if (!overlay.classList.contains('hidden')) {{
-        overlay.classList.add('hidden');
-        document.body.style.overflow = '';
-        currentTicketId = null; currentData = null;
-        _hasAssessmentData = false; _gateContext = null;
-        clearAssessments(); hideGateBanner();
+    var gateP = _parseGateHash(window.location.hash);
+    if (gateP) {{
+      if (!overlay.classList.contains('hidden') && currentTicketId === gateP.ticketId) return;
+      if (window.startGateCheck) window.startGateCheck(gateP.ticketId, gateP.section);
+      return;
+    }}
+    var ticketP = _parseTicketHash(window.location.hash);
+    if (ticketP) {{
+      if (!overlay.classList.contains('hidden') && currentTicketId === ticketP.ticketId) {{
+        if (ticketP.flag) scrollToSection(CAT_RMAP[ticketP.flag]);
+        return;
       }}
+      openOverlay(ticketP.ticketId, ticketP.flag);
+      return;
+    }}
+    if (!overlay.classList.contains('hidden')) {{
+      overlay.classList.add('hidden');
+      document.body.style.overflow = '';
+      currentTicketId = null; currentData = null;
+      _hasAssessmentData = false; _gateContext = null;
+      clearAssessments(); hideGateBanner();
     }}
   }});
 
-  // On page load, open gate panel if hash matches
   (function() {{
-    var parsed = _parseGateHash(window.location.hash);
-    if (parsed && window.startGateCheck) {{
-      setTimeout(function() {{ window.startGateCheck(parsed.ticketId, parsed.section); }}, 200);
+    var gateP = _parseGateHash(window.location.hash);
+    if (gateP && window.startGateCheck) {{
+      setTimeout(function() {{ window.startGateCheck(gateP.ticketId, gateP.section); }}, 200);
+      return;
+    }}
+    var ticketP = _parseTicketHash(window.location.hash);
+    if (ticketP) {{
+      setTimeout(function() {{ openOverlay(ticketP.ticketId, ticketP.flag); }}, 200);
     }}
   }})();
 }})();
@@ -2785,7 +3687,7 @@ def _render_cards(tickets: list[Ticket], column: str, child_tickets: dict[str, l
         if children:
             n_children = len(children)
             child_badge_html = (
-                f'<span class="children-toggle" data-parent="{id_esc}">'
+                f'<span class="children-toggle collapsed" data-parent="{id_esc}">'
                 f'<span class="arrow">&#9660;</span> {n_children}</span>'
             )
 
@@ -2793,7 +3695,7 @@ def _render_cards(tickets: list[Ticket], column: str, child_tickets: dict[str, l
 
         # Render children as full cards in a connected group
         if children:
-            lines.append(f'      <div class="child-group" data-parent="{id_esc}">')
+            lines.append(f'      <div class="child-group collapsed" data-parent="{id_esc}">')
             for child in children:
                 lines.append(_render_single_card(child, column, card_class, dep_state, ""))
             lines.append(f'      </div>')
@@ -2811,34 +3713,50 @@ def _render_single_card(t, column: str, card_class: str, dep_state: dict, child_
     dep_info = dep_state.get(t.id, {})
     blocked_class = " blocked" if dep_info.get("blocking_deps") else ""
 
-    parent_link_html = ""
+    # Parent link — always render (empty placeholder when no parent, for click-to-add)
     if t.parent:
         parent_link_html = f'        <div class="card-parent-link">\u21b3 {escape(t.parent)}</div>\n'
+    else:
+        parent_link_html = f'        <div class="card-parent-link empty">+ parent</div>\n'
 
-    deps_html = ""
+    # Depends — always render (empty placeholder when no deps)
     if t.depends:
         dep_list = ", ".join(escape(d) for d in t.depends)
         deps_html = f'        <div class="card-deps">&#10547; {dep_list}</div>\n'
         blocking = dep_info.get("blocking_deps", [])
         if blocking:
             deps_html += f'        <span class="card-blocked-badge">blocked by: {escape(", ".join(blocking))}</span>\n'
+    else:
+        deps_html = f'        <div class="card-deps empty">+ depends</div>\n'
 
     desc_html = ""
     if t.description:
         desc_html = f'        <div class="card-desc">{desc_esc}</div>\n'
+    else:
+        desc_html = f'        <div class="card-desc empty">+ description</div>\n'
 
     rationale_html = ""
     if t.rationale:
         rationale_html = f'        <div class="card-rationale"><em>Rationale:</em> {escape(t.rationale)}</div>\n'
+    else:
+        rationale_html = f'        <div class="card-rationale empty">+ rationale</div>\n'
 
     criteria_html = ""
+    criteria_items = []
     if t.acceptance_criteria:
-        criteria_items = []
         for checked, text in t.acceptance_criteria:
             cls = ' class="criterion checked"' if checked else ' class="criterion"'
             marker = "&#9745;" if checked else "&#9744;"
             criteria_items.append(f'          <div{cls}>{marker} {escape(text)}</div>')
-        criteria_html = '        <div class="card-criteria">\n' + "\n".join(criteria_items) + "\n        </div>\n"
+    criteria_items.append('          <button class="add-criterion-btn">+ Add Criterion</button>')
+    criteria_html = '        <div class="card-criteria">\n' + "\n".join(criteria_items) + "\n        </div>\n"
+
+    # Git traceability (shown on expanded cards)
+    git_html = ""
+    if t.commit_hash:
+        git_html += f'        <div class="card-commit"><span class="commit-badge">{escape(t.commit_hash)}</span></div>\n'
+    if t.release_tag:
+        git_html += f'        <div class="card-release"><span class="release-badge">{escape(t.release_tag)}</span></div>\n'
 
     readiness_html = _render_readiness_row(t)
     actions_html = _render_action_buttons(column, id_esc)
@@ -2856,6 +3774,7 @@ def _render_single_card(t, column: str, card_class: str, dep_state: dict, child_
         f'<span class="status-badge {status_class}">{status_class}</span></div>\n'
         f'{readiness_html}'
         f'{parent_link_html}{deps_html}{desc_html}{rationale_html}{criteria_html}'
+        f'{git_html}'
         f'{actions_html}'
         f'        <div class="card-footer"><span class="complexity-badge">{escape(t.complexity)}</span></div>\n'
         f'      </div>'
@@ -2865,6 +3784,7 @@ def _render_single_card(t, column: str, card_class: str, dep_state: dict, child_
 def _render_readiness_row(t) -> str:
     """Render readiness indicator dots for a ticket."""
     flag_map = {"D": "description", "C": "criteria", "T": "tests", "R": "reviewed", "S": "smoke"}
+    icon_map = {"D": "&#128196;", "C": "&#9745;", "T": "&#128300;", "R": "&#128065;", "S": "&#128168;"}
     indicators = [
         ("D", "Description", bool(t.description)),
         ("C", "Criteria", len(t.acceptance_criteria) > 0),
@@ -2876,7 +3796,8 @@ def _render_readiness_row(t) -> str:
     for letter, title, filled in indicators:
         cls = "filled" if filled else "empty"
         flag_name = flag_map[letter]
-        dots.append(f'<span class="readiness-dot {cls}" title="{title}" data-flag="{flag_name}">{letter}</span>')
+        icon = icon_map[letter]
+        dots.append(f'<span class="readiness-dot {cls}" title="{title}" data-flag="{flag_name}">{icon}</span>')
     return '        <div class="readiness-row">' + "".join(dots) + '</div>\n'
 
 
@@ -2919,7 +3840,7 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
         child_badge_html = ""
         if children:
             child_badge_html = (
-                f'<span class="children-toggle" data-parent="{id_esc}">'
+                f'<span class="children-toggle collapsed" data-parent="{id_esc}">'
                 f'<span class="arrow">&#9660;</span> {len(children)}</span>'
             )
 
@@ -2969,7 +3890,7 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
 
         # Render children as list rows in a connected group
         if children:
-            lines.append(f'      <div class="child-group" data-parent="{id_esc}">')
+            lines.append(f'      <div class="child-group collapsed" data-parent="{id_esc}">')
             for child in children:
                 child_title = escape(child.title)
                 child_id = escape(child.id)

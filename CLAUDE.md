@@ -48,6 +48,7 @@ PRODUCT_SPECIFICATION.md (write-only output from /accept, not read by generator)
 3. Collects git/code stats via shell commands
 4. Renders a self-contained HTML file with inline CSS/JS (dark theme kanban)
 5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
+6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
 Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, column, description, acceptance_criteria, parent, rationale, depends, summary, archived) → `Project` dataclass (tickets + CodeStats) → HTML or JSON.
 
@@ -58,9 +59,19 @@ Data model: `Ticket` dataclass (id, title, priority, complexity, status, section
 
 Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime use (see `INSTALL.md` for the deployment map).
 
+**`src/serve.py`** is the interactive dashboard server. Serves the generated HTML over HTTP, injecting an `edit-api` meta tag that activates editing features:
+- **Priority cycling** (click the colored dot), **Status dropdown** (click badge), **Criteria toggle** (click checkboxes)
+- **Drag-to-move** (drag cards between columns), **Inline text editing** (dblclick title/description when expanded)
+- **Workflow buttons** (Start, Done, Accept — shown when expanded), **Create/Delete** via API
+
+Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
+
+**Progressive enhancement:** Same HTML works read-only via file://. Edit features only activate when `edit-api` meta tag present (injected by serve.py).
+
 **Deployment:** Source files in `src/` deploy to `~/.claude/` for runtime use:
 - `src/generate.py` → `~/.claude/ticket-takeaway/generate.py` AND `~/.claude/dashboard/generate.py` (fix DASHBOARD_DIR line 25)
 - `src/tickets-cli.py` → `~/.claude/ticket-takeaway/tickets-cli.py`
+- `src/serve.py` → `~/.claude/ticket-takeaway/serve.py`
 
 **DB recovery:** If `tickets.db` is lost, run `tickets-cli.py seed` to reconstruct from PRODUCT_BACKLOG.md.
 

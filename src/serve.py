@@ -390,6 +390,105 @@ def _run_gate_check(project_id: str, ticket_id: str, target_section: str) -> dic
     return analysis
 
 
+# --------------- Per-category assessment ---------------
+
+_CAT_LABELS = {"D": "Description", "C": "Acceptance Criteria", "T": "Tests", "R": "Review", "S": "Smoke Tests"}
+
+
+def _build_category_prompt(ticket: dict, category: str, action: str) -> str:
+    """Build a focused prompt for a single DCTRS category assessment."""
+    cat_label = _CAT_LABELS.get(category, category)
+    criteria_lines = []
+    for c in ticket.get("acceptance_criteria", []):
+        mark = "[x]" if c["checked"] else "[ ]"
+        criteria_lines.append(f"- {mark} {c['text']}")
+    criteria_text = "\n".join(criteria_lines) if criteria_lines else "(none)"
+    flags = ticket.get("readiness_flags", [])
+
+    # Build current-content section based on category
+    if category == "D":
+        current = ticket.get("description") or "(empty)"
+    elif category == "C":
+        current = criteria_text
+    elif category == "T":
+        current = (flags.get("tests") if isinstance(flags, dict) else "") or "(empty)"
+    elif category == "R":
+        current = (flags.get("reviewed") if isinstance(flags, dict) else "") or "(empty)"
+    elif category == "S":
+        current = (flags.get("smoke") if isinstance(flags, dict) else "") or "(empty)"
+    else:
+        current = "(unknown category)"
+
+    if action == "create":
+        task_instruction = (
+            f"Generate high-quality {cat_label.lower()} content for this ticket. "
+            f"Return the generated content in the 'content' field as plain text (not JSON, not markdown fences)."
+        )
+    else:  # review
+        task_instruction = (
+            f"Review the existing {cat_label.lower()} for completeness, clarity, and quality. "
+            f"Provide specific suggestions for improvement."
+        )
+
+    add_criteria_field = ""
+    if category == "C":
+        add_criteria_field = ', "add_criteria": ["suggested new criterion 1", "..."]'
+
+    return f"""You are a project management assistant assessing a single aspect of a ticket.
+
+TICKET: {ticket['id']} — {ticket['title']}
+Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: {ticket['status']}
+
+DESCRIPTION:
+{ticket.get('description') or '(empty)'}
+
+ACCEPTANCE CRITERIA:
+{criteria_text}
+
+CURRENT {cat_label.upper()} CONTENT:
+{current}
+
+TASK: {task_instruction}
+
+Respond with ONLY valid JSON (no markdown fences, no explanation) matching this exact schema:
+{{
+  "status": "ok" or "needs-work",
+  "current_summary": "brief assessment of current state",
+  "suggestion": "specific improvement suggestion or null",
+  "content": "generated content text (for create action) or null"{add_criteria_field}
+}}"""
+
+
+def _run_category_assess(project_id: str, ticket_id: str, category: str, action: str) -> dict:
+    """Run a focused single-category assessment and return structured result."""
+    import subprocess as _sp
+
+    ticket = _get_ticket_json(project_id, ticket_id)
+    if not ticket:
+        return {"error": "Ticket not found"}
+
+    prompt = _build_category_prompt(ticket, category, action)
+
+    try:
+        result = _sp.run(
+            ["claude", "-p", prompt, "--output-format", "json"],
+            capture_output=True, text=True, timeout=45,
+            cwd=os.path.expanduser(_get_project().get("path", "."))
+        )
+        outer = json.loads(result.stdout)
+        text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
+        analysis = json.loads(text) if isinstance(text, str) else text
+    except _sp.TimeoutExpired:
+        return {"error": "Assessment timed out", "status": "needs-work", "current_summary": "Timed out", "suggestion": "Try again."}
+    except (json.JSONDecodeError, KeyError):
+        return {"error": "Failed to parse response", "status": "needs-work", "current_summary": "Parse error", "suggestion": "Try again."}
+
+    analysis["ticket_id"] = ticket_id
+    analysis["category"] = category
+    analysis["action"] = action
+    return analysis
+
+
 def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
     """Toggle a readiness flag. If set, clear it; if unset, set it."""
     if flag not in VALID_READINESS_FLAGS:
@@ -763,6 +862,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             result = _run_gate_check(proj["id"], ticket_id, section)
             if "error" in result and "verdict" not in result:
+                self._send_json(result, 400)
+            else:
+                self._send_json(result)
+            return
+
+        # Per-category assessment
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/assess/([DCTRS])$", path)
+        if m:
+            ticket_id = m.group(1)
+            category = m.group(2)
+            proj = _get_project()
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            action = body.get("action", "review")
+            if action not in ("create", "review"):
+                self._send_json({"error": "action must be 'create' or 'review'"}, 400)
+                return
+
+            result = _run_category_assess(proj["id"], ticket_id, category, action)
+            if "error" in result and "status" not in result:
                 self._send_json(result, 400)
             else:
                 self._send_json(result)

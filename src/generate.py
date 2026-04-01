@@ -919,8 +919,9 @@ a {{ color: var(--accent); text-decoration: none; }}
 .edit-enabled .card:active {{ cursor: grabbing; }}
 .card.dragging {{ opacity: 0.4; }}
 .card.drag-target {{ border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent), 0 0 8px rgba(59,130,246,0.2); }}
-.column-body.drag-over {{ background: rgba(59,130,246,0.06); border: 1px dashed var(--accent); border-radius: 6px; min-height: 40px; }}
-.bottom-section-body.drag-over {{ background: rgba(59,130,246,0.06); }}
+.column.drag-over {{ background: rgba(59,130,246,0.06); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 12px rgba(59,130,246,0.15); }}
+.column.drag-over .column-header {{ background: rgba(59,130,246,0.10); }}
+.bottom-section.drag-over {{ background: rgba(59,130,246,0.06); border-color: var(--accent); }}
 
 /* Workflow action buttons (edit mode) */
 .card-actions {{ display: none; gap: 4px; margin-top: 6px; }}
@@ -948,82 +949,121 @@ a {{ color: var(--accent); text-decoration: none; }}
 .card.gate-checking .card-actions {{ display: none !important; }}
 
 /* Gate-check panel */
-.gate-panel {{
-  margin-top: 8px; padding: 10px; border-radius: 6px;
-  background: var(--bg-surface); border: 1px solid var(--border-default);
-  animation: panelSlide 0.2s ease-out; font-size: 11px;
+/* Gate banner (shown inside detail overlay during column moves) */
+.detail-gate-banner {{
+  padding: 12px 16px; margin-bottom: 12px; border-radius: 8px;
+  background: var(--bg-card); border: 1px solid var(--border-default);
+  animation: panelSlide 0.2s ease-out;
 }}
-.gate-verdict {{
-  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
-  padding-bottom: 6px; border-bottom: 1px solid var(--border-default);
+.detail-gate-banner.hidden {{ display: none; }}
+.detail-gate-verdict {{
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
 }}
 .gate-verdict-badge {{
-  font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 10px;
   text-transform: uppercase; letter-spacing: 0.5px;
 }}
 .gate-verdict-badge.ready {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
 .gate-verdict-badge.needs-work {{ background: rgba(234,179,8,0.15); color: #eab308; }}
 .gate-verdict-badge.blocked {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
-.gate-verdict-summary {{ color: var(--text-secondary); font-size: 11px; }}
-
-/* Gate category rows */
-.gate-category {{
-  padding: 6px 8px; margin: 4px 0; border-radius: 4px;
-  border-left: 3px solid var(--border-default);
-  background: var(--bg-card);
+.detail-gate-summary {{ color: var(--text-secondary); font-size: 13px; }}
+.detail-gate-actions {{
+  display: flex; gap: 8px; margin-top: 8px;
 }}
-.gate-category.ok {{ border-left-color: #22c55e; }}
-.gate-category.needs-work {{ border-left-color: #eab308; }}
-.gate-cat-header {{
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 4px;
-}}
-.gate-cat-label {{
-  font-weight: 700; font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.3px; color: var(--text-secondary);
-}}
-.gate-cat-status {{
-  font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 8px;
-}}
-.gate-cat-status.ok {{ background: rgba(34,197,94,0.12); color: #22c55e; }}
-.gate-cat-status.needs-work {{ background: rgba(234,179,8,0.12); color: #eab308; }}
-.gate-cat-summary {{ color: var(--text-secondary); margin-bottom: 3px; }}
-.gate-cat-suggestion {{
-  color: var(--accent); font-style: italic; margin-bottom: 4px;
-  padding: 3px 6px; background: rgba(59,130,246,0.06); border-radius: 3px;
-}}
-.gate-cat-edit {{
-  width: 100%; min-height: 28px; font-size: 11px; padding: 4px 6px;
-  border-radius: 4px; border: 1px solid var(--border-default);
-  background: var(--bg-page); color: var(--text-primary);
-  font-family: var(--font-sans); resize: vertical; outline: none;
-}}
-.gate-cat-edit:focus {{ border-color: var(--accent); }}
-.gate-save-btn {{
-  font-size: 9px; padding: 2px 8px; border-radius: 4px;
-  border: 1px solid var(--border-default); background: var(--bg-page);
-  color: var(--text-secondary); cursor: pointer; font-weight: 600; margin-top: 3px;
-}}
-.gate-save-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
-.gate-save-btn.saved {{ color: #22c55e; border-color: #22c55e; pointer-events: none; }}
-
-/* Gate panel footer */
-.gate-footer {{
-  display: flex; gap: 6px; margin-top: 8px; padding-top: 6px;
-  border-top: 1px solid var(--border-default);
-}}
-.gate-confirm-btn {{
-  font-size: 10px; padding: 4px 14px; border-radius: 4px; border: none;
+.detail-gate-confirm {{
+  font-size: 12px; padding: 6px 18px; border-radius: 6px; border: none;
   background: var(--accent); color: #fff; cursor: pointer; font-weight: 600;
-  font-family: var(--font-sans);
+  font-family: var(--font-sans); transition: background 0.15s;
 }}
-.gate-confirm-btn:hover {{ background: #2563eb; }}
-.gate-cancel-btn {{
-  font-size: 10px; padding: 4px 14px; border-radius: 4px;
+.detail-gate-confirm:hover {{ background: #2563eb; }}
+.detail-gate-cancel {{
+  font-size: 12px; padding: 6px 18px; border-radius: 6px;
   border: 1px solid var(--border-default); background: none;
   color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans);
+  transition: all 0.15s;
 }}
-.gate-cancel-btn:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
+.detail-gate-cancel:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
+
+/* Properties tab */
+.detail-props-grid {{
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}}
+.detail-prop-field {{ display: flex; flex-direction: column; gap: 4px; }}
+.detail-prop-field.full-width {{ grid-column: 1 / -1; }}
+.detail-prop-label {{
+  font-size: 11px; font-weight: 600; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.3px;
+}}
+.detail-prop-input {{
+  font-size: 13px; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: var(--font-sans); outline: none;
+  box-sizing: border-box; width: 100%;
+}}
+.detail-prop-input:focus {{ border-color: var(--accent); }}
+select.detail-prop-input {{ cursor: pointer; }}
+textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: var(--font-mono); }}
+
+/* Assessment results area */
+.detail-assessment {{
+  margin-bottom: 12px; padding: 10px 12px; border-radius: 6px;
+  background: var(--bg-card); border-left: 3px solid var(--border-default);
+  animation: panelSlide 0.2s ease-out;
+}}
+.detail-assessment.hidden {{ display: none; }}
+.detail-assessment.ok {{ border-left-color: #22c55e; }}
+.detail-assessment.needs-work {{ border-left-color: #eab308; }}
+.assessment-header {{
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+}}
+.assessment-status {{
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 8px;
+  text-transform: uppercase; letter-spacing: 0.3px;
+}}
+.assessment-status.ok {{ background: rgba(34,197,94,0.12); color: #22c55e; }}
+.assessment-status.needs-work {{ background: rgba(234,179,8,0.12); color: #eab308; }}
+.assessment-dismiss {{
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 14px; padding: 0 2px; line-height: 1;
+}}
+.assessment-dismiss:hover {{ color: var(--text-primary); }}
+.assessment-summary {{ font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }}
+.assessment-suggestion {{
+  font-size: 12px; color: var(--accent); font-style: italic;
+  padding: 4px 8px; background: rgba(59,130,246,0.06); border-radius: 4px; margin-bottom: 6px;
+}}
+.assessment-add-criteria {{
+  list-style: none; padding: 0; margin: 6px 0 0 0;
+}}
+.assessment-add-criteria li {{
+  display: flex; align-items: flex-start; gap: 6px; padding: 3px 0;
+  font-size: 12px; color: var(--text-secondary);
+}}
+.assessment-add-criteria button {{
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent);
+  background: none; color: var(--accent); cursor: pointer; white-space: nowrap; flex-shrink: 0;
+}}
+.assessment-add-criteria button:hover {{ background: rgba(59,130,246,0.1); }}
+.assessment-add-criteria button.added {{ color: #22c55e; border-color: #22c55e; pointer-events: none; }}
+.assessment-apply-btn {{
+  font-size: 11px; padding: 4px 12px; border-radius: 4px; border: 1px solid var(--accent);
+  background: rgba(59,130,246,0.1); color: var(--accent); cursor: pointer;
+  font-weight: 600; margin-top: 4px;
+}}
+.assessment-apply-btn:hover {{ background: rgba(59,130,246,0.2); }}
+
+/* Assessment loading indicator */
+.detail-assess-loading {{
+  display: flex; align-items: center; gap: 8px; padding: 12px;
+  color: var(--text-tertiary); font-size: 12px; font-style: italic;
+}}
+.detail-assess-loading.hidden {{ display: none; }}
+.detail-assess-loading::before {{
+  content: ''; width: 14px; height: 14px; border: 2px solid var(--border-default);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: assess-spin 0.6s linear infinite;
+}}
+@keyframes assess-spin {{ to {{ transform: rotate(360deg); }} }}
 
 /* New ticket button + panel (edit mode) */
 .new-ticket-btn {{
@@ -2085,7 +2125,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         document.querySelectorAll('.drag-over').forEach(function(el) {{ el.classList.remove('drag-over'); }});
         dragId = null;
       }});
-      document.querySelectorAll('.column-body, .bottom-section-body').forEach(function(zone) {{
+      document.querySelectorAll('.column, .bottom-section').forEach(function(zone) {{
         zone.addEventListener('dragover', function(e) {{
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
@@ -2099,17 +2139,15 @@ a {{ color: var(--accent); text-decoration: none; }}
           zone.classList.remove('drag-over');
           var id = e.dataTransfer.getData('text/plain');
           if (!id) return;
-          // Determine target section from parent element
-          var parent = zone.parentElement;
           var section = null;
-          if (parent && parent.dataset && parent.dataset.col) {{
+          if (zone.dataset && zone.dataset.col) {{
             // Kanban column
             var colMap = {{ ideas: 'Ideas', backlog: 'Backlog', wip: 'WIP', review: 'For Review' }};
-            section = colMap[parent.dataset.col];
-          }} else if (parent && parent.id) {{
+            section = colMap[zone.dataset.col];
+          }} else if (zone.id) {{
             // Bottom section
             var secMap = {{ bugSection: 'Bugs', iceboxSection: 'Icebox', doneSection: 'Done', wontdoSection: "Won't Do" }};
-            section = secMap[parent.id];
+            section = secMap[zone.id];
           }}
           if (section) {{
             if (GATED_SECTIONS[section]) {{

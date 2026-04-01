@@ -30,38 +30,7 @@ Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashbo
 ### I-10: touch bronwyn (test ticket)
 Priority: medium | Complexity: M | Status: in-progress
 
-### B-08: Readiness Detail View — click D/C/T/R/S to edit section content
-Priority: high | Complexity: L | Status: in-progress
-Clicking any readiness dot (D/C/T/R/S) opens a full ticket detail overlay with all 5 sections as navigable tabs. The clicked dot's section is auto-focused. Each section shows editable text content with 'Create New' and 'Review Existing' clipboard buttons that copy customized prompts for Claude Code CLI. Requires: DB content column on readiness_flags, new PUT API endpoint, detail overlay UI in generate.py.
-- [ ] Click any readiness dot opens full ticket detail overlay
-- [ ] Overlay has 5 navigable tabs (D C T R S) with auto-scroll to clicked section
-- [ ] D tab edits ticket description
-- [ ] C tab edits acceptance criteria with checkboxes
-- [ ] T/R/S tabs edit new content field stored in readiness_flags DB table
-- [ ] Auto-fill: saving content fills dot, clearing empties it
-- [ ] Create New clipboard button copies customized prompt per flag type
-- [ ] Review Existing clipboard button copies prompt with existing content
-- [ ] Content syncs to PRODUCT_BACKLOG.md as Tests:/Reviewed:/Smoke: lines
-- [ ] Roundtrip: seed from markdown preserves readiness content
-
 ## For Review
-
-### B-05: Real-Time Dashboard Updates with Animations
-Priority: high | Complexity: M | Status: for-review
-Commit: 7abdf41
-Replace the full-page-reload polling with in-place DOM diffing. When the dashboard HTML file changes, fetch the new version, extract the changed cards, and patch the live DOM without reloading. Moved cards get a brief highlight indicator. New cards fade in. Removed cards fade out. Scroll position, expanded cards, search/filter state, and keyboard focus are all preserved across updates.
-- [ ] Polling detects file changes without triggering a full page reload
-- [ ] Changed cards are patched in-place (moved between columns, status updated, criteria toggled)
-- [ ] Cards that moved between columns get a 1.5s colored border/glow indicator (reuse existing .just-moved keyframe)
-- [ ] New cards fade in over 0.3s (opacity 0→1)
-- [ ] Removed/archived cards fade out over 0.3s then are removed from DOM
-- [ ] Scroll position is preserved across updates
-- [ ] Expanded card state (clicked cards showing details) is preserved across updates
-- [ ] Search filter text and active filter buttons are preserved across updates
-- [ ] Summary counters (WIP count, Backlog count, etc.) update in place
-- [ ] Progress bars update width smoothly (existing 0.3s transition suffices)
-- [ ] No visible flicker or layout shift during normal updates
-- [ ] Falls back to full reload if DOM structure changes drastically (major generator version bump)
 
 ### B-09: Column Move Gate Check — AI-Powered Readiness Analysis
 Priority: high | Complexity: M | Status: for-review
@@ -282,6 +251,37 @@ One-command install/upgrade/register. Copies CLI, generator, and skills to runti
 Priority: medium | Complexity: S | Status: done
 Commit: 05b7730
 CLI regenerates HTML after every write. File watcher (watch command) detects direct markdown edits. Browser polls every 2s and auto-reloads with card-moved highlighting.
+
+### B-08: Readiness Detail View — click D/C/T/R/S to edit section content
+Priority: high | Complexity: L | Status: done
+Clicking any readiness dot (D/C/T/R/S) opens a full ticket detail overlay with all 5 sections as navigable tabs. The clicked dot's section is auto-focused. Each section shows editable text content with 'Create New' and 'Review Existing' clipboard buttons that copy customized prompts for Claude Code CLI. Requires: DB content column on readiness_flags, new PUT API endpoint, detail overlay UI in generate.py.
+- [ ] Click any readiness dot opens full ticket detail overlay
+- [ ] Overlay has 5 navigable tabs (D C T R S) with auto-scroll to clicked section
+- [ ] D tab edits ticket description
+- [ ] C tab edits acceptance criteria with checkboxes
+- [ ] T/R/S tabs edit new content field stored in readiness_flags DB table
+- [ ] Auto-fill: saving content fills dot, clearing empties it
+- [ ] Create New clipboard button copies customized prompt per flag type
+- [ ] Review Existing clipboard button copies prompt with existing content
+- [ ] Content syncs to PRODUCT_BACKLOG.md as Tests:/Reviewed:/Smoke: lines
+- [ ] Roundtrip: seed from markdown preserves readiness content
+
+### B-05: Real-Time Dashboard Updates with Animations
+Priority: high | Complexity: M | Status: done
+Commit: 7abdf41
+Replace the full-page-reload polling with in-place DOM diffing. When the dashboard HTML file changes, fetch the new version, extract the changed cards, and patch the live DOM without reloading. Moved cards get a brief highlight indicator. New cards fade in. Removed cards fade out. Scroll position, expanded cards, search/filter state, and keyboard focus are all preserved across updates.
+- [ ] Polling detects file changes without triggering a full page reload
+- [ ] Changed cards are patched in-place (moved between columns, status updated, criteria toggled)
+- [ ] Cards that moved between columns get a 1.5s colored border/glow indicator (reuse existing .just-moved keyframe)
+- [ ] New cards fade in over 0.3s (opacity 0→1)
+- [ ] Removed/archived cards fade out over 0.3s then are removed from DOM
+- [ ] Scroll position is preserved across updates
+- [ ] Expanded card state (clicked cards showing details) is preserved across updates
+- [ ] Search filter text and active filter buttons are preserved across updates
+- [ ] Summary counters (WIP count, Backlog count, etc.) update in place
+- [ ] Progress bars update width smoothly (existing 0.3s transition suffices)
+- [ ] No visible flicker or layout shift during normal updates
+- [ ] Falls back to full reload if DOM structure changes drastically (major generator version bump)
 
 ## Won't Do
 

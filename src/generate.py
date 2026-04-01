@@ -1825,6 +1825,11 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
           setTimeout(function() {{
             if (window.populateAssessment) window.populateAssessment(data);
             if (window.showGateBanner) window.showGateBanner(data, targetSection);
+            // Set URL hash for gate state (I-11)
+            var gateHash = '#gate/' + ticketId + '/' + encodeURIComponent(targetSection);
+            if (window.location.hash !== gateHash) {{
+              history.pushState({{ gate: true, ticketId: ticketId, section: targetSection }}, '', gateHash);
+            }}
           }}, 100);
         }}
       }}).catch(function() {{
@@ -2141,11 +2146,10 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
         }});
       }}
     }}
+    // Expose for overlay gate-check integration and testability
+    window.showToast = showToast;
+    window.startGateCheck = startGateCheck;
   }})();
-
-  // Expose showToast for overlay gate-check integration
-  window.showToast = showToast;
-  window.startGateCheck = startGateCheck;
 }})();
 </script>
 
@@ -2539,7 +2543,11 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     }}
   }});
 
-  gateCancel.addEventListener('click', function() {{ hideGateBanner(); }});
+  gateCancel.addEventListener('click', function() {{
+    hideGateBanner();
+    // Close overlay and clear hash on cancel (I-11)
+    closeOverlay();
+  }});
 
   function populateAssessment(data) {{
     var cats = data.categories || {{}};
@@ -2604,6 +2612,10 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
     currentTicketId = null; currentData = null;
     _hasAssessmentData = false; _gateContext = null;
     clearAssessments(); hideGateBanner();
+    // Clear gate hash (I-11)
+    if (window.location.hash && window.location.hash.indexOf('#gate/') === 0) {{
+      history.pushState({{ gate: false }}, '', window.location.pathname + window.location.search);
+    }}
   }}
 
   overlay.querySelector('.detail-backdrop').addEventListener('click', closeOverlay);
@@ -2699,6 +2711,43 @@ textarea.detail-prop-input {{ min-height: 60px; resize: vertical; font-family: v
   window.populateAssessment = populateAssessment;
   window.showGateBanner = showGateBanner;
   window.closeDetailOverlay = closeOverlay;
+
+  // --- URL hash routing for gate panel (I-11) ---
+  function _parseGateHash(hash) {{
+    if (!hash || hash.indexOf('#gate/') !== 0) return null;
+    var parts = hash.substring(6).split('/');
+    if (parts.length < 2) return null;
+    return {{ ticketId: parts[0], section: decodeURIComponent(parts.slice(1).join('/')) }};
+  }}
+
+  var _suppressPopstate = false;
+
+  window.addEventListener('popstate', function() {{
+    if (_suppressPopstate) {{ _suppressPopstate = false; return; }}
+    var parsed = _parseGateHash(window.location.hash);
+    if (parsed) {{
+      // Hash points to a gate state — open it
+      if (!overlay.classList.contains('hidden') && currentTicketId === parsed.ticketId) return;
+      if (window.startGateCheck) window.startGateCheck(parsed.ticketId, parsed.section);
+    }} else {{
+      // No gate hash — close overlay if open
+      if (!overlay.classList.contains('hidden')) {{
+        overlay.classList.add('hidden');
+        document.body.style.overflow = '';
+        currentTicketId = null; currentData = null;
+        _hasAssessmentData = false; _gateContext = null;
+        clearAssessments(); hideGateBanner();
+      }}
+    }}
+  }});
+
+  // On page load, open gate panel if hash matches
+  (function() {{
+    var parsed = _parseGateHash(window.location.hash);
+    if (parsed && window.startGateCheck) {{
+      setTimeout(function() {{ window.startGateCheck(parsed.ticketId, parsed.section); }}, 200);
+    }}
+  }})();
 }})();
 </script>
 </body>

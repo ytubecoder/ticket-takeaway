@@ -1,0 +1,151 @@
+# Session Log
+
+## 2026-04-02 — New ticket creation UI + overlay panel fix
+
+### Summary
+- Added "+ New" button to filter bar (edit-mode only) that opens an inline creation panel
+- Panel has title input, section dropdown (Idea/Backlog/WIP/Bug), and Create button
+- Added expandable "Full ticket form" toggle with "Coming soon" placeholder
+- Fixed panel to use `position: absolute; top: 100%` overlay instead of pushing kanban down (user feedback: layout shift felt jarring)
+
+### Lessons Learned
+- **Accepted:** Overlay panels (absolute positioning) are better than inline panels for transient UI that shouldn't shift the main content — user called out the "jilting" layout shift immediately
+- **Accepted:** Nesting the absolute panel inside the sticky filter-bar div gives correct anchoring without needing a separate wrapper element
+
+### Decisions
+- "Full ticket form" shows "Coming soon" — user will define the full ticket creation screen next
+- Enter key in title input triggers create (keyboard-friendly)
+
+## 2026-04-02 — Codify 3-layer hierarchy + readiness detail view (B-08)
+
+### Summary
+- Formalized the 3-layer hierarchy (Section/Status/Readiness Flags) in `docs/LIFECYCLE.md` Sections 3b and 4b
+- Implemented readiness content storage: added `content` column to `readiness_flags` DB table, with markdown sync (`Tests:`/`Reviewed:`/`Smoke:` labeled lines)
+- Built full ticket detail overlay — clicking any D/C/T/R/S dot opens a tabbed editor with Save buttons and clipboard prompt buttons (Create New / Review Existing)
+- Added `PUT /api/tickets/<id>/readiness/<flag>` endpoint; auto-fill semantics (non-empty content fills dot, empty clears it)
+- Updated `_get_ticket_json` to return readiness_flags as `{flag: content}` dict + `criteria_text`
+
+### Lessons Learned
+- **Accepted:** All 5 readiness dots now have `data-flag` attributes (not just T/R/S) — consistent click handling opens the detail overlay for any flag
+- **Accepted:** Using `ON CONFLICT ... DO UPDATE` for readiness content upserts keeps the toggle and content-save paths unified
+- **Gotcha:** The `cmd_seed` function had its own insert loop separate from `_ingest_markdown_changes` — readiness content roundtrip required adding insert logic to both paths
+
+### Decisions
+- Review (R) defined as a qualitative checkpoint: collective /sync output, decisions, bugs, feature implications — distinct from mechanical T and S flags
+- Readiness content stored in same `readiness_flags` table (added `content` column) rather than a separate table — keeps schema simple
+- Detail overlay uses a separate `<script>` block with its own `EDIT_API` lookup, independent from the main script — avoids coupling with existing click handlers
+
+## 2026-04-02 — Redesign dashboard filter bar (cross-cutting multi-select filters)
+
+### Summary
+- Replaced redundant column-mirroring filters (All/Backlog/WIP/Review/Ideas) with cross-cutting filters: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L)
+- Implemented multi-select filter logic: OR within groups, AND between groups, composable with search
+- Added `data-status`, `data-complexity`, `data-is-bug` attributes to all card rendering locations (kanban cards, parent list rows, child list rows)
+- Updated live-update state save/restore to handle multiple active filters
+
+### Lessons Learned
+- **Accepted:** Card-level filtering (show/hide individual cards) is more flexible than column-level filtering (show/hide columns) — all columns stay visible so the kanban layout context is preserved
+- **Gotcha:** `generate.py --all` required to regenerate dashboards for all registered projects; default auto-detects from cwd and only generates for one project. serve.py defaults to first registry entry (GoodForm), so both projects need regeneration for changes to be visible.
+
+### Decisions
+- Filter groups use visual dividers (1px lines) between them rather than labeled sections — keeps the bar compact
+- "All" button auto-activates when no other filters selected; clicking it clears all active filters
+- Search composes as an additional AND constraint on top of filter state
+
+## 2026-04-01 — Cross-package feedbacks integration (ticket-takeaway + feedbacks repos)
+
+### Summary
+- Designed and implemented cross-package integration between ticket-takeaway and feedbacks
+- Moved feedbacks skill into feedbacks repo (`skills/feedbacks/SKILL.md`) so it ships from the package
+- Created wrapper skill in ticket-takeaway (`src/skills/feedbacks/SKILL.md`) — superset that adds ticket-linked output dirs and context push
+- Updated `/review` skill with formalized feedbacks steps (4a: check prior sessions, 1b: offer visual capture)
+- Updated `install.py` to deploy the wrapper skill alongside existing skills
+
+### Lessons Learned
+- **Accepted:** One-way dependency pattern (orchestrator → tool, never reverse) keeps both packages independently usable. Feedbacks has zero awareness of ticket-takeaway.
+- **Accepted:** Wrapper-as-superset pattern for skills — when two packages ship to the same skill path, the more feature-rich one overwrites the base. Avoids cross-skill invocation complexity.
+- **Accepted:** Feedbacks owns its output location; ticket-takeaway controls where sessions land only when it initiates the capture (via `FEEDBACKS_OUTPUT_DIR`). Standalone captures stay in feedbacks' native `sessions/` dir.
+
+### Decisions
+- Integration is one-way: ticket-takeaway → feedbacks, never the reverse
+- `/feedbacks` standalone does NOT auto-create tickets — it pushes context and the agent decides
+- `/review` is the orchestrator for ticket-linked sessions (sets output dir, analyzes, enriches bug sub-tickets)
+- Both repos deploy to `~/.claude/skills/feedbacks/` — ticket-takeaway's wrapper wins when both installed
+- Design spec saved to `docs/superpowers/specs/2026-04-01-feedbacks-integration-design.md`
+
+## 2026-03-31 — B-05 live dashboard updates + DB single source of truth fix
+
+### Summary
+- Implemented B-05: replaced full-page-reload polling with in-place DOM diffing in generate.py (~130 lines JS)
+- Added card-enter (fade-in), card-exit (fade-out), content-flash, and just-moved animations
+- Fixed critical data integrity issue: generator no longer merges PRODUCT_SPECIFICATION.md tickets into dashboard
+- Fixed `ingest_markdown` deleting DB-only tickets during sync (was silently dropping records)
+- Seeded 9 missing GoodForm tickets (R-17–R-24, BUG-09) into DB from PRODUCT_SPECIFICATION.md
+
+### Lessons Learned
+- **Gotcha:** `ingest_markdown` had a "delete DB tickets missing from markdown" step (line 527-531) that destroyed DB-only records on every sync. When DB is the source of truth, the deletion direction must be reversed — only the CLI should delete tickets.
+- **Gotcha:** `generate.py` was merging PRODUCT_SPECIFICATION.md items into the ticket list, creating phantom tickets not tracked in the DB. This caused count mismatches (36 in DB vs 46 in dashboard).
+- **Accepted:** Using `_bound` flag on DOM elements to prevent double-binding event listeners after DOM patching. Cards that get content replaced reset `_bound = false` so `rebindCardListeners()` re-attaches handlers.
+- **Accepted:** `textContent` comparison (not innerHTML) for change detection avoids false positives from HTML serialization differences.
+
+### Decisions
+- DB is the single source of truth. PRODUCT_SPECIFICATION.md is write-only output (from /accept), never read by the generator.
+- Skipped R-25 (duplicate of R-24) when seeding missing tickets.
+- Schema-version meta tag bumped to "2" — old dashboards fall back to full reload once, then get the new diffing behavior.
+
+## 2026-03-30 — Optional feedbacks integration for /review skill
+
+### Summary
+- Added feedbacks integration hooks to the `/review` skill (step 4a: surface prior sessions, step 1b: offer visual capture)
+- Updated CLAUDE.md with Feedbacks Integration section documenting conventions
+- Added `.feedbacks/` to .gitignore
+
+### Lessons Learned
+- **Accepted:** Detection-not-dependency pattern — check for `~/projects/feedbacks/start.sh` and silently skip if absent. Keeps both projects fully standalone.
+- **Accepted:** Feedbacks SKILL.md already has ticket-takeaway awareness (outputs to `.feedbacks/{ticket-id}/`), so ticket-takeaway just needed to look for those directories during review.
+
+### Decisions
+- Integration is purely at the skill layer (review SKILL.md), not in Python code — keeps CLI and generator feedbacks-agnostic
+- `.feedbacks/` is gitignored per-project since sessions contain screenshots and transcripts
+
+## 2026-03-29 — SQLite migration, install script, read-before-write sync
+
+### Summary
+- Migrated source of truth from PRODUCT_BACKLOG.md to SQLite (tickets.db)
+- Created tickets-cli.py with seed, list, add, update, move, accept, sync subcommands
+- Added read-before-write sync: direct markdown edits absorbed into DB before each CLI write
+- Created install.py for one-command install/upgrade/register
+- Generalized parent-child tickets (any type, not just bugs) with smart labels
+- Updated all skill files, README, INSTALL.md for new architecture
+- Released as v0.2.0
+
+### Lessons Learned
+- **Gotcha:** Two copies of generate.py exist (`~/.claude/ticket-takeaway/` and `~/.claude/dashboard/`) with different DASHBOARD_DIR — install.py patches this automatically now
+- **Accepted:** Read-before-write pattern (ingest markdown → apply CLI change → write back) solves the race condition where agents edit markdown directly while CLI also writes
+- **Accepted:** Separate tables for acceptance_criteria and depends (not JSON columns) enables clean querying and ordering
+- **Gotcha:** Won't Do section name has an apostrophe that breaks SQL string literals — must use `''` escaping
+- **Rejected:** Telling agents "never edit PRODUCT_BACKLOG.md" — agents will self-improve and edit files. Better to absorb their edits gracefully.
+
+### Decisions
+- SQLite DB is source of truth but markdown edits are absorbed (cooperative, not locked-down)
+- PRODUCT_SPECIFICATION.md stays as plain markdown (not in DB) — it's an append-only archive
+- install.py always upgrades system files but preserves registry.json and tickets.db
+- v0.2.0 is a major release with breaking change to architecture
+
+## 2026-03-28 — Parent-child bug ticket rendering overhaul
+
+### Summary
+- Implemented nested bug sub-tickets under parent cards (filtered from standalone columns, rendered inline on expand)
+- Added auto-promotion: parents move to For Review when all child bugs are resolved
+- Converted bottom sections (Done, Bugs, Icebox, Won't Do) from card grid to compact list rows
+- Made linked bug cards individually clickable with their own double-click clipboard prompts
+
+### Lessons Learned
+- **Gotcha:** The `/dashboard` skill runs `~/.claude/dashboard/generate.py`, not `~/.claude/ticket-takeaway/generate.py` — changes must be deployed to both locations
+- **Accepted:** Filtering parented tickets out of column lists then rendering them only inside parent cards is clean and avoids duplication
+- **Accepted:** Adding `class="card"` to list rows lets them inherit existing JS click handlers without duplicating event binding code
+
+### Decisions
+- Child tickets with `Parent:` field never appear as standalone cards anywhere — they only render nested under their parent
+- Bottom sections use a distinct list-row style to visually separate them from the kanban board cards
+- Linked bug cards have red-tinted borders/background to stand out from parent card content

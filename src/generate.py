@@ -1522,6 +1522,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   // Children toggle — collapse/expand child groups
   document.querySelectorAll('.children-toggle').forEach(function(toggle) {{
+    toggle._bound = true;
     toggle.addEventListener('click', function(e) {{
       e.stopPropagation();
       var parentId = this.dataset.parent;

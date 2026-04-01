@@ -2,10 +2,20 @@
 
 ## WIP
 
+### I-07: UI Inline Editing with Field-Level Updates
+Priority: medium | Complexity: M | Status: in-progress
+Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
+- [ ] Phase 1: serve.py HTTP server + quick-edit (priority cycle, status dropdown, criteria checkbox)
+- [ ] Phase 2: full expand-to-edit with form rendering for all 12 editable fields
+- [ ] Phase 3: new ticket creation + drag-and-drop column moves
+- [ ] data-editing guard in patchCards() prevents poll from overwriting edits
+- [ ] file:// mode still works read-only — editing requires serve.py
+
 ## For Review
 
 ### B-05: Real-Time Dashboard Updates with Animations
 Priority: high | Complexity: M | Status: for-review
+Commit: 7abdf41
 Replace the full-page-reload polling with in-place DOM diffing. When the dashboard HTML file changes, fetch the new version, extract the changed cards, and patch the live DOM without reloading. Moved cards get a brief highlight indicator. New cards fade in. Removed cards fade out. Scroll position, expanded cards, search/filter state, and keyboard focus are all preserved across updates.
 - [ ] Polling detects file changes without triggering a full page reload
 - [ ] Changed cards are patched in-place (moved between columns, status updated, criteria toggled)
@@ -70,15 +80,6 @@ Collapsed cards show only title, ID, status badge, and metadata — no descripti
 - [ ] Cards with no description show no preview element
 - [ ] Preview text is selectable but not interactive
 - [ ] Works for both kanban cards and bottom list rows
-
-### I-07: UI Inline Editing with Field-Level Updates
-Priority: medium | Complexity: M | Status: proposed
-Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
-- [ ] Phase 1: serve.py HTTP server + quick-edit (priority cycle, status dropdown, criteria checkbox)
-- [ ] Phase 2: full expand-to-edit with form rendering for all 12 editable fields
-- [ ] Phase 3: new ticket creation + drag-and-drop column moves
-- [ ] data-editing guard in patchCards() prevents poll from overwriting edits
-- [ ] file:// mode still works read-only — editing requires serve.py
 
 ### I-03: Dependency visualization — SVG overlay lines between linked cards
 Priority: medium | Complexity: L | Status: proposed

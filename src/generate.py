@@ -84,6 +84,8 @@ class Ticket:
     archived: bool = False
     commit_hash: str = ""
     release_tag: str = ""
+    readiness_flags: set = field(default_factory=set)  # explicit flags from DB
+    readiness_content: dict = field(default_factory=dict)  # {flag: content_text}
 
 
 @dataclass
@@ -286,6 +288,18 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         except (IndexError, KeyError):
             release_tag = ""
 
+        # Readiness flags and content
+        try:
+            flag_rows = conn.execute(
+                "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ?",
+                (r["id"], project_id)
+            ).fetchall()
+            flags = {f["flag"] for f in flag_rows}
+            readiness_content = {f["flag"]: f["content"] for f in flag_rows}
+        except Exception:
+            flags = set()
+            readiness_content = {}
+
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -303,6 +317,8 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             archived=bool(r["archived"]),
             commit_hash=commit_hash,
             release_tag=release_tag,
+            readiness_flags=flags,
+            readiness_content=readiness_content,
         ))
 
     conn.close()
@@ -525,17 +541,12 @@ def generate_html(projects: list[Project]) -> str:
         if t.parent:
             child_tickets.setdefault(t.parent, []).append(t)
 
-    # Remove child tickets from column lists — they render nested under their parent
-    parented_ids = {t.id for t in all_tickets if t.parent}
-    for col in by_column:
-        by_column[col] = [t for t in by_column[col] if t.id not in parented_ids]
-
     # Auto-promote parents to review when all child tickets are resolved
     review_statuses = {"for-review", "bug-fixed", "done"}
     promoted_ids: set[str] = set()
+    parented_ids = {t.id for t in all_tickets if t.parent}
     for parent_id, children in child_tickets.items():
         if all(c.status in review_statuses for c in children):
-            # Find the parent ticket in non-review columns and move it to review
             for col in ("wip", "backlog", "bugs"):
                 for t in by_column[col]:
                     if t.id == parent_id:
@@ -544,16 +555,43 @@ def generate_html(projects: list[Project]) -> str:
                         promoted_ids.add(t.id)
                         break
 
-    # Count totals (after filtering parented tickets and promotions)
-    count_backlog = len(by_column["backlog"])
-    count_wip = len(by_column["wip"])
-    count_ideas = len(by_column["ideas"])
-    count_wontdo = len(by_column["wontdo"])
-    count_review = len(by_column["review"])
-    count_done = len(by_column["done"])
-    count_icebox = len(by_column["icebox"])
-    count_bugs = len(by_column["bugs"])
+    # Reorder columns: place children directly after their parent
+    # Children NOT in the same column as their parent get a standalone entry
+    for col in by_column:
+        ordered = []
+        seen = set()
+        for t in by_column[col]:
+            if t.id in seen:
+                continue
+            seen.add(t.id)
+            ordered.append(t)
+            # Insert children right after parent
+            for child in child_tickets.get(t.id, []):
+                if child.id not in seen:
+                    seen.add(child.id)
+                    ordered.append(child)
+        by_column[col] = ordered
+
+    # Count totals (exclude children from headline counts)
+    count_backlog = sum(1 for t in by_column["backlog"] if t.id not in parented_ids)
+    count_wip = sum(1 for t in by_column["wip"] if t.id not in parented_ids)
+    count_ideas = sum(1 for t in by_column["ideas"] if t.id not in parented_ids)
+    count_wontdo = sum(1 for t in by_column["wontdo"] if t.id not in parented_ids)
+    count_review = sum(1 for t in by_column["review"] if t.id not in parented_ids)
+    count_done = sum(1 for t in by_column["done"] if t.id not in parented_ids)
+    count_icebox = sum(1 for t in by_column["icebox"] if t.id not in parented_ids)
+    count_bugs = sum(1 for t in by_column["bugs"] if t.id not in parented_ids)
     count_total = count_backlog + count_wip + count_review + count_ideas + count_done
+
+    # Cross-cutting filter counts (across all columns, excluding children)
+    all_visible = [t for col in by_column.values() for t in col if t.id not in parented_ids]
+    count_status_proposed = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "proposed")
+    count_status_inprogress = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "in-progress")
+    count_status_forreview = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "for-review")
+    count_type_bug = sum(1 for t in all_visible if t.column == "bugs" or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed"))
+    count_size_s = sum(1 for t in all_visible if t.complexity == "S")
+    count_size_m = sum(1 for t in all_visible if t.complexity == "M")
+    count_size_l = sum(1 for t in all_visible if t.complexity == "L")
 
     # Progress: done items / (done + remaining)
     total_all = count_total + count_wontdo + count_icebox
@@ -673,6 +711,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 .filter-btn:hover {{ border-color: var(--border-strong); color: var(--text-primary); }}
 .filter-btn.active {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
 .filter-btn .count {{ font-size: 10px; opacity: 0.7; margin-left: 3px; font-family: var(--font-mono); }}
+.filter-group {{ display: inline-flex; gap: 4px; align-items: center; }}
+.filter-divider {{ width: 1px; height: 18px; background: var(--border-default); margin: 0 4px; opacity: 0.5; }}
 .search-input {{
   margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 6px;
   border: 1px solid var(--border-default); background: var(--bg-card); color: var(--text-primary);
@@ -797,28 +837,26 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-weight: 600; display: inline-block; margin-top: 2px;
 }}
 .card.blocked {{ opacity: 0.7; border-left: 3px solid #fb923c; }}
-.card-linked-children {{ margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle); display: none; gap: 2px; flex-direction: column; }}
-.card.expanded .card-linked-children {{ display: flex; }}
-.linked-children-label {{
-  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
-  color: #818cf8; margin-bottom: 2px; padding-left: 2px;
+/* Child card groups — parent + indented children with connector */
+.child-group {{
+  display: flex; flex-direction: column; gap: 4px;
+  margin-left: 20px; padding-left: 12px;
+  border-left: 1px solid var(--border-default);
 }}
-.linked-children-label.has-bugs {{
-  color: var(--priority-high);
+.child-group .card {{ margin-left: 0; position: relative; }}
+.child-group .card::before {{
+  content: ''; position: absolute; left: -13px; top: 12px;
+  width: 8px; border-top: 1px solid var(--border-default);
 }}
-.linked-child-card {{
-  display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-secondary);
-  padding: 5px 8px; border-radius: 4px; cursor: default; user-select: none;
-  border: 1px solid rgba(99,102,241,0.2); background: rgba(99,102,241,0.04); position: relative;
+.child-group.collapsed {{ display: none; }}
+/* Parent toggle */
+.children-toggle {{
+  font-size: 9px; color: var(--text-tertiary); cursor: pointer; margin-left: auto;
+  padding: 1px 5px; border-radius: 3px; user-select: none;
 }}
-.linked-child-card:hover {{ background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.35); }}
-.linked-child-card.is-bug {{
-  border: 1px solid rgba(239,68,68,0.2); background: rgba(239,68,68,0.04);
-}}
-.linked-child-card.is-bug:hover {{ background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.35); }}
-.linked-child-card .priority-dot {{ width: 5px; height: 5px; margin-top: 0; }}
-.linked-child-card .card-id {{ font-size: 9px; }}
-.linked-child-title {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }}
+.children-toggle:hover {{ color: var(--accent); background: rgba(59,130,246,0.08); }}
+.children-toggle .arrow {{ display: inline-block; transition: transform 0.15s; }}
+.children-toggle.collapsed .arrow {{ transform: rotate(-90deg); }}
 
 /* Bug section below kanban */
 /* Collapsible bottom sections (Done, Won't Do, Bugs) */
@@ -875,6 +913,234 @@ a {{ color: var(--accent); text-decoration: none; }}
 .edit-enabled .criterion {{ cursor: pointer; }}
 .edit-enabled .priority-dot:hover {{ transform: scale(1.5); transition: transform 0.15s; }}
 .edit-enabled .status-badge:hover {{ filter: brightness(1.3); transition: filter 0.15s; }}
+
+/* Drag-drop (edit mode) */
+.edit-enabled .card {{ cursor: grab; }}
+.edit-enabled .card:active {{ cursor: grabbing; }}
+.card.dragging {{ opacity: 0.4; }}
+.card.drag-target {{ border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent), 0 0 8px rgba(59,130,246,0.2); }}
+.column-body.drag-over {{ background: rgba(59,130,246,0.06); border: 1px dashed var(--accent); border-radius: 6px; min-height: 40px; }}
+.bottom-section-body.drag-over {{ background: rgba(59,130,246,0.06); }}
+
+/* Workflow action buttons (edit mode) */
+.card-actions {{ display: none; gap: 4px; margin-top: 6px; }}
+.edit-enabled .card.expanded .card-actions {{ display: flex; }}
+.action-btn {{
+  font-size: 9px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border-default);
+  background: var(--bg-page); color: var(--text-secondary); cursor: pointer; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.3px;
+}}
+.action-btn:hover {{ background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }}
+.action-btn.primary {{ background: rgba(59,130,246,0.12); color: var(--accent); border-color: var(--accent); }}
+.action-btn.primary:hover {{ background: rgba(59,130,246,0.2); }}
+.action-btn.danger {{ color: var(--priority-high); border-color: var(--priority-high); }}
+.action-btn.danger:hover {{ background: rgba(239,68,68,0.1); }}
+
+/* Gate-check: card pulsing state */
+@keyframes gatePulse {{
+  0%, 100% {{ box-shadow: 0 0 0 0 rgba(59,130,246,0.3); }}
+  50% {{ box-shadow: 0 0 0 6px rgba(59,130,246,0); }}
+}}
+.card.gate-checking {{
+  animation: gatePulse 1.5s ease-in-out infinite;
+  border-color: var(--accent);
+}}
+.card.gate-checking .card-actions {{ display: none !important; }}
+
+/* Gate-check panel */
+.gate-panel {{
+  margin-top: 8px; padding: 10px; border-radius: 6px;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  animation: panelSlide 0.2s ease-out; font-size: 11px;
+}}
+.gate-verdict {{
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border-default);
+}}
+.gate-verdict-badge {{
+  font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 10px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}}
+.gate-verdict-badge.ready {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.gate-verdict-badge.needs-work {{ background: rgba(234,179,8,0.15); color: #eab308; }}
+.gate-verdict-badge.blocked {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+.gate-verdict-summary {{ color: var(--text-secondary); font-size: 11px; }}
+
+/* Gate category rows */
+.gate-category {{
+  padding: 6px 8px; margin: 4px 0; border-radius: 4px;
+  border-left: 3px solid var(--border-default);
+  background: var(--bg-card);
+}}
+.gate-category.ok {{ border-left-color: #22c55e; }}
+.gate-category.needs-work {{ border-left-color: #eab308; }}
+.gate-cat-header {{
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 4px;
+}}
+.gate-cat-label {{
+  font-weight: 700; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.3px; color: var(--text-secondary);
+}}
+.gate-cat-status {{
+  font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 8px;
+}}
+.gate-cat-status.ok {{ background: rgba(34,197,94,0.12); color: #22c55e; }}
+.gate-cat-status.needs-work {{ background: rgba(234,179,8,0.12); color: #eab308; }}
+.gate-cat-summary {{ color: var(--text-secondary); margin-bottom: 3px; }}
+.gate-cat-suggestion {{
+  color: var(--accent); font-style: italic; margin-bottom: 4px;
+  padding: 3px 6px; background: rgba(59,130,246,0.06); border-radius: 3px;
+}}
+.gate-cat-edit {{
+  width: 100%; min-height: 28px; font-size: 11px; padding: 4px 6px;
+  border-radius: 4px; border: 1px solid var(--border-default);
+  background: var(--bg-page); color: var(--text-primary);
+  font-family: var(--font-sans); resize: vertical; outline: none;
+}}
+.gate-cat-edit:focus {{ border-color: var(--accent); }}
+.gate-save-btn {{
+  font-size: 9px; padding: 2px 8px; border-radius: 4px;
+  border: 1px solid var(--border-default); background: var(--bg-page);
+  color: var(--text-secondary); cursor: pointer; font-weight: 600; margin-top: 3px;
+}}
+.gate-save-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+.gate-save-btn.saved {{ color: #22c55e; border-color: #22c55e; pointer-events: none; }}
+
+/* Gate panel footer */
+.gate-footer {{
+  display: flex; gap: 6px; margin-top: 8px; padding-top: 6px;
+  border-top: 1px solid var(--border-default);
+}}
+.gate-confirm-btn {{
+  font-size: 10px; padding: 4px 14px; border-radius: 4px; border: none;
+  background: var(--accent); color: #fff; cursor: pointer; font-weight: 600;
+  font-family: var(--font-sans);
+}}
+.gate-confirm-btn:hover {{ background: #2563eb; }}
+.gate-cancel-btn {{
+  font-size: 10px; padding: 4px 14px; border-radius: 4px;
+  border: 1px solid var(--border-default); background: none;
+  color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans);
+}}
+.gate-cancel-btn:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
+
+/* New ticket button + panel (edit mode) */
+.new-ticket-btn {{
+  display: none; font-size: 11px; padding: 4px 12px; border-radius: 6px;
+  border: 1px solid var(--accent); background: rgba(59,130,246,0.12);
+  color: var(--accent); cursor: pointer; font-weight: 600; font-family: var(--font-sans);
+  transition: all 0.15s; margin-left: 6px;
+}}
+.new-ticket-btn:hover {{ background: rgba(59,130,246,0.25); }}
+.edit-enabled .new-ticket-btn {{ display: inline-block; }}
+.new-ticket-panel {{
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 99;
+  background: var(--bg-surface); border-bottom: 1px solid var(--border-default);
+  padding: 10px 20px 12px; animation: panelSlide 0.15s ease-out;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+}}
+@keyframes panelSlide {{ from {{ opacity: 0; transform: translateY(-6px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+.new-ticket-quick {{
+  display: flex; align-items: center; gap: 8px;
+}}
+.new-ticket-input {{
+  flex: 1; font-size: 13px; padding: 6px 12px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: var(--font-sans); outline: none;
+  min-width: 0;
+}}
+.new-ticket-input::placeholder {{ color: var(--text-tertiary); }}
+.new-ticket-input:focus {{ border-color: var(--accent); }}
+.new-ticket-select {{
+  font-size: 11px; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-secondary); font-family: var(--font-sans); outline: none;
+  cursor: pointer;
+}}
+.new-ticket-select:focus {{ border-color: var(--accent); }}
+.new-ticket-submit {{
+  font-size: 11px; padding: 6px 16px; border-radius: 6px; border: none;
+  background: var(--accent); color: #fff; cursor: pointer; font-weight: 600;
+  font-family: var(--font-sans); transition: background 0.15s; white-space: nowrap;
+}}
+.new-ticket-submit:hover {{ background: #2563eb; }}
+.new-ticket-submit:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+.new-ticket-expand-btn {{
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 8px;
+  font-size: 10px; padding: 2px 0; border: none; background: none;
+  color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans);
+  transition: color 0.15s;
+}}
+.new-ticket-expand-btn:hover {{ color: var(--text-secondary); }}
+.new-ticket-expand-btn .arrow {{ display: inline-block; transition: transform 0.15s; font-size: 8px; }}
+.new-ticket-expand-btn.expanded .arrow {{ transform: rotate(90deg); }}
+.new-ticket-full {{
+  margin-top: 10px; padding: 20px; border-radius: 8px;
+  background: var(--bg-card); border: 1px solid var(--border-default);
+}}
+.coming-soon {{
+  color: var(--text-tertiary); font-size: 13px; text-align: center;
+  padding: 24px 0; font-style: italic;
+}}
+
+/* Inline editing (edit mode) */
+.edit-enabled .card-title {{ cursor: text; }}
+.edit-enabled .card-desc {{ cursor: text; }}
+.card-title[contenteditable="true"] {{ outline: 1px solid var(--accent); border-radius: 2px; padding: 1px 3px; background: var(--bg-page); }}
+.card-desc[contenteditable="true"] {{ outline: 1px solid var(--accent); border-radius: 2px; padding: 2px 4px; background: var(--bg-page); min-height: 2em; }}
+
+/* Readiness indicator dots */
+.readiness-row {{ display: flex; gap: 3px; margin: 3px 0; }}
+.readiness-dot {{
+  width: 16px; height: 16px; border-radius: 50%; font-size: 8px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); line-height: 1; cursor: default;
+}}
+.readiness-dot.filled {{
+  background: rgba(34,197,94,0.15); color: var(--status-done); border: 1px solid rgba(34,197,94,0.3);
+}}
+.readiness-dot.empty {{
+  background: transparent; color: var(--text-tertiary); border: 1px solid var(--border-subtle);
+  opacity: 0.5;
+}}
+.edit-enabled .readiness-dot {{ cursor: pointer; }}
+.edit-enabled .readiness-dot:hover {{ opacity: 1; border-color: var(--accent); }}
+
+/* Detail overlay */
+.detail-overlay {{ position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }}
+.detail-overlay.hidden {{ display: none; }}
+.detail-backdrop {{ position: absolute; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }}
+.detail-panel {{ position: relative; width: 90vw; max-width: 820px; max-height: 88vh; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,0.5); }}
+.detail-header {{ display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--border-subtle); }}
+.detail-header .detail-id {{ font-family: var(--font-mono); font-size: 13px; color: var(--accent); font-weight: 700; }}
+.detail-header .detail-title {{ font-size: 15px; font-weight: 600; color: var(--text-primary); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.detail-close {{ background: none; border: none; color: var(--text-tertiary); font-size: 22px; cursor: pointer; padding: 0 4px; line-height: 1; }}
+.detail-close:hover {{ color: var(--text-primary); }}
+.detail-tabs {{ display: flex; gap: 4px; padding: 10px 20px; border-bottom: 1px solid var(--border-subtle); }}
+.detail-tab {{ width: 36px; height: 28px; border-radius: 6px; font-size: 12px; font-weight: 700; font-family: var(--font-mono); display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); transition: all 0.15s; }}
+.detail-tab.active {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
+.detail-tab.filled {{ color: var(--status-done); border-color: rgba(34,197,94,0.3); }}
+.detail-tab.active.filled {{ background: var(--accent); color: #fff; }}
+.detail-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
+.detail-section {{ display: none; }}
+.detail-section.active {{ display: block; }}
+.detail-section-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }}
+.detail-section-header h3 {{ margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }}
+.detail-clipboard-btns {{ display: flex; gap: 6px; }}
+.detail-clip-btn {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-family: var(--font-mono); transition: all 0.15s; }}
+.detail-clip-btn:hover {{ border-color: var(--accent); color: var(--text-primary); }}
+.detail-editor {{ width: 100%; min-height: 180px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 6px; padding: 12px; font-family: var(--font-mono); font-size: 13px; resize: vertical; line-height: 1.5; box-sizing: border-box; }}
+.detail-editor:focus {{ outline: none; border-color: var(--accent); }}
+.detail-criteria-list {{ list-style: none; padding: 0; margin: 0 0 10px 0; }}
+.detail-criteria-item {{ display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--text-secondary); }}
+.detail-criteria-item input[type="checkbox"] {{ margin-top: 3px; }}
+.detail-save-row {{ display: flex; justify-content: flex-end; margin-top: 10px; gap: 8px; }}
+.detail-save-btn {{ font-size: 12px; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; font-weight: 600; }}
+.detail-save-btn:hover {{ opacity: 0.9; }}
+.detail-toast {{ position: absolute; top: 14px; right: 60px; font-size: 11px; font-weight: 600; color: var(--status-done); background: var(--status-done-bg); padding: 3px 10px; border-radius: 4px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }}
+.detail-toast.show {{ opacity: 1; }}
+
 .status-dropdown-opt:hover {{ background: var(--bg-hover); }}
 .list-row-detail {{ display: none; padding: 6px 8px 4px 22px; }}
 .list-row.expanded .list-row-detail {{ display: block; }}
@@ -959,12 +1225,41 @@ a {{ color: var(--accent); text-decoration: none; }}
 </div>
 
 <div class="filter-bar" id="filterBar">
-  <button class="filter-btn active" data-filter="all">All <span class="count">{count_total}</span></button>
-  <button class="filter-btn" data-filter="backlog">Backlog <span class="count">{count_backlog}</span></button>
-  <button class="filter-btn" data-filter="wip">WIP <span class="count">{count_wip}</span></button>
-  <button class="filter-btn" data-filter="review">Review <span class="count">{count_review}</span></button>
-  <button class="filter-btn" data-filter="ideas">Ideas <span class="count">{count_ideas}</span></button>
+  <button class="filter-btn active" data-filter="all" data-group="all">All <span class="count">{count_total}</span></button>
+  <span class="filter-divider"></span>
+  <span class="filter-group" data-group-name="status">
+    <button class="filter-btn" data-filter="proposed" data-group="status">Proposed <span class="count">{count_status_proposed}</span></button>
+    <button class="filter-btn" data-filter="in-progress" data-group="status">In Progress <span class="count">{count_status_inprogress}</span></button>
+    <button class="filter-btn" data-filter="for-review" data-group="status">For Review <span class="count">{count_status_forreview}</span></button>
+  </span>
+  <span class="filter-divider"></span>
+  <span class="filter-group" data-group-name="type">
+    <button class="filter-btn" data-filter="bug" data-group="type">Bug <span class="count">{count_type_bug}</span></button>
+  </span>
+  <span class="filter-divider"></span>
+  <span class="filter-group" data-group-name="size">
+    <button class="filter-btn" data-filter="S" data-group="size">S <span class="count">{count_size_s}</span></button>
+    <button class="filter-btn" data-filter="M" data-group="size">M <span class="count">{count_size_m}</span></button>
+    <button class="filter-btn" data-filter="L" data-group="size">L <span class="count">{count_size_l}</span></button>
+  </span>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
+  <button class="new-ticket-btn" id="newTicketBtn">+ New</button>
+  <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
+    <div class="new-ticket-quick">
+      <input type="text" id="newTicketTitle" placeholder="What needs to be done?" class="new-ticket-input" />
+      <select id="newTicketSection" class="new-ticket-select">
+        <option value="ideas">Idea</option>
+        <option value="backlog">Backlog</option>
+        <option value="wip">WIP</option>
+        <option value="bugs">Bug</option>
+      </select>
+      <button id="newTicketSubmit" class="new-ticket-submit">Create</button>
+    </div>
+    <button class="new-ticket-expand-btn" id="newTicketExpandBtn"><span class="arrow">&#9654;</span> Full ticket form</button>
+    <div class="new-ticket-full" id="newTicketFull" style="display:none">
+      <div class="coming-soon">Coming soon</div>
+    </div>
+  </div>
 </div>
 
 <div class="kanban" id="kanban">
@@ -1092,41 +1387,69 @@ a {{ color: var(--accent); text-decoration: none; }}
     document.getElementById('filterBar').scrollIntoView({{ behavior: 'smooth' }});
   }}, 100);
 
-  // Filter buttons
+  // Multi-select filter buttons
   var filterBtns = document.querySelectorAll('.filter-btn');
-  var columns = document.querySelectorAll('.column');
+  var allBtn = document.querySelector('.filter-btn[data-filter="all"]');
+  var searchInput = document.getElementById('searchInput');
+
+  function applyFilters() {{
+    var activeByGroup = {{}};
+    filterBtns.forEach(function(btn) {{
+      if (btn.classList.contains('active') && btn.dataset.group !== 'all') {{
+        var g = btn.dataset.group;
+        if (!activeByGroup[g]) activeByGroup[g] = [];
+        activeByGroup[g].push(btn.dataset.filter);
+      }}
+    }});
+    var groups = Object.keys(activeByGroup);
+    var noFilters = groups.length === 0;
+    if (noFilters) {{ allBtn.classList.add('active'); }} else {{ allBtn.classList.remove('active'); }}
+
+    var allCards = document.querySelectorAll('.card');
+    allCards.forEach(function(card) {{
+      if (noFilters) {{ card.style.display = ''; }}
+      else {{
+        var show = true;
+        groups.forEach(function(g) {{
+          var vals = activeByGroup[g];
+          var match = false;
+          if (g === 'status') {{ match = vals.indexOf(card.dataset.status) !== -1; }}
+          else if (g === 'type') {{ match = card.dataset.isBug === 'true'; }}
+          else if (g === 'size') {{ match = vals.indexOf(card.dataset.complexity) !== -1; }}
+          if (!match) show = false;
+        }});
+        card.style.display = show ? '' : 'none';
+      }}
+    }});
+    // Compose search on top of filters
+    var q = (searchInput.value || '').toLowerCase().trim();
+    if (q) {{
+      allCards.forEach(function(card) {{
+        if (card.style.display === 'none') return;
+        var title = (card.dataset.title || '').toLowerCase();
+        var id = (card.dataset.itemId || '').toLowerCase();
+        var desc = (card.dataset.desc || '').toLowerCase();
+        if (title.indexOf(q) === -1 && id.indexOf(q) === -1 && desc.indexOf(q) === -1) {{
+          card.style.display = 'none';
+        }}
+      }});
+    }}
+  }}
 
   filterBtns.forEach(function(btn) {{
     btn.addEventListener('click', function() {{
-      filterBtns.forEach(function(b) {{ b.classList.remove('active'); }});
-      btn.classList.add('active');
-      var filter = btn.dataset.filter;
-      columns.forEach(function(col) {{
-        if (filter === 'all') {{
-          col.classList.remove('hidden');
-        }} else {{
-          col.classList.toggle('hidden', col.dataset.col !== filter);
-        }}
-      }});
+      if (btn.dataset.group === 'all') {{
+        filterBtns.forEach(function(b) {{ b.classList.remove('active'); }});
+        allBtn.classList.add('active');
+      }} else {{
+        btn.classList.toggle('active');
+      }}
+      applyFilters();
     }});
   }});
 
   // Search
-  var searchInput = document.getElementById('searchInput');
-  searchInput.addEventListener('input', function() {{
-    var q = searchInput.value.toLowerCase().trim();
-    var allCards = document.querySelectorAll('.card');
-    allCards.forEach(function(card) {{
-      if (!q) {{
-        card.style.display = '';
-        return;
-      }}
-      var title = (card.dataset.title || '').toLowerCase();
-      var id = (card.dataset.itemId || '').toLowerCase();
-      var desc = (card.dataset.desc || '').toLowerCase();
-      card.style.display = (title.indexOf(q) !== -1 || id.indexOf(q) !== -1 || desc.indexOf(q) !== -1) ? '' : 'none';
-    }});
-  }});
+  searchInput.addEventListener('input', function() {{ applyFilters(); }});
 
   // Column/section header double-click — copy prompt to clipboard
   document.querySelectorAll('.column-header[data-prompt], .bottom-section-header[data-prompt]').forEach(function(header) {{
@@ -1197,30 +1520,16 @@ a {{ color: var(--accent); text-decoration: none; }}
     }});
   }});
 
-  // Linked child cards — double click copies context-aware prompt, click does nothing (prevent parent toggle)
-  document.querySelectorAll('.linked-child-card').forEach(function(el) {{
-    el._bound = true;
-    el.addEventListener('click', function(e) {{
+  // Children toggle — collapse/expand child groups
+  document.querySelectorAll('.children-toggle').forEach(function(toggle) {{
+    toggle.addEventListener('click', function(e) {{
       e.stopPropagation();
-    }});
-    el.addEventListener('dblclick', function(e) {{
-      e.stopPropagation();
-      var id = this.dataset.itemId;
-      var title = this.dataset.title;
-      var col = this.dataset.column;
-      var text;
-      if (col === 'bugs' || this.classList.contains('is-bug')) {{
-        text = 'We need to come up with a plan to fix this bug ' + id + ': ' + title;
-      }} else {{
-        text = 'I want to work on ' + id + ': ' + title;
+      var parentId = this.dataset.parent;
+      var group = document.querySelector('.child-group[data-parent="' + parentId + '"]');
+      if (group) {{
+        group.classList.toggle('collapsed');
+        this.classList.toggle('collapsed');
       }}
-      navigator.clipboard.writeText(text).then(function() {{
-        var toast = el.querySelector('.copied-toast');
-        if (toast) {{
-          toast.classList.add('show');
-          setTimeout(function() {{ toast.classList.remove('show'); }}, 1200);
-        }}
-      }});
     }});
   }});
 
@@ -1346,8 +1655,10 @@ a {{ color: var(--accent); text-decoration: none; }}
 
         var scrollY = window.scrollY;
         var searchVal = document.getElementById('searchInput').value;
-        var activeBtn = document.querySelector('.filter-btn.active');
-        var activeFilter = activeBtn ? activeBtn.dataset.filter : 'all';
+        var activeFilters = [];
+        document.querySelectorAll('.filter-btn.active').forEach(function(b) {{
+          activeFilters.push(b.dataset.group + ':' + b.dataset.filter);
+        }});
         var expandedIds = [];
         document.querySelectorAll('.bottom-section.expanded').forEach(function(s) {{ expandedIds.push(s.id); }});
 
@@ -1357,7 +1668,13 @@ a {{ color: var(--accent); text-decoration: none; }}
         window.scrollTo(0, scrollY);
         document.getElementById('searchInput').value = searchVal;
         if (searchVal) document.getElementById('searchInput').dispatchEvent(new Event('input'));
-        if (activeFilter !== 'all') {{ var fb = document.querySelector('.filter-btn[data-filter="' + activeFilter + '"]'); if (fb) fb.click(); }}
+        filterBtns.forEach(function(b) {{ b.classList.remove('active'); }});
+        activeFilters.forEach(function(key) {{
+          var parts = key.split(':');
+          var btn = document.querySelector('.filter-btn[data-group="' + parts[0] + '"][data-filter="' + parts[1] + '"]');
+          if (btn) btn.classList.add('active');
+        }});
+        applyFilters();
         expandedIds.forEach(function(sid) {{ var sec = document.getElementById(sid); if (sec && !sec.classList.contains('expanded')) sec.classList.add('expanded'); }});
         rebindCardListeners();
         if (firstChanged) setTimeout(function() {{ firstChanged.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); }}, 100);
@@ -1386,19 +1703,18 @@ a {{ color: var(--accent); text-decoration: none; }}
           }});
         }});
       }});
-      document.querySelectorAll('.linked-child-card').forEach(function(el) {{
-        if (el._bound) return;
-        el._bound = true;
-        el.addEventListener('click', function(e) {{ e.stopPropagation(); }});
-        el.addEventListener('dblclick', function(e) {{
+      // Rebind children toggles
+      document.querySelectorAll('.children-toggle').forEach(function(toggle) {{
+        if (toggle._bound) return;
+        toggle._bound = true;
+        toggle.addEventListener('click', function(e) {{
           e.stopPropagation();
-          var id = this.dataset.itemId, title = this.dataset.title, col = this.dataset.column, text;
-          if (col === 'bugs' || this.classList.contains('is-bug')) text = 'We need to come up with a plan to fix this bug ' + id + ': ' + title;
-          else text = 'I want to work on ' + id + ': ' + title;
-          navigator.clipboard.writeText(text).then(function() {{
-            var toast = el.querySelector('.copied-toast');
-            if (toast) {{ toast.classList.add('show'); setTimeout(function() {{ toast.classList.remove('show'); }}, 1200); }}
-          }});
+          var parentId = this.dataset.parent;
+          var group = document.querySelector('.child-group[data-parent="' + parentId + '"]');
+          if (group) {{
+            group.classList.toggle('collapsed');
+            this.classList.toggle('collapsed');
+          }}
         }});
       }});
     }}
@@ -1425,6 +1741,226 @@ a {{ color: var(--accent); text-decoration: none; }}
         headers: {{ 'Content-Type': 'application/json' }},
         body: JSON.stringify({{ section: section }})
       }}).then(function(r) {{ return r.json(); }});
+    }}
+
+    var GATED_SECTIONS = {{ 'Ideas': 1, 'Backlog': 1, 'WIP': 1, 'For Review': 1, 'Done': 1 }};
+
+    function apiGateCheck(ticketId, section) {{
+      if (!EDIT_API) return Promise.reject('No API');
+      return fetch(EDIT_API + '/tickets/' + ticketId + '/gate-check', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ section: section }})
+      }}).then(function(r) {{ return r.json(); }});
+    }}
+
+    function setCardGateChecking(card, checking) {{
+      if (checking) {{
+        card.classList.add('gate-checking', 'expanded');
+      }} else {{
+        card.classList.remove('gate-checking');
+      }}
+    }}
+
+    function removeGatePanel(card) {{
+      var panel = card.querySelector('.gate-panel');
+      if (panel) panel.remove();
+      card.classList.remove('gate-checking');
+    }}
+
+    function startGateCheck(ticketId, targetSection) {{
+      var card = document.querySelector('[data-item-id="' + ticketId + '"]');
+      if (!card) return;
+      removeGatePanel(card);
+      setCardGateChecking(card, true);
+      apiGateCheck(ticketId, targetSection).then(function(data) {{
+        setCardGateChecking(card, false);
+        renderGatePanel(card, data, ticketId, targetSection);
+      }}).catch(function(err) {{
+        setCardGateChecking(card, false);
+        showToast(card, 'Gate check failed');
+      }});
+    }}
+
+    function renderGatePanel(card, data, ticketId, targetSection) {{
+      removeGatePanel(card);
+      card.classList.add('expanded');
+      var panel = document.createElement('div');
+      panel.className = 'gate-panel';
+
+      // Verdict header — safe DOM construction
+      var verdict = data.verdict || 'needs-work';
+      var verdictDiv = document.createElement('div');
+      verdictDiv.className = 'gate-verdict';
+      var badge = document.createElement('span');
+      badge.className = 'gate-verdict-badge ' + verdict;
+      badge.textContent = verdict.replace(/-/g, ' ');
+      var summarySpan = document.createElement('span');
+      summarySpan.className = 'gate-verdict-summary';
+      summarySpan.textContent = data.summary || '';
+      verdictDiv.appendChild(badge);
+      verdictDiv.appendChild(summarySpan);
+      panel.appendChild(verdictDiv);
+
+      // Category rows
+      var catOrder = ['D', 'C', 'T', 'R', 'S'];
+      var catLabels = {{ D: 'Description', C: 'Criteria', T: 'Tests', R: 'Reviewed', S: 'Smoke Tested' }};
+      var cats = data.categories || {{}};
+
+      catOrder.forEach(function(key) {{
+        var cat = cats[key] || {{}};
+        var status = cat.status || 'ok';
+        var row = document.createElement('div');
+        row.className = 'gate-category ' + status;
+        row.dataset.cat = key;
+
+        // Header
+        var header = document.createElement('div');
+        header.className = 'gate-cat-header';
+        var label = document.createElement('span');
+        label.className = 'gate-cat-label';
+        label.textContent = key + ' \\u2014 ' + catLabels[key];
+        var statusEl = document.createElement('span');
+        statusEl.className = 'gate-cat-status ' + status;
+        statusEl.textContent = status.replace(/-/g, ' ');
+        header.appendChild(label);
+        header.appendChild(statusEl);
+        row.appendChild(header);
+
+        // Summary
+        var summaryDiv = document.createElement('div');
+        summaryDiv.className = 'gate-cat-summary';
+        summaryDiv.textContent = cat.current_summary || '';
+        row.appendChild(summaryDiv);
+
+        // Suggestion
+        if (cat.suggestion) {{
+          var sugDiv = document.createElement('div');
+          sugDiv.className = 'gate-cat-suggestion';
+          sugDiv.textContent = cat.suggestion;
+          row.appendChild(sugDiv);
+        }}
+
+        // Editable field for Description
+        if (key === 'D') {{
+          var ta = document.createElement('textarea');
+          ta.className = 'gate-cat-edit';
+          ta.dataset.field = 'description';
+          ta.placeholder = 'Edit description...';
+          ta.value = card.dataset.desc || '';
+          row.appendChild(ta);
+        }}
+
+        // Suggested new criteria for C
+        if (key === 'C') {{
+          var addCriteria = cat.add_criteria || [];
+          if (addCriteria.length > 0) {{
+            var hint = document.createElement('div');
+            hint.style.cssText = 'margin-top:3px;font-size:10px;color:var(--text-tertiary)';
+            hint.textContent = 'Suggested additions:';
+            row.appendChild(hint);
+            addCriteria.forEach(function(c, i) {{
+              var cta = document.createElement('textarea');
+              cta.className = 'gate-cat-edit';
+              cta.dataset.field = 'add_criteria';
+              cta.dataset.index = String(i);
+              cta.style.cssText = 'min-height:22px;margin-top:2px';
+              cta.value = c;
+              row.appendChild(cta);
+            }});
+          }}
+        }}
+
+        // Save button for D and C
+        if (key === 'D' || (key === 'C' && (cat.add_criteria || []).length > 0)) {{
+          var saveBtn = document.createElement('button');
+          saveBtn.className = 'gate-save-btn';
+          saveBtn.dataset.cat = key;
+          saveBtn.textContent = 'Save ' + catLabels[key];
+          row.appendChild(saveBtn);
+        }}
+
+        panel.appendChild(row);
+      }});
+
+      // Footer
+      var footer = document.createElement('div');
+      footer.className = 'gate-footer';
+      var confirmBtn = document.createElement('button');
+      confirmBtn.className = 'gate-confirm-btn';
+      confirmBtn.textContent = 'Confirm Move \\u2192 ' + targetSection;
+      var cancelBtn = document.createElement('button');
+      cancelBtn.className = 'gate-cancel-btn';
+      cancelBtn.textContent = 'Cancel';
+      footer.appendChild(confirmBtn);
+      footer.appendChild(cancelBtn);
+      panel.appendChild(footer);
+
+      // Wire up per-section Save buttons
+      panel.querySelectorAll('.gate-save-btn').forEach(function(btn) {{
+        btn.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          var catKey = btn.dataset.cat;
+          var catRow = btn.closest('.gate-category');
+
+          if (catKey === 'D') {{
+            var textarea = catRow.querySelector('textarea[data-field="description"]');
+            if (textarea) {{
+              apiPut(ticketId, {{ description: textarea.value }}).then(function() {{
+                btn.textContent = 'Saved \\u2714';
+                btn.classList.add('saved');
+              }});
+            }}
+          }} else if (catKey === 'C') {{
+            var fields = catRow.querySelectorAll('textarea[data-field="add_criteria"]');
+            var promises = [];
+            fields.forEach(function(f) {{
+              var text = f.value.trim();
+              if (text) {{
+                promises.push(apiPut(ticketId, {{ add_criteria: text }}));
+              }}
+            }});
+            Promise.all(promises).then(function() {{
+              btn.textContent = 'Saved \\u2714';
+              btn.classList.add('saved');
+            }});
+          }}
+        }});
+      }});
+
+      // Wire up Confirm Move
+      confirmBtn.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        if (targetSection === 'Done') {{
+          fetch(EDIT_API + '/tickets/' + ticketId + '/accept', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: '{{}}'
+          }}).then(function(r) {{ return r.json(); }}).then(function() {{
+            removeGatePanel(card);
+            showToast(card, 'Accepted!');
+          }});
+        }} else {{
+          apiMove(ticketId, targetSection).then(function() {{
+            removeGatePanel(card);
+            showToast(card, 'Moved!');
+          }});
+        }}
+      }});
+
+      // Wire up Cancel
+      cancelBtn.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        removeGatePanel(card);
+      }});
+
+      // Insert panel into card (before action buttons if present)
+      var actions = card.querySelector('.card-actions');
+      if (actions) {{
+        card.insertBefore(panel, actions);
+      }} else {{
+        card.appendChild(panel);
+      }}
     }}
 
     function showToast(el, text) {{
@@ -1462,8 +1998,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (!badge) return;
         var card = badge.closest('.card');
         if (!card || !card.dataset.itemId) return;
-        // Don't trigger on status badges inside child cards
-        if (e.target.closest('.linked-child-card')) return;
+        // (child cards are now full cards — no special handling needed)
         e.stopPropagation();
         e.preventDefault();
         clearTimeout(card._clickTimer);
@@ -1532,8 +2067,458 @@ a {{ color: var(--accent); text-decoration: none; }}
           showToast(card, isChecked ? 'unchecked' : 'checked');
         }});
       }}, true);
+
+      // --- Drag-to-move ---
+      var dragId = null;
+      document.addEventListener('dragstart', function(e) {{
+        var card = e.target.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        dragId = card.dataset.itemId;
+        card.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', dragId);
+      }});
+      document.addEventListener('dragend', function(e) {{
+        var card = e.target.closest('.card');
+        if (card) card.classList.remove('dragging');
+        document.querySelectorAll('.drag-over').forEach(function(el) {{ el.classList.remove('drag-over'); }});
+        dragId = null;
+      }});
+      document.querySelectorAll('.column-body, .bottom-section-body').forEach(function(zone) {{
+        zone.addEventListener('dragover', function(e) {{
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          zone.classList.add('drag-over');
+        }});
+        zone.addEventListener('dragleave', function(e) {{
+          if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-over');
+        }});
+        zone.addEventListener('drop', function(e) {{
+          e.preventDefault();
+          zone.classList.remove('drag-over');
+          var id = e.dataTransfer.getData('text/plain');
+          if (!id) return;
+          // Determine target section from parent element
+          var parent = zone.parentElement;
+          var section = null;
+          if (parent && parent.dataset && parent.dataset.col) {{
+            // Kanban column
+            var colMap = {{ ideas: 'Ideas', backlog: 'Backlog', wip: 'WIP', review: 'For Review' }};
+            section = colMap[parent.dataset.col];
+          }} else if (parent && parent.id) {{
+            // Bottom section
+            var secMap = {{ bugSection: 'Bugs', iceboxSection: 'Icebox', doneSection: 'Done', wontdoSection: "Won't Do" }};
+            section = secMap[parent.id];
+          }}
+          if (section) {{
+            if (GATED_SECTIONS[section]) {{
+              startGateCheck(id, section);
+            }} else {{
+              apiMove(id, section).then(function() {{
+                showToast(document.querySelector('[data-item-id="' + id + '"]'), 'Moved!');
+              }});
+            }}
+          }}
+        }});
+      }});
+      // Make cards draggable
+      document.querySelectorAll('.card').forEach(function(c) {{ c.setAttribute('draggable', 'true'); }});
+
+      // --- Card-on-card drop (set parent) ---
+      document.addEventListener('dragover', function(e) {{
+        if (!dragId) return;
+        var card = e.target.closest('.card');
+        if (!card || !card.dataset.itemId || card.dataset.itemId === dragId) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'link';
+        card.classList.add('drag-target');
+      }}, true);
+      document.addEventListener('dragleave', function(e) {{
+        var card = e.target.closest('.card');
+        if (card) card.classList.remove('drag-target');
+      }});
+      document.addEventListener('drop', function(e) {{
+        var card = e.target.closest('.card');
+        if (!card || !card.dataset.itemId || !dragId) return;
+        var targetId = card.dataset.itemId;
+        var childId = dragId;
+        if (targetId === childId) return;
+        // Don't allow circular — check if target is already a child of dragged
+        var targetParent = card.closest('[data-item-id="' + childId + '"]');
+        if (targetParent) return;
+        e.preventDefault();
+        e.stopPropagation();
+        card.classList.remove('drag-target');
+        apiPut(childId, {{ parent: targetId }}).then(function() {{
+          showToast(card, childId + ' \u2192 child');
+        }});
+      }}, true);
+
+      // --- Inline text editing ---
+      document.addEventListener('dblclick', function(e) {{
+        var titleEl = e.target.closest('.card-title');
+        var descEl = e.target.closest('.card-desc');
+        var target = titleEl || descEl;
+        if (!target) return;
+        var card = target.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        // Only in expanded cards
+        if (!card.classList.contains('expanded')) return;
+        e.stopPropagation();
+        e.preventDefault();
+        clearTimeout(card._clickTimer);
+        // Prevent starting edit if already editing
+        if (target.contentEditable === 'true') return;
+        card.dataset.editing = 'true';
+        target.contentEditable = 'true';
+        target.focus();
+        // Select all text
+        var range = document.createRange();
+        range.selectNodeContents(target);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        // Save on blur
+        function save() {{
+          target.contentEditable = 'false';
+          card.dataset.editing = '';
+          var field = titleEl ? 'title' : 'description';
+          var value = target.textContent.trim();
+          if (field === 'title') card.dataset.title = value;
+          if (field === 'description') card.dataset.desc = value;
+          var body = {{}};
+          body[field] = value;
+          apiPut(card.dataset.itemId, body).then(function() {{
+            showToast(card, 'Saved');
+          }});
+          target.removeEventListener('blur', save);
+          target.removeEventListener('keydown', keyHandler);
+        }}
+        function keyHandler(ev) {{
+          if (ev.key === 'Enter' && !ev.shiftKey) {{ ev.preventDefault(); target.blur(); }}
+          if (ev.key === 'Escape') {{ target.textContent = titleEl ? card.dataset.title : card.dataset.desc; target.blur(); }}
+        }}
+        target.addEventListener('blur', save);
+        target.addEventListener('keydown', keyHandler);
+      }}, true);
+
+      // --- Readiness dot click → opens detail overlay (handled in overlay script below) ---
+
+      // --- Workflow action buttons ---
+      document.addEventListener('click', function(e) {{
+        var btn = e.target.closest('.action-btn');
+        if (!btn) return;
+        var card = btn.closest('.card');
+        if (!card || !card.dataset.itemId) return;
+        e.stopPropagation();
+        e.preventDefault();
+        clearTimeout(card._clickTimer);
+        var action = btn.dataset.action;
+        var id = card.dataset.itemId;
+        if (action === 'move') {{
+          var section = btn.dataset.section;
+          if (GATED_SECTIONS[section]) {{
+            startGateCheck(id, section);
+          }} else {{
+            apiMove(id, section).then(function() {{ showToast(card, 'Moved!'); }});
+          }}
+        }} else if (action === 'accept') {{
+          startGateCheck(id, 'Done');
+        }}
+      }}, true);
+
+      // --- New ticket panel ---
+      var newBtn = document.getElementById('newTicketBtn');
+      var newPanel = document.getElementById('newTicketPanel');
+      var newTitle = document.getElementById('newTicketTitle');
+      var newSection = document.getElementById('newTicketSection');
+      var newSubmit = document.getElementById('newTicketSubmit');
+      var expandBtn = document.getElementById('newTicketExpandBtn');
+      var fullPanel = document.getElementById('newTicketFull');
+
+      if (newBtn) {{
+        newBtn.addEventListener('click', function() {{
+          var open = newPanel.style.display !== 'none';
+          newPanel.style.display = open ? 'none' : 'block';
+          if (!open) setTimeout(function() {{ newTitle.focus(); }}, 50);
+        }});
+      }}
+
+      function submitNewTicket() {{
+        var title = newTitle.value.trim();
+        if (!title) return;
+        newSubmit.disabled = true;
+        fetch(EDIT_API + '/tickets', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ title: title, section: newSection.value }})
+        }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+          newTitle.value = '';
+          newSubmit.disabled = false;
+          newTitle.focus();
+        }}).catch(function() {{ newSubmit.disabled = false; }});
+      }}
+
+      if (newSubmit) newSubmit.addEventListener('click', submitNewTicket);
+      if (newTitle) newTitle.addEventListener('keydown', function(e) {{
+        if (e.key === 'Enter') {{ e.preventDefault(); submitNewTicket(); }}
+      }});
+
+      if (expandBtn) {{
+        expandBtn.addEventListener('click', function() {{
+          var open = fullPanel.style.display !== 'none';
+          fullPanel.style.display = open ? 'none' : 'block';
+          expandBtn.classList.toggle('expanded', !open);
+        }});
+      }}
     }}
   }})();
+}})();
+</script>
+
+<!-- Detail overlay for readiness flag editing -->
+<div id="ticket-detail-overlay" class="detail-overlay hidden">
+  <div class="detail-backdrop"></div>
+  <div class="detail-panel">
+    <div class="detail-header">
+      <span class="detail-id"></span>
+      <span class="detail-title"></span>
+      <span class="detail-toast"></span>
+      <button class="detail-close">&times;</button>
+    </div>
+    <div class="detail-tabs">
+      <button class="detail-tab" data-section="description">D</button>
+      <button class="detail-tab" data-section="criteria">C</button>
+      <button class="detail-tab" data-section="tests">T</button>
+      <button class="detail-tab" data-section="reviewed">R</button>
+      <button class="detail-tab" data-section="smoke">S</button>
+    </div>
+    <div class="detail-body">
+      <div class="detail-section" data-section="description">
+        <div class="detail-section-header"><h3>Description</h3>
+          <div class="detail-clipboard-btns">
+            <button class="detail-clip-btn" data-action="create" data-flag="description">Create New</button>
+            <button class="detail-clip-btn" data-action="review" data-flag="description">Review Existing</button>
+          </div>
+        </div>
+        <textarea class="detail-editor" data-field="description" placeholder="Ticket description..."></textarea>
+        <div class="detail-save-row"><button class="detail-save-btn" data-field="description">Save</button></div>
+      </div>
+      <div class="detail-section" data-section="criteria">
+        <div class="detail-section-header"><h3>Acceptance Criteria</h3>
+          <div class="detail-clipboard-btns">
+            <button class="detail-clip-btn" data-action="create" data-flag="criteria">Create New</button>
+            <button class="detail-clip-btn" data-action="review" data-flag="criteria">Review Existing</button>
+          </div>
+        </div>
+        <ul class="detail-criteria-list"></ul>
+        <textarea class="detail-editor" data-field="criteria" placeholder="Add new criteria (one per line)..." style="min-height:80px"></textarea>
+        <div class="detail-save-row"><button class="detail-save-btn" data-field="criteria">Add Criteria</button></div>
+      </div>
+      <div class="detail-section" data-section="tests">
+        <div class="detail-section-header"><h3>Tests</h3>
+          <div class="detail-clipboard-btns">
+            <button class="detail-clip-btn" data-action="create" data-flag="tests">Create New</button>
+            <button class="detail-clip-btn" data-action="review" data-flag="tests">Review Existing</button>
+          </div>
+        </div>
+        <textarea class="detail-editor" data-field="tests" placeholder="Test definitions, TDD plan, coverage notes..."></textarea>
+        <div class="detail-save-row"><button class="detail-save-btn" data-field="tests">Save</button></div>
+      </div>
+      <div class="detail-section" data-section="reviewed">
+        <div class="detail-section-header"><h3>Review</h3>
+          <div class="detail-clipboard-btns">
+            <button class="detail-clip-btn" data-action="create" data-flag="reviewed">Create New</button>
+            <button class="detail-clip-btn" data-action="review" data-flag="reviewed">Review Existing</button>
+          </div>
+        </div>
+        <textarea class="detail-editor" data-field="reviewed" placeholder="Review notes: decisions, bugs found, feature implications, /sync output..."></textarea>
+        <div class="detail-save-row"><button class="detail-save-btn" data-field="reviewed">Save</button></div>
+      </div>
+      <div class="detail-section" data-section="smoke">
+        <div class="detail-section-header"><h3>Smoke Tests</h3>
+          <div class="detail-clipboard-btns">
+            <button class="detail-clip-btn" data-action="create" data-flag="smoke">Create New</button>
+            <button class="detail-clip-btn" data-action="review" data-flag="smoke">Review Existing</button>
+          </div>
+        </div>
+        <textarea class="detail-editor" data-field="smoke" placeholder="Smoke test plan: manual verification steps, pass/fail results..."></textarea>
+        <div class="detail-save-row"><button class="detail-save-btn" data-field="smoke">Save</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var overlay = document.getElementById('ticket-detail-overlay');
+  if (!overlay) return;
+  var idEl = overlay.querySelector('.detail-id');
+  var titleEl = overlay.querySelector('.detail-title');
+  var toastEl = overlay.querySelector('.detail-toast');
+  var tabEls = overlay.querySelectorAll('.detail-tab');
+  var secEls = overlay.querySelectorAll('.detail-section');
+  var currentTicketId = null;
+  var currentData = null;
+
+  var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Review', smoke:'Smoke Tests' }};
+
+  var PROMPTS = {{
+    description: {{
+      create: function(t) {{ return 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.'; }},
+      review: function(t) {{ return 'Review the description for ' + t.id + ': "' + t.title + '". Check clarity, completeness, feasibility.\\n\\nDescription:\\n' + (t.description || '(empty)'); }}
+    }},
+    criteria: {{
+      create: function(t) {{ return 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then or checkbox format. Cover happy path, errors, edge cases.\\n\\nDescription:\\n' + (t.description || '(empty)'); }},
+      review: function(t) {{ return 'Review acceptance criteria for ' + t.id + ': "' + t.title + '". Check testability, completeness, clarity.\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }}
+    }},
+    tests: {{
+      create: function(t) {{ return 'Using TDD, write test definitions for ' + t.id + ': "' + t.title + '". Start with failing tests that define expected behavior.\\n\\nAcceptance criteria:\\n' + (t.criteria_text || '(none)'); }},
+      review: function(t) {{ var c = (t.readiness_flags && t.readiness_flags.tests) || ''; return 'Review test definitions for ' + t.id + ': "' + t.title + '". Check coverage gaps, edge cases, alignment with criteria.\\n\\nTests:\\n' + (c || '(empty)'); }}
+    }},
+    reviewed: {{
+      create: function(t) {{ return 'Perform a review for ' + t.id + ': "' + t.title + '". Capture: decisions made, bugs found, feature implications, architectural trade-offs. Run /sync to collect session context.\\n\\nDescription:\\n' + (t.description || '(empty)'); }},
+      review: function(t) {{ var c = (t.readiness_flags && t.readiness_flags.reviewed) || ''; return 'Review the review notes for ' + t.id + ': "' + t.title + '". Verify all items addressed, no regressions, approval criteria met.\\n\\nReview notes:\\n' + (c || '(empty)'); }}
+    }},
+    smoke: {{
+      create: function(t) {{ return 'Create a smoke test plan for ' + t.id + ': "' + t.title + '". Define manual verification steps: happy path, error cases, browser/device matrix.\\n\\nAcceptance criteria:\\n' + (t.criteria_text || '(none)'); }},
+      review: function(t) {{ var c = (t.readiness_flags && t.readiness_flags.smoke) || ''; return 'Review smoke test results for ' + t.id + ': "' + t.title + '". Verify all cases executed, pass/fail documented.\\n\\nSmoke test notes:\\n' + (c || '(empty)'); }}
+    }}
+  }};
+
+  function toast(msg) {{ toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(function() {{ toastEl.classList.remove('show'); }}, 1500); }}
+
+  function activateTab(name) {{
+    tabEls.forEach(function(t) {{ t.classList.toggle('active', t.dataset.section === name); }});
+    secEls.forEach(function(s) {{ s.classList.toggle('active', s.dataset.section === name); }});
+  }}
+
+  function refreshTabs() {{
+    if (!currentData) return;
+    var fl = currentData.readiness_flags || {{}};
+    tabEls.forEach(function(t) {{
+      var s = t.dataset.section;
+      var ok = s === 'description' ? !!(currentData.description) : s === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[s]);
+      t.classList.toggle('filled', ok);
+    }});
+  }}
+
+  function populate(data) {{
+    currentData = data;
+    idEl.textContent = data.id;
+    titleEl.textContent = data.title;
+    overlay.querySelector('[data-field="description"]').value = data.description || '';
+
+    var list = overlay.querySelector('.detail-criteria-list');
+    while (list.firstChild) list.removeChild(list.firstChild);
+    (data.acceptance_criteria || []).forEach(function(c, i) {{
+      var li = document.createElement('li'); li.className = 'detail-criteria-item';
+      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = c.checked;
+      cb.addEventListener('change', function() {{
+        fetch(EDIT_API + '/tickets/' + data.id, {{ method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{toggle_criterion:i}}) }})
+          .then(function(r){{return r.json();}}).then(function(u){{ if(u&&u.acceptance_criteria) currentData=u; }});
+      }});
+      var sp = document.createElement('span'); sp.textContent = c.text;
+      li.appendChild(cb); li.appendChild(sp); list.appendChild(li);
+    }});
+    var ce = overlay.querySelector('[data-field="criteria"]'); if(ce) ce.value='';
+
+    var fl = data.readiness_flags || {{}};
+    ['tests','reviewed','smoke'].forEach(function(f) {{
+      var ed = overlay.querySelector('[data-field="'+f+'"]');
+      if(ed) ed.value = fl[f] || '';
+    }});
+    refreshTabs();
+  }}
+
+  function openOverlay(tid, section) {{
+    currentTicketId = tid;
+    overlay.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    fetch(EDIT_API+'/tickets/'+tid).then(function(r){{return r.json();}}).then(function(d){{
+      populate(d); activateTab(section||'description');
+    }});
+  }}
+
+  function closeOverlay() {{
+    overlay.classList.add('hidden');
+    document.body.style.overflow = '';
+    currentTicketId = null; currentData = null;
+  }}
+
+  overlay.querySelector('.detail-backdrop').addEventListener('click', closeOverlay);
+  overlay.querySelector('.detail-close').addEventListener('click', closeOverlay);
+  document.addEventListener('keydown', function(e) {{ if(e.key==='Escape' && !overlay.classList.contains('hidden')) closeOverlay(); }});
+
+  tabEls.forEach(function(tab) {{ tab.addEventListener('click', function() {{ activateTab(tab.dataset.section); }}); }});
+
+  // Save buttons
+  overlay.querySelectorAll('.detail-save-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var field = btn.dataset.field;
+      var ed = overlay.querySelector('[data-field="'+field+'"]');
+      if(!ed || !currentTicketId) return;
+      var val = ed.value;
+
+      if(field === 'description') {{
+        fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{description:val}})}})
+          .then(function(r){{return r.json();}}).then(function(u){{ if(u)currentData=u; toast('Description saved'); refreshTabs(); }});
+      }} else if(field === 'criteria') {{
+        var lines = val.split('\\n').filter(function(l){{return l.trim();}});
+        if(!lines.length) return;
+        var chain = Promise.resolve();
+        lines.forEach(function(line) {{
+          var text = line.replace(/^-\\s*\\[[ xX]?\\]\\s*/, '').trim();
+          if(!text) return;
+          chain = chain.then(function() {{
+            return fetch(EDIT_API+'/tickets/'+currentTicketId, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{add_criteria:text}})}}).then(function(r){{return r.json();}});
+          }});
+        }});
+        chain.then(function() {{ return fetch(EDIT_API+'/tickets/'+currentTicketId).then(function(r){{return r.json();}}); }})
+          .then(function(d) {{ populate(d); activateTab('criteria'); toast('Criteria added'); }});
+      }} else {{
+        fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{content:val}})}})
+          .then(function(r){{return r.json();}}).then(function(u){{ if(u)currentData=u; toast(FLAG_NAMES[field]+' saved'); refreshTabs(); }});
+      }}
+    }});
+  }});
+
+  // Clipboard buttons
+  overlay.querySelectorAll('.detail-clip-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      if(!currentData) return;
+      var fn = PROMPTS[btn.dataset.flag] && PROMPTS[btn.dataset.flag][btn.dataset.action];
+      if(!fn) return;
+      navigator.clipboard.writeText(fn(currentData)).then(function(){{ toast('Copied!'); }});
+    }});
+  }});
+
+  // Ctrl+S saves active section
+  overlay.addEventListener('keydown', function(e) {{
+    if((e.ctrlKey||e.metaKey) && e.key==='s') {{
+      e.preventDefault();
+      var sec = overlay.querySelector('.detail-section.active');
+      if(sec) {{ var sb = sec.querySelector('.detail-save-btn'); if(sb) sb.click(); }}
+    }}
+  }});
+
+  // Readiness dot click — open detail view
+  document.addEventListener('click', function(e) {{
+    var dot = e.target.closest('.readiness-dot[data-flag]');
+    if(!dot) return;
+    var card = dot.closest('.card') || dot.closest('.list-row');
+    if(!card || !card.dataset.itemId) return;
+    e.stopPropagation(); e.preventDefault();
+    if(card._clickTimer) clearTimeout(card._clickTimer);
+    openOverlay(card.dataset.itemId, dot.dataset.flag);
+  }}, true);
+
+  window.DETAIL_OVERLAY_OPEN = function() {{ return currentTicketId; }};
 }})();
 </script>
 </body>
@@ -1560,95 +2545,128 @@ def _render_cards(tickets: list[Ticket], column: str, child_tickets: dict[str, l
         dep_info = dep_state.get(t.id, {})
         blocked_class = " blocked" if dep_info.get("blocking_deps") else ""
 
-        # Child count badge for parent tickets
-        child_badge_html = ""
-        children = child_tickets.get(t.id, [])
-        if children:
-            n_bugs = sum(1 for c in children if c.id.startswith("BUG-"))
-            n_other = len(children) - n_bugs
-            has_bugs_cls = " has-bugs" if n_bugs > 0 else ""
-            if n_bugs and not n_other:
-                badge_text = f"{n_bugs} bug{'s' if n_bugs != 1 else ''}"
-            elif n_other and not n_bugs:
-                badge_text = f"{n_other} sub-ticket{'s' if n_other != 1 else ''}"
-            else:
-                parts = []
-                if n_bugs:
-                    parts.append(f"{n_bugs} bug{'s' if n_bugs != 1 else ''}")
-                if n_other:
-                    parts.append(f"{n_other} sub-ticket{'s' if n_other != 1 else ''}")
-                badge_text = ", ".join(parts)
-            child_badge_html = f'<span class="child-count-badge{has_bugs_cls}">{badge_text}</span>'
-
-        # Parent link for sub-tickets
-        parent_link_html = ""
+        # Skip children here — they'll be rendered in the child-group after their parent
         if t.parent:
-            parent_link_html = f'        <div class="card-parent-link">\u21b3 {escape(t.parent)}</div>\n'
+            continue
 
-        # Dependency badges
-        deps_html = ""
-        if t.depends:
-            dep_list = ", ".join(escape(d) for d in t.depends)
-            deps_html = f'        <div class="card-deps">&#10547; {dep_list}</div>\n'
-            blocking = dep_info.get("blocking_deps", [])
-            if blocking:
-                deps_html += f'        <span class="card-blocked-badge">blocked by: {escape(", ".join(blocking))}</span>\n'
+        children = child_tickets.get(t.id, [])
 
-        # Build description and criteria HTML
-        desc_html = ""
-        if t.description:
-            desc_html = f'        <div class="card-desc">{desc_esc}</div>\n'
-
-        # Rationale (collapsed, shown when expanded)
-        rationale_html = ""
-        if t.rationale:
-            rationale_html = f'        <div class="card-rationale"><em>Rationale:</em> {escape(t.rationale)}</div>\n'
-
-        criteria_html = ""
-        if t.acceptance_criteria:
-            criteria_items = []
-            for checked, text in t.acceptance_criteria:
-                cls = ' class="criterion checked"' if checked else ' class="criterion"'
-                marker = "&#9745;" if checked else "&#9744;"
-                criteria_items.append(f'          <div{cls}>{marker} {escape(text)}</div>')
-            criteria_html = '        <div class="card-criteria">\n' + "\n".join(criteria_items) + "\n        </div>\n"
-
-        # Linked children (shown when expanded)
-        linked_children_html = ""
+        # Children toggle for parent tickets
+        child_badge_html = ""
         if children:
-            child_items = []
-            for child in children:
-                child_status_class = child.status.replace(" ", "-").lower()
-                child_desc_esc = escape(child.description) if child.description else ""
-                is_bug = child.id.startswith("BUG-")
-                bug_cls = " is-bug" if is_bug else ""
-                child_col = child.column or ("bugs" if is_bug else column)
-                child_items.append(
-                    f'          <div class="linked-child-card{bug_cls}" data-column="{child_col}" '
-                    f'data-item-id="{escape(child.id)}" data-title="{escape(child.title)}" data-desc="{child_desc_esc}">'
-                    f'<div class="copied-toast">Copied!</div>'
-                    f'<span class="priority-dot {child.priority}"></span>'
-                    f'<span class="card-id">{escape(child.id)}</span> '
-                    f'<span class="linked-child-title">{escape(child.title)}</span> '
-                    f'<span class="status-badge {child_status_class}">{child_status_class}</span></div>'
-                )
-            has_bugs_label_cls = " has-bugs" if n_bugs > 0 else ""
-            child_label = f'          <div class="linked-children-label{has_bugs_label_cls}">{badge_text}</div>'
-            linked_children_html = '        <div class="card-linked-children">\n' + child_label + "\n" + "\n".join(child_items) + "\n        </div>\n"
+            n_children = len(children)
+            child_badge_html = (
+                f'<span class="children-toggle" data-parent="{id_esc}">'
+                f'<span class="arrow">&#9660;</span> {n_children}</span>'
+            )
 
-        lines.append(
-            f'      <div class="card {card_class}{blocked_class}" data-column="{column}" '
-            f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}">\n'
-            f'        <div class="copied-toast">Copied!</div>\n'
-            f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
-            f'<span class="card-title">{title_esc}</span>{child_badge_html}</div>\n'
-            f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
-            f'<span class="status-badge {status_class}">{status_class}</span></div>\n'
-            f'{parent_link_html}{deps_html}{desc_html}{rationale_html}{criteria_html}{linked_children_html}'
-            f'        <div class="card-footer"><span class="complexity-badge">{escape(t.complexity)}</span></div>\n'
-            f'      </div>'
-        )
+        lines.append(_render_single_card(t, column, card_class, dep_state, child_badge_html))
+
+        # Render children as full cards in a connected group
+        if children:
+            lines.append(f'      <div class="child-group" data-parent="{id_esc}">')
+            for child in children:
+                lines.append(_render_single_card(child, column, card_class, dep_state, ""))
+            lines.append(f'      </div>')
+
     return "\n".join(lines)
+
+
+def _render_single_card(t, column: str, card_class: str, dep_state: dict, child_badge_html: str) -> str:
+    """Render a single card (parent or child) as full HTML."""
+    title_esc = escape(t.title)
+    id_esc = escape(t.id)
+    desc_esc = escape(t.description) if t.description else ""
+    status_class = t.status.replace(" ", "-").lower()
+
+    dep_info = dep_state.get(t.id, {})
+    blocked_class = " blocked" if dep_info.get("blocking_deps") else ""
+
+    parent_link_html = ""
+    if t.parent:
+        parent_link_html = f'        <div class="card-parent-link">\u21b3 {escape(t.parent)}</div>\n'
+
+    deps_html = ""
+    if t.depends:
+        dep_list = ", ".join(escape(d) for d in t.depends)
+        deps_html = f'        <div class="card-deps">&#10547; {dep_list}</div>\n'
+        blocking = dep_info.get("blocking_deps", [])
+        if blocking:
+            deps_html += f'        <span class="card-blocked-badge">blocked by: {escape(", ".join(blocking))}</span>\n'
+
+    desc_html = ""
+    if t.description:
+        desc_html = f'        <div class="card-desc">{desc_esc}</div>\n'
+
+    rationale_html = ""
+    if t.rationale:
+        rationale_html = f'        <div class="card-rationale"><em>Rationale:</em> {escape(t.rationale)}</div>\n'
+
+    criteria_html = ""
+    if t.acceptance_criteria:
+        criteria_items = []
+        for checked, text in t.acceptance_criteria:
+            cls = ' class="criterion checked"' if checked else ' class="criterion"'
+            marker = "&#9745;" if checked else "&#9744;"
+            criteria_items.append(f'          <div{cls}>{marker} {escape(text)}</div>')
+        criteria_html = '        <div class="card-criteria">\n' + "\n".join(criteria_items) + "\n        </div>\n"
+
+    readiness_html = _render_readiness_row(t)
+    actions_html = _render_action_buttons(column, id_esc)
+
+    return (
+        f'      <div class="card {card_class}{blocked_class}" data-column="{column}" '
+        f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
+        f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
+        f'{"" if column != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
+        f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}>\n'
+        f'        <div class="copied-toast">Copied!</div>\n'
+        f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
+        f'<span class="card-title">{title_esc}</span>{child_badge_html}</div>\n'
+        f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
+        f'<span class="status-badge {status_class}">{status_class}</span></div>\n'
+        f'{readiness_html}'
+        f'{parent_link_html}{deps_html}{desc_html}{rationale_html}{criteria_html}'
+        f'{actions_html}'
+        f'        <div class="card-footer"><span class="complexity-badge">{escape(t.complexity)}</span></div>\n'
+        f'      </div>'
+    )
+
+
+def _render_readiness_row(t) -> str:
+    """Render readiness indicator dots for a ticket."""
+    flag_map = {"D": "description", "C": "criteria", "T": "tests", "R": "reviewed", "S": "smoke"}
+    indicators = [
+        ("D", "Description", bool(t.description)),
+        ("C", "Criteria", len(t.acceptance_criteria) > 0),
+        ("T", "Tests", "tests" in t.readiness_flags),
+        ("R", "Reviewed", "reviewed" in t.readiness_flags),
+        ("S", "Smoke tested", "smoke" in t.readiness_flags),
+    ]
+    dots = []
+    for letter, title, filled in indicators:
+        cls = "filled" if filled else "empty"
+        flag_name = flag_map[letter]
+        dots.append(f'<span class="readiness-dot {cls}" title="{title}" data-flag="{flag_name}">{letter}</span>')
+    return '        <div class="readiness-row">' + "".join(dots) + '</div>\n'
+
+
+def _render_action_buttons(column: str, ticket_id: str) -> str:
+    """Render contextual action buttons for a card (only visible in edit mode when expanded)."""
+    buttons = []
+    if column == "ideas":
+        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="Backlog">&#8594; Backlog</button>')
+    elif column == "backlog":
+        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="WIP">&#9654; Start</button>')
+    elif column == "wip":
+        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="For Review">&#10003; Done</button>')
+        buttons.append(f'<button class="action-btn" data-action="move" data-section="Icebox">&#10052; Icebox</button>')
+    elif column == "review":
+        buttons.append(f'<button class="action-btn primary" data-action="accept">&#10003; Accept</button>')
+        buttons.append(f'<button class="action-btn" data-action="move" data-section="WIP">&#8592; Back to WIP</button>')
+    if not buttons:
+        return ""
+    return '        <div class="card-actions">' + "".join(buttons) + '</div>\n'
 
 
 def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[str, list] = None, dep_state: dict = None) -> str:
@@ -1659,32 +2677,22 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
         dep_state = {}
     lines = []
     for t in tickets:
+        # Skip children — they appear in child-group after their parent
+        if t.parent:
+            continue
+
         title_esc = escape(t.title)
         id_esc = escape(t.id)
         desc_esc = escape(t.description) if t.description else ""
         status_class = t.status.replace(" ", "-").lower()
 
-        # Child count badge
         children = child_tickets.get(t.id, [])
         child_badge_html = ""
-        badge_text = ""
-        n_bugs = 0
         if children:
-            n_bugs = sum(1 for c in children if c.id.startswith("BUG-"))
-            n_other = len(children) - n_bugs
-            has_bugs_cls = " has-bugs" if n_bugs > 0 else ""
-            if n_bugs and not n_other:
-                badge_text = f"{n_bugs} bug{'s' if n_bugs != 1 else ''}"
-            elif n_other and not n_bugs:
-                badge_text = f"{n_other} sub-ticket{'s' if n_other != 1 else ''}"
-            else:
-                parts = []
-                if n_bugs:
-                    parts.append(f"{n_bugs} bug{'s' if n_bugs != 1 else ''}")
-                if n_other:
-                    parts.append(f"{n_other} sub-ticket{'s' if n_other != 1 else ''}")
-                badge_text = ", ".join(parts)
-            child_badge_html = f'<span class="child-count-badge{has_bugs_cls}">{badge_text}</span>'
+            child_badge_html = (
+                f'<span class="children-toggle" data-parent="{id_esc}">'
+                f'<span class="arrow">&#9660;</span> {len(children)}</span>'
+            )
 
         # Expandable detail panel
         detail_parts = []
@@ -1699,26 +2707,6 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
                 marker = "&#9745;" if checked else "&#9744;"
                 criteria_items.append(f'            <div{cls}>{marker} {escape(text)}</div>')
             detail_parts.append('          <div class="card-criteria" style="display:block">\n' + "\n".join(criteria_items) + "\n          </div>")
-        if children:
-            child_items = []
-            for child in children:
-                child_status_class = child.status.replace(" ", "-").lower()
-                child_desc_esc = escape(child.description) if child.description else ""
-                is_bug = child.id.startswith("BUG-")
-                bug_cls = " is-bug" if is_bug else ""
-                child_col = child.column or ("bugs" if is_bug else column)
-                child_items.append(
-                    f'            <div class="linked-child-card{bug_cls}" data-column="{child_col}" '
-                    f'data-item-id="{escape(child.id)}" data-title="{escape(child.title)}" data-desc="{child_desc_esc}">'
-                    f'<div class="copied-toast">Copied!</div>'
-                    f'<span class="priority-dot {child.priority}"></span>'
-                    f'<span class="card-id">{escape(child.id)}</span> '
-                    f'<span class="linked-child-title">{escape(child.title)}</span> '
-                    f'<span class="status-badge {child_status_class}">{child_status_class}</span></div>'
-                )
-            has_bugs_label_cls = " has-bugs" if n_bugs > 0 else ""
-            child_label = f'            <div class="linked-children-label{has_bugs_label_cls}">{badge_text}</div>'
-            detail_parts.append('          <div class="card-linked-children" style="display:flex">\n' + child_label + "\n" + "\n".join(child_items) + "\n          </div>")
 
         detail_html = ""
         if detail_parts:
@@ -1734,7 +2722,9 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
 
         lines.append(
             f'      <div class="list-row card" data-column="{column}" '
-            f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}">\n'
+            f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
+            f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
+            f'{"" if column != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}>\n'
             f'        <div class="copied-toast">Copied!</div>\n'
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
@@ -1747,6 +2737,32 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
             f'{detail_html}'
             f'      </div>'
         )
+
+        # Render children as list rows in a connected group
+        if children:
+            lines.append(f'      <div class="child-group" data-parent="{id_esc}">')
+            for child in children:
+                child_title = escape(child.title)
+                child_id = escape(child.id)
+                child_desc = escape(child.description) if child.description else ""
+                child_status = child.status.replace(" ", "-").lower()
+                lines.append(
+                    f'      <div class="list-row card" data-column="{column}" '
+                    f'data-title="{child_title}" data-item-id="{child_id}" data-desc="{child_desc}" '
+                    f'data-status="{child_status}" data-complexity="{escape(child.complexity)}"'
+                    f'{"" if column != "bugs" and child_status not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
+                    f' data-parent="{id_esc}">\n'
+                    f'        <div class="copied-toast">Copied!</div>\n'
+                    f'        <div class="list-row-main">'
+                    f'<span class="priority-dot {child.priority}"></span>'
+                    f'<span class="card-id">{child_id}</span>'
+                    f'<span class="card-title">{child_title}</span>'
+                    f'<span class="status-badge {child_status}">{child_status}</span>'
+                    f'<span class="complexity-badge">{escape(child.complexity)}</span></div>\n'
+                    f'      </div>'
+                )
+            lines.append(f'      </div>')
+
     return "\n".join(lines)
 
 

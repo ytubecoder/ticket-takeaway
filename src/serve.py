@@ -1,0 +1,899 @@
+#!/usr/bin/env python3
+"""Ticket Takeaway Dashboard Server — serves the dashboard with editing API.
+
+Usage:
+    python3 serve.py [--port PORT] [--project ID]
+
+Starts an HTTP server at http://localhost:PORT (default 8787) that:
+  - GET /              → serves the generated HTML dashboard
+  - GET /api/tickets   → JSON ticket data
+  - PUT /api/tickets/<id>      → update ticket fields
+  - POST /api/tickets/<id>/move → move ticket between sections
+"""
+
+import importlib.util
+import json
+import os
+import re
+import sys
+import threading
+from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import urlparse
+
+# ---------------------------------------------------------------------------
+# Import tickets-cli.py (hyphenated filename requires importlib)
+# ---------------------------------------------------------------------------
+
+_CLI_PATH = Path(__file__).parent / "tickets-cli.py"
+if not _CLI_PATH.exists():
+    _CLI_PATH = Path.home() / ".claude" / "ticket-takeaway" / "tickets-cli.py"
+
+_spec = importlib.util.spec_from_file_location("tickets_cli", str(_CLI_PATH))
+cli = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cli)
+
+# Import generate.py
+_GEN_PATH = Path(__file__).parent / "generate.py"
+if not _GEN_PATH.exists():
+    _GEN_PATH = Path.home() / ".claude" / "ticket-takeaway" / "generate.py"
+
+_gen_spec = importlib.util.spec_from_file_location("generate", str(_GEN_PATH))
+gen = importlib.util.module_from_spec(_gen_spec)
+_gen_spec.loader.exec_module(gen)
+
+# ---------------------------------------------------------------------------
+# Server state
+# ---------------------------------------------------------------------------
+
+SERVER_PROJECT_ID = None  # Set from --project arg or auto-detect
+SERVER_PORT = 8787
+
+# Lock for DB operations (sqlite3 connections aren't thread-safe)
+_db_lock = threading.Lock()
+
+
+def _get_project() -> dict:
+    """Get the target project dict from registry."""
+    projects = cli.load_registry()
+    if SERVER_PROJECT_ID:
+        return cli.find_project(projects, SERVER_PROJECT_ID)
+    return projects[0]
+
+
+def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> bool:
+    """Update a single field on a ticket. Returns True on success."""
+    ALLOWED_FIELDS = {
+        "title", "priority", "complexity", "status", "description",
+        "parent", "rationale", "commit_hash", "release_tag",
+    }
+    if field not in ALLOWED_FIELDS:
+        return False
+
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        # Verify ticket exists
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        conn.execute(
+            f"UPDATE tickets SET {field} = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+            (value, datetime.now().isoformat(), tid, project_id)
+        )
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
+    """Move a ticket to a different section. Returns True on success."""
+    try:
+        section = cli.resolve_section(section_name)
+    except (SystemExit, ValueError):
+        return False
+
+    column = cli.SECTION_TO_COLUMN.get(section)
+    status = cli.DEFAULT_STATUS_BY_SECTION.get(section)
+    if not column or not status:
+        return False
+
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        sort_row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
+            (project_id, section)
+        ).fetchone()
+
+        conn.execute("""
+            UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?
+            WHERE id = ? AND project_id = ?
+        """, (section, column, status, sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
+
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
+    """Toggle a single acceptance criterion's checked state."""
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        # Find the criterion by ticket + sort_order
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        criterion = conn.execute(
+            "SELECT id, checked FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
+            (tid, project_id, criterion_index)
+        ).fetchone()
+        if not criterion:
+            conn.close()
+            return False
+
+        new_checked = 0 if criterion["checked"] else 1
+        conn.execute(
+            "UPDATE acceptance_criteria SET checked = ? WHERE id = ?",
+            (new_checked, criterion["id"])
+        )
+        conn.execute(
+            "UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
+            (datetime.now().isoformat(), tid, project_id)
+        )
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
+    """Create a new ticket. Returns the ticket JSON on success."""
+    section_name = body.get("section", "Ideas")
+    try:
+        section = cli.resolve_section(section_name)
+    except (SystemExit, ValueError):
+        return None
+
+    column = cli.SECTION_TO_COLUMN.get(section, "ideas")
+    status = cli.DEFAULT_STATUS_BY_SECTION.get(section, "proposed")
+    priority = body.get("priority", "medium")
+    complexity = body.get("complexity", "M")
+    description = body.get("description", "")
+
+    # Determine next ID by prefix (CLI uses "B", "I", "BUG" etc. without dash)
+    prefix = cli.SECTION_PREFIX.get(section, "B")
+    sep = "-"
+
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        # Find next ID number for this prefix
+        rows = conn.execute(
+            "SELECT id FROM tickets WHERE project_id = ? AND id LIKE ?",
+            (project_id, prefix + sep + "%")
+        ).fetchall()
+        max_num = 0
+        for r in rows:
+            try:
+                num = int(r["id"].split(sep, 1)[1])
+                if num > max_num:
+                    max_num = num
+            except (ValueError, IndexError):
+                pass
+        ticket_id = f"{prefix}{sep}{max_num + 1:02d}"
+
+        sort_row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
+            (project_id, section)
+        ).fetchone()
+
+        conn.execute("""
+            INSERT INTO tickets (id, project_id, title, priority, complexity, status, section, column, description, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ticket_id, project_id, title, priority, complexity, status, section, column, description, sort_row["next_order"]))
+
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+
+    return _get_ticket_json(project_id, ticket_id)
+
+
+def _delete_ticket(project_id: str, ticket_id: str) -> bool:
+    """Delete a ticket. Returns True on success."""
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        conn.execute("DELETE FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
+        conn.execute("DELETE FROM depends WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
+        conn.execute("DELETE FROM tickets WHERE id = ? AND project_id = ?", (tid, project_id))
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _accept_ticket(project_id: str, ticket_id: str) -> bool:
+    """Accept a ticket — move to Done with status 'done'. Returns True on success."""
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        sort_row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = 'Done'",
+            (project_id,)
+        ).fetchone()
+
+        conn.execute("""
+            UPDATE tickets SET section = 'Done', column = 'done', status = 'done', sort_order = ?, updated_at = ?
+            WHERE id = ? AND project_id = ?
+        """, (sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
+
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+VALID_READINESS_FLAGS = {"tests", "reviewed", "smoke"}
+
+# Sections that require a gate check before entry
+GATED_SECTIONS = {"Ideas", "Backlog", "WIP", "For Review", "Done"}
+
+
+def _build_gate_prompt(ticket: dict, target_section: str) -> str:
+    """Build the analysis prompt for the gate-check agent."""
+    criteria_lines = []
+    for c in ticket.get("acceptance_criteria", []):
+        mark = "[x]" if c["checked"] else "[ ]"
+        criteria_lines.append(f"- {mark} {c['text']}")
+    criteria_text = "\n".join(criteria_lines) if criteria_lines else "(none)"
+    total = len(ticket.get("acceptance_criteria", []))
+    checked = sum(1 for c in ticket.get("acceptance_criteria", []) if c["checked"])
+
+    flags = ticket.get("readiness_flags", [])
+    deps = ticket.get("depends", [])
+    deps_text = ", ".join(deps) if deps else "none"
+
+    return f"""You are a project management assistant analyzing a ticket column move.
+
+TICKET: {ticket['id']} — {ticket['title']}
+MOVE: {ticket['section']} → {target_section}
+Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: {ticket['status']}
+
+CURRENT STATE:
+
+[D] DESCRIPTION:
+{ticket['description'] or '(empty)'}
+
+[C] ACCEPTANCE CRITERIA ({checked}/{total} complete):
+{criteria_text}
+
+[T] TESTS: {'SET' if 'tests' in flags else 'NOT SET'}
+[R] REVIEWED: {'SET' if 'reviewed' in flags else 'NOT SET'}
+[S] SMOKE TESTED: {'SET' if 'smoke' in flags else 'NOT SET'}
+
+DEPENDENCIES: {deps_text}
+
+TASK: Analyze readiness for moving to {target_section}. For each category (D,C,T,R,S), assess completeness and suggest specific improvements if needed.
+
+Respond with ONLY valid JSON (no markdown fences, no explanation) matching this exact schema:
+{{
+  "verdict": "ready" or "needs-work" or "blocked",
+  "summary": "one-line explanation",
+  "categories": {{
+    "D": {{ "status": "ok" or "needs-work", "current_summary": "brief state", "suggestion": "improvement or null" }},
+    "C": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null", "add_criteria": ["new criterion 1"] }},
+    "T": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null" }},
+    "R": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null" }},
+    "S": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null" }}
+  }}
+}}"""
+
+
+def _run_gate_check(project_id: str, ticket_id: str, target_section: str) -> dict:
+    """Run the gate-check agent and return structured analysis."""
+    import subprocess as _sp
+
+    ticket = _get_ticket_json(project_id, ticket_id)
+    if not ticket:
+        return {"error": "Ticket not found"}
+
+    prompt = _build_gate_prompt(ticket, target_section)
+
+    try:
+        result = _sp.run(
+            ["claude", "-p", prompt, "--output-format", "json"],
+            capture_output=True, text=True, timeout=90,
+            cwd=os.path.expanduser(_get_project().get("path", "."))
+        )
+        # --output-format json wraps the response in {"type":"result","result":"..."}
+        outer = json.loads(result.stdout)
+        text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
+        # The agent's text response should be raw JSON
+        analysis = json.loads(text) if isinstance(text, str) else text
+    except _sp.TimeoutExpired:
+        return {"error": "Gate check timed out", "verdict": "needs-work", "summary": "Analysis timed out — review manually."}
+    except (json.JSONDecodeError, KeyError):
+        return {"error": "Failed to parse agent response", "verdict": "needs-work", "summary": "Could not parse analysis — review manually."}
+
+    # Attach metadata
+    analysis["ticket_id"] = ticket_id
+    analysis["target_section"] = target_section
+    return analysis
+
+
+def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
+    """Toggle a readiness flag. If set, clear it; if unset, set it."""
+    if flag not in VALID_READINESS_FLAGS:
+        return False
+
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        existing = conn.execute(
+            "SELECT flag FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+            (tid, project_id, flag)
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+                (tid, project_id, flag)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO readiness_flags (ticket_id, project_id, flag, set_by) VALUES (?, ?, ?, 'dashboard')",
+                (tid, project_id, flag)
+            )
+
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _update_readiness_content(project_id: str, ticket_id: str, flag: str, content: str) -> bool:
+    """Update readiness flag content. Non-empty content upserts (auto-fills dot), empty deletes (auto-empties)."""
+    if flag not in VALID_READINESS_FLAGS:
+        return False
+
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        content = content.strip()
+
+        if content:
+            conn.execute("""
+                INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                VALUES (?, ?, ?, ?, 'dashboard')
+                ON CONFLICT (ticket_id, project_id, flag)
+                DO UPDATE SET content = excluded.content
+            """, (tid, project_id, flag, content))
+        else:
+            conn.execute(
+                "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+                (tid, project_id, flag)
+            )
+
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
+    """Get a single ticket as a JSON-serializable dict."""
+    conn = cli.get_db()
+    cli.init_db(conn)
+    row = conn.execute(
+        "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+        (ticket_id, project_id)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    criteria = conn.execute(
+        "SELECT text, checked FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
+        (row["id"], project_id)
+    ).fetchall()
+    deps = conn.execute(
+        "SELECT depends_on_id FROM depends WHERE ticket_id = ? AND project_id = ?",
+        (row["id"], project_id)
+    ).fetchall()
+    try:
+        flags = conn.execute(
+            "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ?",
+            (row["id"], project_id)
+        ).fetchall()
+        readiness_flags = {f["flag"]: f["content"] for f in flags}
+    except Exception:
+        readiness_flags = {}
+    conn.close()
+
+    # Build criteria text for clipboard prompts
+    criteria_list = [{"text": c["text"], "checked": bool(c["checked"])} for c in criteria]
+    criteria_text = "\n".join(f"- [{'x' if c['checked'] else ' '}] {c['text']}" for c in criteria_list)
+
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "priority": row["priority"],
+        "complexity": row["complexity"],
+        "status": row["status"],
+        "section": row["section"],
+        "column": row["column"],
+        "description": row["description"],
+        "parent": row["parent"],
+        "rationale": row["rationale"],
+        "commit_hash": row["commit_hash"] if "commit_hash" in row.keys() else "",
+        "release_tag": row["release_tag"] if "release_tag" in row.keys() else "",
+        "acceptance_criteria": criteria_list,
+        "criteria_text": criteria_text,
+        "depends": [d["depends_on_id"] for d in deps],
+        "readiness_flags": readiness_flags,
+    }
+
+
+# ---------------------------------------------------------------------------
+# HTTP Handler
+# ---------------------------------------------------------------------------
+
+class DashboardHandler(BaseHTTPRequestHandler):
+    """Handle dashboard HTTP requests."""
+
+    def log_message(self, format, *args):
+        """Quieter logging — only errors."""
+        if args and str(args[0]).startswith(("4", "5")):
+            super().log_message(format, *args)
+
+    def _send_json(self, data, status=200):
+        body = json.dumps(data, indent=2).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, html):
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            return {}
+        raw = self.rfile.read(length)
+        return json.loads(raw.decode("utf-8"))
+
+    def do_OPTIONS(self):
+        """Handle CORS preflight."""
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+
+        # Serve dashboard HTML
+        if path == "/" or path == "/index.html":
+            proj = _get_project()
+            html_path = Path(os.path.expanduser(proj.get("path", ""))) / "docs" / "sdlc-dashboard.html"
+            if html_path.exists():
+                html = html_path.read_text(encoding="utf-8")
+                # Inject edit-api meta tag if not present
+                if '<meta name="edit-api"' not in html:
+                    # Only inject in <head>, not inside JS strings — replace first occurrence only
+                    idx = html.find('<meta name="gen-ts"')
+                    if idx != -1:
+                        html = html[:idx] + f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/api">\n' + html[idx:]
+                self._send_html(html)
+            else:
+                self._send_json({"error": "Dashboard not generated yet. Run generate.py first."}, 404)
+            return
+
+        # JSON tickets API
+        if path == "/api/tickets":
+            proj = _get_project()
+            project_id = proj["id"]
+            conn = cli.get_db()
+            cli.init_db(conn)
+            rows = conn.execute(
+                "SELECT id FROM tickets WHERE project_id = ? ORDER BY sort_order ASC",
+                (project_id,)
+            ).fetchall()
+            tickets = []
+            for r in rows:
+                t = _get_ticket_json(project_id, r["id"])
+                if t:
+                    tickets.append(t)
+            conn.close()
+            self._send_json({"project_id": project_id, "tickets": tickets})
+            return
+
+        # Single ticket
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        if m:
+            proj = _get_project()
+            t = _get_ticket_json(proj["id"], m.group(1))
+            if t:
+                self._send_json(t)
+            else:
+                self._send_json({"error": "Ticket not found"}, 404)
+            return
+
+        self._send_json({"error": "Not found"}, 404)
+
+    def do_PUT(self):
+        path = urlparse(self.path).path
+
+        # Update readiness flag content
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", path)
+        if m:
+            ticket_id = m.group(1)
+            flag = m.group(2)
+            proj = _get_project()
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            content = body.get("content", "")
+            if _update_readiness_content(proj["id"], ticket_id, flag, content):
+                t = _get_ticket_json(proj["id"], ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Invalid flag or ticket"}, 400)
+            return
+
+        # Update ticket fields
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        if not m:
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        ticket_id = m.group(1)
+        proj = _get_project()
+        project_id = proj["id"]
+
+        try:
+            body = self._read_body()
+        except (json.JSONDecodeError, ValueError):
+            self._send_json({"error": "Invalid JSON"}, 400)
+            return
+
+        if not body:
+            self._send_json({"error": "Empty body"}, 400)
+            return
+
+        # Handle adding a new acceptance criterion (from gate-check panel)
+        if "add_criteria" in body:
+            text = body["add_criteria"]
+            if isinstance(text, str) and text.strip():
+                with _db_lock:
+                    conn = cli.get_db()
+                    cli.init_db(conn)
+                    proj2 = _get_project()
+                    cli.ingest_markdown(conn, proj2)
+                    row = conn.execute(
+                        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                        (ticket_id, project_id)
+                    ).fetchone()
+                    if row:
+                        tid = row["id"]
+                        sort_row = conn.execute(
+                            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
+                            (tid, project_id)
+                        ).fetchone()
+                        conn.execute(
+                            "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?, ?, ?, 0, ?)",
+                            (tid, project_id, text.strip(), sort_row["next_order"])
+                        )
+                        conn.commit()
+                        cli.sync_to_markdown(conn, proj2)
+                        cli.regenerate_dashboard(proj2)
+                    conn.close()
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+                return
+
+        # Handle criterion toggle specially
+        if "toggle_criterion" in body:
+            idx = body["toggle_criterion"]
+            if isinstance(idx, int) and _toggle_criterion(project_id, ticket_id, idx):
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Failed to toggle criterion"}, 400)
+            return
+
+        # Update individual fields
+        for field, value in body.items():
+            if not _update_ticket_field(project_id, ticket_id, field, value):
+                self._send_json({"error": f"Failed to update field: {field}"}, 400)
+                return
+
+        # Return updated ticket
+        t = _get_ticket_json(project_id, ticket_id)
+        self._send_json(t or {"ok": True})
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+
+        # Move ticket
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/move$", path)
+        if m:
+            ticket_id = m.group(1)
+            proj = _get_project()
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            section = body.get("section", "")
+            if not section:
+                self._send_json({"error": "Missing 'section' field"}, 400)
+                return
+
+            if _move_ticket(proj["id"], ticket_id, section):
+                t = _get_ticket_json(proj["id"], ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Failed to move ticket"}, 400)
+            return
+
+        # Gate check before column move
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/gate-check$", path)
+        if m:
+            ticket_id = m.group(1)
+            proj = _get_project()
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            section = body.get("section", "")
+            if not section:
+                self._send_json({"error": "Missing 'section' field"}, 400)
+                return
+
+            result = _run_gate_check(proj["id"], ticket_id, section)
+            if "error" in result and "verdict" not in result:
+                self._send_json(result, 400)
+            else:
+                self._send_json(result)
+            return
+
+        # Toggle readiness flag
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", path)
+        if m:
+            ticket_id = m.group(1)
+            flag = m.group(2)
+            proj = _get_project()
+            if _toggle_readiness(proj["id"], ticket_id, flag):
+                t = _get_ticket_json(proj["id"], ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Invalid flag or ticket"}, 400)
+            return
+
+        # Accept ticket (move to Done + append to PRODUCT_SPECIFICATION.md)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/accept$", path)
+        if m:
+            ticket_id = m.group(1)
+            proj = _get_project()
+            if _accept_ticket(proj["id"], ticket_id):
+                t = _get_ticket_json(proj["id"], ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Failed to accept ticket"}, 400)
+            return
+
+        # Create ticket
+        if path == "/api/tickets":
+            proj = _get_project()
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            title = body.get("title", "").strip()
+            if not title:
+                self._send_json({"error": "Missing 'title' field"}, 400)
+                return
+
+            result = _create_ticket(proj["id"], title, body)
+            if result:
+                self._send_json(result, 201)
+            else:
+                self._send_json({"error": "Failed to create ticket"}, 400)
+            return
+
+        self._send_json({"error": "Not found"}, 404)
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        if not m:
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        ticket_id = m.group(1)
+        proj = _get_project()
+        if _delete_ticket(proj["id"], ticket_id):
+            self._send_json({"ok": True, "deleted": ticket_id})
+        else:
+            self._send_json({"error": "Ticket not found"}, 404)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    global SERVER_PROJECT_ID, SERVER_PORT
+
+    args = sys.argv[1:]
+    if "--port" in args:
+        idx = args.index("--port")
+        if idx + 1 < len(args):
+            SERVER_PORT = int(args[idx + 1])
+    if "--project" in args:
+        idx = args.index("--project")
+        if idx + 1 < len(args):
+            SERVER_PROJECT_ID = args[idx + 1]
+
+    # Auto-detect project from cwd
+    if not SERVER_PROJECT_ID:
+        cwd = os.path.realpath(os.getcwd())
+        try:
+            for proj in cli.load_registry():
+                proj_path = os.path.realpath(os.path.expanduser(proj.get("path", "")))
+                if cwd == proj_path or cwd.startswith(proj_path + os.sep):
+                    SERVER_PROJECT_ID = proj["id"]
+                    break
+        except SystemExit:
+            pass
+
+    # Regenerate dashboard before starting
+    try:
+        proj = _get_project()
+        print(f"Serving: {proj.get('name', proj.get('id', 'unknown'))}")
+    except (SystemExit, IndexError):
+        print("No project found. Run from a registered project directory or use --project ID.", file=sys.stderr)
+        sys.exit(1)
+
+    server = HTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
+    url = f"http://localhost:{SERVER_PORT}"
+    print(f"Dashboard server: {url}")
+    print("Press Ctrl+C to stop.\n")
+
+    # Open in browser
+    import platform
+    import subprocess
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.Popen(["open", url])
+        elif system == "Linux":
+            subprocess.Popen(["xdg-open", url], stderr=subprocess.DEVNULL)
+        elif system == "Windows":
+            os.startfile(url)
+    except Exception:
+        pass
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

@@ -94,6 +94,12 @@ Add inline editing to dashboard cards via a local HTTP server (stdlib http.serve
 Priority: medium | Complexity: M | Status: released
 Released: 2026-04-03 | Commit: c33135a
 
+
+### B-16: Test Framework — Smoke, E2E Journey, TDD
+Priority: high | Complexity: L | Status: released
+Released: 2026-04-03 | Commit: 64aece0
+Three-category test framework: (1) Smoke tests — click everything, verify every UI element renders/responds/persists, organized per page (kanban, expanded card, detail overlay, gate panel). (2) E2E Journey tests — multi-step user workflows (ticket lifecycle, bug workflow, gate check, quick edit, external edit). (3) TDD tests — written before implementing complex new logic (business rules, status validation, compute_status_on_move). Smoke + E2E written against refactored actions.py API. Separate worktree recommended.
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

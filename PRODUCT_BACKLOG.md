@@ -31,19 +31,6 @@ Phase 3 of I-07. Undo system: toast with countdown after each edit (5s window to
 - [ ] Undo works for: priority, status, complexity, criteria toggle, text edits, moves
 - [ ] Ctrl+Z does not fire when focused on input/textarea fields
 
-### B-16: Test Framework — Smoke, E2E Journey, TDD
-Priority: high | Complexity: L | Status: for-review
-Rationale: We need to define 3 types of tests that are "available" to tickets. It's likely that for the best process we want to use TDD first but it doesnt make sense in every case due to efficiency so sometimes we will 'take a shortcut' and go with e2e/smoke tests. There may also be more fuzzy acceptance criteria. I think by default we would want a bare minimum of testable human readable items that may then inspire more technical level unit/tdd type tests.
-Three-category test framework: (1) Smoke tests — click everything, verify every UI element renders/responds/persists, organized per page (kanban, expanded card, detail overlay, gate panel). (2) E2E Journey tests — multi-step user workflows (ticket lifecycle, bug workflow, gate check, quick edit, external edit). (3) TDD tests — written before implementing complex new logic (business rules, status validation, compute_status_on_move). Smoke + E2E written against refactored actions.py API. Separate worktree recommended.
-- [ ] Smoke tests: every API endpoint returns expected response
-- [ ] Smoke tests: every UI interactive element responds to click
-- [ ] E2E: ticket lifecycle journey (create → backlog → WIP → review → accept → Done)
-- [ ] E2E: bug workflow journey (create bug → fix → parent auto-promotes)
-- [ ] E2E: quick edit journey (click → edit → save → undo → redo)
-- [ ] TDD: compute_status_on_move edge cases
-- [ ] TDD: auto-promote parent logic
-- [ ] Tests runnable via python3 -m pytest or similar
-
 ### B-11: Security fixes — CORS, threading, content-length
 Priority: high | Complexity: S | Status: for-review
 Parent: B-10
@@ -358,6 +345,20 @@ Add inline editing to dashboard cards via a local HTTP server (stdlib http.serve
 - [ ] B-06: serve.py HTTP server + quick-edit controls (Phase 1)
 - [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
 - [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
+
+### B-16: Test Framework — Smoke, E2E Journey, TDD
+Priority: high | Complexity: L | Status: done
+Rationale: We need to define 3 types of tests that are "available" to tickets. It's likely that for the best process we want to use TDD first but it doesnt make sense in every case due to efficiency so sometimes we will 'take a shortcut' and go with e2e/smoke tests. There may also be more fuzzy acceptance criteria. I think by default we would want a bare minimum of testable human readable items that may then inspire more technical level unit/tdd type tests.
+Commit: 64aece0
+Three-category test framework: (1) Smoke tests — click everything, verify every UI element renders/responds/persists, organized per page (kanban, expanded card, detail overlay, gate panel). (2) E2E Journey tests — multi-step user workflows (ticket lifecycle, bug workflow, gate check, quick edit, external edit). (3) TDD tests — written before implementing complex new logic (business rules, status validation, compute_status_on_move). Smoke + E2E written against refactored actions.py API. Separate worktree recommended.
+- [ ] Smoke tests: every API endpoint returns expected response
+- [ ] Smoke tests: every UI interactive element responds to click
+- [ ] E2E: ticket lifecycle journey (create → backlog → WIP → review → accept → Done)
+- [ ] E2E: bug workflow journey (create bug → fix → parent auto-promotes)
+- [ ] E2E: quick edit journey (click → edit → save → undo → redo)
+- [ ] TDD: compute_status_on_move edge cases
+- [ ] TDD: auto-promote parent logic
+- [ ] Tests runnable via python3 -m pytest or similar
 
 ## Won't Do
 

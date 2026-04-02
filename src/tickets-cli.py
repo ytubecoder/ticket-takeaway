@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -20,140 +21,23 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
+# Ensure the src/ directory is importable (handles running from other dirs)
+_src_dir = str(Path(__file__).resolve().parent)
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
-# ---------------------------------------------------------------------------
-# Constants (shared with generate.py)
-# ---------------------------------------------------------------------------
-
-DASHBOARD_DIR = Path.home() / ".claude" / "ticket-takeaway"
-DB_PATH = DASHBOARD_DIR / "tickets.db"
-REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
-
-SECTION_ORDER = ["WIP", "For Review", "Backlog", "Ideas", "Bugs", "Icebox", "Done", "Won't Do"]
-
-SECTION_TO_COLUMN = {
-    "Ideas": "ideas",
-    "Backlog": "backlog",
-    "WIP": "wip",
-    "For Review": "review",
-    "Done": "done",
-    "Won't Do": "wontdo",
-    "Icebox": "icebox",
-    "Bugs": "bugs",
-}
-
-DEFAULT_STATUS_BY_SECTION = {
-    "Ideas": "proposed",
-    "Backlog": "proposed",
-    "WIP": "in-progress",
-    "For Review": "for-review",
-    "Done": "done",
-    "Won't Do": "wontdo",
-    "Icebox": "icebox",
-    "Bugs": "bug",
-}
-
-# Lowercase aliases for section names (used in CLI args)
-COLUMN_TO_SECTION = {v: k for k, v in SECTION_TO_COLUMN.items()}
-
-# ID prefix by section for auto-generation
-SECTION_PREFIX = {
-    "Ideas": "I",
-    "Backlog": "B",
-    "WIP": "B",
-    "For Review": "B",
-    "Done": "R",
-    "Won't Do": "W",
-    "Icebox": "Z",
-    "Bugs": "BUG",
-}
-
-
-# ---------------------------------------------------------------------------
-# Database helpers
-# ---------------------------------------------------------------------------
-
-def get_db(db_path: str = None) -> sqlite3.Connection:
-    """Open (or create) the SQLite database with WAL mode and FK support."""
-    path = db_path or str(DB_PATH)
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db(conn: sqlite3.Connection):
-    """Create tables if they don't exist."""
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS tickets (
-            id          TEXT NOT NULL,
-            project_id  TEXT NOT NULL,
-            title       TEXT NOT NULL,
-            priority    TEXT NOT NULL DEFAULT 'medium',
-            complexity  TEXT NOT NULL DEFAULT 'M',
-            status      TEXT NOT NULL DEFAULT 'proposed',
-            section     TEXT NOT NULL DEFAULT 'Ideas',
-            column      TEXT NOT NULL DEFAULT 'ideas',
-            description TEXT NOT NULL DEFAULT '',
-            parent      TEXT,
-            rationale   TEXT NOT NULL DEFAULT '',
-            summary     TEXT NOT NULL DEFAULT '',
-            archived    INTEGER NOT NULL DEFAULT 0,
-            sort_order  INTEGER NOT NULL DEFAULT 0,
-            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-            PRIMARY KEY (id, project_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS acceptance_criteria (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticket_id   TEXT NOT NULL,
-            project_id  TEXT NOT NULL,
-            text        TEXT NOT NULL,
-            checked     INTEGER NOT NULL DEFAULT 0,
-            sort_order  INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS depends (
-            ticket_id       TEXT NOT NULL,
-            project_id      TEXT NOT NULL,
-            depends_on_id   TEXT NOT NULL,
-            PRIMARY KEY (ticket_id, project_id, depends_on_id),
-            FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS readiness_flags (
-            ticket_id   TEXT NOT NULL,
-            project_id  TEXT NOT NULL,
-            flag        TEXT NOT NULL,
-            set_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            set_by      TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (ticket_id, project_id, flag),
-            FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_tickets_project_section ON tickets(project_id, section);
-        CREATE INDEX IF NOT EXISTS idx_criteria_ticket ON acceptance_criteria(ticket_id, project_id);
-        CREATE INDEX IF NOT EXISTS idx_depends_ticket ON depends(ticket_id, project_id);
-        CREATE INDEX IF NOT EXISTS idx_readiness_ticket ON readiness_flags(ticket_id, project_id);
-    """)
-
-    # Migrate: add commit_hash and release_tag columns if missing
-    for col, default in [("commit_hash", "''"), ("release_tag", "''")]:
-        try:
-            conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-
-    # Migrate: add content column to readiness_flags if missing
-    try:
-        conn.execute("ALTER TABLE readiness_flags ADD COLUMN content TEXT NOT NULL DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
+from constants import (
+    SECTION_ORDER, SECTION_SLUGS, SLUG_TO_SECTION,
+    DEFAULT_STATUS_BY_SECTION, SECTION_PREFIX, STATUSES,
+    VALID_STATUSES_BY_SECTION, compute_status_on_move,
+    DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
+)
+from db import get_db, init_db
+from actions import (
+    move_ticket, accept_ticket, add_ticket, update_ticket,
+    capture_commit_hash,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +139,6 @@ def parse_backlog(filepath: str) -> list[dict]:
 
             header = line_stripped[4:].strip()
             ticket_id, title = _parse_ticket_header(header)
-            column = SECTION_TO_COLUMN.get(current_section, "backlog")
             default_status = DEFAULT_STATUS_BY_SECTION.get(current_section, "proposed")
 
             current_ticket = {
@@ -265,7 +148,6 @@ def parse_backlog(filepath: str) -> list[dict]:
                 "complexity": "M",
                 "status": default_status,
                 "section": current_section,
-                "column": column,
                 "description": "",
                 "parent": None,
                 "rationale": "",
@@ -369,9 +251,9 @@ def resolve_section(name: str) -> str:
     for s in SECTION_ORDER:
         if s.lower() == name.lower():
             return s
-    # Column alias
-    if name.lower() in COLUMN_TO_SECTION:
-        return COLUMN_TO_SECTION[name.lower()]
+    # Slug alias
+    if name.lower() in SLUG_TO_SECTION:
+        return SLUG_TO_SECTION[name.lower()]
     # Common aliases
     aliases = {
         "for-review": "For Review",
@@ -385,34 +267,6 @@ def resolve_section(name: str) -> str:
     print(f"Unknown section: '{name}'. Valid: {', '.join(SECTION_ORDER)}", file=sys.stderr)
     sys.exit(1)
 
-
-# ---------------------------------------------------------------------------
-# Auto-generate ticket ID
-# ---------------------------------------------------------------------------
-
-def auto_generate_id(conn: sqlite3.Connection, project_id: str, section: str) -> str:
-    """Generate the next ticket ID for a section (e.g., B-14, BUG-10, I-03)."""
-    prefix = SECTION_PREFIX.get(section, "B")
-    sep = "-"
-    pattern = f"{prefix}{sep}%"
-
-    rows = conn.execute(
-        "SELECT id FROM tickets WHERE project_id = ? AND id LIKE ?",
-        (project_id, pattern)
-    ).fetchall()
-
-    max_num = 0
-    for row in rows:
-        tid = row["id"]
-        suffix = tid[len(prefix) + len(sep):]
-        try:
-            num = int(suffix)
-            if num > max_num:
-                max_num = num
-        except ValueError:
-            pass
-
-    return f"{prefix}{sep}{max_num + 1:02d}"
 
 
 # ---------------------------------------------------------------------------
@@ -498,13 +352,13 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
             # Existing ticket — update fields from markdown (markdown wins)
             conn.execute("""
                 UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
-                    section=?, column=?, description=?, parent=?, rationale=?,
+                    section=?, description=?, parent=?, rationale=?,
                     sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
                     release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
             """, (
                 t["title"], t["priority"], t["complexity"], t["status"],
-                t["section"], t["column"], t["description"], t["parent"],
+                t["section"], t["description"], t["parent"],
                 t["rationale"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
                 datetime.now().isoformat(),
@@ -551,12 +405,12 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
             # New ticket added directly to markdown — insert into DB
             conn.execute("""
                 INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, column, description, parent, rationale, sort_order,
+                                     section, description, parent, rationale, sort_order,
                                      commit_hash, release_tag)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 tid, project_id, t["title"], t["priority"], t["complexity"],
-                t["status"], t["section"], t["column"], t["description"],
+                t["status"], t["section"], t["description"],
                 t["parent"], t["rationale"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
@@ -692,7 +546,16 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
         lines.append("")
         lines.extend(custom_sections)
 
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    content = "\n".join(lines) + "\n"
+    out_path.write_text(content, encoding="utf-8")
+
+    # Store hash of the written markdown so we can detect external edits later
+    md_hash = hashlib.sha256(content.encode()).hexdigest()
+    conn.execute(
+        "INSERT OR REPLACE INTO _sync_state (project_id, last_md_hash, last_sync_at) VALUES (?, ?, ?)",
+        (project_id, md_hash, datetime.now().isoformat())
+    )
+    conn.commit()
 
 
 def regenerate_dashboard(project: dict):
@@ -718,6 +581,166 @@ def sync_all(conn: sqlite3.Connection, projects: list[dict]):
         sync_to_markdown(conn, proj)
         regenerate_dashboard(proj)
         print(f"Synced {proj['name']}: {proj['path']}/PRODUCT_BACKLOG.md")
+
+
+def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
+    """Detect if PRODUCT_BACKLOG.md was edited outside the CLI.
+
+    Compares the current file hash against the last known hash stored in
+    ``_sync_state``.  When they differ the markdown is parsed, deltas are
+    merged into the DB, and the file is regenerated from the DB (clean
+    state) with an updated hash.
+
+    Returns True if external edits were detected and absorbed, False otherwise.
+    """
+    project_id = project["id"]
+    project_path = os.path.expanduser(project.get("path", ""))
+    if not project_path:
+        return False
+
+    md_path = Path(project_path) / "PRODUCT_BACKLOG.md"
+    if not md_path.exists():
+        return False
+
+    # Read current file and compute hash
+    current_content = md_path.read_text(encoding="utf-8")
+    current_hash = hashlib.sha256(current_content.encode()).hexdigest()
+
+    # Look up stored hash
+    row = conn.execute(
+        "SELECT last_md_hash FROM _sync_state WHERE project_id = ?",
+        (project_id,)
+    ).fetchone()
+    stored_hash = row["last_md_hash"] if row else ""
+
+    if current_hash == stored_hash:
+        return False  # No external edits
+
+    # --- External edit detected — merge into DB ---
+
+    md_tickets = parse_backlog(str(md_path))
+    if not md_tickets:
+        # File was blanked or unparseable — don't destroy DB state,
+        # just update the hash so we don't re-check every cycle
+        conn.execute(
+            "INSERT OR REPLACE INTO _sync_state (project_id, last_md_hash, last_sync_at) VALUES (?, ?, ?)",
+            (project_id, current_hash, datetime.now().isoformat())
+        )
+        conn.commit()
+        return False
+
+    md_ids = set()
+
+    # Index DB tickets by upper-cased ID for comparison
+    db_rows = conn.execute(
+        "SELECT id FROM tickets WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    db_ids = {r["id"].upper(): r["id"] for r in db_rows}
+
+    for t in md_tickets:
+        tid = t["id"]
+        if not tid:
+            continue
+        md_ids.add(tid.upper())
+
+        if tid.upper() in db_ids:
+            # Existing ticket — update fields from markdown (markdown wins)
+            real_id = db_ids[tid.upper()]
+            conn.execute("""
+                UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
+                    section=?, description=?, parent=?, rationale=?,
+                    sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
+                    release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
+                WHERE id=? AND project_id=?
+            """, (
+                t["title"], t["priority"], t["complexity"], t["status"],
+                t["section"], t["description"], t["parent"],
+                t["rationale"], t["sort_order"],
+                t.get("commit_hash", ""), t.get("release_tag", ""),
+                datetime.now().isoformat(),
+                real_id, project_id,
+            ))
+
+            # Replace acceptance criteria
+            conn.execute(
+                "DELETE FROM acceptance_criteria WHERE ticket_id=? AND project_id=?",
+                (real_id, project_id)
+            )
+            for i, (checked, text) in enumerate(t["acceptance_criteria"]):
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
+                    (real_id, project_id, text, int(checked), i)
+                )
+
+            # Replace depends
+            conn.execute(
+                "DELETE FROM depends WHERE ticket_id=? AND project_id=?",
+                (real_id, project_id)
+            )
+            for dep_id in t["depends"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
+                    (real_id, project_id, dep_id)
+                )
+
+            # Upsert readiness content
+            for flag, content in t.get("readiness_content", {}).items():
+                if content:
+                    conn.execute("""
+                        INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                        VALUES (?, ?, ?, ?, 'external-edit')
+                        ON CONFLICT (ticket_id, project_id, flag)
+                        DO UPDATE SET content = excluded.content
+                    """, (real_id, project_id, flag, content))
+                else:
+                    conn.execute(
+                        "DELETE FROM readiness_flags WHERE ticket_id=? AND project_id=? AND flag=?",
+                        (real_id, project_id, flag)
+                    )
+        else:
+            # New ticket added directly to markdown — insert into DB
+            conn.execute("""
+                INSERT INTO tickets (id, project_id, title, priority, complexity, status,
+                                     section, description, parent, rationale, sort_order,
+                                     commit_hash, release_tag)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                tid, project_id, t["title"], t["priority"], t["complexity"],
+                t["status"], t["section"], t["description"],
+                t["parent"], t["rationale"], t["sort_order"],
+                t.get("commit_hash", ""), t.get("release_tag", ""),
+            ))
+            for i, (checked, text) in enumerate(t["acceptance_criteria"]):
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
+                    (tid, project_id, text, int(checked), i)
+                )
+            for dep_id in t["depends"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
+                    (tid, project_id, dep_id)
+                )
+            for flag, content in t.get("readiness_content", {}).items():
+                if content:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                        VALUES (?, ?, ?, ?, 'external-edit')
+                    """, (tid, project_id, flag, content))
+
+    # Do NOT delete tickets that are in DB but missing from markdown.
+    # They may have been added via CLI or direct DB insert. Just flag them
+    # with a log message for awareness.
+    missing_from_md = set(db_ids.keys()) - md_ids
+    if missing_from_md:
+        real_missing = [db_ids[uid] for uid in missing_from_md]
+        print(f"[{project_id}] Note: {len(real_missing)} ticket(s) in DB but not in markdown (preserved): {', '.join(real_missing)}")
+
+    conn.commit()
+
+    # Regenerate markdown from DB (clean state) and update the hash
+    sync_to_markdown(conn, project)
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -748,12 +771,12 @@ def cmd_seed(args):
         for t in tickets:
             conn.execute("""
                 INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, column, description, parent, rationale, sort_order,
+                                     section, description, parent, rationale, sort_order,
                                      commit_hash, release_tag)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 t["id"], project_id, t["title"], t["priority"], t["complexity"],
-                t["status"], t["section"], t["column"], t["description"],
+                t["status"], t["section"], t["description"],
                 t["parent"], t["rationale"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
@@ -856,35 +879,22 @@ def cmd_add(args):
     project_id = proj["id"]
 
     section = resolve_section(args.section) if args.section else "Backlog"
-    column = SECTION_TO_COLUMN[section]
-    status = DEFAULT_STATUS_BY_SECTION[section]
-    priority = args.priority or "medium"
-    complexity = args.complexity or "M"
 
     conn = get_db()
     init_db(conn)
     ingest_markdown(conn, proj)
 
-    ticket_id = auto_generate_id(conn, project_id, section)
-
-    # sort_order = max in section + 1
-    row = conn.execute(
-        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
-        (project_id, section)
-    ).fetchone()
-    sort_order = row["next_order"]
-
-    conn.execute("""
-        INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                             section, column, description, parent, rationale, sort_order)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        ticket_id, project_id, args.title, priority, complexity, status,
-        section, column, args.description or "", args.parent, args.rationale or "", sort_order,
-    ))
+    ticket_id = add_ticket(
+        conn, project_id, args.title,
+        section=section,
+        priority=args.priority or "medium",
+        complexity=args.complexity or "M",
+        description=args.description or "",
+        parent=args.parent,
+        rationale=args.rationale or "",
+    )
     conn.commit()
 
-    # Sync markdown and regenerate dashboard
     sync_to_markdown(conn, proj)
     regenerate_dashboard(proj)
     conn.close()
@@ -906,117 +916,57 @@ def cmd_update(args):
     init_db(conn)
     ingest_markdown(conn, proj)
 
-    # Verify ticket exists
-    ticket = conn.execute(
-        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
-        (args.id.upper(), project_id)
-    ).fetchone()
-    if not ticket:
-        # Try case-insensitive
-        ticket = conn.execute(
-            "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-            (args.id, project_id)
-        ).fetchone()
-    if not ticket:
-        print(f"Ticket '{args.id}' not found in {proj['name']}.", file=sys.stderr)
+    # Build kwargs for actions.update_ticket — only pass fields that were
+    # explicitly provided on the command line (None means "not provided" for
+    # most fields; parent uses the ... sentinel in actions.py to distinguish
+    # "not provided" from "clear parent").
+    kwargs = {}
+    if args.title is not None:
+        kwargs["title"] = args.title
+    if args.priority is not None:
+        kwargs["priority"] = args.priority
+    if args.complexity is not None:
+        kwargs["complexity"] = args.complexity
+    if args.status is not None:
+        kwargs["status"] = args.status
+    if args.description is not None:
+        kwargs["description"] = args.description
+    if args.rationale is not None:
+        kwargs["rationale"] = args.rationale
+    if args.parent is not None:
+        # Empty string means "clear parent"; non-empty means "set parent"
+        kwargs["parent"] = args.parent if args.parent else None
+    if args.summary is not None:
+        kwargs["summary"] = args.summary
+    if args.add_criteria:
+        kwargs["add_criteria"] = args.add_criteria
+    if args.check_criteria is not None:
+        kwargs["check_criteria"] = args.check_criteria
+    if args.uncheck_criteria is not None:
+        kwargs["uncheck_criteria"] = args.uncheck_criteria
+    if args.remove_criteria is not None:
+        kwargs["remove_criteria"] = args.remove_criteria
+    if args.add_depends:
+        kwargs["add_depends"] = args.add_depends
+    if args.remove_depends:
+        kwargs["remove_depends"] = args.remove_depends
+
+    try:
+        tid = update_ticket(conn, project_id, args.id, **kwargs)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
         conn.close()
         sys.exit(1)
-
-    tid = ticket["id"]
-
-    # Build SET clause for ticket fields
-    updates = {}
-    if args.title is not None:
-        updates["title"] = args.title
-    if args.priority is not None:
-        updates["priority"] = args.priority.lower()
-    if args.complexity is not None:
-        updates["complexity"] = args.complexity.upper()
-    if args.status is not None:
-        updates["status"] = args.status.lower()
-    if args.description is not None:
-        updates["description"] = args.description
-    if args.rationale is not None:
-        updates["rationale"] = args.rationale
-    if args.parent is not None:
-        updates["parent"] = args.parent if args.parent else None
-    if args.summary is not None:
-        updates["summary"] = args.summary
-
-    if updates:
-        updates["updated_at"] = datetime.now().isoformat()
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [tid, project_id]
-        conn.execute(
-            f"UPDATE tickets SET {set_clause} WHERE id = ? AND project_id = ?",
-            values
-        )
-
-    # Acceptance criteria operations
-    if args.add_criteria:
-        for text in args.add_criteria:
-            row = conn.execute(
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
-                (tid, project_id)
-            ).fetchone()
-            conn.execute(
-                "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?, ?, ?, 0, ?)",
-                (tid, project_id, text, row["next"])
-            )
-
-    if args.check_criteria is not None:
-        _update_criterion(conn, tid, project_id, args.check_criteria, checked=1)
-
-    if args.uncheck_criteria is not None:
-        _update_criterion(conn, tid, project_id, args.uncheck_criteria, checked=0)
-
-    if args.remove_criteria is not None:
-        _remove_criterion(conn, tid, project_id, args.remove_criteria)
-
-    # Depends operations
-    if args.add_depends:
-        for dep in args.add_depends:
-            conn.execute(
-                "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?, ?, ?)",
-                (tid, project_id, dep)
-            )
-
-    if args.remove_depends:
-        for dep in args.remove_depends:
-            conn.execute(
-                "DELETE FROM depends WHERE ticket_id = ? AND project_id = ? AND depends_on_id = ?",
-                (tid, project_id, dep)
-            )
+    except IndexError as e:
+        print(str(e), file=sys.stderr)
+        conn.close()
+        sys.exit(1)
 
     conn.commit()
     sync_to_markdown(conn, proj)
     regenerate_dashboard(proj)
     conn.close()
     print(f"Updated {tid}")
-
-
-def _update_criterion(conn, tid, project_id, index, checked):
-    """Update the checked state of the Nth criterion (1-indexed)."""
-    criteria = conn.execute(
-        "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
-        (tid, project_id)
-    ).fetchall()
-    if 1 <= index <= len(criteria):
-        conn.execute("UPDATE acceptance_criteria SET checked = ? WHERE id = ?", (checked, criteria[index - 1]["id"]))
-    else:
-        print(f"Criterion index {index} out of range (1-{len(criteria)})", file=sys.stderr)
-
-
-def _remove_criterion(conn, tid, project_id, index):
-    """Remove the Nth criterion (1-indexed)."""
-    criteria = conn.execute(
-        "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
-        (tid, project_id)
-    ).fetchall()
-    if 1 <= index <= len(criteria):
-        conn.execute("DELETE FROM acceptance_criteria WHERE id = ?", (criteria[index - 1]["id"],))
-    else:
-        print(f"Criterion index {index} out of range (1-{len(criteria)})", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -1028,57 +978,20 @@ def cmd_move(args):
     projects = load_registry()
     proj = find_project(projects, args.project)
     project_id = proj["id"]
+    project_path = os.path.expanduser(proj.get("path", ""))
 
     section = resolve_section(args.section)
-    column = SECTION_TO_COLUMN[section]
-    status = DEFAULT_STATUS_BY_SECTION[section]
 
     conn = get_db()
     init_db(conn)
     ingest_markdown(conn, proj)
 
-    # Find ticket (case-insensitive)
-    ticket = conn.execute(
-        "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-        (args.id, project_id)
-    ).fetchone()
-    if not ticket:
-        print(f"Ticket '{args.id}' not found in {proj['name']}.", file=sys.stderr)
+    try:
+        tid = move_ticket(conn, project_id, args.id, section, project_path)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
         conn.close()
         sys.exit(1)
-
-    tid = ticket["id"]
-
-    # sort_order = max in target section + 1
-    row = conn.execute(
-        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
-        (project_id, section)
-    ).fetchone()
-
-    # Capture commit hash when moving to Done
-    commit_hash_val = ""
-    if section == "Done":
-        project_path = os.path.expanduser(proj.get("path", ""))
-        if project_path:
-            try:
-                result = subprocess.run(
-                    ["git", "log", "-1", "--format=%h"],
-                    cwd=project_path, capture_output=True, text=True, timeout=5
-                )
-                commit_hash_val = result.stdout.strip() if result.returncode == 0 else ""
-            except Exception:
-                pass
-
-    if commit_hash_val:
-        conn.execute("""
-            UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?, commit_hash = ?
-            WHERE id = ? AND project_id = ?
-        """, (section, column, status, row["next_order"], datetime.now().isoformat(), commit_hash_val, tid, project_id))
-    else:
-        conn.execute("""
-            UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
-        """, (section, column, status, row["next_order"], datetime.now().isoformat(), tid, project_id))
 
     conn.commit()
     sync_to_markdown(conn, proj)
@@ -1097,71 +1010,20 @@ def cmd_accept(args):
     proj = find_project(projects, args.project)
     project_id = proj["id"]
     project_path = os.path.expanduser(proj.get("path", ""))
+    project_name = proj.get("name", project_id)
 
     conn = get_db()
     init_db(conn)
     ingest_markdown(conn, proj)
 
-    # Find ticket
-    ticket = conn.execute(
-        "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-        (args.id, project_id)
-    ).fetchone()
-    if not ticket:
-        print(f"Ticket '{args.id}' not found in {proj['name']}.", file=sys.stderr)
+    try:
+        tid = accept_ticket(conn, project_id, args.id, project_path, project_name)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
         conn.close()
         sys.exit(1)
 
-    tid = ticket["id"]
-
-    # Capture commit hash from the project repo
-    commit_hash_val = ""
-    if project_path:
-        try:
-            result = subprocess.run(
-                ["git", "log", "-1", "--format=%h"],
-                cwd=project_path, capture_output=True, text=True, timeout=5
-            )
-            commit_hash_val = result.stdout.strip() if result.returncode == 0 else ""
-        except Exception:
-            pass
-
-    # Move to Done
-    row = conn.execute(
-        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = 'Done'",
-        (project_id,)
-    ).fetchone()
-
-    conn.execute("""
-        UPDATE tickets SET section = 'Done', column = 'done', status = 'done',
-                           sort_order = ?, updated_at = ?, commit_hash = ?
-        WHERE id = ? AND project_id = ?
-    """, (row["next_order"], datetime.now().isoformat(), commit_hash_val, tid, project_id))
-
     conn.commit()
-
-    # Append to PRODUCT_SPECIFICATION.md
-    spec_path = Path(project_path) / "PRODUCT_SPECIFICATION.md"
-    today = datetime.now().strftime("%Y-%m-%d")
-    entry = f"\n### {tid}: {ticket['title']}\n"
-    entry += f"Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: released\n"
-    commit_info = f" | Commit: {commit_hash_val}" if commit_hash_val else ""
-    entry += f"Released: {today}{commit_info}\n"
-    if ticket["description"]:
-        entry += f"{ticket['description']}\n"
-
-    if spec_path.exists():
-        content = spec_path.read_text(encoding="utf-8")
-        # Insert before ## Archive if it exists, otherwise append
-        if "## Archive" in content:
-            content = content.replace("## Archive", entry + "\n## Archive")
-        else:
-            content = content.rstrip() + "\n" + entry
-        spec_path.write_text(content, encoding="utf-8")
-    else:
-        spec_path.write_text(f"# Product Specification \u2014 {proj['name']}\n{entry}\n", encoding="utf-8")
-
-    # Sync markdown and regenerate dashboard
     sync_to_markdown(conn, proj)
     regenerate_dashboard(proj)
     conn.close()

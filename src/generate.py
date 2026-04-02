@@ -18,6 +18,10 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).parent))
+from constants import (SECTION_ORDER, SECTION_SLUGS, SLUG_TO_SECTION,
+                       DEFAULT_STATUS_BY_SECTION, CARD_CLASS_BY_SLUG, STATUSES)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -25,41 +29,6 @@ from typing import Optional
 DASHBOARD_DIR = Path.home() / ".claude" / "ticket-takeaway"
 REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 # OUTPUT_PATH is now per-project: {project.path}/docs/sdlc-dashboard.html
-
-SECTION_ORDER = ["WIP", "For Review", "Backlog", "Ideas", "Bugs", "Icebox", "Done", "Won't Do"]
-
-SECTION_TO_COLUMN = {
-    "Ideas": "ideas",
-    "Backlog": "backlog",
-    "WIP": "wip",
-    "For Review": "review",
-    "Done": "done",
-    "Won't Do": "wontdo",
-    "Icebox": "icebox",
-    "Bugs": "bugs",
-}
-
-DEFAULT_STATUS_BY_SECTION = {
-    "Ideas": "proposed",
-    "Backlog": "proposed",
-    "WIP": "in-progress",
-    "For Review": "for-review",
-    "Done": "done",
-    "Won't Do": "wontdo",
-    "Icebox": "icebox",
-    "Bugs": "bug",
-}
-
-CARD_CLASS_BY_COLUMN = {
-    "backlog": "backlog-card",
-    "wip": "wip-card",
-    "review": "review-card",
-    "ideas": "idea-card",
-    "done": "done-card",
-    "wontdo": "wontdo-card",
-    "icebox": "icebox-card",
-    "bugs": "bug-card",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +43,6 @@ class Ticket:
     complexity: str = "M"
     status: str = "proposed"
     section: str = "Ideas"
-    column: str = "ideas"
     description: str = ""
     acceptance_criteria: list = field(default_factory=list)
     parent: Optional[str] = None
@@ -86,6 +54,10 @@ class Ticket:
     release_tag: str = ""
     readiness_flags: set = field(default_factory=set)  # explicit flags from DB
     readiness_content: dict = field(default_factory=dict)  # {flag: content_text}
+
+    @property
+    def slug(self) -> str:
+        return SECTION_SLUGS.get(self.section, "backlog")
 
 
 @dataclass
@@ -163,14 +135,12 @@ def parse_backlog(filepath: str) -> list[Ticket]:
 
             header = line_stripped[4:].strip()
             ticket_id, title = _parse_ticket_header(header)
-            column = SECTION_TO_COLUMN.get(current_section, "backlog")
             default_status = DEFAULT_STATUS_BY_SECTION.get(current_section, "proposed")
 
             current_ticket = Ticket(
                 id=ticket_id,
                 title=title,
                 section=current_section,
-                column=column,
                 status=default_status,
             )
             continue
@@ -307,7 +277,6 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             complexity=r["complexity"],
             status=r["status"],
             section=r["section"],
-            column=r["column"],
             description=r["description"],
             acceptance_criteria=criteria,
             parent=r["parent"],
@@ -364,7 +333,6 @@ def parse_spec_for_done(filepath: str) -> list[Ticket]:
                     title=title,
                     status="released",
                     section="Done",
-                    column="done",
                     archived=in_archive,
                 )
             else:
@@ -401,6 +369,32 @@ def compute_dependency_state(tickets: list[Ticket]) -> dict[str, dict]:
                     if status_by_id.get(dep, "unknown") not in DONE_STATUSES]
         result[t.id] = {"deps_resolved": len(blocking) == 0, "blocking_deps": blocking}
     return result
+
+
+def auto_promote_parents(
+    by_section: dict[str, list[Ticket]],
+    child_tickets: dict[str, list[Ticket]],
+) -> set[str]:
+    """Move parents to For Review when all children are resolved.
+
+    Checks parents in WIP, Backlog, and Bugs sections. If every child ticket
+    has status in {"for-review", "bug-fixed", "done"}, the parent is moved
+    to For Review.
+
+    Returns the set of promoted ticket IDs.
+    """
+    review_statuses = {"for-review", "bug-fixed", "done"}
+    promoted_ids: set[str] = set()
+    for parent_id, children in child_tickets.items():
+        if all(c.status in review_statuses for c in children):
+            for sec in ("WIP", "Backlog", "Bugs"):
+                for t in by_section.get(sec, []):
+                    if t.id == parent_id:
+                        by_section[sec].remove(t)
+                        by_section.setdefault("For Review", []).append(t)
+                        promoted_ids.add(t.id)
+                        break
+    return promoted_ids
 
 
 # ---------------------------------------------------------------------------
@@ -507,21 +501,11 @@ def generate_html(projects: list[Project]) -> str:
     for proj in projects:
         all_tickets.extend(proj.tickets)
 
-    # Categorize tickets by column
-    by_column: dict[str, list[Ticket]] = {
-        "backlog": [],
-        "wip": [],
-        "review": [],
-        "ideas": [],
-        "done": [],
-        "wontdo": [],
-        "icebox": [],
-        "bugs": [],
-    }
+    # Categorize tickets by section
+    by_section: dict[str, list[Ticket]] = {s: [] for s in SECTION_ORDER}
     for t in all_tickets:
-        col = t.column
-        if col in by_column:
-            by_column[col].append(t)
+        if t.section in by_section:
+            by_section[t.section].append(t)
 
     # Code stats
     cs = primary.code_stats if primary else CodeStats()
@@ -541,54 +525,42 @@ def generate_html(projects: list[Project]) -> str:
         if t.parent:
             child_tickets.setdefault(t.parent, []).append(t)
 
-    # Auto-promote parents to review when all child tickets are resolved
-    review_statuses = {"for-review", "bug-fixed", "done"}
-    promoted_ids: set[str] = set()
+    # Auto-promote parents to For Review when all child tickets are resolved
+    promoted_ids = auto_promote_parents(by_section, child_tickets)
     parented_ids = {t.id for t in all_tickets if t.parent}
-    for parent_id, children in child_tickets.items():
-        if all(c.status in review_statuses for c in children):
-            for col in ("wip", "backlog", "bugs"):
-                for t in by_column[col]:
-                    if t.id == parent_id:
-                        by_column[col].remove(t)
-                        by_column["review"].append(t)
-                        promoted_ids.add(t.id)
-                        break
 
-    # Reorder columns: place children directly after their parent
-    # Children NOT in the same column as their parent get a standalone entry
-    for col in by_column:
+    # Reorder sections: place children directly after their parent
+    for sec in by_section:
         ordered = []
         seen = set()
-        for t in by_column[col]:
+        for t in by_section[sec]:
             if t.id in seen:
                 continue
             seen.add(t.id)
             ordered.append(t)
-            # Insert children right after parent
             for child in child_tickets.get(t.id, []):
                 if child.id not in seen:
                     seen.add(child.id)
                     ordered.append(child)
-        by_column[col] = ordered
+        by_section[sec] = ordered
 
     # Count totals (exclude children from headline counts)
-    count_backlog = sum(1 for t in by_column["backlog"] if t.id not in parented_ids)
-    count_wip = sum(1 for t in by_column["wip"] if t.id not in parented_ids)
-    count_ideas = sum(1 for t in by_column["ideas"] if t.id not in parented_ids)
-    count_wontdo = sum(1 for t in by_column["wontdo"] if t.id not in parented_ids)
-    count_review = sum(1 for t in by_column["review"] if t.id not in parented_ids)
-    count_done = sum(1 for t in by_column["done"] if t.id not in parented_ids)
-    count_icebox = sum(1 for t in by_column["icebox"] if t.id not in parented_ids)
-    count_bugs = sum(1 for t in by_column["bugs"] if t.id not in parented_ids)
+    count_backlog = sum(1 for t in by_section["Backlog"] if t.id not in parented_ids)
+    count_wip = sum(1 for t in by_section["WIP"] if t.id not in parented_ids)
+    count_ideas = sum(1 for t in by_section["Ideas"] if t.id not in parented_ids)
+    count_wontdo = sum(1 for t in by_section["Won't Do"] if t.id not in parented_ids)
+    count_review = sum(1 for t in by_section["For Review"] if t.id not in parented_ids)
+    count_done = sum(1 for t in by_section["Done"] if t.id not in parented_ids)
+    count_icebox = sum(1 for t in by_section["Icebox"] if t.id not in parented_ids)
+    count_bugs = sum(1 for t in by_section["Bugs"] if t.id not in parented_ids)
     count_total = count_backlog + count_wip + count_review + count_ideas + count_done
 
-    # Cross-cutting filter counts (across all columns, excluding children)
-    all_visible = [t for col in by_column.values() for t in col if t.id not in parented_ids]
+    # Cross-cutting filter counts (across all sections, excluding children)
+    all_visible = [t for sec in by_section.values() for t in sec if t.id not in parented_ids]
     count_status_proposed = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "proposed")
     count_status_inprogress = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "in-progress")
     count_status_forreview = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "for-review")
-    count_type_bug = sum(1 for t in all_visible if t.column == "bugs" or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed"))
+    count_type_bug = sum(1 for t in all_visible if t.section == "Bugs" or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed"))
     count_size_s = sum(1 for t in all_visible if t.complexity == "S")
     count_size_m = sum(1 for t in all_visible if t.complexity == "M")
     count_size_l = sum(1 for t in all_visible if t.complexity == "L")
@@ -601,15 +573,15 @@ def generate_html(projects: list[Project]) -> str:
     dep_state = compute_dependency_state(all_tickets)
 
     # Build card HTML
-    backlog_cards = _render_cards(by_column["backlog"], "backlog", child_tickets, dep_state)
-    wip_cards = _render_cards(by_column["wip"], "wip", child_tickets, dep_state)
-    ideas_cards = _render_cards(by_column["ideas"], "ideas", child_tickets, dep_state)
+    backlog_cards = _render_cards(by_section["Backlog"], "backlog", child_tickets, dep_state)
+    wip_cards = _render_cards(by_section["WIP"], "wip", child_tickets, dep_state)
+    ideas_cards = _render_cards(by_section["Ideas"], "ideas", child_tickets, dep_state)
     # Bottom list sections: newest first (reverse insertion order)
-    wontdo_cards = _render_list_rows(list(reversed(by_column["wontdo"])), "wontdo", child_tickets, dep_state)
-    review_cards = _render_cards(by_column["review"], "review", child_tickets, dep_state)
-    done_cards = _render_list_rows(list(reversed(by_column["done"])), "done", child_tickets, dep_state)
-    icebox_cards = _render_list_rows(list(reversed(by_column["icebox"])), "icebox", child_tickets, dep_state)
-    bugs_cards = _render_list_rows(list(reversed(by_column["bugs"])), "bugs", child_tickets, dep_state)
+    wontdo_cards = _render_list_rows(list(reversed(by_section["Won't Do"])), "wontdo", child_tickets, dep_state)
+    review_cards = _render_cards(by_section["For Review"], "review", child_tickets, dep_state)
+    done_cards = _render_list_rows(list(reversed(by_section["Done"])), "done", child_tickets, dep_state)
+    icebox_cards = _render_list_rows(list(reversed(by_section["Icebox"])), "icebox", child_tickets, dep_state)
+    bugs_cards = _render_list_rows(list(reversed(by_section["Bugs"])), "bugs", child_tickets, dep_state)
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
 
@@ -1291,8 +1263,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 .meta-chip--priority .chip-dot.medium {{ background: #eab308; }}
 .meta-chip--priority .chip-dot.low {{ background: #22c55e; }}
 .meta-chip--status {{ }}
-.meta-chip--column {{ cursor: default; color: var(--text-tertiary); border-color: transparent; background: transparent; }}
-.meta-chip--column:hover {{ background: transparent; color: var(--text-tertiary); }}
+.meta-chip--section {{ cursor: default; color: var(--text-tertiary); border-color: transparent; background: transparent; }}
+.meta-chip--section:hover {{ background: transparent; color: var(--text-tertiary); }}
 .meta-chip--parent {{ }}
 .meta-chip--parent .chip-label {{ color: var(--text-tertiary); }}
 .meta-chip--parent .chip-value {{ color: var(--accent); font-family: var(--font-mono); }}
@@ -1700,7 +1672,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       clearTimeout(this._clickTimer);
       var id = this.dataset.itemId;
       var title = this.dataset.title;
-      var col = this.dataset.column;
+      var col = this.dataset.section;
       var text;
       if (col === 'ideas') {{
         text = '/spec ' + id;
@@ -1780,7 +1752,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (!oldEl) return;
         // Skip cards being edited — don't overwrite in-progress edits
         if (oldEl.dataset.editing === 'true') return;
-        var oldCol = oldEl.dataset.column, newCol = newEl.dataset.column;
+        var oldCol = oldEl.dataset.section, newCol = newEl.dataset.section;
         var wasExpanded = oldEl.classList.contains('expanded');
 
         if (oldCol !== newCol) {{
@@ -1788,7 +1760,7 @@ a {{ color: var(--accent); text-decoration: none; }}
           if (sel) {{
             var target = document.querySelector(sel);
             if (target) {{
-              oldEl.dataset.column = newCol;
+              oldEl.dataset.section = newCol;
               oldEl.dataset.title = newEl.dataset.title || '';
               oldEl.dataset.desc = newEl.dataset.desc || '';
               oldEl.className = newEl.className;
@@ -1895,7 +1867,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         }});
         el.addEventListener('dblclick', function(e) {{
           e.stopPropagation(); clearTimeout(this._clickTimer);
-          var id = this.dataset.itemId, title = this.dataset.title, col = this.dataset.column, text;
+          var id = this.dataset.itemId, title = this.dataset.title, col = this.dataset.section, text;
           if (col === 'ideas') text = '/spec ' + id;
           else if (col === 'backlog') text = 'I want to spec out ' + id + ': ' + title + ' — write the description and acceptance criteria';
           else if (col === 'review') text = '/review ' + id;
@@ -2130,7 +2102,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (existing) existing.remove();
         var oldStatus = badge.textContent.trim();
         // Create dropdown
-        var statuses = ['proposed','specified','ready','in-progress','blocked','rework','for-review','done','bug','bug-fixed','icebox','wont-do'];
+        var statuses = {json.dumps(STATUSES)};
         var dd = document.createElement('div');
         dd.className = 'status-dropdown';
         dd.style.cssText = 'position:absolute;z-index:100;background:var(--bg-card);border:1px solid var(--border-main);border-radius:6px;padding:4px 0;min-width:130px;box-shadow:0 4px 12px rgba(0,0,0,.4);';
@@ -2660,7 +2632,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       <span class="meta-chip meta-chip--status" title="Click to change status"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--complexity" title="Click to change complexity"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--parent"><span class="chip-label">Parent:</span> <span class="chip-value">None</span></span>
-      <span class="meta-chip meta-chip--column"><span class="chip-text"></span></span>
+      <span class="meta-chip meta-chip--section"><span class="chip-text"></span></span>
     </div>
     <div class="detail-body">
       <!-- Gate banner (shown during column moves) -->
@@ -2765,7 +2737,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', tests: 'T', reviewed: 'R', smoke: 'S' }};
   var PRIORITY_CYCLE = ['high', 'medium', 'low'];
   var COMPLEXITY_CYCLE = ['S', 'M', 'L', 'XL'];
-  var STATUS_OPTIONS = ['proposed', 'in-progress', 'blocked', 'rework', 'for-review', 'done'];
+  var STATUS_OPTIONS = {json.dumps(STATUSES)};
 
   var gateBanner = document.getElementById('detail-gate-banner');
   var gateBadge = document.getElementById('gate-banner-badge');
@@ -2850,8 +2822,8 @@ a {{ color: var(--accent); text-decoration: none; }}
     parentVal.textContent = data.parent || 'None';
 
     // Column
-    var colText = overlay.querySelector('.meta-chip--column .chip-text');
-    colText.textContent = (data.section || data.column || '').replace(/^\\w/, function(c){{ return c.toUpperCase(); }});
+    var colText = overlay.querySelector('.meta-chip--section .chip-text');
+    colText.textContent = (data.section || '').replace(/^\\w/, function(c){{ return c.toUpperCase(); }});
   }}
 
   // Priority cycling
@@ -3665,13 +3637,13 @@ a {{ color: var(--accent); text-decoration: none; }}
     return html
 
 
-def _render_cards(tickets: list[Ticket], column: str, child_tickets: dict[str, list] = None, dep_state: dict = None) -> str:
+def _render_cards(tickets: list[Ticket], slug: str, child_tickets: dict[str, list] = None, dep_state: dict = None) -> str:
     """Render full-size kanban cards."""
     if child_tickets is None:
         child_tickets = {}
     if dep_state is None:
         dep_state = {}
-    card_class = CARD_CLASS_BY_COLUMN.get(column, "")
+    card_class = CARD_CLASS_BY_SLUG.get(slug, "")
     lines = []
     for t in tickets:
         title_esc = escape(t.title)
@@ -3698,19 +3670,19 @@ def _render_cards(tickets: list[Ticket], column: str, child_tickets: dict[str, l
                 f'<span class="arrow">&#9660;</span> {n_children}</span>'
             )
 
-        lines.append(_render_single_card(t, column, card_class, dep_state, child_badge_html))
+        lines.append(_render_single_card(t, slug, card_class, dep_state, child_badge_html))
 
         # Render children as full cards in a connected group
         if children:
             lines.append(f'      <div class="child-group collapsed" data-parent="{id_esc}">')
             for child in children:
-                lines.append(_render_single_card(child, column, card_class, dep_state, ""))
+                lines.append(_render_single_card(child, slug, card_class, dep_state, ""))
             lines.append(f'      </div>')
 
     return "\n".join(lines)
 
 
-def _render_single_card(t, column: str, card_class: str, dep_state: dict, child_badge_html: str) -> str:
+def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_badge_html: str) -> str:
     """Render a single card (parent or child) as full HTML."""
     title_esc = escape(t.title)
     id_esc = escape(t.id)
@@ -3766,13 +3738,13 @@ def _render_single_card(t, column: str, card_class: str, dep_state: dict, child_
         git_html += f'        <div class="card-release"><span class="release-badge">{escape(t.release_tag)}</span></div>\n'
 
     readiness_html = _render_readiness_row(t)
-    actions_html = _render_action_buttons(column, id_esc)
+    actions_html = _render_action_buttons(slug, id_esc)
 
     return (
-        f'      <div class="card {card_class}{blocked_class}" data-column="{column}" '
+        f'      <div class="card {card_class}{blocked_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
         f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
-        f'{"" if column != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
+        f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}>\n'
         f'        <div class="copied-toast">Copied!</div>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
@@ -3808,17 +3780,17 @@ def _render_readiness_row(t) -> str:
     return '        <div class="readiness-row">' + "".join(dots) + '</div>\n'
 
 
-def _render_action_buttons(column: str, ticket_id: str) -> str:
+def _render_action_buttons(slug: str, ticket_id: str) -> str:
     """Render contextual action buttons for a card (only visible in edit mode when expanded)."""
     buttons = []
-    if column == "ideas":
+    if slug == "ideas":
         buttons.append(f'<button class="action-btn primary" data-action="move" data-section="Backlog">&#8594; Backlog</button>')
-    elif column == "backlog":
+    elif slug == "backlog":
         buttons.append(f'<button class="action-btn primary" data-action="move" data-section="WIP">&#9654; Start</button>')
-    elif column == "wip":
+    elif slug == "wip":
         buttons.append(f'<button class="action-btn primary" data-action="move" data-section="For Review">&#10003; Done</button>')
         buttons.append(f'<button class="action-btn" data-action="move" data-section="Icebox">&#10052; Icebox</button>')
-    elif column == "review":
+    elif slug == "review":
         buttons.append(f'<button class="action-btn primary" data-action="accept">&#10003; Accept</button>')
         buttons.append(f'<button class="action-btn" data-action="move" data-section="WIP">&#8592; Back to WIP</button>')
     if not buttons:
@@ -3826,7 +3798,7 @@ def _render_action_buttons(column: str, ticket_id: str) -> str:
     return '        <div class="card-actions">' + "".join(buttons) + '</div>\n'
 
 
-def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[str, list] = None, dep_state: dict = None) -> str:
+def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str, list] = None, dep_state: dict = None) -> str:
     """Render compact list rows for bottom sections (bugs, done, icebox, won't do)."""
     if child_tickets is None:
         child_tickets = {}
@@ -3878,10 +3850,10 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
             release_badge = f'<span class="release-badge">{escape(t.release_tag)}</span>'
 
         lines.append(
-            f'      <div class="list-row card" data-column="{column}" '
+            f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
             f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
-            f'{"" if column != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}>\n'
+            f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}>\n'
             f'        <div class="copied-toast">Copied!</div>\n'
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
@@ -3904,10 +3876,10 @@ def _render_list_rows(tickets: list[Ticket], column: str, child_tickets: dict[st
                 child_desc = escape(child.description) if child.description else ""
                 child_status = child.status.replace(" ", "-").lower()
                 lines.append(
-                    f'      <div class="list-row card" data-column="{column}" '
+                    f'      <div class="list-row card" data-section="{slug}" '
                     f'data-title="{child_title}" data-item-id="{child_id}" data-desc="{child_desc}" '
                     f'data-status="{child_status}" data-complexity="{escape(child.complexity)}"'
-                    f'{"" if column != "bugs" and child_status not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
+                    f'{"" if slug != "bugs" and child_status not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
                     f' data-parent="{id_esc}">\n'
                     f'        <div class="copied-toast">Copied!</div>\n'
                     f'        <div class="list-row-main">'
@@ -3950,7 +3922,6 @@ def generate_json_output(projects: list[Project]) -> str:
                 "complexity": t.complexity,
                 "status": t.status,
                 "section": t.section,
-                "column": t.column,
                 "description": t.description,
                 "acceptance_criteria": [
                     {"checked": c, "text": txt} for c, txt in t.acceptance_criteria
@@ -4073,18 +4044,6 @@ def main():
     if not projects:
         # Create a placeholder project so dashboard still renders
         projects = [Project(id="none", name="No Projects", path="")]
-
-    # Route tickets to their correct columns
-    for proj in projects:
-        for t in proj.tickets:
-            if t.section == "Done":
-                t.column = "done"
-            elif t.section == "For Review":
-                t.column = "review"
-            elif t.section == "Icebox":
-                t.column = "icebox"
-            elif t.section == "Bugs":
-                t.column = "bugs"
 
     # JSON output mode: print and exit
     if json_mode:

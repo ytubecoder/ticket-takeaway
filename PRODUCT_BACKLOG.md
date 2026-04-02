@@ -6,22 +6,10 @@
 Priority: medium | Complexity: M | Status: for-review
 just get off the pc and go touch
 - [ ] touching has occurred and she provides feedback
-
-### B-10: Data Model Refactor + Business Rules Engine
-Priority: high | Complexity: XL | Status: in-progress
-Refactor ticket system from generated-HTML-with-scattered-logic to clean app architecture. DB is truth, markdown is output. Three branches: (1) db-cleanup: drop column field, dedup rows, migration tracking. (2) status-foundation: constants.py, fix move logic (guided not forced), decompose accept, unify JS dropdowns. (3) rules-engine: post-change hooks in actions.py, scheduled events poller, auto-promote parent, delayed auto-accept. New files: constants.py, db.py, actions.py. Security fixes first (CORS wildcard, prompt injection, thread safety). See plan: ~/.claude/plans/dapper-mapping-unicorn.md
-- [ ] B-11: Security fixes applied
-- [ ] B-12: column field dropped, duplicates cleaned
-- [ ] B-13: constants.py, actions.py, db.py created; move logic fixed; accept decomposed
-- [ ] B-14: Post-change hooks working; auto-promote and delayed auto-accept shipping
-- [ ] B-15: External markdown edits detected and imported without clobbering
-- [ ] CLI commands still work identically
-- [ ] Dashboard renders correctly throughout
-
-### B-11: Security fixes — CORS, threading, content-length
-Priority: high | Complexity: S | Status: in-progress
-Parent: B-10
-Pre-refactor security fixes. (1) Lock CORS to localhost origin — critical, 5min. (2) ThreadingHTTPServer — low, 15min. (3) Content-Length cap 1MB — low, 5min. (4) Wrap _get_ticket_json in _db_lock for write-path callers — medium, 1hr. (5) Atomic spec file append under _db_lock — medium, 30min. (6) Prompt injection: XML data tags in claude -p calls — high, 2-4hr.
+- [ ] integration-test criterion 1775120298
+- [ ] markdown-criteria-test 1775120298
+- [ ] integration-test criterion 1775127571
+- [ ] markdown-criteria-test 1775127571
 
 ## For Review
 
@@ -43,55 +31,9 @@ Phase 3 of I-07. Undo system: toast with countdown after each edit (5s window to
 - [ ] Undo works for: priority, status, complexity, criteria toggle, text edits, moves
 - [ ] Ctrl+Z does not fire when focused on input/textarea fields
 
-### I-07: UI Inline Editing with Field-Level Updates
-Priority: medium | Complexity: M | Status: done
-Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
-- [ ] Phase 2: full expand-to-edit with form rendering for all 12 editable fields
-- [ ] Phase 3: new ticket creation + drag-and-drop column moves
-- [ ] data-editing guard in patchCards() prevents poll from overwriting edits
-- [ ] file:// mode still works read-only — editing requires serve.py
-- [ ] B-06: serve.py HTTP server + quick-edit controls (Phase 1)
-- [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
-- [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
-
-## Backlog
-
-### B-02: Per-Feature Working Files
-Priority: medium | Complexity: M | Status: proposed
-Depends: B-01
-Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include PLAN.md, NOTES.md, BUGS.md, TESTS.md, REVIEW.md templates. Clean up on acceptance after /sync.
-- [ ] Create directory structure on WIP transition
-- [ ] Template files with section headers
-- [ ] Cleanup step integrated into /accept
-- [ ] /sync integration before cleanup
-- [ ] Test criterion from gate panel
-
-### B-04: Registry Auto-Discovery
-Priority: low | Complexity: S | Status: proposed
-Auto-detect projects that have PRODUCT_BACKLOG.md instead of requiring manual registry.json setup. Fall back to registry.json if auto-discovery finds nothing.
-
-### B-12: Branch 1: DB cleanup — drop column, dedup, migrations
-Priority: high | Complexity: M | Status: proposed
-Parent: B-10
-Drop redundant column field (~154 references), derive from section. Dedup 28 duplicate DB rows. Add _migrations table for version tracking. Merge FIRST — touches most lines.
-
-### B-13: Branch 2: Status foundation — constants.py, fix move, decompose accept
-Priority: high | Complexity: L | Status: proposed
-Parent: B-10
-Create src/constants.py (canonical STATUSES, VALID_STATUSES_BY_SECTION). Fix move logic: compute_status_on_move() preserves valid statuses. Emit STATUSES to JS. Create src/db.py and src/actions.py. Decompose cmd_accept into atomic functions + /api/tickets/<id>/accept endpoint. Merge SECOND.
-
-### B-14: Branch 3: Rules engine — hooks, scheduled events, initial rules
-Priority: medium | Complexity: L | Status: proposed
-Parent: B-10
-Post-change hooks in actions.py (_after_move, _after_status_change). Scheduled events table + 30s poller thread in serve.py. Ship initial rules: auto-promote parent when all children done, delayed auto-accept from For Review. Merge LAST.
-
-### B-15: Markdown watcher — hash-based external edit detection
-Priority: medium | Complexity: M | Status: proposed
-Parent: B-10
-Replace read-before-write ingest_markdown with hash-based change detection. Store SHA256 of generated markdown in _sync_state table. Watcher thread detects external edits (LLM/human), diffs against last-generated version, imports only deltas into DB. Keeps LLM markdown editing working without race conditions.
-
 ### B-16: Test Framework — Smoke, E2E Journey, TDD
-Priority: high | Complexity: L | Status: proposed
+Priority: high | Complexity: L | Status: for-review
+Rationale: We need to define 3 types of tests that are "available" to tickets. It's likely that for the best process we want to use TDD first but it doesnt make sense in every case due to efficiency so sometimes we will 'take a shortcut' and go with e2e/smoke tests. There may also be more fuzzy acceptance criteria. I think by default we would want a bare minimum of testable human readable items that may then inspire more technical level unit/tdd type tests.
 Three-category test framework: (1) Smoke tests — click everything, verify every UI element renders/responds/persists, organized per page (kanban, expanded card, detail overlay, gate panel). (2) E2E Journey tests — multi-step user workflows (ticket lifecycle, bug workflow, gate check, quick edit, external edit). (3) TDD tests — written before implementing complex new logic (business rules, status validation, compute_status_on_move). Smoke + E2E written against refactored actions.py API. Separate worktree recommended.
 - [ ] Smoke tests: every API endpoint returns expected response
 - [ ] Smoke tests: every UI interactive element responds to click
@@ -101,6 +43,55 @@ Three-category test framework: (1) Smoke tests — click everything, verify ever
 - [ ] TDD: compute_status_on_move edge cases
 - [ ] TDD: auto-promote parent logic
 - [ ] Tests runnable via python3 -m pytest or similar
+
+### B-11: Security fixes — CORS, threading, content-length
+Priority: high | Complexity: S | Status: for-review
+Parent: B-10
+Pre-refactor security fixes. (1) Lock CORS to localhost origin — critical, 5min. (2) ThreadingHTTPServer — low, 15min. (3) Content-Length cap 1MB — low, 5min. (4) Wrap _get_ticket_json in _db_lock for write-path callers — medium, 1hr. (5) Atomic spec file append under _db_lock — medium, 30min. (6) Prompt injection: XML data tags in claude -p calls — high, 2-4hr.
+
+### B-12: Branch 1: DB cleanup — drop column, dedup, migrations
+Priority: high | Complexity: M | Status: for-review
+Parent: B-10
+Drop redundant column field (~154 references), derive from section. Dedup 28 duplicate DB rows. Add _migrations table for version tracking. Merge FIRST — touches most lines.
+
+### B-13: Branch 2: Status foundation — constants.py, fix move, decompose accept
+Priority: high | Complexity: L | Status: for-review
+Parent: B-10
+Create src/constants.py (canonical STATUSES, VALID_STATUSES_BY_SECTION). Fix move logic: compute_status_on_move() preserves valid statuses. Emit STATUSES to JS. Create src/db.py and src/actions.py. Decompose cmd_accept into atomic functions + /api/tickets/<id>/accept endpoint. Merge SECOND.
+
+### B-14: Branch 3: Rules engine — hooks, scheduled events, initial rules
+Priority: medium | Complexity: L | Status: for-review
+Parent: B-10
+Post-change hooks in actions.py (_after_move, _after_status_change). Scheduled events table + 30s poller thread in serve.py. Ship initial rules: auto-promote parent when all children done, delayed auto-accept from For Review. Merge LAST.
+
+### B-15: Markdown watcher — hash-based external edit detection
+Priority: medium | Complexity: M | Status: for-review
+Parent: B-10
+Replace read-before-write ingest_markdown with hash-based change detection. Store SHA256 of generated markdown in _sync_state table. Watcher thread detects external edits (LLM/human), diffs against last-generated version, imports only deltas into DB. Keeps LLM markdown editing working without race conditions.
+
+### B-10: Data Model Refactor + Business Rules Engine
+Priority: high | Complexity: XL | Status: in-progress
+Refactor ticket system from generated-HTML-with-scattered-logic to clean app architecture. DB is truth, markdown is output. Three branches: (1) db-cleanup: drop column field, dedup rows, migration tracking. (2) status-foundation: constants.py, fix move logic (guided not forced), decompose accept, unify JS dropdowns. (3) rules-engine: post-change hooks in actions.py, scheduled events poller, auto-promote parent, delayed auto-accept. New files: constants.py, db.py, actions.py. Security fixes first (CORS wildcard, prompt injection, thread safety). See plan: ~/.claude/plans/dapper-mapping-unicorn.md
+- [ ] B-11: Security fixes applied
+- [ ] B-12: column field dropped, duplicates cleaned
+- [ ] B-13: constants.py, actions.py, db.py created; move logic fixed; accept decomposed
+- [ ] B-14: Post-change hooks working; auto-promote and delayed auto-accept shipping
+- [ ] B-15: External markdown edits detected and imported without clobbering
+- [ ] CLI commands still work identically
+- [ ] Dashboard renders correctly throughout
+
+## Backlog
+
+### I-06: 3-line truncated description preview on collapsed cards
+Priority: medium | Complexity: M | Status: proposed
+Collapsed cards show only title, ID, status badge, and metadata — no description preview. Add a 3-line truncated description preview visible on collapsed cards with CSS line-clamp for truncation. Uses secondary text color for visual hierarchy, hidden when card is expanded (full description shown instead). Only rendered if description exists. Inspired by cline/kanban card information hierarchy: status dot, title, truncated description, activity, metadata.
+- [ ] Collapsed cards show first 3 lines of description text
+- [ ] Text is visually truncated with CSS line-clamp (ellipsis at end)
+- [ ] Preview uses secondary text color for visual hierarchy
+- [ ] Preview hidden when card is expanded (full description shown instead)
+- [ ] Cards with no description show no preview element
+- [ ] Preview text is selectable but not interactive
+- [ ] Works for both kanban cards and bottom list rows
 
 ## Ideas
 
@@ -127,17 +118,6 @@ Currently clicking a card expands it inline, pushing other cards down. Replace w
 - [ ] Bottom list rows also open the detail panel
 - [ ] Panel works correctly with filtered/searched views
 
-### I-06: 3-line truncated description preview on collapsed cards
-Priority: medium | Complexity: M | Status: proposed
-Collapsed cards show only title, ID, status badge, and metadata — no description preview. Add a 3-line truncated description preview visible on collapsed cards with CSS line-clamp for truncation. Uses secondary text color for visual hierarchy, hidden when card is expanded (full description shown instead). Only rendered if description exists. Inspired by cline/kanban card information hierarchy: status dot, title, truncated description, activity, metadata.
-- [ ] Collapsed cards show first 3 lines of description text
-- [ ] Text is visually truncated with CSS line-clamp (ellipsis at end)
-- [ ] Preview uses secondary text color for visual hierarchy
-- [ ] Preview hidden when card is expanded (full description shown instead)
-- [ ] Cards with no description show no preview element
-- [ ] Preview text is selectable but not interactive
-- [ ] Works for both kanban cards and bottom list rows
-
 ### I-03: Dependency visualization — SVG overlay lines between linked cards
 Priority: medium | Complexity: L | Status: proposed
 Render SVG connector lines between cards that have Depends: relationships. Currently dependencies show as text but there is no visual graph. An SVG overlay layer drawn on top of the kanban board would connect dependent cards with directional lines/arrows, making blocking relationships instantly visible. Inspired by cline/kanban DependencyOverlay component. Implementation: absolutely-positioned SVG element covering the kanban container, line drawing via getBoundingClientRect(), dashed lines for resolved deps, solid red for blocking deps, toggle button in filter bar, recalculate on resize/filter/expand.
@@ -148,9 +128,26 @@ Render SVG connector lines between cards that have Depends: relationships. Curre
 - [ ] Lines work across columns (e.g. WIP card depending on Backlog card)
 - [ ] No lines rendered when dependency target card is hidden by filter
 
+### B-02: Per-Feature Working Files
+Priority: medium | Complexity: M | Status: proposed
+Depends: B-01
+Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include PLAN.md, NOTES.md, BUGS.md, TESTS.md, REVIEW.md templates. Clean up on acceptance after /sync.
+- [ ] Create directory structure on WIP transition
+- [ ] Template files with section headers
+- [ ] Cleanup step integrated into /accept
+- [ ] /sync integration before cleanup
+- [ ] Test criterion from gate panel
+
+### B-04: Registry Auto-Discovery
+Priority: low | Complexity: S | Status: proposed
+Auto-detect projects that have PRODUCT_BACKLOG.md instead of requiring manual registry.json setup. Fall back to registry.json if auto-discovery finds nothing.
+
 ### I-09: test ticket with nothing on it
 Priority: medium | Complexity: M | Status: proposed
 This is just a test but the feature should be to add a text file called hello.txt
+
+### I-16: MCP server for LLM tool integration
+Priority: medium | Complexity: M | Status: proposed
 
 ## Bugs
 
@@ -349,6 +346,18 @@ When a ticket is moved to a top kanban column (Ideas, Backlog, WIP, For Review, 
 - [ ] Cancel dismisses panel without moving, saved edits persist
 - [ ] Moves to Bugs/Icebox/Won't Do bypass the gate (immediate)
 - [ ] add_criteria PUT support for saving suggested new criteria
+
+### I-07: UI Inline Editing with Field-Level Updates
+Priority: medium | Complexity: M | Status: done
+Commit: 91f188e
+Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
+- [ ] Phase 2: full expand-to-edit with form rendering for all 12 editable fields
+- [ ] Phase 3: new ticket creation + drag-and-drop column moves
+- [ ] data-editing guard in patchCards() prevents poll from overwriting edits
+- [ ] file:// mode still works read-only — editing requires serve.py
+- [ ] B-06: serve.py HTTP server + quick-edit controls (Phase 1)
+- [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
+- [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
 
 ## Won't Do
 

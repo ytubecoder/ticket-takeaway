@@ -19,6 +19,7 @@ import sys
 import threading
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -44,6 +45,17 @@ gen = importlib.util.module_from_spec(_gen_spec)
 _gen_spec.loader.exec_module(gen)
 
 # ---------------------------------------------------------------------------
+# Direct imports from new modules (prefer these over cli.* where available)
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, str(Path(__file__).parent))
+from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
+                       SECTION_PREFIX, STATUSES, VALID_STATUSES_BY_SECTION,
+                       compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH)
+from db import get_db, init_db
+from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
+
+# ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------
 
@@ -51,7 +63,7 @@ SERVER_PROJECT_ID = None  # Set from --project arg or auto-detect
 SERVER_PORT = 8787
 
 # Lock for DB operations (sqlite3 connections aren't thread-safe)
-_db_lock = threading.Lock()
+_db_lock = threading.RLock()  # Reentrant — write functions call _get_ticket_json while holding lock
 
 
 def _get_project() -> dict:
@@ -72,8 +84,8 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -99,41 +111,31 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
 
 
 def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
-    """Move a ticket to a different section. Returns True on success."""
+    """Move a ticket to a different section. Returns True on success.
+
+    Delegates to actions.move_ticket() which uses compute_status_on_move()
+    to preserve valid statuses across section moves.
+    """
     try:
         section = cli.resolve_section(section_name)
     except (SystemExit, ValueError):
         return False
 
-    column = cli.SECTION_TO_COLUMN.get(section)
-    status = cli.DEFAULT_STATUS_BY_SECTION.get(section)
-    if not column or not status:
+    if section not in SECTION_SLUGS:
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
-        row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-            (ticket_id, project_id)
-        ).fetchone()
-        if not row:
+        project_path = os.path.expanduser(proj.get("path", ""))
+        try:
+            _actions_move_ticket(conn, project_id, ticket_id, section, project_path=project_path)
+        except ValueError:
             conn.close()
             return False
-
-        tid = row["id"]
-        sort_row = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
-            (project_id, section)
-        ).fetchone()
-
-        conn.execute("""
-            UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
-        """, (section, column, status, sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -145,8 +147,8 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
 def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
     """Toggle a single acceptance criterion's checked state."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -187,8 +189,8 @@ def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
 def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int, new_text: str) -> bool:
     """Update the text of a criterion at a given index."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -222,8 +224,8 @@ def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int
 def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
     """Remove a criterion at a given index."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -265,8 +267,8 @@ def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
 def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
     """Add a new criterion to the end of the list."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -300,8 +302,8 @@ def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
 def _update_depends(project_id: str, ticket_id: str, depends_list: list) -> bool:
     """Replace all depends for a ticket with a new list."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -339,46 +341,21 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     except (SystemExit, ValueError):
         return None
 
-    column = cli.SECTION_TO_COLUMN.get(section, "ideas")
-    status = cli.DEFAULT_STATUS_BY_SECTION.get(section, "proposed")
     priority = body.get("priority", "medium")
     complexity = body.get("complexity", "M")
     description = body.get("description", "")
 
-    # Determine next ID by prefix (CLI uses "B", "I", "BUG" etc. without dash)
-    prefix = cli.SECTION_PREFIX.get(section, "B")
-    sep = "-"
-
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
-        # Find next ID number for this prefix
-        rows = conn.execute(
-            "SELECT id FROM tickets WHERE project_id = ? AND id LIKE ?",
-            (project_id, prefix + sep + "%")
-        ).fetchall()
-        max_num = 0
-        for r in rows:
-            try:
-                num = int(r["id"].split(sep, 1)[1])
-                if num > max_num:
-                    max_num = num
-            except (ValueError, IndexError):
-                pass
-        ticket_id = f"{prefix}{sep}{max_num + 1:02d}"
-
-        sort_row = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
-            (project_id, section)
-        ).fetchone()
-
-        conn.execute("""
-            INSERT INTO tickets (id, project_id, title, priority, complexity, status, section, column, description, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ticket_id, project_id, title, priority, complexity, status, section, column, description, sort_row["next_order"]))
+        ticket_id = _actions_add_ticket(
+            conn, project_id, title,
+            section=section, priority=priority,
+            complexity=complexity, description=description,
+        )
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -391,8 +368,8 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
 def _delete_ticket(project_id: str, ticket_id: str) -> bool:
     """Delete a ticket. Returns True on success."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -418,29 +395,18 @@ def _delete_ticket(project_id: str, ticket_id: str) -> bool:
 def _accept_ticket(project_id: str, ticket_id: str) -> bool:
     """Accept a ticket — move to Done with status 'done'. Returns True on success."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
-        row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-            (ticket_id, project_id)
-        ).fetchone()
-        if not row:
+        project_path = os.path.expanduser(proj.get("path", ""))
+        project_name = proj.get("name", proj.get("id", ""))
+        try:
+            _actions_accept_ticket(conn, project_id, ticket_id, project_path, project_name)
+        except ValueError:
             conn.close()
             return False
-
-        tid = row["id"]
-        sort_row = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = 'Done'",
-            (project_id,)
-        ).fetchone()
-
-        conn.execute("""
-            UPDATE tickets SET section = 'Done', column = 'done', status = 'done', sort_order = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
-        """, (sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -771,8 +737,8 @@ def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
 
         row = conn.execute(
@@ -813,8 +779,8 @@ def _update_readiness_content(project_id: str, ticket_id: str, flag: str, conten
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
 
         row = conn.execute(
@@ -849,9 +815,15 @@ def _update_readiness_content(project_id: str, ticket_id: str, flag: str, conten
 
 
 def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
-    """Get a single ticket as a JSON-serializable dict."""
-    conn = cli.get_db()
-    cli.init_db(conn)
+    """Get a single ticket as a JSON-serializable dict. Thread-safe."""
+    with _db_lock:
+        return _get_ticket_json_inner(project_id, ticket_id)
+
+
+def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
+    """Inner implementation — caller must hold _db_lock."""
+    conn = get_db()
+    init_db(conn)
     row = conn.execute(
         "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
         (ticket_id, project_id)
@@ -889,7 +861,6 @@ def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
         "complexity": row["complexity"],
         "status": row["status"],
         "section": row["section"],
-        "column": row["column"],
         "description": row["description"],
         "parent": row["parent"],
         "rationale": row["rationale"],
@@ -906,6 +877,10 @@ def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
 # HTTP Handler
 # ---------------------------------------------------------------------------
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     """Handle dashboard HTTP requests."""
 
@@ -919,7 +894,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", f"http://localhost:{SERVER_PORT}")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
@@ -934,7 +909,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0))
+        length = min(int(self.headers.get("Content-Length", 0)), 1_048_576)  # 1 MB cap
         if length == 0:
             return {}
         raw = self.rfile.read(length)
@@ -943,7 +918,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         """Handle CORS preflight."""
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", f"http://localhost:{SERVER_PORT}")
         self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -972,8 +947,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/tickets":
             proj = _get_project()
             project_id = proj["id"]
-            conn = cli.get_db()
-            cli.init_db(conn)
+            conn = get_db()
+            init_db(conn)
             rows = conn.execute(
                 "SELECT id FROM tickets WHERE project_id = ? ORDER BY sort_order ASC",
                 (project_id,)
@@ -1048,8 +1023,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             text = body["add_criteria"]
             if isinstance(text, str) and text.strip():
                 with _db_lock:
-                    conn = cli.get_db()
-                    cli.init_db(conn)
+                    conn = get_db()
+                    init_db(conn)
                     proj2 = _get_project()
                     cli.ingest_markdown(conn, proj2)
                     row = conn.execute(
@@ -1303,8 +1278,94 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 # ---------------------------------------------------------------------------
+# Background watcher for external markdown edits
+# ---------------------------------------------------------------------------
+
+def _start_external_edit_watcher(project: dict, interval: float = 5.0):
+    """Start a daemon thread that polls for external PRODUCT_BACKLOG.md edits.
+
+    Every *interval* seconds it computes the file hash and compares with the
+    stored hash in ``_sync_state``.  Only when the hash differs does it parse
+    the markdown and merge deltas — keeping the hot-path cheap.
+    """
+    import time
+
+    def _poll():
+        while True:
+            try:
+                time.sleep(interval)
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    changed = cli.detect_external_edits(conn, project)
+                    if changed:
+                        cli.regenerate_dashboard(project)
+                        print(f"[watcher] External edits absorbed for {project.get('id', '?')}")
+                    conn.close()
+            except Exception as exc:
+                # Don't crash the watcher on transient errors
+                print(f"[watcher] Error: {exc}")
+
+    t = threading.Thread(target=_poll, daemon=True, name="md-edit-watcher")
+    t.start()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
+    """Start a daemon thread that polls scheduled_events every *interval* seconds.
+
+    Picks up unfired events whose fire_at <= now, executes the action via
+    execute_scheduled_event(), marks them fired, and syncs markdown/dashboard.
+    Each event is wrapped in its own try/except so one bad event cannot kill
+    the poller.
+    """
+    import time
+
+    def _poll():
+        while True:
+            try:
+                time.sleep(interval)
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    now = datetime.now().isoformat()
+                    due = conn.execute(
+                        "SELECT * FROM scheduled_events WHERE fired = 0 AND fire_at <= ? "
+                        "ORDER BY fire_at ASC",
+                        (now,),
+                    ).fetchall()
+                    executed_any = False
+                    for event in due:
+                        try:
+                            execute_scheduled_event(conn, event)
+                            conn.execute(
+                                "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
+                                (event["id"],),
+                            )
+                            executed_any = True
+                        except Exception as exc:
+                            # Mark as fired to avoid retry-looping on permanently broken events
+                            conn.execute(
+                                "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
+                                (event["id"],),
+                            )
+                            import traceback
+                            traceback.print_exc()
+                    if executed_any:
+                        conn.commit()
+                        cli.sync_to_markdown(conn, project)
+                        cli.regenerate_dashboard(project)
+                    conn.close()
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
+    t = threading.Thread(target=_poll, daemon=True, name="scheduled-event-poller")
+    t.start()
+
 
 def main():
     global SERVER_PROJECT_ID, SERVER_PORT
@@ -1339,7 +1400,11 @@ def main():
         print("No project found. Run from a registered project directory or use --project ID.", file=sys.stderr)
         sys.exit(1)
 
-    server = HTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
+    # Start background threads
+    _start_external_edit_watcher(proj)
+    _start_scheduled_event_poller(proj)
+
+    server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"
     print(f"Dashboard server: {url}")
     print("Press Ctrl+C to stop.\n")

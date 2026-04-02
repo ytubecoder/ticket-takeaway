@@ -50,10 +50,10 @@ PRODUCT_SPECIFICATION.md (write-only output from /accept, not read by generator)
 5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
-Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, column, description, acceptance_criteria, parent, rationale, depends, summary, archived, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON.
+Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, rationale, depends, summary, archived, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; slugs (wip, review, etc.) are derived via `SECTION_SLUGS` for CLI/HTML use.
 
 **Three-layer hierarchy** (see `docs/LIFECYCLE.md` Section 3b):
-- **Section** (column) = where the work is (Ideas → Backlog → WIP → Review → Done)
+- **Section** = where the work is (Ideas → Backlog → WIP → Review → Done)
 - **Status** (badge) = how the work is going (proposed, in-progress, blocked, etc.)
 - **Readiness Flags** (D C T R S) = what's been done (Description, Criteria, Tests, Reviewed, Smoke)
 
@@ -152,6 +152,24 @@ Bug sub-tickets with a `Parent: {ID}` field are **never shown as standalone card
 ## Bottom List Sections
 
 The bottom sections (Bugs, Done, Icebox, Won't Do) render as **compact list rows** instead of full kanban cards. Same click/dblclick behavior, different visual style. Orphan bugs (no parent) appear in the Bug Backlog list; parented bugs only appear nested under their parent.
+
+## Testing
+
+Three-category test framework (`tests/`). Requires `pytest` and `playwright`.
+
+```bash
+python3 -m pytest tests/test_tdd_*.py -v      # TDD: pure logic, no server (instant)
+python3 -m pytest tests/test_smoke_*.py -v     # Smoke: API + UI (needs serve.py)
+python3 -m pytest tests/test_e2e_*.py -v       # E2E: full workflows (needs serve.py + browser)
+python3 -m pytest tests/ -v                    # Everything
+```
+
+- **TDD tests** cover: status-on-move mappings, `auto_promote_parents()`, `resolve_section()`, `auto_generate_id()`, `compute_dependency_state()`
+- **Smoke tests** cover: all API endpoints return expected responses, all UI elements respond to click
+- **E2E tests** cover: ticket lifecycle journey, bug workflow + parent auto-promote, quick edit persistence
+- `conftest.py` provides: `dashboard_server` (starts serve.py on free port), `browser`/`page` (Playwright with mocked gate-check), `live_page` (no mocks), shared API helpers
+
+**Key testability note:** `auto_promote_parents()` is extracted as a standalone function in `generate.py` for direct import. Business logic constants (`DEFAULT_STATUS_BY_SECTION`, `SECTION_SLUGS`, etc.) are importable from `tickets-cli.py` via importlib.
 
 ## Generated Files
 

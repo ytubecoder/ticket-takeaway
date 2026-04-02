@@ -19,6 +19,7 @@ import sys
 import threading
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -51,7 +52,7 @@ SERVER_PROJECT_ID = None  # Set from --project arg or auto-detect
 SERVER_PORT = 8787
 
 # Lock for DB operations (sqlite3 connections aren't thread-safe)
-_db_lock = threading.Lock()
+_db_lock = threading.RLock()  # Reentrant — write functions call _get_ticket_json while holding lock
 
 
 def _get_project() -> dict:
@@ -849,7 +850,13 @@ def _update_readiness_content(project_id: str, ticket_id: str, flag: str, conten
 
 
 def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
-    """Get a single ticket as a JSON-serializable dict."""
+    """Get a single ticket as a JSON-serializable dict. Thread-safe."""
+    with _db_lock:
+        return _get_ticket_json_inner(project_id, ticket_id)
+
+
+def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
+    """Inner implementation — caller must hold _db_lock."""
     conn = cli.get_db()
     cli.init_db(conn)
     row = conn.execute(
@@ -906,6 +913,10 @@ def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
 # HTTP Handler
 # ---------------------------------------------------------------------------
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     """Handle dashboard HTTP requests."""
 
@@ -919,7 +930,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", f"http://localhost:{SERVER_PORT}")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
@@ -934,7 +945,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0))
+        length = min(int(self.headers.get("Content-Length", 0)), 1_048_576)  # 1 MB cap
         if length == 0:
             return {}
         raw = self.rfile.read(length)
@@ -943,7 +954,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         """Handle CORS preflight."""
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", f"http://localhost:{SERVER_PORT}")
         self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -1339,7 +1350,7 @@ def main():
         print("No project found. Run from a registered project directory or use --project ID.", file=sys.stderr)
         sys.exit(1)
 
-    server = HTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"
     print(f"Dashboard server: {url}")
     print("Press Ctrl+C to stop.\n")

@@ -74,8 +74,12 @@ class Ticket:
     complexity: str = "M"
     status: str = "proposed"
     section: str = "Ideas"
-    column: str = "ideas"
+    column: str = ""
     description: str = ""
+
+    def __post_init__(self):
+        if not self.column:
+            self.column = SECTION_TO_COLUMN.get(self.section, "backlog")
     acceptance_criteria: list = field(default_factory=list)
     parent: Optional[str] = None
     rationale: str = ""
@@ -403,6 +407,32 @@ def compute_dependency_state(tickets: list[Ticket]) -> dict[str, dict]:
     return result
 
 
+def auto_promote_parents(
+    by_column: dict[str, list[Ticket]],
+    child_tickets: dict[str, list[Ticket]],
+) -> set[str]:
+    """Move parents to review column when all children are resolved.
+
+    Checks parents in wip, backlog, and bugs columns. If every child ticket
+    has status in {"for-review", "bug-fixed", "done"}, the parent is moved
+    to the review column.
+
+    Returns the set of promoted ticket IDs.
+    """
+    review_statuses = {"for-review", "bug-fixed", "done"}
+    promoted_ids: set[str] = set()
+    for parent_id, children in child_tickets.items():
+        if all(c.status in review_statuses for c in children):
+            for col in ("wip", "backlog", "bugs"):
+                for t in by_column.get(col, []):
+                    if t.id == parent_id:
+                        by_column[col].remove(t)
+                        by_column.setdefault("review", []).append(t)
+                        promoted_ids.add(t.id)
+                        break
+    return promoted_ids
+
+
 # ---------------------------------------------------------------------------
 # Code stats collection
 # ---------------------------------------------------------------------------
@@ -542,18 +572,8 @@ def generate_html(projects: list[Project]) -> str:
             child_tickets.setdefault(t.parent, []).append(t)
 
     # Auto-promote parents to review when all child tickets are resolved
-    review_statuses = {"for-review", "bug-fixed", "done"}
-    promoted_ids: set[str] = set()
+    promoted_ids = auto_promote_parents(by_column, child_tickets)
     parented_ids = {t.id for t in all_tickets if t.parent}
-    for parent_id, children in child_tickets.items():
-        if all(c.status in review_statuses for c in children):
-            for col in ("wip", "backlog", "bugs"):
-                for t in by_column[col]:
-                    if t.id == parent_id:
-                        by_column[col].remove(t)
-                        by_column["review"].append(t)
-                        promoted_ids.add(t.id)
-                        break
 
     # Reorder columns: place children directly after their parent
     # Children NOT in the same column as their parent get a standalone entry

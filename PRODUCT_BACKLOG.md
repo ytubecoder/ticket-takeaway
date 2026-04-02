@@ -13,7 +13,7 @@ Add inline editing to dashboard cards via a local HTTP server (stdlib http.serve
 - [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
 - [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
 
-### I-10: touch bronwyn (test ticket) ..
+### I-10: touch bronwyn
 Priority: medium | Complexity: M | Status: for-review
 just get off the pc and go touch
 - [ ] touching has occurred and she provides feedback
@@ -75,27 +75,13 @@ Verify that all edits made through the gate panel (description changes, new crit
 - [ ] All DB changes trigger sync_to_markdown and regenerate_dashboard
 - [ ] PRODUCT_BACKLOG.md reflects all gate panel edits after sync
 
-### B-06: serve.py HTTP Server + Quick-Edit Controls
-Priority: medium | Complexity: M | Status: for-review
-Parent: I-07
-Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashboard with REST API. Quick-edit: click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. data-editing guard in patchCards(). file:// mode still read-only.
-- [ ] serve.py starts and serves dashboard at localhost:8787
-- [ ] GET /api/tickets returns JSON ticket data
-- [ ] PUT /api/tickets/<id> updates individual fields in DB
-- [ ] POST /api/tickets/<id>/move moves ticket between sections
-- [ ] Click priority dot cycles high/medium/low and persists
-- [ ] Click status badge shows dropdown, selection persists
-- [ ] Click acceptance criteria checkbox toggles and persists
-- [ ] data-editing guard in patchCards() skips cards being edited
-- [ ] file:// mode works read-only with no edit controls
-
 ### B-07: Expand-to-Edit: Full Form Editing for All Fields
 Priority: medium | Complexity: L | Status: done
 Parent: I-07
 Phase 2 of I-07. Click any text field on an expanded kanban card to edit it in-place — title becomes input, description becomes textarea, rationale becomes textarea, etc. Single-click transforms the element, blur saves via apiPut(). No pencil icon, no edit mode toggle. Each field is independently clickable and editable. Select dropdowns for enums (priority, complexity, status, section). Criteria rows: click text to edit, click checkbox to toggle, plus add/remove buttons. Parent and depends fields get autocomplete from existing ticket IDs. Keyboard: ESC reverts, Tab moves to next field. Only in server mode (gated behind EDIT_API check).
 
 ### I-08: Undo System — Toast Countdown + Ctrl+Z
-Priority: medium | Complexity: M | Status: for-review
+Priority: medium | Complexity: M | Status: done
 Parent: I-07
 Phase 3 of I-07. Undo system: toast with countdown after each edit (5s window to revert), plus Ctrl+Z to reverse the last action.
 - [ ] Toast bar appears at bottom-center after every edit action
@@ -295,6 +281,21 @@ Each gate-check state should have a unique URL fragment (e.g. #gate/B-05/review)
 - [ ] Browser back button closes the panel / returns to previous state
 - [ ] Multiple gate panels don't clobber each other's URL state
 Tests: When the readiness gating screen (ill call it ticket view) is open, the URL should change in the browser to reflect the exact screen. There should be a URL always in the browser so that bookmarks and back and forward navigation works in the browser and the user knows where they are.
+
+### B-06: serve.py HTTP Server + Quick-Edit Controls
+Priority: medium | Complexity: M | Status: done
+Parent: I-07
+Commit: a7ba01f
+Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashboard with REST API. Quick-edit: click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. data-editing guard in patchCards(). file:// mode still read-only.
+- [ ] serve.py starts and serves dashboard at localhost:8787
+- [ ] GET /api/tickets returns JSON ticket data
+- [ ] PUT /api/tickets/<id> updates individual fields in DB
+- [ ] POST /api/tickets/<id>/move moves ticket between sections
+- [ ] Click priority dot cycles high/medium/low and persists
+- [ ] Click status badge shows dropdown, selection persists
+- [ ] Click acceptance criteria checkbox toggles and persists
+- [ ] data-editing guard in patchCards() skips cards being edited
+- [ ] file:// mode works read-only with no edit controls
 
 ## Won't Do
 

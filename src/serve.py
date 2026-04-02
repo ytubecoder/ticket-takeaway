@@ -184,6 +184,153 @@ def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
     return True
 
 
+def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int, new_text: str) -> bool:
+    """Update the text of a criterion at a given index."""
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        criterion = conn.execute(
+            "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
+            (tid, project_id, criterion_index)
+        ).fetchone()
+        if not criterion:
+            conn.close()
+            return False
+
+        conn.execute("UPDATE acceptance_criteria SET text = ? WHERE id = ?", (new_text, criterion["id"]))
+        conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
+                     (datetime.now().isoformat(), tid, project_id))
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
+    """Remove a criterion at a given index."""
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        criterion = conn.execute(
+            "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
+            (tid, project_id, criterion_index)
+        ).fetchone()
+        if not criterion:
+            conn.close()
+            return False
+
+        conn.execute("DELETE FROM acceptance_criteria WHERE id = ?", (criterion["id"],))
+        # Re-number sort_order
+        remaining = conn.execute(
+            "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
+            (tid, project_id)
+        ).fetchall()
+        for i, r in enumerate(remaining):
+            conn.execute("UPDATE acceptance_criteria SET sort_order = ? WHERE id = ?", (i, r["id"]))
+
+        conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
+                     (datetime.now().isoformat(), tid, project_id))
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
+    """Add a new criterion to the end of the list."""
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        max_order = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
+            (tid, project_id)
+        ).fetchone()["next_order"]
+
+        conn.execute(
+            "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,0,?)",
+            (tid, project_id, text, max_order)
+        )
+        conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
+                     (datetime.now().isoformat(), tid, project_id))
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
+def _update_depends(project_id: str, ticket_id: str, depends_list: list) -> bool:
+    """Replace all depends for a ticket with a new list."""
+    with _db_lock:
+        conn = cli.get_db()
+        cli.init_db(conn)
+        proj = _get_project()
+        cli.ingest_markdown(conn, proj)
+
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        tid = row["id"]
+        conn.execute("DELETE FROM depends WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
+        for dep_id in depends_list:
+            dep_id = dep_id.strip()
+            if dep_id:
+                conn.execute(
+                    "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
+                    (tid, project_id, dep_id)
+                )
+        conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
+                     (datetime.now().isoformat(), tid, project_id))
+        conn.commit()
+        cli.sync_to_markdown(conn, proj)
+        cli.regenerate_dashboard(proj)
+        conn.close()
+    return True
+
+
 def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     """Create a new ticket. Returns the ticket JSON on success."""
     section_name = body.get("section", "Ideas")
@@ -487,6 +634,135 @@ def _run_category_assess(project_id: str, ticket_id: str, category: str, action:
     analysis["category"] = category
     analysis["action"] = action
     return analysis
+
+
+def _build_enrich_prompt(ticket: dict, field: str, content: str, action: str) -> str:
+    """Build a prompt for Claude CLI to enrich/review a single field's content."""
+    field_label = {
+        "description": "Description",
+        "criteria": "Acceptance Criteria",
+        "tests": "Tests",
+        "reviewed": "Review Notes",
+        "smoke": "Smoke Test Plan",
+    }.get(field, field)
+
+    criteria_lines = []
+    for c in ticket.get("acceptance_criteria", []):
+        mark = "[x]" if c["checked"] else "[ ]"
+        criteria_lines.append(f"- {mark} {c['text']}")
+    criteria_text = "\n".join(criteria_lines) if criteria_lines else "(none)"
+
+    if action == "create":
+        task = (
+            f"Generate high-quality {field_label.lower()} content for this ticket. "
+            f"Return the complete text in the 'suggested' field. Be thorough and specific."
+        )
+    else:
+        task = (
+            f"Review and improve the existing {field_label.lower()} content for this ticket. "
+            f"Return an improved version in the 'suggested' field. Preserve what is correct, fix gaps and clarity issues."
+        )
+
+    return f"""You are a project management assistant improving ticket content.
+
+TICKET: {ticket['id']} — {ticket['title']}
+Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: {ticket['status']}
+
+DESCRIPTION:
+{ticket.get('description') or '(empty)'}
+
+ACCEPTANCE CRITERIA:
+{criteria_text}
+
+CURRENT {field_label.upper()} CONTENT:
+{content or '(empty)'}
+
+TASK: {task}
+
+Respond with ONLY valid JSON (no markdown fences, no explanation):
+{{
+  "original": {json.dumps(content or "")},
+  "suggested": "your improved/generated content here as a plain text string"
+}}"""
+
+
+def _compute_diff_hunks(original: str, suggested: str) -> list:
+    """Compute line-by-line diff hunks between original and suggested text."""
+    import difflib
+
+    orig_lines = original.splitlines() if original else []
+    sugg_lines = suggested.splitlines() if suggested else []
+
+    matcher = difflib.SequenceMatcher(None, orig_lines, sugg_lines, autojunk=False)
+    hunks = []
+    idx = 0
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        elif tag == "replace":
+            # Pair up lines where possible, then handle extras
+            orig_chunk = orig_lines[i1:i2]
+            sugg_chunk = sugg_lines[j1:j2]
+            max_len = max(len(orig_chunk), len(sugg_chunk))
+            for k in range(max_len):
+                o = orig_chunk[k] if k < len(orig_chunk) else None
+                s = sugg_chunk[k] if k < len(sugg_chunk) else None
+                if o is None:
+                    hunks.append({"type": "add", "original": "", "suggested": s, "index": idx})
+                elif s is None:
+                    hunks.append({"type": "remove", "original": o, "suggested": "", "index": idx})
+                else:
+                    hunks.append({"type": "modify", "original": o, "suggested": s, "index": idx})
+                idx += 1
+        elif tag == "delete":
+            for line in orig_lines[i1:i2]:
+                hunks.append({"type": "remove", "original": line, "suggested": "", "index": idx})
+                idx += 1
+        elif tag == "insert":
+            for line in sugg_lines[j1:j2]:
+                hunks.append({"type": "add", "original": "", "suggested": line, "index": idx})
+                idx += 1
+
+    return hunks
+
+
+def _run_enrich(project_id: str, ticket_id: str, field: str, content: str, action: str) -> dict:
+    """Run Claude CLI to enrich a single field and return diff hunks."""
+    import subprocess as _sp
+
+    ticket = _get_ticket_json(project_id, ticket_id)
+    if not ticket:
+        return {"error": "Ticket not found"}
+
+    prompt = _build_enrich_prompt(ticket, field, content, action)
+
+    try:
+        result = _sp.run(
+            ["claude", "-p", prompt, "--output-format", "json"],
+            capture_output=True, text=True, timeout=90,
+            cwd=os.path.expanduser(_get_project().get("path", "."))
+        )
+        outer = json.loads(result.stdout)
+        text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
+        data = json.loads(text) if isinstance(text, str) else text
+    except _sp.TimeoutExpired:
+        return {"error": "Enrich timed out — try again."}
+    except (json.JSONDecodeError, KeyError) as e:
+        return {"error": f"Failed to parse response: {e}"}
+
+    original = data.get("original", content or "")
+    suggested = data.get("suggested", "")
+    hunks = _compute_diff_hunks(original, suggested)
+
+    return {
+        "original": original,
+        "suggested": suggested,
+        "hunks": hunks,
+        "ticket_id": ticket_id,
+        "field": field,
+        "action": action,
+    }
 
 
 def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
@@ -808,6 +1084,47 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Failed to toggle criterion"}, 400)
             return
 
+        # Handle criterion text update
+        if "criterion_index" in body and "criterion_text" in body:
+            idx = body["criterion_index"]
+            text = body["criterion_text"]
+            if isinstance(idx, int) and isinstance(text, str) and _update_criterion_text(project_id, ticket_id, idx, text):
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Failed to update criterion text"}, 400)
+            return
+
+        # Handle criterion removal
+        if "remove_criterion" in body:
+            idx = body["remove_criterion"]
+            if isinstance(idx, int) and _remove_criterion(project_id, ticket_id, idx):
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Failed to remove criterion"}, 400)
+            return
+
+        # Handle add criterion
+        if "add_criteria" in body:
+            text = body["add_criteria"]
+            if isinstance(text, str) and text.strip() and _add_criterion(project_id, ticket_id, text.strip()):
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Failed to add criterion"}, 400)
+            return
+
+        # Handle depends list update
+        if "depends" in body:
+            deps = body["depends"]
+            if isinstance(deps, list) and _update_depends(project_id, ticket_id, deps):
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+            else:
+                self._send_json({"error": "Failed to update depends"}, 400)
+            return
+
         # Update individual fields
         for field, value in body.items():
             if not _update_ticket_field(project_id, ticket_id, field, value):
@@ -842,6 +1159,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t or {"ok": True})
             else:
                 self._send_json({"error": "Failed to move ticket"}, 400)
+            return
+
+        # AI-powered field enrichment with diff hunks
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/enrich$", path)
+        if m:
+            ticket_id = m.group(1)
+            proj = _get_project()
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            field = body.get("field", "")
+            content = body.get("content", "")
+            action = body.get("action", "review")
+
+            valid_fields = {"description", "criteria", "tests", "reviewed", "smoke"}
+            if field not in valid_fields:
+                self._send_json({"error": f"field must be one of: {', '.join(sorted(valid_fields))}"}, 400)
+                return
+            if action not in ("create", "review"):
+                self._send_json({"error": "action must be 'create' or 'review'"}, 400)
+                return
+
+            result = _run_enrich(proj["id"], ticket_id, field, content, action)
+            if "error" in result and "hunks" not in result:
+                self._send_json(result, 400)
+            else:
+                self._send_json(result)
             return
 
         # Gate check before column move

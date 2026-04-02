@@ -47,6 +47,12 @@ Priority: high | Complexity: M | Status: released
 Released: 2026-04-01 | Commit: 7abdf41
 Replace the full-page-reload polling with in-place DOM diffing. When the dashboard HTML file changes, fetch the new version, extract the changed cards, and patch the live DOM without reloading. Moved cards get a brief highlight indicator. New cards fade in. Removed cards fade out. Scroll position, expanded cards, search/filter state, and keyboard focus are all preserved across updates.
 
+
+### B-06: serve.py HTTP Server + Quick-Edit Controls
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-02 | Commit: a7ba01f
+Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashboard with REST API. Quick-edit: click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. data-editing guard in patchCards(). file:// mode still read-only.
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

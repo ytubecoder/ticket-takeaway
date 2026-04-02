@@ -1169,6 +1169,16 @@ a {{ color: var(--accent); text-decoration: none; }}
   animation: assess-spin 0.6s linear infinite;
 }}
 @keyframes assess-spin {{ to {{ transform: rotate(360deg); }} }}
+@keyframes sectionGlow {{
+  0% {{ box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }}
+  50% {{ box-shadow: 0 0 12px 2px rgba(59,130,246,0.25); }}
+  100% {{ box-shadow: 0 0 0 0 rgba(59,130,246,0); }}
+}}
+.detail-section.assess-complete {{
+  animation: sectionGlow 1.2s ease-out;
+  border-color: var(--accent);
+  transition: border-color 1.2s ease-out;
+}}
 
 /* New ticket button + panel (edit mode) */
 .new-ticket-btn {{
@@ -2094,16 +2104,14 @@ a {{ color: var(--accent); text-decoration: none; }}
         var current = dot.classList.contains('high') ? 'high' : dot.classList.contains('medium') ? 'medium' : 'low';
         var next = cycle[(cycle.indexOf(current) + 1) % 3];
         dot.className = 'priority-dot ' + next;
-        apiPut(card.dataset.itemId, {{ priority: next }}).then(function() {{
-          showToast(card, next);
-          pushUndo(card.dataset.itemId, card.dataset.itemId + ' priority \u2192 ' + next, function() {{
-            dot.className = 'priority-dot ' + current;
-            return apiPut(card.dataset.itemId, {{ priority: current }});
-          }}, function() {{
-            dot.className = 'priority-dot ' + next;
-            return apiPut(card.dataset.itemId, {{ priority: next }});
-          }});
+        pushUndo(card.dataset.itemId, card.dataset.itemId + ' priority \u2192 ' + next, function() {{
+          dot.className = 'priority-dot ' + current;
+          return apiPut(card.dataset.itemId, {{ priority: current }});
+        }}, function() {{
+          dot.className = 'priority-dot ' + next;
+          return apiPut(card.dataset.itemId, {{ priority: next }});
         }});
+        apiPut(card.dataset.itemId, {{ priority: next }});
       }}, true);
 
       // Status badge click — show dropdown
@@ -2137,18 +2145,16 @@ a {{ color: var(--accent); text-decoration: none; }}
             dd.remove();
             badge.className = 'status-badge ' + s;
             badge.textContent = s;
-            apiPut(card.dataset.itemId, {{ status: s }}).then(function() {{
-              showToast(card, s);
-              pushUndo(card.dataset.itemId, card.dataset.itemId + ' status \u2192 ' + s, function() {{
-                badge.className = 'status-badge ' + oldStatus;
-                badge.textContent = oldStatus;
-                return apiPut(card.dataset.itemId, {{ status: oldStatus }});
-              }}, function() {{
-                badge.className = 'status-badge ' + s;
-                badge.textContent = s;
-                return apiPut(card.dataset.itemId, {{ status: s }});
-              }});
+            pushUndo(card.dataset.itemId, card.dataset.itemId + ' status \u2192 ' + s, function() {{
+              badge.className = 'status-badge ' + oldStatus;
+              badge.textContent = oldStatus;
+              return apiPut(card.dataset.itemId, {{ status: oldStatus }});
+            }}, function() {{
+              badge.className = 'status-badge ' + s;
+              badge.textContent = s;
+              return apiPut(card.dataset.itemId, {{ status: s }});
             }});
+            apiPut(card.dataset.itemId, {{ status: s }});
           }});
           dd.appendChild(opt);
         }});
@@ -2233,20 +2239,18 @@ a {{ color: var(--accent); text-decoration: none; }}
           criterion.classList.toggle('checked');
           var newMarker = isChecked ? '\u2610 ' : '\u2611 ';
           criterion.textContent = newMarker + criterion.textContent.substring(2);
-          apiPut(card.dataset.itemId, {{ toggle_criterion: idx }}).then(function() {{
-            showToast(card, isChecked ? 'unchecked' : 'checked');
-            pushUndo(card.dataset.itemId, card.dataset.itemId + ' criterion ' + (isChecked ? 'unchecked' : 'checked'), function() {{
-              criterion.classList.toggle('checked');
-              var revertMarker = !isChecked ? '\u2610 ' : '\u2611 ';
-              criterion.textContent = revertMarker + criterion.textContent.substring(2);
-              return apiPut(card.dataset.itemId, {{ toggle_criterion: idx }});
-            }}, function() {{
-              criterion.classList.toggle('checked');
-              var redoMarker = isChecked ? '\u2610 ' : '\u2611 ';
-              criterion.textContent = redoMarker + criterion.textContent.substring(2);
-              return apiPut(card.dataset.itemId, {{ toggle_criterion: idx }});
-            }});
+          pushUndo(card.dataset.itemId, card.dataset.itemId + ' criterion ' + (isChecked ? 'unchecked' : 'checked'), function() {{
+            criterion.classList.toggle('checked');
+            var revertMarker = !isChecked ? '\u2610 ' : '\u2611 ';
+            criterion.textContent = revertMarker + criterion.textContent.substring(2);
+            return apiPut(card.dataset.itemId, {{ toggle_criterion: idx }});
+          }}, function() {{
+            criterion.classList.toggle('checked');
+            var redoMarker = isChecked ? '\u2610 ' : '\u2611 ';
+            criterion.textContent = redoMarker + criterion.textContent.substring(2);
+            return apiPut(card.dataset.itemId, {{ toggle_criterion: idx }});
           }});
+          apiPut(card.dataset.itemId, {{ toggle_criterion: idx }});
         }} else {{
           // Text click-to-edit
           var origText = criterion.textContent.substring(2).trim();
@@ -2310,18 +2314,16 @@ a {{ color: var(--accent); text-decoration: none; }}
             dd.remove();
             badge.textContent = sz;
             card.dataset.complexity = sz;
-            apiPut(card.dataset.itemId, {{ complexity: sz }}).then(function() {{
-              showToast(card, sz);
-              pushUndo(card.dataset.itemId, card.dataset.itemId + ' complexity \u2192 ' + sz, function() {{
-                badge.textContent = oldComplexity;
-                card.dataset.complexity = oldComplexity;
-                return apiPut(card.dataset.itemId, {{ complexity: oldComplexity }});
-              }}, function() {{
-                badge.textContent = sz;
-                card.dataset.complexity = sz;
-                return apiPut(card.dataset.itemId, {{ complexity: sz }});
-              }});
+            pushUndo(card.dataset.itemId, card.dataset.itemId + ' complexity \u2192 ' + sz, function() {{
+              badge.textContent = oldComplexity;
+              card.dataset.complexity = oldComplexity;
+              return apiPut(card.dataset.itemId, {{ complexity: oldComplexity }});
+            }}, function() {{
+              badge.textContent = sz;
+              card.dataset.complexity = sz;
+              return apiPut(card.dataset.itemId, {{ complexity: sz }});
             }});
+            apiPut(card.dataset.itemId, {{ complexity: sz }});
           }});
           dd.appendChild(opt);
         }});
@@ -2528,23 +2530,23 @@ a {{ color: var(--accent); text-decoration: none; }}
           if (field === 'description') card.dataset.desc = value;
           var body = {{}};
           body[field] = value;
+          pushUndo(card.dataset.itemId, card.dataset.itemId + ' ' + field + ' updated', function() {{
+            target.textContent = origValue;
+            if (field === 'title') card.dataset.title = origValue;
+            if (field === 'description') card.dataset.desc = origValue;
+            var revertBody = {{}};
+            revertBody[field] = origValue;
+            return apiPut(card.dataset.itemId, revertBody);
+          }}, function() {{
+            target.textContent = value;
+            if (field === 'title') card.dataset.title = value;
+            if (field === 'description') card.dataset.desc = value;
+            var redoBody = {{}};
+            redoBody[field] = value;
+            return apiPut(card.dataset.itemId, redoBody);
+          }});
           apiPut(card.dataset.itemId, body).then(function() {{
             showToast(card, 'Saved');
-            pushUndo(card.dataset.itemId, card.dataset.itemId + ' ' + field + ' updated', function() {{
-              target.textContent = origValue;
-              if (field === 'title') card.dataset.title = origValue;
-              if (field === 'description') card.dataset.desc = origValue;
-              var revertBody = {{}};
-              revertBody[field] = origValue;
-              return apiPut(card.dataset.itemId, revertBody);
-            }}, function() {{
-              target.textContent = value;
-              if (field === 'title') card.dataset.title = value;
-              if (field === 'description') card.dataset.desc = value;
-              var redoBody = {{}};
-              redoBody[field] = value;
-              return apiPut(card.dataset.itemId, redoBody);
-            }});
           }});
           target.removeEventListener('blur', save);
           target.removeEventListener('keydown', keyHandler);
@@ -3276,7 +3278,7 @@ a {{ color: var(--accent); text-decoration: none; }}
     container.insertBefore(panel, container.firstChild);
   }}
 
-  function runCategoryAssess(cat, action) {{
+  function runCategoryAssess(cat, action, onDone) {{
     var loading = overlay.querySelector('[data-cat-loading="'+cat+'"]');
     var resultEl = overlay.querySelector('[data-cat-result="'+cat+'"]');
     if (loading) loading.classList.remove('hidden');
@@ -3293,16 +3295,23 @@ a {{ color: var(--accent); text-decoration: none; }}
     .then(function(r) {{ return r.json(); }})
     .then(function(data) {{
       if (loading) loading.classList.add('hidden');
+      if (onDone) onDone();
       if (data.error) {{
         toast('Enrich error: ' + data.error);
         return;
       }}
       var sectionKey = CAT_RMAP[cat];
       var section = overlay.querySelector('[data-section="' + sectionKey + '"]');
-      if (section) renderDiffUI(section, data, cat);
+      if (section) {{
+        renderDiffUI(section, data, cat);
+        section.classList.add('assess-complete');
+        setTimeout(function() {{ section.classList.remove('assess-complete'); }}, 1500);
+        section.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+      }}
     }})
     .catch(function() {{
       if (loading) loading.classList.add('hidden');
+      if (onDone) onDone();
       toast('Enrich request failed');
     }});
   }}
@@ -3555,10 +3564,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       btn.textContent = 'Assessing...'; btn.classList.add('loading');
       var _origLabel = hasContent ? 'Re-assess' : 'Assess';
       var _restore = function() {{ btn.textContent = _origLabel; btn.classList.remove('loading'); }};
-      // Use enrich endpoint for the assess
-      runCategoryAssess(cat, action);
-      // Restore button after a delay (runCategoryAssess handles its own loading)
-      setTimeout(_restore, 2000);
+      runCategoryAssess(cat, action, _restore);
     }});
   }});
 

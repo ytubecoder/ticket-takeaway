@@ -45,11 +45,11 @@ def test_bug_fix_promotes_parent(dashboard_server, bug_workflow_tickets):
 
     # Verify parent is in WIP
     parent = api_get(dashboard_server, f"/api/tickets/{parent_id}")
-    assert parent["column"] == "wip"
+    assert parent["section"] == "WIP"
 
     # Verify bug is in bugs
     bug = api_get(dashboard_server, f"/api/tickets/{bug_id}")
-    assert bug["column"] == "bugs"
+    assert bug["section"] == "Bugs"
 
     # Fix the bug — move to Done
     status_code, _ = api_post(

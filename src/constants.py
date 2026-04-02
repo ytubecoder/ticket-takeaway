@@ -18,12 +18,12 @@ DB_PATH = DASHBOARD_DIR / "tickets.db"
 REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 
 # ---------------------------------------------------------------------------
-# Section / column mappings
+# Section slugs (CLI / HTML aliases)
 # ---------------------------------------------------------------------------
 
 SECTION_ORDER = ["WIP", "For Review", "Backlog", "Ideas", "Bugs", "Icebox", "Done", "Won't Do"]
 
-SECTION_TO_COLUMN = {
+SECTION_SLUGS = {
     "Ideas": "ideas",
     "Backlog": "backlog",
     "WIP": "wip",
@@ -35,7 +35,7 @@ SECTION_TO_COLUMN = {
 }
 
 # Lowercase aliases for section names (used in CLI args)
-COLUMN_TO_SECTION = {v: k for k, v in SECTION_TO_COLUMN.items()}
+SLUG_TO_SECTION = {v: k for k, v in SECTION_SLUGS.items()}
 
 # ID prefix by section for auto-generation
 SECTION_PREFIX = {
@@ -65,10 +65,10 @@ DEFAULT_STATUS_BY_SECTION = {
 }
 
 # ---------------------------------------------------------------------------
-# CSS class per column (used by generate.py dashboard renderer)
+# CSS class per section slug (used by generate.py dashboard renderer)
 # ---------------------------------------------------------------------------
 
-CARD_CLASS_BY_COLUMN = {
+CARD_CLASS_BY_SLUG = {
     "backlog": "backlog-card",
     "wip": "wip-card",
     "review": "review-card",

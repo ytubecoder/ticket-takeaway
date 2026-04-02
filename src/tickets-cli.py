@@ -28,7 +28,7 @@ if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
 from constants import (
-    SECTION_ORDER, SECTION_TO_COLUMN, COLUMN_TO_SECTION,
+    SECTION_ORDER, SECTION_SLUGS, SLUG_TO_SECTION,
     DEFAULT_STATUS_BY_SECTION, SECTION_PREFIX, STATUSES,
     VALID_STATUSES_BY_SECTION, compute_status_on_move,
     DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
@@ -251,9 +251,9 @@ def resolve_section(name: str) -> str:
     for s in SECTION_ORDER:
         if s.lower() == name.lower():
             return s
-    # Column alias
-    if name.lower() in COLUMN_TO_SECTION:
-        return COLUMN_TO_SECTION[name.lower()]
+    # Slug alias
+    if name.lower() in SLUG_TO_SECTION:
+        return SLUG_TO_SECTION[name.lower()]
     # Common aliases
     aliases = {
         "for-review": "For Review",

@@ -22,7 +22,6 @@ from constants import (
     DEFAULT_STATUS_BY_SECTION,
     SECTION_ORDER,
     SECTION_PREFIX,
-    SECTION_TO_COLUMN,
     compute_status_on_move,
 )
 

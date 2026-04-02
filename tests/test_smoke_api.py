@@ -95,7 +95,7 @@ def test_post_move_ticket(dashboard_server):
     tid = _get_first_ticket_id(dashboard_server)
     # Get current section to restore later
     original = api_get(dashboard_server, f"/api/tickets/{tid}")
-    original_section = original.get("section", original.get("column", "Backlog"))
+    original_section = original.get("section", "Backlog")
 
     status_code, data = api_post(
         dashboard_server, f"/api/tickets/{tid}/move", {"section": "WIP"}

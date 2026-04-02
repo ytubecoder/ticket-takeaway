@@ -38,7 +38,6 @@ def init_db(conn: sqlite3.Connection):
             complexity  TEXT NOT NULL DEFAULT 'M',
             status      TEXT NOT NULL DEFAULT 'proposed',
             section     TEXT NOT NULL DEFAULT 'Ideas',
-            column      TEXT NOT NULL DEFAULT 'ideas',
             description TEXT NOT NULL DEFAULT '',
             parent      TEXT,
             rationale   TEXT NOT NULL DEFAULT '',
@@ -126,4 +125,13 @@ def init_db(conn: sqlite3.Connection):
             )
         """)
         conn.execute("INSERT INTO _migrations (version) VALUES (1)")
+        conn.commit()
+
+    # Migration 2: drop redundant column field (always derived from section)
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 2").fetchone():
+        try:
+            conn.execute("ALTER TABLE tickets DROP COLUMN column")
+        except sqlite3.OperationalError:
+            pass  # Column already gone or never existed
+        conn.execute("INSERT INTO _migrations (version) VALUES (2)")
         conn.commit()

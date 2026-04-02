@@ -33,7 +33,7 @@ def test_full_ticket_lifecycle(dashboard_server, lifecycle_ticket):
 
     # 1. Verify created in Ideas
     ticket = api_get(dashboard_server, f"/api/tickets/{tid}")
-    assert ticket["column"] == "ideas"
+    assert ticket["section"] == "Ideas"
     assert ticket["status"] == "proposed"
 
     # 2. Move to Backlog
@@ -42,7 +42,7 @@ def test_full_ticket_lifecycle(dashboard_server, lifecycle_ticket):
     )
     assert status_code == 200
     ticket = api_get(dashboard_server, f"/api/tickets/{tid}")
-    assert ticket["column"] == "backlog"
+    assert ticket["section"] == "Backlog"
     assert ticket["status"] == "proposed"
 
     # 3. Move to WIP
@@ -51,7 +51,7 @@ def test_full_ticket_lifecycle(dashboard_server, lifecycle_ticket):
     )
     assert status_code == 200
     ticket = api_get(dashboard_server, f"/api/tickets/{tid}")
-    assert ticket["column"] == "wip"
+    assert ticket["section"] == "WIP"
     assert ticket["status"] == "in-progress"
 
     # 4. Move to For Review
@@ -60,7 +60,7 @@ def test_full_ticket_lifecycle(dashboard_server, lifecycle_ticket):
     )
     assert status_code == 200
     ticket = api_get(dashboard_server, f"/api/tickets/{tid}")
-    assert ticket["column"] == "review"
+    assert ticket["section"] == "For Review"
     assert ticket["status"] == "for-review"
 
     # 5. Accept → Done
@@ -69,5 +69,5 @@ def test_full_ticket_lifecycle(dashboard_server, lifecycle_ticket):
     )
     assert status_code == 200
     ticket = api_get(dashboard_server, f"/api/tickets/{tid}")
-    assert ticket["column"] == "done"
+    assert ticket["section"] == "Done"
     assert ticket["status"] == "done"

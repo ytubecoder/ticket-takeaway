@@ -49,7 +49,7 @@ _gen_spec.loader.exec_module(gen)
 # ---------------------------------------------------------------------------
 
 sys.path.insert(0, str(Path(__file__).parent))
-from constants import (SECTION_TO_COLUMN, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
+from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        SECTION_PREFIX, STATUSES, VALID_STATUSES_BY_SECTION,
                        compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH)
 from db import get_db, init_db
@@ -121,7 +121,7 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
     except (SystemExit, ValueError):
         return False
 
-    if section not in SECTION_TO_COLUMN:
+    if section not in SECTION_SLUGS:
         return False
 
     with _db_lock:
@@ -861,7 +861,6 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "complexity": row["complexity"],
         "status": row["status"],
         "section": row["section"],
-        "column": SECTION_TO_COLUMN.get(row["section"], "backlog"),
         "description": row["description"],
         "parent": row["parent"],
         "rationale": row["rationale"],

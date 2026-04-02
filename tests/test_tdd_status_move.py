@@ -1,6 +1,6 @@
 """TDD tests for compute_status_on_move logic.
 
-Verifies that moving a ticket to a section assigns the correct status and column,
+Verifies that moving a ticket to a section assigns the correct status,
 and that commit hash capture is only triggered for Done moves.
 """
 
@@ -31,10 +31,10 @@ def test_status_mapping(section, expected_status):
 
 
 # ---------------------------------------------------------------------------
-# Column mapping: each section → expected column slug
+# Slug mapping: each section → expected slug
 # ---------------------------------------------------------------------------
 
-COLUMN_EXPECTATIONS = [
+SLUG_EXPECTATIONS = [
     ("Ideas", "ideas"),
     ("Backlog", "backlog"),
     ("WIP", "wip"),
@@ -46,10 +46,10 @@ COLUMN_EXPECTATIONS = [
 ]
 
 
-@pytest.mark.parametrize("section,expected_column", COLUMN_EXPECTATIONS)
-def test_column_mapping(section, expected_column):
-    """Each section maps to the correct column slug."""
-    assert cli_mod.SECTION_TO_COLUMN[section] == expected_column
+@pytest.mark.parametrize("section,expected_slug", SLUG_EXPECTATIONS)
+def test_slug_mapping(section, expected_slug):
+    """Each section maps to the correct slug."""
+    assert cli_mod.SECTION_SLUGS[section] == expected_slug
 
 
 # ---------------------------------------------------------------------------
@@ -65,11 +65,11 @@ def test_all_sections_have_status_mapping():
         )
 
 
-def test_all_sections_have_column_mapping():
-    """No section in SECTION_ORDER is missing a column mapping."""
+def test_all_sections_have_slug_mapping():
+    """No section in SECTION_ORDER is missing a slug mapping."""
     for section in cli_mod.SECTION_ORDER:
-        assert section in cli_mod.SECTION_TO_COLUMN, (
-            f"Section '{section}' missing from SECTION_TO_COLUMN"
+        assert section in cli_mod.SECTION_SLUGS, (
+            f"Section '{section}' missing from SECTION_SLUGS"
         )
 
 

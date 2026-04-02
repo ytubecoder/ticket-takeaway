@@ -1045,6 +1045,8 @@ a {{ color: var(--accent); text-decoration: none; }}
   white-space: pre-wrap; word-break: break-all; line-height: 1.4;
 }}
 .diff-hunk-new:empty {{ display: none; }}
+.diff-hunk-new[contenteditable="true"] {{ cursor: text; outline: none; }}
+.diff-hunk-new[contenteditable="true"]:focus {{ background: rgba(34,197,94,0.15); border-radius: 3px; }}
 .diff-hunk-actions {{ display: flex; gap: 4px; flex-shrink: 0; padding-top: 2px; }}
 .diff-accept, .diff-reject {{
   width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border-default);
@@ -1285,7 +1287,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 .detail-section-header h3 {{ margin: 0; font-size: 13px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.3px; display: flex; align-items: center; gap: 6px; }}
 .detail-section-header h3 .section-flag {{ font-size: 11px; width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-subtle); color: var(--text-tertiary); font-weight: 700; font-family: var(--font-mono); }}
 .detail-section-header h3 .section-flag.filled {{ background: rgba(34,197,94,0.15); color: #22c55e; border-color: rgba(34,197,94,0.3); }}
-.section-assess-btn {{ font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: none; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); transition: all 0.15s; opacity: 0; }}
+.section-assess-btn {{ font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: none; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); transition: all 0.15s; opacity: 0.4; }}
 .detail-section:hover .section-assess-btn, .section-assess-btn:focus {{ opacity: 1; }}
 .section-assess-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
 .section-assess-btn.loading {{ opacity: 1; color: var(--accent); pointer-events: none; }}
@@ -1946,12 +1948,24 @@ a {{ color: var(--accent); text-decoration: none; }}
       // Open overlay INSTANTLY — don't wait for AI
       if (window.openDetailOverlay) {{
         window.openDetailOverlay(ticketId, null);
-        setTimeout(function() {{
-          if (window.showGateBannerLoading) window.showGateBannerLoading(targetSection);
-        }}, 50);
       }}
-      // AI gate-check runs in background
+      // Check cache first
+      var cacheKey = ticketId + ':gate:' + targetSection;
+      if (_assessCache[cacheKey]) {{
+        if (card) setCardGateChecking(card, false);
+        var cached = _assessCache[cacheKey];
+        if (window.populateAssessment) window.populateAssessment(cached);
+        if (window.showGateBanner) window.showGateBanner(cached, targetSection);
+        var gateHash = '#gate/' + ticketId + '/' + encodeURIComponent(targetSection);
+        if (window.location.hash !== gateHash) history.replaceState({{ gate: true, ticketId: ticketId, section: targetSection }}, '', gateHash);
+        return;
+      }}
+      // Cache miss — show loading and run AI in background
+      setTimeout(function() {{
+        if (window.showGateBannerLoading) window.showGateBannerLoading(targetSection);
+      }}, 50);
       apiGateCheck(ticketId, targetSection).then(function(data) {{
+        _assessCache[cacheKey] = data;  // cache the result
         if (card) setCardGateChecking(card, false);
         // Find first needs-work category to focus on
         var cats = data.categories || {{}};
@@ -2739,6 +2753,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var _hasAssessmentData = false;
   var _gateContext = null;
   var _editingField = null;
+  var _assessCache = {{}};  // keyed by ticketId:gate:section or ticketId:cat:D/C/T/R/S
 
   var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Learnings', smoke:'Smoke Tests' }};
   var CAT_MAP = {{ description:'D', criteria:'C', tests:'T', reviewed:'R', smoke:'S' }};
@@ -3164,7 +3179,15 @@ a {{ color: var(--accent); text-decoration: none; }}
       if (hunk.type === 'add' || hunk.type === 'modify') {{
         var newEl = document.createElement('div');
         newEl.className = 'diff-hunk-new';
+        newEl.contentEditable = 'true';
+        newEl.spellcheck = false;
         newEl.textContent = '+ ' + (hunk.suggested || '');
+        newEl.addEventListener('input', function() {{
+          hunk.suggested = newEl.textContent.replace(/^\+\s?/, '');
+        }});
+        newEl.addEventListener('keydown', function(e) {{
+          if (e.key === 'Enter') e.preventDefault();
+        }});
         linesEl.appendChild(newEl);
       }}
 
@@ -3260,10 +3283,22 @@ a {{ color: var(--accent); text-decoration: none; }}
     container.insertBefore(panel, container.firstChild);
   }}
 
-  function runCategoryAssess(cat, action, onDone) {{
+  function runCategoryAssess(cat, action, onDone, forceRefresh) {{
+    var catCacheKey = currentTicketId + ':cat:' + cat;
     var loading = overlay.querySelector('[data-cat-loading="'+cat+'"]');
     var resultEl = overlay.querySelector('[data-cat-result="'+cat+'"]');
-    if (loading) loading.classList.remove('hidden');
+
+    // Check cache (unless force refresh)
+    if (!forceRefresh && _assessCache[catCacheKey]) {{
+      var cached = _assessCache[catCacheKey];
+      if (onDone) onDone();
+      var sectionKey = CAT_RMAP[cat];
+      var section = overlay.querySelector('[data-section="' + sectionKey + '"]');
+      if (section) renderDiffUI(section, cached, cat);
+      return;
+    }}
+
+    if (loading) {{ loading.classList.remove('hidden'); loading.textContent = 'Assessing ' + (FLAG_NAMES[CAT_RMAP[cat]] || cat) + '...'; }}
     if (resultEl) resultEl.classList.add('hidden');
 
     var content = _getFieldContent(cat);
@@ -3282,6 +3317,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         toast('Enrich error: ' + data.error);
         return;
       }}
+      _assessCache[catCacheKey] = data;  // cache the result
       var sectionKey = CAT_RMAP[cat];
       var section = overlay.querySelector('[data-section="' + sectionKey + '"]');
       if (section) {{
@@ -3516,6 +3552,8 @@ a {{ color: var(--accent); text-decoration: none; }}
   }}
 
   function populate(data) {{
+    // Invalidate AI cache for this ticket (data may have changed)
+    Object.keys(_assessCache).forEach(function(k) {{ if (k.startsWith(data.id + ':')) delete _assessCache[k]; }});
     currentData = data;
     idEl.textContent = data.id;
     titleEl.textContent = data.title;
@@ -3633,7 +3671,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       btn.textContent = 'Assessing...'; btn.classList.add('loading');
       var _origLabel = hasContent ? 'Re-assess' : 'Assess';
       var _restore = function() {{ btn.textContent = _origLabel; btn.classList.remove('loading'); }};
-      runCategoryAssess(cat, action, _restore);
+      runCategoryAssess(cat, action, _restore, true);  // force refresh — user explicitly clicked
     }});
   }});
 

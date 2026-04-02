@@ -78,10 +78,28 @@ def init_db(conn: sqlite3.Connection):
             FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS scheduled_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type  TEXT NOT NULL,
+            ticket_id   TEXT NOT NULL,
+            project_id  TEXT NOT NULL,
+            payload     TEXT NOT NULL DEFAULT '{}',
+            fire_at     TEXT NOT NULL,
+            fired       INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tickets_project_section ON tickets(project_id, section);
         CREATE INDEX IF NOT EXISTS idx_criteria_ticket ON acceptance_criteria(ticket_id, project_id);
         CREATE INDEX IF NOT EXISTS idx_depends_ticket ON depends(ticket_id, project_id);
         CREATE INDEX IF NOT EXISTS idx_readiness_ticket ON readiness_flags(ticket_id, project_id);
+        CREATE INDEX IF NOT EXISTS idx_scheduled_events_fire ON scheduled_events(fired, fire_at);
+
+        CREATE TABLE IF NOT EXISTS _sync_state (
+            project_id    TEXT PRIMARY KEY,
+            last_md_hash  TEXT NOT NULL DEFAULT '',
+            last_sync_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
 
     # Migrate: add commit_hash and release_tag columns if missing

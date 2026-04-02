@@ -10,10 +10,11 @@ sqlite3.Connection and returns a result.  Callers are responsible for:
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -88,6 +89,58 @@ def auto_generate_id(conn: sqlite3.Connection, project_id: str, section: str) ->
             pass
 
     return f"{prefix}{sep}{max_num + 1:02d}"
+
+
+def execute_scheduled_event(conn: sqlite3.Connection, event: sqlite3.Row) -> None:
+    """Execute a single scheduled event.  Called by the poller in serve.py.
+
+    Dispatches on event['event_type'].  Currently supported:
+      - 'auto-accept': accept the ticket (move to Done + spec entry)
+    """
+    event_type = event["event_type"]
+    ticket_id = event["ticket_id"]
+    project_id = event["project_id"]
+
+    if event_type == "auto-accept":
+        # Re-check preconditions: ticket still in For Review, status done, no open bugs
+        ticket = conn.execute(
+            "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if not ticket:
+            return
+        if ticket["section"] != "For Review" or ticket["status"] != "done":
+            return
+        if _has_open_bugs(conn, project_id, ticket_id):
+            return
+
+        # Move to Done
+        sort_order = _next_sort_order(conn, project_id, "Done")
+        commit_hash_val = ""
+        try:
+            from db import REGISTRY_PATH
+            import json as _json
+            registry = _json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+            for p in registry.get("projects", []):
+                if p["id"] == project_id:
+                    project_path = os.path.expanduser(p.get("path", ""))
+                    commit_hash_val = capture_commit_hash(project_path)
+                    break
+        except Exception:
+            pass
+
+        now = datetime.now().isoformat()
+        update_fields = "section = 'Done', sort_order = ?, updated_at = ?"
+        params: list = [sort_order, now]
+        if commit_hash_val and not ticket["commit_hash"]:
+            update_fields += ", commit_hash = ?"
+            params.append(commit_hash_val)
+        params.extend([ticket_id, project_id])
+        conn.execute(
+            f"UPDATE tickets SET {update_fields} WHERE id = ? AND project_id = ?",
+            params,
+        )
+    # else: unknown event type — silently skip
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +440,37 @@ def _remove_criterion(
 # Post-change hooks
 # ---------------------------------------------------------------------------
 
+def schedule_event(
+    conn: sqlite3.Connection,
+    event_type: str,
+    ticket_id: str,
+    project_id: str,
+    payload: dict | None = None,
+    delay_seconds: int = 300,
+) -> int:
+    """Insert a scheduled event to fire after *delay_seconds*.
+
+    Returns the new event row id.
+    """
+    fire_at = (datetime.now() + timedelta(seconds=delay_seconds)).isoformat()
+    cur = conn.execute(
+        "INSERT INTO scheduled_events (event_type, ticket_id, project_id, payload, fire_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (event_type, ticket_id, project_id, json.dumps(payload or {}), fire_at),
+    )
+    return cur.lastrowid
+
+
+def _has_open_bugs(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> bool:
+    """Return True if *ticket_id* has any child bugs not in a terminal status."""
+    terminal = {"done", "for-review", "bug-fixed"}
+    children = conn.execute(
+        "SELECT status FROM tickets WHERE parent = ? AND project_id = ?",
+        (ticket_id, project_id),
+    ).fetchall()
+    return any(c["status"] not in terminal for c in children)
+
+
 def _after_status_change(
     conn: sqlite3.Connection,
     project_id: str,
@@ -394,8 +478,33 @@ def _after_status_change(
     old_status: str,
     new_status: str,
 ) -> None:
-    """Placeholder for future status-change side effects (notifications, etc.)."""
-    pass
+    """Run post-status-change side effects."""
+    # Promote parent when a child reaches a done-like status
+    if new_status in {"done", "for-review", "bug-fixed"}:
+        _maybe_promote_parent(conn, project_id, ticket_id)
+
+    # Auto-accept rule: when status becomes "done" while in "For Review"
+    # and there are no open bugs, schedule an auto-accept with 5 min delay.
+    if new_status == "done":
+        ticket = conn.execute(
+            "SELECT section FROM tickets WHERE id = ? AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if ticket and ticket["section"] == "For Review":
+            if not _has_open_bugs(conn, project_id, ticket_id):
+                # Cancel any existing unfired auto-accept for this ticket
+                conn.execute(
+                    "UPDATE scheduled_events SET fired = 1 "
+                    "WHERE ticket_id = ? AND project_id = ? AND event_type = 'auto-accept' AND fired = 0",
+                    (ticket_id, project_id),
+                )
+                schedule_event(
+                    conn,
+                    event_type="auto-accept",
+                    ticket_id=ticket_id,
+                    project_id=project_id,
+                    delay_seconds=300,  # 5 minutes
+                )
 
 
 def _after_section_change(
@@ -407,6 +516,31 @@ def _after_section_change(
 ) -> None:
     """Run post-move logic after a ticket changes section."""
     _maybe_promote_parent(conn, project_id, ticket_id)
+
+    # Capture commit hash when moving to Done (if not already set)
+    if new_section == "Done":
+        ticket = conn.execute(
+            "SELECT commit_hash FROM tickets WHERE id = ? AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if ticket and not ticket["commit_hash"]:
+            # Try to find project path from registry for commit hash capture
+            try:
+                from db import REGISTRY_PATH
+                import json as _json
+                registry = _json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+                for p in registry.get("projects", []):
+                    if p["id"] == project_id:
+                        project_path = os.path.expanduser(p.get("path", ""))
+                        commit_hash_val = capture_commit_hash(project_path)
+                        if commit_hash_val:
+                            conn.execute(
+                                "UPDATE tickets SET commit_hash = ? WHERE id = ? AND project_id = ?",
+                                (commit_hash_val, ticket_id, project_id),
+                            )
+                        break
+            except Exception:
+                pass  # Best-effort — move_ticket already captures this in most paths
 
 
 def _maybe_promote_parent(

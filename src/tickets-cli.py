@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -545,7 +546,16 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
         lines.append("")
         lines.extend(custom_sections)
 
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    content = "\n".join(lines) + "\n"
+    out_path.write_text(content, encoding="utf-8")
+
+    # Store hash of the written markdown so we can detect external edits later
+    md_hash = hashlib.sha256(content.encode()).hexdigest()
+    conn.execute(
+        "INSERT OR REPLACE INTO _sync_state (project_id, last_md_hash, last_sync_at) VALUES (?, ?, ?)",
+        (project_id, md_hash, datetime.now().isoformat())
+    )
+    conn.commit()
 
 
 def regenerate_dashboard(project: dict):
@@ -571,6 +581,166 @@ def sync_all(conn: sqlite3.Connection, projects: list[dict]):
         sync_to_markdown(conn, proj)
         regenerate_dashboard(proj)
         print(f"Synced {proj['name']}: {proj['path']}/PRODUCT_BACKLOG.md")
+
+
+def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
+    """Detect if PRODUCT_BACKLOG.md was edited outside the CLI.
+
+    Compares the current file hash against the last known hash stored in
+    ``_sync_state``.  When they differ the markdown is parsed, deltas are
+    merged into the DB, and the file is regenerated from the DB (clean
+    state) with an updated hash.
+
+    Returns True if external edits were detected and absorbed, False otherwise.
+    """
+    project_id = project["id"]
+    project_path = os.path.expanduser(project.get("path", ""))
+    if not project_path:
+        return False
+
+    md_path = Path(project_path) / "PRODUCT_BACKLOG.md"
+    if not md_path.exists():
+        return False
+
+    # Read current file and compute hash
+    current_content = md_path.read_text(encoding="utf-8")
+    current_hash = hashlib.sha256(current_content.encode()).hexdigest()
+
+    # Look up stored hash
+    row = conn.execute(
+        "SELECT last_md_hash FROM _sync_state WHERE project_id = ?",
+        (project_id,)
+    ).fetchone()
+    stored_hash = row["last_md_hash"] if row else ""
+
+    if current_hash == stored_hash:
+        return False  # No external edits
+
+    # --- External edit detected — merge into DB ---
+
+    md_tickets = parse_backlog(str(md_path))
+    if not md_tickets:
+        # File was blanked or unparseable — don't destroy DB state,
+        # just update the hash so we don't re-check every cycle
+        conn.execute(
+            "INSERT OR REPLACE INTO _sync_state (project_id, last_md_hash, last_sync_at) VALUES (?, ?, ?)",
+            (project_id, current_hash, datetime.now().isoformat())
+        )
+        conn.commit()
+        return False
+
+    md_ids = set()
+
+    # Index DB tickets by upper-cased ID for comparison
+    db_rows = conn.execute(
+        "SELECT id FROM tickets WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    db_ids = {r["id"].upper(): r["id"] for r in db_rows}
+
+    for t in md_tickets:
+        tid = t["id"]
+        if not tid:
+            continue
+        md_ids.add(tid.upper())
+
+        if tid.upper() in db_ids:
+            # Existing ticket — update fields from markdown (markdown wins)
+            real_id = db_ids[tid.upper()]
+            conn.execute("""
+                UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
+                    section=?, description=?, parent=?, rationale=?,
+                    sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
+                    release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
+                WHERE id=? AND project_id=?
+            """, (
+                t["title"], t["priority"], t["complexity"], t["status"],
+                t["section"], t["description"], t["parent"],
+                t["rationale"], t["sort_order"],
+                t.get("commit_hash", ""), t.get("release_tag", ""),
+                datetime.now().isoformat(),
+                real_id, project_id,
+            ))
+
+            # Replace acceptance criteria
+            conn.execute(
+                "DELETE FROM acceptance_criteria WHERE ticket_id=? AND project_id=?",
+                (real_id, project_id)
+            )
+            for i, (checked, text) in enumerate(t["acceptance_criteria"]):
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
+                    (real_id, project_id, text, int(checked), i)
+                )
+
+            # Replace depends
+            conn.execute(
+                "DELETE FROM depends WHERE ticket_id=? AND project_id=?",
+                (real_id, project_id)
+            )
+            for dep_id in t["depends"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
+                    (real_id, project_id, dep_id)
+                )
+
+            # Upsert readiness content
+            for flag, content in t.get("readiness_content", {}).items():
+                if content:
+                    conn.execute("""
+                        INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                        VALUES (?, ?, ?, ?, 'external-edit')
+                        ON CONFLICT (ticket_id, project_id, flag)
+                        DO UPDATE SET content = excluded.content
+                    """, (real_id, project_id, flag, content))
+                else:
+                    conn.execute(
+                        "DELETE FROM readiness_flags WHERE ticket_id=? AND project_id=? AND flag=?",
+                        (real_id, project_id, flag)
+                    )
+        else:
+            # New ticket added directly to markdown — insert into DB
+            conn.execute("""
+                INSERT INTO tickets (id, project_id, title, priority, complexity, status,
+                                     section, description, parent, rationale, sort_order,
+                                     commit_hash, release_tag)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                tid, project_id, t["title"], t["priority"], t["complexity"],
+                t["status"], t["section"], t["description"],
+                t["parent"], t["rationale"], t["sort_order"],
+                t.get("commit_hash", ""), t.get("release_tag", ""),
+            ))
+            for i, (checked, text) in enumerate(t["acceptance_criteria"]):
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
+                    (tid, project_id, text, int(checked), i)
+                )
+            for dep_id in t["depends"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
+                    (tid, project_id, dep_id)
+                )
+            for flag, content in t.get("readiness_content", {}).items():
+                if content:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                        VALUES (?, ?, ?, ?, 'external-edit')
+                    """, (tid, project_id, flag, content))
+
+    # Do NOT delete tickets that are in DB but missing from markdown.
+    # They may have been added via CLI or direct DB insert. Just flag them
+    # with a log message for awareness.
+    missing_from_md = set(db_ids.keys()) - md_ids
+    if missing_from_md:
+        real_missing = [db_ids[uid] for uid in missing_from_md]
+        print(f"[{project_id}] Note: {len(real_missing)} ticket(s) in DB but not in markdown (preserved): {', '.join(real_missing)}")
+
+    conn.commit()
+
+    # Regenerate markdown from DB (clean state) and update the hash
+    sync_to_markdown(conn, project)
+
+    return True
 
 
 # ---------------------------------------------------------------------------

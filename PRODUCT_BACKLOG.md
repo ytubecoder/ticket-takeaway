@@ -11,22 +11,6 @@ just get off the pc and go touch
 - [ ] integration-test criterion 1775127571
 - [ ] markdown-criteria-test 1775127571
 
-### B-10: Data Model Refactor + Business Rules Engine
-Priority: high | Complexity: XL | Status: in-progress
-Refactor ticket system from generated-HTML-with-scattered-logic to clean app architecture. DB is truth, markdown is output. Three branches: (1) db-cleanup: drop column field, dedup rows, migration tracking. (2) status-foundation: constants.py, fix move logic (guided not forced), decompose accept, unify JS dropdowns. (3) rules-engine: post-change hooks in actions.py, scheduled events poller, auto-promote parent, delayed auto-accept. New files: constants.py, db.py, actions.py. Security fixes first (CORS wildcard, prompt injection, thread safety). See plan: ~/.claude/plans/dapper-mapping-unicorn.md
-- [ ] B-11: Security fixes applied
-- [ ] B-12: column field dropped, duplicates cleaned
-- [ ] B-13: constants.py, actions.py, db.py created; move logic fixed; accept decomposed
-- [ ] B-14: Post-change hooks working; auto-promote and delayed auto-accept shipping
-- [ ] B-15: External markdown edits detected and imported without clobbering
-- [ ] CLI commands still work identically
-- [ ] Dashboard renders correctly throughout
-
-### B-15: Markdown watcher — hash-based external edit detection
-Priority: medium | Complexity: M | Status: in-progress
-Parent: B-10
-Replace read-before-write ingest_markdown with hash-based change detection. Store SHA256 of generated markdown in _sync_state table. Watcher thread detects external edits (LLM/human), diffs against last-generated version, imports only deltas into DB. Keeps LLM markdown editing working without race conditions.
-
 ## For Review
 
 ### B-07: Expand-to-Edit: Full Form Editing for All Fields
@@ -79,6 +63,22 @@ Create src/constants.py (canonical STATUSES, VALID_STATUSES_BY_SECTION). Fix mov
 Priority: medium | Complexity: L | Status: for-review
 Parent: B-10
 Post-change hooks in actions.py (_after_move, _after_status_change). Scheduled events table + 30s poller thread in serve.py. Ship initial rules: auto-promote parent when all children done, delayed auto-accept from For Review. Merge LAST.
+
+### B-15: Markdown watcher — hash-based external edit detection
+Priority: medium | Complexity: M | Status: for-review
+Parent: B-10
+Replace read-before-write ingest_markdown with hash-based change detection. Store SHA256 of generated markdown in _sync_state table. Watcher thread detects external edits (LLM/human), diffs against last-generated version, imports only deltas into DB. Keeps LLM markdown editing working without race conditions.
+
+### B-10: Data Model Refactor + Business Rules Engine
+Priority: high | Complexity: XL | Status: in-progress
+Refactor ticket system from generated-HTML-with-scattered-logic to clean app architecture. DB is truth, markdown is output. Three branches: (1) db-cleanup: drop column field, dedup rows, migration tracking. (2) status-foundation: constants.py, fix move logic (guided not forced), decompose accept, unify JS dropdowns. (3) rules-engine: post-change hooks in actions.py, scheduled events poller, auto-promote parent, delayed auto-accept. New files: constants.py, db.py, actions.py. Security fixes first (CORS wildcard, prompt injection, thread safety). See plan: ~/.claude/plans/dapper-mapping-unicorn.md
+- [ ] B-11: Security fixes applied
+- [ ] B-12: column field dropped, duplicates cleaned
+- [ ] B-13: constants.py, actions.py, db.py created; move logic fixed; accept decomposed
+- [ ] B-14: Post-change hooks working; auto-promote and delayed auto-accept shipping
+- [ ] B-15: External markdown edits detected and imported without clobbering
+- [ ] CLI commands still work identically
+- [ ] Dashboard renders correctly throughout
 
 ## Backlog
 
@@ -145,6 +145,9 @@ Auto-detect projects that have PRODUCT_BACKLOG.md instead of requiring manual re
 ### I-09: test ticket with nothing on it
 Priority: medium | Complexity: M | Status: proposed
 This is just a test but the feature should be to add a text file called hello.txt
+
+### I-16: MCP server for LLM tool integration
+Priority: medium | Complexity: M | Status: proposed
 
 ## Bugs
 

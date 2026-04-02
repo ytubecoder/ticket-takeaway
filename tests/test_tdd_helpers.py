@@ -4,12 +4,12 @@ import sqlite3
 
 import pytest
 from conftest import cli_mod, gen_mod
+from actions import auto_generate_id
+from db import init_db
 
 Ticket = gen_mod.Ticket
 compute_dependency_state = gen_mod.compute_dependency_state
 resolve_section = cli_mod.resolve_section
-auto_generate_id = cli_mod.auto_generate_id
-init_db = cli_mod.init_db
 
 
 # ===========================================================================

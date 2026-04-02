@@ -1,5 +1,25 @@
 # Session Log
 
+## 2026-04-03 — Accept I-07, unify column/section into section only
+
+### Summary
+- Accepted I-07 (UI Inline Editing with Field-Level Updates) — all 3 phases delivered via sub-tickets B-06, B-07, I-08
+- Eliminated `column` as a separate concept — `section` is now the single term for kanban placement
+- Renamed constants: `SECTION_TO_COLUMN` → `SECTION_SLUGS`, `COLUMN_TO_SECTION` → `SLUG_TO_SECTION`, `CARD_CLASS_BY_COLUMN` → `CARD_CLASS_BY_SLUG`
+- Removed `column` field from Ticket dataclass (replaced with `slug` property), DB schema (migration 2), and API response
+- Updated all HTML/JS from `data-column`/`dataset.column` to `data-section`/`dataset.section`
+- Updated `auto_promote_parents()` to use section names instead of slugs as dict keys
+
+### Lessons Learned
+- **Accepted:** Using `replace_all=true` on Edit for simple renames (e.g. `dataset.column` → `dataset.section`) was efficient but missed cases where the surrounding context differed slightly — always follow up with a grep sweep
+- **Gotcha:** Python f-string references to renamed parameters inside multi-line f-strings are easy to miss — the `_render_list_rows` child rendering had a stale `column` reference that only showed up at runtime, not in grep for `t.column`
+- **Accepted:** SQLite 3.35+ supports `ALTER TABLE DROP COLUMN` directly — no need for the create-copy-drop-rename dance
+
+### Decisions
+- CSS class `.column` (kanban layout term) stays unchanged — it's a visual/layout concept, not data model
+- `by_column` dict renamed to `by_section` with section name keys ("WIP", "For Review") instead of slug keys ("wip", "review") — more consistent with the single-term philosophy
+- Slugs remain as utilities (CLI aliases, CSS class lookups, HTML data attributes) but renamed from "column" to "slug"
+
 ## 2026-04-02 — B-16 test framework: smoke, E2E journey, TDD
 
 ### Summary

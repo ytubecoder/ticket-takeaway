@@ -89,6 +89,11 @@ Priority: medium | Complexity: M | Status: released
 Released: 2026-04-03 | Commit: 91f188e
 Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
 
+
+### I-16: e2e-lifecycle-1775151721
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-03 | Commit: c33135a
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

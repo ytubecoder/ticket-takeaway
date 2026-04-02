@@ -18,7 +18,12 @@ GEN_PATH = os.path.join(os.path.dirname(__file__), "..", "src", "generate.py")
 
 # ---------------------------------------------------------------------------
 # Import tickets-cli.py and generate.py (hyphenated filename requires importlib)
+# Ensure src/ is on sys.path so `from constants import ...` works inside them.
 # ---------------------------------------------------------------------------
+
+_src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 _cli_spec = importlib.util.spec_from_file_location("tickets_cli", CLI_PATH)
 cli_mod = importlib.util.module_from_spec(_cli_spec)

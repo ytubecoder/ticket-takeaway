@@ -985,6 +985,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 .gate-verdict-badge.ready {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
 .gate-verdict-badge.needs-work {{ background: rgba(234,179,8,0.15); color: #eab308; }}
 .gate-verdict-badge.blocked {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+.gate-verdict-badge.loading {{ background: var(--bg-hover); color: var(--text-tertiary); animation: assess-spin 1.5s ease-in-out infinite; }}
+.detail-gate-confirm:disabled {{ opacity: 0.4; cursor: not-allowed; }}
 .detail-gate-summary {{ color: var(--text-secondary); font-size: 13px; }}
 .detail-gate-actions {{
   display: flex; gap: 8px; margin-top: 8px;
@@ -2626,7 +2628,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         <button class="readiness-dot" data-flag="description" title="Description">D</button>
         <button class="readiness-dot" data-flag="criteria" title="Criteria">C</button>
         <button class="readiness-dot" data-flag="tests" title="Tests">T</button>
-        <button class="readiness-dot" data-flag="reviewed" title="Review">R</button>
+        <button class="readiness-dot" data-flag="reviewed" title="Learnings">R</button>
         <button class="readiness-dot" data-flag="smoke" title="Smoke">S</button>
       </div>
       <span class="detail-toast" role="status" aria-live="polite"></span>
@@ -2683,18 +2685,19 @@ a {{ color: var(--accent); text-decoration: none; }}
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="T">Assessing tests...</div>
         <div class="detail-assessment hidden" data-cat-result="T"></div>
-        <textarea class="detail-editor" data-field="tests" placeholder="No test plan yet. Click to add one."></textarea>
+        <ul class="detail-criteria-list" data-list-field="tests"></ul>
+        <input type="text" class="criteria-add-input" data-list-add="tests" placeholder="+ Add test item and press Enter">
       </div>
 
       <!-- Review -->
       <div class="detail-section" data-section="reviewed" id="section-reviewed">
         <div class="detail-section-header">
-          <h3><span class="section-flag" data-cat="R">R</span> Review</h3>
+          <h3><span class="section-flag" data-cat="R">R</span> Learnings / Sync</h3>
           <button class="section-assess-btn" data-cat="R">Assess</button>
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
         <div class="detail-assessment hidden" data-cat-result="R"></div>
-        <textarea class="detail-editor" data-field="reviewed" placeholder="No review notes yet. Click to add them."></textarea>
+        <textarea class="detail-editor" data-field="reviewed" placeholder="Learnings, sync notes, and decisions captured along the way..."></textarea>
       </div>
 
       <!-- Smoke -->
@@ -2705,7 +2708,8 @@ a {{ color: var(--accent); text-decoration: none; }}
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="S">Assessing smoke tests...</div>
         <div class="detail-assessment hidden" data-cat-result="S"></div>
-        <textarea class="detail-editor" data-field="smoke" placeholder="No smoke tests yet. Click to add them."></textarea>
+        <ul class="detail-criteria-list" data-list-field="smoke"></ul>
+        <input type="text" class="criteria-add-input" data-list-add="smoke" placeholder="+ Add smoke test and press Enter">
       </div>
 
       <!-- Rationale -->
@@ -2736,7 +2740,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var _gateContext = null;
   var _editingField = null;
 
-  var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Review', smoke:'Smoke Tests' }};
+  var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Learnings', smoke:'Smoke Tests' }};
   var CAT_MAP = {{ description:'D', criteria:'C', tests:'T', reviewed:'R', smoke:'S' }};
   var CAT_RMAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
   var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', tests: 'T', reviewed: 'R', smoke: 'S' }};
@@ -2978,7 +2982,7 @@ a {{ color: var(--accent); text-decoration: none; }}
             prompt: function(t) {{ return 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
       T: {{ icon: '\U0001F52C', label: 'Run Tests',
             prompt: function(t) {{ return 'Write test definitions for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }} }},
-      R: {{ icon: '\U0001F441', label: 'Start Review',
+      R: {{ icon: '\U0001F441', label: 'Start Learnings',
             prompt: function(t) {{ return 'Perform a code review for ' + t.id + ': "' + t.title + '". Check correctness, edge cases, and document decisions.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
       S: {{ icon: '\U0001F4A8', label: 'Run Smoke',
             prompt: function(t) {{ return 'Create a smoke test checklist for ' + t.id + ': "' + t.title + '". List manual verification steps to confirm the feature works end-to-end.\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }} }}
@@ -3400,12 +3404,79 @@ a {{ color: var(--accent); text-decoration: none; }}
     }});
   }}
 
+  /* --- List-style fields (Tests, Smoke) --- */
+  function serializeListField(field) {{
+    var ul = overlay.querySelector('[data-list-field="' + field + '"]');
+    if (!ul) return '';
+    var items = [];
+    ul.querySelectorAll('.criteria-text').forEach(function(sp) {{
+      var t = sp.textContent.trim();
+      if (t) items.push(t);
+    }});
+    return items.join('\\n');
+  }}
+
+  function saveListField(field) {{
+    var val = serializeListField(field);
+    fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{content:val}})}})
+      .then(function(r){{return r.json();}}).then(function(u){{ if(u) {{ currentData=u; refreshDCTRS(currentData); }} toast(FLAG_NAMES[field]+' saved'); }});
+  }}
+
+  function populateListField(field, rawText) {{
+    var ul = overlay.querySelector('[data-list-field="' + field + '"]');
+    if (!ul) return;
+    ul.innerHTML = '';
+    var lines = (rawText || '').split('\\n').filter(function(l){{ return l.trim(); }});
+    lines.forEach(function(line) {{
+      var li = document.createElement('li'); li.className = 'detail-criteria-item';
+      var bullet = document.createElement('span'); bullet.className = 'criteria-bullet'; bullet.textContent = '\\u2022';
+      var sp = document.createElement('span'); sp.className = 'criteria-text'; sp.textContent = line.trim();
+      sp.addEventListener('click', function() {{ sp.contentEditable = 'true'; sp.focus(); }});
+      sp.addEventListener('blur', function() {{ sp.contentEditable = 'false'; saveListField(field); }});
+      sp.addEventListener('keydown', function(e) {{
+        if (e.key === 'Enter') {{ e.preventDefault(); sp.blur(); }}
+        if (e.key === 'Escape') {{ e.preventDefault(); e.stopPropagation(); sp.textContent = line.trim(); sp.blur(); }}
+      }});
+      var del = document.createElement('button'); del.className = 'criteria-delete'; del.textContent = '\\u00d7';
+      del.addEventListener('click', function() {{ li.remove(); saveListField(field); toast('Item removed'); }});
+      li.appendChild(bullet); li.appendChild(sp); li.appendChild(del); ul.appendChild(li);
+    }});
+  }}
+
+  // Wire up list-field add inputs (tests, smoke)
+  overlay.querySelectorAll('[data-list-add]').forEach(function(input) {{
+    var field = input.dataset.listAdd;
+    input.addEventListener('keydown', function(e) {{
+      if (e.key === 'Escape') {{ e.preventDefault(); e.stopPropagation(); input.value = ''; input.blur(); return; }}
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      var text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      // Add to list and save
+      var ul = overlay.querySelector('[data-list-field="' + field + '"]');
+      if (ul) {{
+        var current = serializeListField(field);
+        var newVal = current ? current + '\\n' + text : text;
+        fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{content:newVal}})}})
+          .then(function(r){{return r.json();}}).then(function(u){{
+            if(u) {{ currentData=u; var fl=u.readiness_content||{{}}; populateListField(field, fl[field]||''); refreshDCTRS(u); }}
+            toast('Item added');
+          }});
+      }}
+    }});
+  }});
+
   /* --- Inline auto-save for textarea editors --- */
   function setupInlineEditors() {{
     overlay.querySelectorAll('.detail-editor').forEach(function(ed) {{
       var field = ed.dataset.field;
       ed._origValue = ed.value;
       ed.addEventListener('focus', function() {{ _editingField = field; ed._origValue = ed.value; }});
+      ed.addEventListener('keydown', function(e) {{
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {{ e.preventDefault(); ed.blur(); }}
+        if (e.key === 'Escape') {{ e.preventDefault(); e.stopPropagation(); ed.value = ed._origValue || ''; ed.blur(); }}
+      }});
       ed.addEventListener('blur', function() {{
         _editingField = null;
         var val = ed.value;
@@ -3429,6 +3500,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var criteriaInput = overlay.querySelector('.criteria-add-input');
   if (criteriaInput) {{
     criteriaInput.addEventListener('keydown', function(e) {{
+      if (e.key === 'Escape') {{ e.preventDefault(); e.stopPropagation(); criteriaInput.value = ''; criteriaInput.blur(); return; }}
       if (e.key !== 'Enter') return;
       e.preventDefault();
       var text = criteriaInput.value.trim();
@@ -3452,11 +3524,13 @@ a {{ color: var(--accent); text-decoration: none; }}
     if (pathEl) pathEl.textContent = 'docs/features/' + data.id + '/';
     overlay.querySelector('[data-field="description"]').value = data.description || '';
     populateCriteria(data);
-    var fl = data.readiness_flags || {{}};
-    ['tests','reviewed','smoke'].forEach(function(f) {{
-      var ed = overlay.querySelector('[data-field="'+f+'"]');
-      if(ed) {{ ed.value = fl[f] || ''; ed._origValue = ed.value; }}
-    }});
+    var fl = data.readiness_content || data.readiness_flags || {{}};
+    // Tests and Smoke are list-style fields
+    populateListField('tests', fl['tests'] || '');
+    populateListField('smoke', fl['smoke'] || '');
+    // Reviewed (Learnings) stays as textarea
+    var reviewEd = overlay.querySelector('[data-field="reviewed"]');
+    if(reviewEd) {{ reviewEd.value = fl['reviewed'] || ''; reviewEd._origValue = reviewEd.value; }}
     // Rationale
     var ratEd = overlay.querySelector('[data-field="rationale"]');
     if(ratEd) {{ ratEd.value = data.rationale || ''; ratEd._origValue = ratEd.value; }}
@@ -3512,7 +3586,12 @@ a {{ color: var(--accent); text-decoration: none; }}
     e.stopPropagation();
     navigator.clipboard.writeText(this.textContent).then(function() {{ toast('Path copied'); }});
   }});
-  document.addEventListener('keydown', function(e) {{ if(e.key==='Escape' && !overlay.classList.contains('hidden')) closeOverlay(); }});
+  document.addEventListener('keydown', function(e) {{
+    if (e.key !== 'Escape' || overlay.classList.contains('hidden')) return;
+    var active = document.activeElement;
+    if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.contentEditable === 'true')) return;
+    closeOverlay();
+  }});
 
   // DCTRS dots in header — scroll to section
   overlay.querySelectorAll('.detail-dctrs-strip .readiness-dot').forEach(function(dot) {{

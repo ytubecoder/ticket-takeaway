@@ -2,78 +2,12 @@
 
 ## WIP
 
-### I-07: UI Inline Editing with Field-Level Updates
-Priority: medium | Complexity: M | Status: in-progress
-Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
-- [ ] Phase 2: full expand-to-edit with form rendering for all 12 editable fields
-- [ ] Phase 3: new ticket creation + drag-and-drop column moves
-- [ ] data-editing guard in patchCards() prevents poll from overwriting edits
-- [ ] file:// mode still works read-only — editing requires serve.py
-- [ ] B-06: serve.py HTTP server + quick-edit controls (Phase 1)
-- [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
-- [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
-
 ### I-10: touch bronwyn
 Priority: medium | Complexity: M | Status: for-review
 just get off the pc and go touch
 - [ ] touching has occurred and she provides feedback
 
-### B-09: Column Move Gate Check — AI-Powered Readiness Analysis
-Priority: high | Complexity: M | Status: for-review
-When a ticket is moved to a top kanban column (Ideas, Backlog, WIP, For Review, Done), the move is intercepted and a Claude CLI agent analyzes the ticket's DCTRS readiness. Results are shown in an expandable panel with per-section editable fields and independent Save buttons. Users can edit suggestions, save per-section, then Confirm Move or Cancel. Bottom sections (Bugs, Icebox, Won't Do) remain ungated.
-- [ ] POST /api/tickets/{id}/gate-check endpoint spawns Claude CLI and returns structured JSON
-- [ ] Drag-drop moves to top columns are intercepted (not immediate)
-- [ ] Action button moves to top columns are intercepted (not immediate)
-- [ ] Card shows pulsing state while agent is thinking
-- [ ] Gate panel renders with verdict badge and per-DCTRS category rows
-- [ ] Per-section Save buttons persist edits independently of move decision
-- [ ] Confirm Move executes the column move
-- [ ] Cancel dismisses panel without moving, saved edits persist
-- [ ] Moves to Bugs/Icebox/Won't Do bypass the gate (immediate)
-- [ ] add_criteria PUT support for saving suggested new criteria
-
 ## For Review
-
-### I-14: Gate panel: show output directory path with click-to-copy
-Priority: low | Complexity: M | Status: done
-Parent: B-09
-The gate panel should display the ticket's output directory path (e.g. docs/features/B-05/) in the panel. Clicking it copies the path to clipboard and shows a 'Path copied' acknowledgment toast.
-- [x] Output directory path is visible in the gate panel
-- [x] Clicking the path copies it to clipboard
-- [x] Toast shows 'Path copied' on successful copy
-- [x] Path is derived from ticket ID using the project's docs/features/ convention
-
-### I-15: Gate panel: DCTRS icons and expanded action buttons
-Priority: medium | Complexity: M | Status: for-review
-Parent: B-09
-Replace the plain D/C/T/R/S letter dots in the gate panel category rows with meaningful icons (e.g. document icon for D, checklist for C, flask for T, eye for R, smoke/cloud for S). When expanded, show full action buttons for each category (e.g. 'Write Description', 'Add Criteria', 'Run Tests', 'Start Review', 'Run Smoke Test') that trigger the appropriate workflow.
-- [x] Each DCTRS category has a recognizable icon (not just a letter)
-- [ ] Icons are consistent between the readiness row on cards and the gate panel
-- [ ] Expanded gate panel shows contextual action buttons per category
-- [ ] Action buttons trigger appropriate workflows (clipboard prompts or direct actions)
-- [ ] Icons work in both light and dark themes
-- [ ] Icons degrade gracefully if custom font/SVG fails to load (fallback to letter)
-
-### I-12: Gate panel: Claude CLI round-trip with diff-style merge UI
-Priority: high | Complexity: M | Status: for-review
-Parent: B-09
-When creating new content or reviewing existing content in the gate panel (e.g. editing description, criteria, review notes), the edited text should be sent to Claude CLI for enrichment/validation and returned. The UI should show a diff-style display comparing current vs suggested, with point-by-point accept/reject for each change. Use a pattern that doesn't clobber existing content — insertions and updates are presented as discrete merge operations the user controls.
-- [ ] Edited text can be sent to Claude CLI for enrichment via a 'Review with AI' button
-- [ ] Response is shown as a diff: current content vs suggested content
-- [ ] Each change (addition, modification, deletion) is individually accept/reject-able
-- [ ] Accepted changes merge into the field without clobbering unmodified content
-- [ ] User can accept all or reject all in bulk
-- [ ] Works for description, criteria, and any future DCTRS category content
-
-### I-13: Gate panel: verify all edits persist to DB and sync to markdown
-Priority: medium | Complexity: M | Status: for-review
-Parent: B-09
-Verify that all edits made through the gate panel (description changes, new criteria, flag toggles, review notes) are persisted to the SQLite database and then synced to PRODUCT_BACKLOG.md. This is a verification/hardening sub-ticket, not new functionality.
-- [ ] Description edits via gate panel Save are in tickets table
-- [ ] New criteria via gate panel Save are in acceptance_criteria table
-- [ ] Flag toggles during gate review are in readiness_flags table
-- [ ] All DB changes trigger sync_to_markdown and regenerate_dashboard
-- [ ] PRODUCT_BACKLOG.md reflects all gate panel edits after sync
 
 ### B-07: Expand-to-Edit: Full Form Editing for All Fields
 Priority: medium | Complexity: L | Status: done
@@ -92,6 +26,17 @@ Phase 3 of I-07. Undo system: toast with countdown after each edit (5s window to
 - [ ] Toast disappears after 5s if no undo clicked
 - [ ] Undo works for: priority, status, complexity, criteria toggle, text edits, moves
 - [ ] Ctrl+Z does not fire when focused on input/textarea fields
+
+### I-07: UI Inline Editing with Field-Level Updates
+Priority: medium | Complexity: M | Status: for-review
+Add inline editing to dashboard cards via a local HTTP server (stdlib http.server, zero deps). Three tiers: (1) Quick-edit on collapsed cards — click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. (2) Expand-to-edit — pencil icon on expanded cards transforms text into form fields, per-field auto-save on blur. (3) Creation — plus button per column header for new tickets. Server (serve.py) imports DB helpers from tickets-cli.py, exposes REST API: GET/PUT/POST. Live-update poll skips cards with data-editing=true to prevent overwriting in-progress edits. No framework — stay vanilla JS. No build step. File:// mode stays read-only (no regressions).
+- [ ] Phase 2: full expand-to-edit with form rendering for all 12 editable fields
+- [ ] Phase 3: new ticket creation + drag-and-drop column moves
+- [ ] data-editing guard in patchCards() prevents poll from overwriting edits
+- [ ] file:// mode still works read-only — editing requires serve.py
+- [ ] B-06: serve.py HTTP server + quick-edit controls (Phase 1)
+- [ ] B-07: expand-to-edit with form rendering for all fields (Phase 2)
+- [ ] I-08: new ticket creation + drag-and-drop (Phase 3)
 
 ## Backlog
 
@@ -296,6 +241,66 @@ Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashbo
 - [ ] Click acceptance criteria checkbox toggles and persists
 - [ ] data-editing guard in patchCards() skips cards being edited
 - [ ] file:// mode works read-only with no edit controls
+
+### I-12: Gate panel: Claude CLI round-trip with diff-style merge UI
+Priority: high | Complexity: M | Status: done
+Parent: B-09
+Commit: 6b49669
+When creating new content or reviewing existing content in the gate panel (e.g. editing description, criteria, review notes), the edited text should be sent to Claude CLI for enrichment/validation and returned. The UI should show a diff-style display comparing current vs suggested, with point-by-point accept/reject for each change. Use a pattern that doesn't clobber existing content — insertions and updates are presented as discrete merge operations the user controls.
+- [ ] Edited text can be sent to Claude CLI for enrichment via a 'Review with AI' button
+- [ ] Response is shown as a diff: current content vs suggested content
+- [ ] Each change (addition, modification, deletion) is individually accept/reject-able
+- [ ] Accepted changes merge into the field without clobbering unmodified content
+- [ ] User can accept all or reject all in bulk
+- [ ] Works for description, criteria, and any future DCTRS category content
+
+### I-13: Gate panel: verify all edits persist to DB and sync to markdown
+Priority: medium | Complexity: M | Status: done
+Parent: B-09
+Commit: 6b49669
+Verify that all edits made through the gate panel (description changes, new criteria, flag toggles, review notes) are persisted to the SQLite database and then synced to PRODUCT_BACKLOG.md. This is a verification/hardening sub-ticket, not new functionality.
+- [ ] Description edits via gate panel Save are in tickets table
+- [ ] New criteria via gate panel Save are in acceptance_criteria table
+- [ ] Flag toggles during gate review are in readiness_flags table
+- [ ] All DB changes trigger sync_to_markdown and regenerate_dashboard
+- [ ] PRODUCT_BACKLOG.md reflects all gate panel edits after sync
+
+### I-14: Gate panel: show output directory path with click-to-copy
+Priority: low | Complexity: M | Status: done
+Parent: B-09
+Commit: 6b49669
+The gate panel should display the ticket's output directory path (e.g. docs/features/B-05/) in the panel. Clicking it copies the path to clipboard and shows a 'Path copied' acknowledgment toast.
+- [x] Output directory path is visible in the gate panel
+- [x] Clicking the path copies it to clipboard
+- [x] Toast shows 'Path copied' on successful copy
+- [x] Path is derived from ticket ID using the project's docs/features/ convention
+
+### I-15: Gate panel: DCTRS icons and expanded action buttons
+Priority: medium | Complexity: M | Status: done
+Parent: B-09
+Commit: 6b49669
+Replace the plain D/C/T/R/S letter dots in the gate panel category rows with meaningful icons (e.g. document icon for D, checklist for C, flask for T, eye for R, smoke/cloud for S). When expanded, show full action buttons for each category (e.g. 'Write Description', 'Add Criteria', 'Run Tests', 'Start Review', 'Run Smoke Test') that trigger the appropriate workflow.
+- [x] Each DCTRS category has a recognizable icon (not just a letter)
+- [ ] Icons are consistent between the readiness row on cards and the gate panel
+- [ ] Expanded gate panel shows contextual action buttons per category
+- [ ] Action buttons trigger appropriate workflows (clipboard prompts or direct actions)
+- [ ] Icons work in both light and dark themes
+- [ ] Icons degrade gracefully if custom font/SVG fails to load (fallback to letter)
+
+### B-09: Column Move Gate Check — AI-Powered Readiness Analysis
+Priority: high | Complexity: M | Status: done
+Commit: 6b49669
+When a ticket is moved to a top kanban column (Ideas, Backlog, WIP, For Review, Done), the move is intercepted and a Claude CLI agent analyzes the ticket's DCTRS readiness. Results are shown in an expandable panel with per-section editable fields and independent Save buttons. Users can edit suggestions, save per-section, then Confirm Move or Cancel. Bottom sections (Bugs, Icebox, Won't Do) remain ungated.
+- [ ] POST /api/tickets/{id}/gate-check endpoint spawns Claude CLI and returns structured JSON
+- [ ] Drag-drop moves to top columns are intercepted (not immediate)
+- [ ] Action button moves to top columns are intercepted (not immediate)
+- [ ] Card shows pulsing state while agent is thinking
+- [ ] Gate panel renders with verdict badge and per-DCTRS category rows
+- [ ] Per-section Save buttons persist edits independently of move decision
+- [ ] Confirm Move executes the column move
+- [ ] Cancel dismisses panel without moving, saved edits persist
+- [ ] Moves to Bugs/Icebox/Won't Do bypass the gate (immediate)
+- [ ] add_criteria PUT support for saving suggested new criteria
 
 ## Won't Do
 

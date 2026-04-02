@@ -53,6 +53,36 @@ Priority: medium | Complexity: M | Status: released
 Released: 2026-04-02 | Commit: a7ba01f
 Phase 1 of I-07. Local HTTP server (stdlib http.server, zero deps) serves dashboard with REST API. Quick-edit: click priority dot to cycle, click status badge for dropdown, click criteria checkbox to toggle. data-editing guard in patchCards(). file:// mode still read-only.
 
+
+### I-12: Gate panel: Claude CLI round-trip with diff-style merge UI
+Priority: high | Complexity: M | Status: released
+Released: 2026-04-02 | Commit: 6b49669
+When creating new content or reviewing existing content in the gate panel (e.g. editing description, criteria, review notes), the edited text should be sent to Claude CLI for enrichment/validation and returned. The UI should show a diff-style display comparing current vs suggested, with point-by-point accept/reject for each change. Use a pattern that doesn't clobber existing content — insertions and updates are presented as discrete merge operations the user controls.
+
+
+### I-13: Gate panel: verify all edits persist to DB and sync to markdown
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-02 | Commit: 6b49669
+Verify that all edits made through the gate panel (description changes, new criteria, flag toggles, review notes) are persisted to the SQLite database and then synced to PRODUCT_BACKLOG.md. This is a verification/hardening sub-ticket, not new functionality.
+
+
+### I-14: Gate panel: show output directory path with click-to-copy
+Priority: low | Complexity: M | Status: released
+Released: 2026-04-02 | Commit: 6b49669
+The gate panel should display the ticket's output directory path (e.g. docs/features/B-05/) in the panel. Clicking it copies the path to clipboard and shows a 'Path copied' acknowledgment toast.
+
+
+### I-15: Gate panel: DCTRS icons and expanded action buttons
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-02 | Commit: 6b49669
+Replace the plain D/C/T/R/S letter dots in the gate panel category rows with meaningful icons (e.g. document icon for D, checklist for C, flask for T, eye for R, smoke/cloud for S). When expanded, show full action buttons for each category (e.g. 'Write Description', 'Add Criteria', 'Run Tests', 'Start Review', 'Run Smoke Test') that trigger the appropriate workflow.
+
+
+### B-09: Column Move Gate Check — AI-Powered Readiness Analysis
+Priority: high | Complexity: M | Status: released
+Released: 2026-04-02 | Commit: 6b49669
+When a ticket is moved to a top kanban column (Ideas, Backlog, WIP, For Review, Done), the move is intercepted and a Claude CLI agent analyzes the ticket's DCTRS readiness. Results are shown in an expandable panel with per-section editable fields and independent Save buttons. Users can edit suggestions, save per-section, then Confirm Move or Cancel. Bottom sections (Bugs, Icebox, Won't Do) remain ungated.
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

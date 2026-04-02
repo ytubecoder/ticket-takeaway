@@ -604,11 +604,12 @@ def generate_html(projects: list[Project]) -> str:
     backlog_cards = _render_cards(by_column["backlog"], "backlog", child_tickets, dep_state)
     wip_cards = _render_cards(by_column["wip"], "wip", child_tickets, dep_state)
     ideas_cards = _render_cards(by_column["ideas"], "ideas", child_tickets, dep_state)
-    wontdo_cards = _render_list_rows(by_column["wontdo"], "wontdo", child_tickets, dep_state)
+    # Bottom list sections: newest first (reverse insertion order)
+    wontdo_cards = _render_list_rows(list(reversed(by_column["wontdo"])), "wontdo", child_tickets, dep_state)
     review_cards = _render_cards(by_column["review"], "review", child_tickets, dep_state)
-    done_cards = _render_list_rows(by_column["done"], "done", child_tickets, dep_state)
-    icebox_cards = _render_list_rows(by_column["icebox"], "icebox", child_tickets, dep_state)
-    bugs_cards = _render_list_rows(by_column["bugs"], "bugs", child_tickets, dep_state)
+    done_cards = _render_list_rows(list(reversed(by_column["done"])), "done", child_tickets, dep_state)
+    icebox_cards = _render_list_rows(list(reversed(by_column["icebox"])), "icebox", child_tickets, dep_state)
+    bugs_cards = _render_list_rows(list(reversed(by_column["bugs"])), "bugs", child_tickets, dep_state)
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
 

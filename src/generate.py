@@ -18,6 +18,10 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).parent))
+from constants import (SECTION_ORDER, SECTION_TO_COLUMN, COLUMN_TO_SECTION,
+                       DEFAULT_STATUS_BY_SECTION, CARD_CLASS_BY_COLUMN, STATUSES)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -25,41 +29,6 @@ from typing import Optional
 DASHBOARD_DIR = Path.home() / ".claude" / "ticket-takeaway"
 REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 # OUTPUT_PATH is now per-project: {project.path}/docs/sdlc-dashboard.html
-
-SECTION_ORDER = ["WIP", "For Review", "Backlog", "Ideas", "Bugs", "Icebox", "Done", "Won't Do"]
-
-SECTION_TO_COLUMN = {
-    "Ideas": "ideas",
-    "Backlog": "backlog",
-    "WIP": "wip",
-    "For Review": "review",
-    "Done": "done",
-    "Won't Do": "wontdo",
-    "Icebox": "icebox",
-    "Bugs": "bugs",
-}
-
-DEFAULT_STATUS_BY_SECTION = {
-    "Ideas": "proposed",
-    "Backlog": "proposed",
-    "WIP": "in-progress",
-    "For Review": "for-review",
-    "Done": "done",
-    "Won't Do": "wontdo",
-    "Icebox": "icebox",
-    "Bugs": "bug",
-}
-
-CARD_CLASS_BY_COLUMN = {
-    "backlog": "backlog-card",
-    "wip": "wip-card",
-    "review": "review-card",
-    "ideas": "idea-card",
-    "done": "done-card",
-    "wontdo": "wontdo-card",
-    "icebox": "icebox-card",
-    "bugs": "bug-card",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -2150,7 +2119,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (existing) existing.remove();
         var oldStatus = badge.textContent.trim();
         // Create dropdown
-        var statuses = ['proposed','specified','ready','in-progress','blocked','rework','for-review','done','bug','bug-fixed','icebox','wont-do'];
+        var statuses = {json.dumps(STATUSES)};
         var dd = document.createElement('div');
         dd.className = 'status-dropdown';
         dd.style.cssText = 'position:absolute;z-index:100;background:var(--bg-card);border:1px solid var(--border-main);border-radius:6px;padding:4px 0;min-width:130px;box-shadow:0 4px 12px rgba(0,0,0,.4);';
@@ -2785,7 +2754,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', tests: 'T', reviewed: 'R', smoke: 'S' }};
   var PRIORITY_CYCLE = ['high', 'medium', 'low'];
   var COMPLEXITY_CYCLE = ['S', 'M', 'L', 'XL'];
-  var STATUS_OPTIONS = ['proposed', 'in-progress', 'blocked', 'rework', 'for-review', 'done'];
+  var STATUS_OPTIONS = {json.dumps(STATUSES)};
 
   var gateBanner = document.getElementById('detail-gate-banner');
   var gateBadge = document.getElementById('gate-banner-badge');

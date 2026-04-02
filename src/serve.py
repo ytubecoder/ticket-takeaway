@@ -45,6 +45,17 @@ gen = importlib.util.module_from_spec(_gen_spec)
 _gen_spec.loader.exec_module(gen)
 
 # ---------------------------------------------------------------------------
+# Direct imports from new modules (prefer these over cli.* where available)
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, str(Path(__file__).parent))
+from constants import (SECTION_TO_COLUMN, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
+                       SECTION_PREFIX, STATUSES, VALID_STATUSES_BY_SECTION,
+                       compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH)
+from db import get_db, init_db
+from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id
+
+# ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------
 
@@ -73,8 +84,8 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -100,42 +111,31 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
 
 
 def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
-    """Move a ticket to a different section. Returns True on success."""
+    """Move a ticket to a different section. Returns True on success.
+
+    Delegates to actions.move_ticket() which uses compute_status_on_move()
+    to preserve valid statuses across section moves.
+    """
     try:
         section = cli.resolve_section(section_name)
     except (SystemExit, ValueError):
         return False
 
-    if section not in cli.SECTION_TO_COLUMN:
-        return False
-    status = cli.DEFAULT_STATUS_BY_SECTION.get(section)
-    if not status:
+    if section not in SECTION_TO_COLUMN:
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
-        row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-            (ticket_id, project_id)
-        ).fetchone()
-        if not row:
+        project_path = os.path.expanduser(proj.get("path", ""))
+        try:
+            _actions_move_ticket(conn, project_id, ticket_id, section, project_path=project_path)
+        except ValueError:
             conn.close()
             return False
-
-        tid = row["id"]
-        sort_row = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
-            (project_id, section)
-        ).fetchone()
-
-        conn.execute("""
-            UPDATE tickets SET section = ?, status = ?, sort_order = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
-        """, (section, status, sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -147,8 +147,8 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
 def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
     """Toggle a single acceptance criterion's checked state."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -189,8 +189,8 @@ def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
 def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int, new_text: str) -> bool:
     """Update the text of a criterion at a given index."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -224,8 +224,8 @@ def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int
 def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
     """Remove a criterion at a given index."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -267,8 +267,8 @@ def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
 def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
     """Add a new criterion to the end of the list."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -302,8 +302,8 @@ def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
 def _update_depends(project_id: str, ticket_id: str, depends_list: list) -> bool:
     """Replace all depends for a ticket with a new list."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -341,45 +341,21 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     except (SystemExit, ValueError):
         return None
 
-    status = cli.DEFAULT_STATUS_BY_SECTION.get(section, "proposed")
     priority = body.get("priority", "medium")
     complexity = body.get("complexity", "M")
     description = body.get("description", "")
 
-    # Determine next ID by prefix (CLI uses "B", "I", "BUG" etc. without dash)
-    prefix = cli.SECTION_PREFIX.get(section, "B")
-    sep = "-"
-
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
-        # Find next ID number for this prefix
-        rows = conn.execute(
-            "SELECT id FROM tickets WHERE project_id = ? AND id LIKE ?",
-            (project_id, prefix + sep + "%")
-        ).fetchall()
-        max_num = 0
-        for r in rows:
-            try:
-                num = int(r["id"].split(sep, 1)[1])
-                if num > max_num:
-                    max_num = num
-            except (ValueError, IndexError):
-                pass
-        ticket_id = f"{prefix}{sep}{max_num + 1:02d}"
-
-        sort_row = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = ?",
-            (project_id, section)
-        ).fetchone()
-
-        conn.execute("""
-            INSERT INTO tickets (id, project_id, title, priority, complexity, status, section, description, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ticket_id, project_id, title, priority, complexity, status, section, description, sort_row["next_order"]))
+        ticket_id = _actions_add_ticket(
+            conn, project_id, title,
+            section=section, priority=priority,
+            complexity=complexity, description=description,
+        )
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -392,8 +368,8 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
 def _delete_ticket(project_id: str, ticket_id: str) -> bool:
     """Delete a ticket. Returns True on success."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
@@ -419,29 +395,18 @@ def _delete_ticket(project_id: str, ticket_id: str) -> bool:
 def _accept_ticket(project_id: str, ticket_id: str) -> bool:
     """Accept a ticket — move to Done with status 'done'. Returns True on success."""
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
-        row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-            (ticket_id, project_id)
-        ).fetchone()
-        if not row:
+        project_path = os.path.expanduser(proj.get("path", ""))
+        project_name = proj.get("name", proj.get("id", ""))
+        try:
+            _actions_accept_ticket(conn, project_id, ticket_id, project_path, project_name)
+        except ValueError:
             conn.close()
             return False
-
-        tid = row["id"]
-        sort_row = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tickets WHERE project_id = ? AND section = 'Done'",
-            (project_id,)
-        ).fetchone()
-
-        conn.execute("""
-            UPDATE tickets SET section = 'Done', status = 'done', sort_order = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
-        """, (sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -772,8 +737,8 @@ def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
 
         row = conn.execute(
@@ -814,8 +779,8 @@ def _update_readiness_content(project_id: str, ticket_id: str, flag: str, conten
         return False
 
     with _db_lock:
-        conn = cli.get_db()
-        cli.init_db(conn)
+        conn = get_db()
+        init_db(conn)
         proj = _get_project()
 
         row = conn.execute(
@@ -857,8 +822,8 @@ def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
 
 def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
     """Inner implementation — caller must hold _db_lock."""
-    conn = cli.get_db()
-    cli.init_db(conn)
+    conn = get_db()
+    init_db(conn)
     row = conn.execute(
         "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
         (ticket_id, project_id)
@@ -896,7 +861,7 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "complexity": row["complexity"],
         "status": row["status"],
         "section": row["section"],
-        "column": cli.SECTION_TO_COLUMN.get(row["section"], "backlog"),
+        "column": SECTION_TO_COLUMN.get(row["section"], "backlog"),
         "description": row["description"],
         "parent": row["parent"],
         "rationale": row["rationale"],
@@ -983,8 +948,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/tickets":
             proj = _get_project()
             project_id = proj["id"]
-            conn = cli.get_db()
-            cli.init_db(conn)
+            conn = get_db()
+            init_db(conn)
             rows = conn.execute(
                 "SELECT id FROM tickets WHERE project_id = ? ORDER BY sort_order ASC",
                 (project_id,)
@@ -1059,8 +1024,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             text = body["add_criteria"]
             if isinstance(text, str) and text.strip():
                 with _db_lock:
-                    conn = cli.get_db()
-                    cli.init_db(conn)
+                    conn = get_db()
+                    init_db(conn)
                     proj2 = _get_project()
                     cli.ingest_markdown(conn, proj2)
                     row = conn.execute(

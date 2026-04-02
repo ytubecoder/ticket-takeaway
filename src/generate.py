@@ -1941,6 +1941,14 @@ a {{ color: var(--accent); text-decoration: none; }}
     function startGateCheck(ticketId, targetSection) {{
       var card = document.querySelector('[data-item-id="' + ticketId + '"]');
       if (card) setCardGateChecking(card, true);
+      // Open overlay INSTANTLY — don't wait for AI
+      if (window.openDetailOverlay) {{
+        window.openDetailOverlay(ticketId, null);
+        setTimeout(function() {{
+          if (window.showGateBannerLoading) window.showGateBannerLoading(targetSection);
+        }}, 50);
+      }}
+      // AI gate-check runs in background
       apiGateCheck(ticketId, targetSection).then(function(data) {{
         if (card) setCardGateChecking(card, false);
         // Find first needs-work category to focus on
@@ -1952,22 +1960,19 @@ a {{ color: var(--accent); text-decoration: none; }}
             focusTab = catRMap[k];
           }}
         }});
-        // Open detail overlay with assessment results and gate banner
-        if (window.openDetailOverlay) {{
-          window.openDetailOverlay(ticketId, focusTab);
-          // Small delay to let overlay populate before adding assessment data
-          setTimeout(function() {{
-            if (window.populateAssessment) window.populateAssessment(data);
-            if (window.showGateBanner) window.showGateBanner(data, targetSection);
-            // Set URL hash for gate state (I-11) — replaceState to overwrite the #ticket/ hash from openOverlay
-            var gateHash = '#gate/' + ticketId + '/' + encodeURIComponent(targetSection);
-            if (window.location.hash !== gateHash) {{
-              history.replaceState({{ gate: true, ticketId: ticketId, section: targetSection }}, '', gateHash);
-            }}
-          }}, 100);
+        // Populate assessment results into already-open overlay
+        if (window.populateAssessment) window.populateAssessment(data);
+        if (window.showGateBanner) window.showGateBanner(data, targetSection);
+        // Set URL hash for gate state
+        var gateHash = '#gate/' + ticketId + '/' + encodeURIComponent(targetSection);
+        if (window.location.hash !== gateHash) {{
+          history.replaceState({{ gate: true, ticketId: ticketId, section: targetSection }}, '', gateHash);
         }}
       }}).catch(function() {{
         if (card) setCardGateChecking(card, false);
+        // Hide loading banner on failure
+        var banner = document.getElementById('detail-gate-banner');
+        if (banner) banner.classList.add('hidden');
         showToast(card || document.body, 'Gate check failed');
       }});
     }}
@@ -3289,6 +3294,17 @@ a {{ color: var(--accent); text-decoration: none; }}
     }});
   }}
 
+  function showGateBannerLoading(targetSection) {{
+    _gateContext = {{ targetSection: targetSection, ticketId: currentTicketId }};
+    gateBadge.className = 'gate-verdict-badge loading';
+    gateBadge.textContent = 'Checking...';
+    gateSummary.textContent = 'AI is analyzing readiness for ' + targetSection;
+    gateConfirm.textContent = 'Move to ' + targetSection;
+    gateConfirm.disabled = true;
+    gateBanner.classList.remove('hidden');
+  }}
+  window.showGateBannerLoading = showGateBannerLoading;
+
   function showGateBanner(data, targetSection) {{
     _gateContext = {{ targetSection: targetSection, ticketId: currentTicketId }};
     var verdict = data.verdict || 'needs-work';
@@ -3296,6 +3312,7 @@ a {{ color: var(--accent); text-decoration: none; }}
     gateBadge.textContent = verdict.replace(/-/g, ' ');
     gateSummary.textContent = data.summary || '';
     gateConfirm.textContent = 'Move to ' + targetSection;
+    gateConfirm.disabled = false;
     gateBanner.classList.remove('hidden');
   }}
 

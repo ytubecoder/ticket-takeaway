@@ -11,6 +11,39 @@ just get off the pc and go touch
 - [ ] integration-test criterion 1775127571
 - [ ] markdown-criteria-test 1775127571
 
+### B-17: Ticket Screen AI and Layout Cleanup
+Priority: high | Complexity: XL | Status: in-progress
+Fix the ticket detail/gate screen UX: instant open, cached AI, formatted fields, keyboard shortcuts, editable AI suggestions. 6 child tickets covering 8 requirements.
+- [ ] B-18: Overlay opens instantly, AI loads in background
+- [ ] B-19: Cached AI responses shown on reopen
+- [ ] B-20: T/S as list items, Review renamed to Learnings
+- [ ] B-21: Re-assess always visible with loading text
+- [ ] B-22: Ctrl+Enter saves, Escape cancels without closing overlay
+- [ ] B-23: AI suggestion text editable before applying
+
+### B-18: Instant open with loading indicator
+Priority: high | Complexity: M | Status: in-progress
+Parent: B-17
+Open ticket overlay INSTANTLY when triggered. Move openDetailOverlay() call before apiGateCheck() in startGateCheck(). Show loading spinner in gate banner while AI works. One fast GET for ticket data, async AI call in background.
+- [ ] Overlay opens within 200ms of drag-drop (one fast GET)
+- [ ] Gate banner shows loading spinner while AI works
+- [ ] AI results populate into overlay when ready
+- [ ] Confirm Move button disabled during loading
+
+### B-20: Section format cleanup — list-style T/S + learnings rename
+Priority: medium | Complexity: M | Status: in-progress
+Parent: B-17
+Convert Tests and Smoke from textarea to list-style items (like Criteria). Each line becomes an editable item with delete button. Add populateListField() function. Rename Review section to Learnings/Sync. Keep Description and Learnings as prose textarea.
+
+### B-22: Keyboard shortcuts — Ctrl+Enter save, Escape cancel
+Priority: medium | Complexity: S | Status: in-progress
+Parent: B-17
+Add Ctrl+Enter as save shortcut in all textareas (triggers blur-save). Escape in textarea reverts to original value and blurs without saving. Escape in textarea does NOT close overlay (stopPropagation). Escape in criteria input clears and blurs.
+- [ ] Ctrl+Enter in textarea triggers blur-save
+- [ ] Escape in textarea reverts and blurs without saving
+- [ ] Escape in textarea does NOT close overlay
+- [ ] Escape in criteria input clears and unfocuses
+
 ## For Review
 
 ### B-07: Expand-to-Edit: Full Form Editing for All Fields
@@ -79,6 +112,21 @@ Collapsed cards show only title, ID, status badge, and metadata — no descripti
 - [ ] Cards with no description show no preview element
 - [ ] Preview text is selectable but not interactive
 - [ ] Works for both kanban cards and bottom list rows
+
+### B-19: Cache AI assessment responses
+Priority: high | Complexity: M | Status: proposed
+Parent: B-17
+Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
+
+### B-21: Re-assess button — always visible with loading feedback
+Priority: medium | Complexity: S | Status: proposed
+Parent: B-17
+Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
+
+### B-23: Editable AI suggestions before accepting
+Priority: medium | Complexity: M | Status: proposed
+Parent: B-17
+Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
 
 ## Ideas
 

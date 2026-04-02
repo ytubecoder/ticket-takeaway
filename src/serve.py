@@ -106,9 +106,10 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
     except (SystemExit, ValueError):
         return False
 
-    column = cli.SECTION_TO_COLUMN.get(section)
+    if section not in cli.SECTION_TO_COLUMN:
+        return False
     status = cli.DEFAULT_STATUS_BY_SECTION.get(section)
-    if not column or not status:
+    if not status:
         return False
 
     with _db_lock:
@@ -132,9 +133,9 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
         ).fetchone()
 
         conn.execute("""
-            UPDATE tickets SET section = ?, column = ?, status = ?, sort_order = ?, updated_at = ?
+            UPDATE tickets SET section = ?, status = ?, sort_order = ?, updated_at = ?
             WHERE id = ? AND project_id = ?
-        """, (section, column, status, sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
+        """, (section, status, sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -340,7 +341,6 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     except (SystemExit, ValueError):
         return None
 
-    column = cli.SECTION_TO_COLUMN.get(section, "ideas")
     status = cli.DEFAULT_STATUS_BY_SECTION.get(section, "proposed")
     priority = body.get("priority", "medium")
     complexity = body.get("complexity", "M")
@@ -377,9 +377,9 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
         ).fetchone()
 
         conn.execute("""
-            INSERT INTO tickets (id, project_id, title, priority, complexity, status, section, column, description, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ticket_id, project_id, title, priority, complexity, status, section, column, description, sort_row["next_order"]))
+            INSERT INTO tickets (id, project_id, title, priority, complexity, status, section, description, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ticket_id, project_id, title, priority, complexity, status, section, description, sort_row["next_order"]))
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -439,7 +439,7 @@ def _accept_ticket(project_id: str, ticket_id: str) -> bool:
         ).fetchone()
 
         conn.execute("""
-            UPDATE tickets SET section = 'Done', column = 'done', status = 'done', sort_order = ?, updated_at = ?
+            UPDATE tickets SET section = 'Done', status = 'done', sort_order = ?, updated_at = ?
             WHERE id = ? AND project_id = ?
         """, (sort_row["next_order"], datetime.now().isoformat(), tid, project_id))
 
@@ -896,7 +896,7 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "complexity": row["complexity"],
         "status": row["status"],
         "section": row["section"],
-        "column": row["column"],
+        "column": cli.SECTION_TO_COLUMN.get(row["section"], "backlog"),
         "description": row["description"],
         "parent": row["parent"],
         "rationale": row["rationale"],

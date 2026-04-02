@@ -76,10 +76,6 @@ class Ticket:
     section: str = "Ideas"
     column: str = ""
     description: str = ""
-
-    def __post_init__(self):
-        if not self.column:
-            self.column = SECTION_TO_COLUMN.get(self.section, "backlog")
     acceptance_criteria: list = field(default_factory=list)
     parent: Optional[str] = None
     rationale: str = ""
@@ -90,6 +86,10 @@ class Ticket:
     release_tag: str = ""
     readiness_flags: set = field(default_factory=set)  # explicit flags from DB
     readiness_content: dict = field(default_factory=dict)  # {flag: content_text}
+
+    def __post_init__(self):
+        if not self.column:
+            self.column = SECTION_TO_COLUMN.get(self.section, "backlog")
 
 
 @dataclass
@@ -311,7 +311,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             complexity=r["complexity"],
             status=r["status"],
             section=r["section"],
-            column=r["column"],
+            column=SECTION_TO_COLUMN.get(r["section"], "backlog"),
             description=r["description"],
             acceptance_criteria=criteria,
             parent=r["parent"],

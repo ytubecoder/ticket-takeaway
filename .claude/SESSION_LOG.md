@@ -1,5 +1,25 @@
 # Session Log
 
+## 2026-04-02 — B-16 test framework: smoke, E2E journey, TDD
+
+### Summary
+- Built 3-category test framework with 72 tests across 8 new files (48 TDD, 18 smoke, 6 E2E)
+- Extracted `auto_promote_parents()` from `generate.py` inline code into standalone testable function
+- Extended `conftest.py` with CLI/generate module imports via importlib, `live_page` fixture, shared API helpers
+- Discovered card single-click expands in-place; detail overlay requires `window.openDetailOverlay()` or double-click
+
+### Lessons Learned
+- **Accepted:** Importing `tickets-cli.py` (hyphenated filename) via importlib works cleanly for TDD — no need to refactor filenames. Pattern already used in `serve.py`.
+- **Accepted:** Testing `auto_promote_parents` required extracting it from the 3000-line `generate_html()` function. The extraction was trivial (pure function, no side effects beyond list mutation) and improved code structure.
+- **Gotcha:** Card click opens in-place expansion (200ms debounce timer), NOT the detail overlay. Detail overlay opens via `window.openDetailOverlay(tid)` or double-click on card ID. Browser tests that need the overlay must use the JS API, not `card.click()`.
+- **Gotcha:** Detail overlay description textarea is not visible until the overlay fetches ticket data async — must `wait_for_function` on `ta.value !== ''` before asserting content.
+- **Gotcha:** 5 pre-existing failures in `test_gate_hash_state.py` — tests reference tab-based hash routing (`detail-tab.active`) that was replaced by single-card overlay design. Not regressions.
+
+### Decisions
+- AI-dependent endpoints (gate-check, assess, enrich) excluded from smoke tests — require API keys
+- Undo/redo E2E test marked as skip — not implemented in detail overlay yet
+- Browser edit test changed to API-edit-then-verify-in-dashboard pattern (more reliable than manipulating hidden textareas)
+
 ## 2026-04-02 — Redesign ticket detail overlay: tabs → single scrollable card
 
 ### Summary
@@ -9,6 +29,8 @@
 - Removed all Save buttons, tab switching, Properties form, and Create New/Review Existing button pairs
 - Replaced criteria checkboxes with bullet + inline-editable text + × delete button + Enter-to-add input
 - Collapsed two assess buttons per section into single "Assess"/"Re-assess" ghost button (visible on hover)
+- Accepted B-09 (Column Move Gate Check) + all 4 children (I-12, I-13, I-14, I-15)
+- Fixed bottom list sections (Done, Bugs, Icebox, Won't Do) to show newest tickets first
 
 ### Lessons Learned
 - **Accepted:** Auto-save on blur eliminates Save buttons entirely — reduces mouse clicks and cognitive load. Toast confirms save happened.

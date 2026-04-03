@@ -4202,8 +4202,8 @@ def main():
     for p in output_paths:
         print(f"Output: {p}")
 
-    # Open first project's dashboard in browser
-    if output_paths:
+    # Open first project's dashboard in browser (skip if --no-open)
+    if output_paths and "--no-open" not in sys.argv:
         open_path = output_paths[0]
         system = platform.system()
         try:

@@ -556,7 +556,7 @@ def regenerate_dashboard(project: dict):
     project_path = os.path.expanduser(project.get("path", ""))
     if project_path:
         subprocess.run(
-            [sys.executable, str(gen_script)],
+            [sys.executable, str(gen_script), "--no-open"],
             cwd=project_path,
             capture_output=True,
         )

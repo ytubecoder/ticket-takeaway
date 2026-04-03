@@ -1,5 +1,43 @@
 # Session Log
 
+## 2026-04-04 — B-17 ticket screen AI cleanup + papercut fixes
+
+### Summary
+- Implemented B-17 (Ticket Screen AI and Layout Cleanup) — 6 child tickets across 2 phases: instant overlay open, AI response caching, DCSTL field reorder, list-style Tests/Smoke, keyboard shortcuts, editable AI diff suggestions
+- Fixed papercuts: ↗ open button on kanban cards, DCSTL reorder in overlay + readiness row, removed rationale field entirely, fixed browser opening on every API write
+- Fixed critical bug: `regenerate_dashboard()` was calling `generate.py` without `--no-open`, causing browser to open a new tab on every status change via the UI
+
+### Lessons Learned
+- **Accepted:** Parallel agents editing different zones of the same file works if zones are well-separated (3 agents on generate.py simultaneously — card template, overlay HTML, JS handlers)
+- **Accepted:** `pushUndo` must be synchronous (before API call, not in `.then()`) — otherwise Ctrl+Z doesn't work because the undo isn't registered until the async response returns
+- **Gotcha:** Python f-string `{}` vs JS `{}` — `_assessCache = {}` broke the f-string parse. Must be `{{}}` for empty JS objects inside f-strings
+- **Gotcha:** `regenerate_dashboard()` shells out to `generate.py` which always opens the browser — needed `--no-open` flag to prevent this in API context
+- **Rejected:** Using agents to implement small JS edits — they returned plans instead of making edits. Better to implement directly for surgical changes
+
+### Decisions
+- Rationale field permanently removed (DB column preserved inert, all code paths stripped)
+- DCTRS reordered to DCSTL: Description, Criteria, Smoke, Tests, Learnings
+- "Review" renamed to "Learnings / Sync" throughout — data key `reviewed` unchanged
+- AI assessment cache is JS in-memory (not DB-persisted) — invalidated on ticket data change, force-refreshable via Re-assess button
+
+## 2026-04-03 — B-16 review, fix post-refactor test imports, accept
+
+### Summary
+- Reviewed B-16 (Test Framework) — verified all 8 acceptance criteria, ran 72 tests green
+- Fixed conftest.py: added `src/` to sys.path so `from constants import ...` works after B-12 module extraction
+- Fixed test_tdd_helpers.py: import `auto_generate_id` from `actions` directly (no longer on `tickets-cli.py`)
+- Accepted B-16 → Done
+- Updated `/sync` skill with context scan step for capturing product decisions and learnings
+
+### Lessons Learned
+- **Gotcha:** After B-12 extracted `constants.py`/`actions.py`/`db.py` from monolithic `tickets-cli.py`, test conftest broke because importlib-loaded modules don't inherit the `sys.path` manipulation that `tickets-cli.py` does internally. Fix: add `src/` to `sys.path` in conftest before loading modules.
+- **Gotcha:** Functions that move between modules during refactors (e.g. `auto_generate_id` from `tickets-cli.py` → `actions.py`) may still appear to exist via re-export but actually don't — `tickets-cli.py` imports `move_ticket` from `actions` but not `auto_generate_id`, so it's not available on the loaded module.
+- **Accepted:** Review workflow caught real breakage from a prior refactor (B-12) — tests that passed when written had silently broken due to module restructuring. The `/review` process surfaced this before acceptance.
+
+### Decisions
+- Undo/redo criterion in B-16 accepted as skip — covered by separate I-08 ticket, not a gap in test framework
+- `/sync` skill updated with explicit "context scan" step to systematically mine conversations for decisions, learnings, corrections, and architectural insights before writing session log
+
 ## 2026-04-03 — Accept I-07, unify column/section into section only
 
 ### Summary

@@ -31,14 +31,23 @@ python3 ~/.claude/ticket-takeaway/generate.py --json
 ## Architecture
 
 ```
-tickets.db (SQLite)  ──→  tickets-cli.py  ──→  PRODUCT_BACKLOG.md (auto-generated)
-                     ──→  generate.py     ──→  docs/sdlc-dashboard.html
-PRODUCT_SPECIFICATION.md (write-only output from /accept, not read by generator)
+UI (browser)  →  API (serve.py)  →  App Layer (actions.py)  →  DB (sqlite)
+                                                              →  Markdown (output)
+CLI (tickets-cli.py)  →  App Layer (same)  →  DB → Markdown
+
+src/constants.py   — canonical STATUSES, VALID_STATUSES_BY_SECTION, compute_status_on_move()
+src/db.py          — get_db(), init_db(), schema, migrations
+src/actions.py     — move_ticket(), accept_ticket(), add_ticket(), update_ticket() + post-change hooks
+src/tickets-cli.py — thin CLI wrapper calling actions.py
+src/serve.py       — HTTP server routing to actions.py + background threads
+src/generate.py    — dashboard HTML renderer
 ```
 
-**Data flow is one-directional:** DB → markdown → dashboard. The generator does NOT merge tickets from PRODUCT_SPECIFICATION.md — all tickets must exist in the DB. The `ingest_markdown` step in sync absorbs direct markdown edits into the DB but never deletes DB-only records.
+**Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `actions.py`.
 
-**Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `tickets-cli.py`.
+**Markdown sync:** DB → markdown is one-directional on every write. External markdown edits (by LLM agents) are detected by a hash-based watcher thread (5s poll) and diff-imported into DB.
+
+**Business rules:** Post-change hooks in `actions.py` fire after moves/status changes. Auto-promote parent when all children done. Scheduled events table + 30s poller for delayed rules (e.g., auto-accept after 5min).
 
 **`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
 
@@ -50,12 +59,12 @@ PRODUCT_SPECIFICATION.md (write-only output from /accept, not read by generator)
 5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
-Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, rationale, depends, summary, archived, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; slugs (wip, review, etc.) are derived via `SECTION_SLUGS` for CLI/HTML use.
+Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
 
 **Three-layer hierarchy** (see `docs/LIFECYCLE.md` Section 3b):
 - **Section** = where the work is (Ideas → Backlog → WIP → Review → Done)
 - **Status** (badge) = how the work is going (proposed, in-progress, blocked, etc.)
-- **Readiness Flags** (D C T R S) = what's been done (Description, Criteria, Tests, Reviewed, Smoke)
+- **Readiness Flags** (D C S T L) = what's been done (Description, Criteria, Smoke, Tests, Learnings)
 
 **`src/skills/`** contains Claude Code skill definitions:
 - `dashboard/SKILL.md` — the `/dashboard` skill
@@ -70,16 +79,21 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 - **Workflow buttons** (Start, Done, Accept — shown when expanded), **Create/Delete** via API
 - **New ticket panel** ("+ New" in filter bar) — overlay panel with title input, section dropdown, and expandable "Full ticket form" (coming soon placeholder)
 - **Gate-check on column moves** — dragging/moving a ticket to a top column triggers an AI-powered readiness analysis (DCTRS flags), showing results in an expandable panel with per-section editable fields
-- **Ticket detail overlay** — single scrollable card (no tabs). Header: ID + contenteditable title + DCTRS readiness dots (click to scroll). Meta strip: priority/status/complexity chips (click to cycle/dropdown), parent (click to edit), column badge. Body: all DCTRS sections + rationale stacked and always visible with inline auto-save on blur. Single "Assess"/"Re-assess" ghost button per section (visible on hover). Criteria: bullet + editable text + × delete, Enter-to-add input.
+- **Ticket detail overlay** — single scrollable card. Header: ID + contenteditable title + DCSTL readiness dots (click to scroll). Meta strip: priority/status/complexity chips (click to cycle/dropdown), parent (click to edit), section badge. Body: D C S T L sections stacked with inline auto-save on blur. "Assess"/"Re-assess" button per section (always visible at 40% opacity). Criteria/Tests/Smoke as individual list items (add/edit/delete per-item). Learnings as prose textarea. AI responses cached per-ticket. ↗ open button on kanban cards.
+- **Undo/Redo** — Ctrl+Z undoes last edit, Ctrl+Shift+Z/Ctrl+Y redoes. Stack depth 50. Covers priority, status, complexity, criteria, text edits.
+- **Keyboard shortcuts** — Ctrl+Enter saves textarea, Escape reverts without closing overlay.
 
 Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
 
 **Progressive enhancement:** Same HTML works read-only via file://. Edit features only activate when `edit-api` meta tag present (injected by serve.py).
 
 **Deployment:** Source files in `src/` deploy to `~/.claude/` for runtime use:
-- `src/generate.py` → `~/.claude/ticket-takeaway/generate.py` AND `~/.claude/dashboard/generate.py` (fix DASHBOARD_DIR line 25)
+- `src/generate.py` → `~/.claude/ticket-takeaway/generate.py` AND `~/.claude/dashboard/generate.py`
 - `src/tickets-cli.py` → `~/.claude/ticket-takeaway/tickets-cli.py`
 - `src/serve.py` → `~/.claude/ticket-takeaway/serve.py`
+- `src/constants.py` → `~/.claude/ticket-takeaway/constants.py`
+- `src/db.py` → `~/.claude/ticket-takeaway/db.py`
+- `src/actions.py` → `~/.claude/ticket-takeaway/actions.py`
 
 **DB recovery:** If `tickets.db` is lost, run `tickets-cli.py seed` to reconstruct from PRODUCT_BACKLOG.md.
 
@@ -89,8 +103,8 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 ### {ID}: {Title}
 Priority: {priority} | Complexity: {complexity} | Status: {status}
 Parent: {parent-id}       (optional — for sub-tickets)
-Rationale: {reason}       (optional — captures "why" decisions)
 Depends: {id1}, {id2}     (optional — inter-ticket dependencies)
+Commit: {hash}            (optional — git commit hash, auto-captured on done/accept)
 {Description}
 - [ ] Acceptance criterion
 - [x] Completed criterion
@@ -169,7 +183,7 @@ python3 -m pytest tests/ -v                    # Everything
 - **E2E tests** cover: ticket lifecycle journey, bug workflow + parent auto-promote, quick edit persistence
 - `conftest.py` provides: `dashboard_server` (starts serve.py on free port), `browser`/`page` (Playwright with mocked gate-check), `live_page` (no mocks), shared API helpers
 
-**Key testability note:** `auto_promote_parents()` is extracted as a standalone function in `generate.py` for direct import. Business logic constants (`DEFAULT_STATUS_BY_SECTION`, `SECTION_SLUGS`, etc.) are importable from `tickets-cli.py` via importlib.
+**Key testability note:** Business logic lives in `actions.py` (importable). Constants in `constants.py`. DB layer in `db.py`. All importable without side effects.
 
 ## Generated Files
 

@@ -265,7 +265,6 @@ def add_ticket(
     complexity: str = "M",
     description: str = "",
     parent: Optional[str] = None,
-    rationale: str = "",
 ) -> str:
     """Add a new ticket.  Auto-generates the ID from *section* prefix.
 
@@ -277,10 +276,10 @@ def add_ticket(
 
     conn.execute(
         "INSERT INTO tickets (id, project_id, title, priority, complexity, status, "
-        "section, description, parent, rationale, sort_order) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "section, description, parent, sort_order) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ticket_id, project_id, title, priority, complexity, status,
-         section, description, parent, rationale, sort_order),
+         section, description, parent, sort_order),
     )
 
     return ticket_id
@@ -296,7 +295,6 @@ def update_ticket(
     complexity: Optional[str] = None,
     status: Optional[str] = None,
     description: Optional[str] = None,
-    rationale: Optional[str] = None,
     parent: Optional[str] = ...,  # sentinel — None means "clear parent"
     summary: Optional[str] = None,
     add_criteria: Optional[list[str]] = None,
@@ -326,8 +324,6 @@ def update_ticket(
         updates["status"] = status.lower()
     if description is not None:
         updates["description"] = description
-    if rationale is not None:
-        updates["rationale"] = rationale
     if parent is not ...:
         # None clears the parent; a string sets it
         updates["parent"] = parent if parent else None

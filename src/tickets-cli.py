@@ -4,8 +4,8 @@
 Usage:
     tickets-cli.py seed [--project ID]
     tickets-cli.py list [--project ID] [--section S] [--status S]
-    tickets-cli.py add <project> "title" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D] [--rationale R]
-    tickets-cli.py update <project> <id> [--title T] [--priority P] [--complexity C] [--status S] [--description D] [--rationale R] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID]
+    tickets-cli.py add <project> "title" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D]
+    tickets-cli.py update <project> <id> [--title T] [--priority P] [--complexity C] [--status S] [--description D] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID]
     tickets-cli.py move <project> <id> <section>
     tickets-cli.py accept <project> <id>
     tickets-cli.py sync [--project ID]
@@ -150,7 +150,6 @@ def parse_backlog(filepath: str) -> list[dict]:
                 "section": current_section,
                 "description": "",
                 "parent": None,
-                "rationale": "",
                 "depends": [],
                 "acceptance_criteria": [],
                 "sort_order": sort_order,
@@ -177,13 +176,6 @@ def parse_backlog(filepath: str) -> list[dict]:
             val = line_stripped.split(":", 1)[1].strip()
             if val:
                 current_ticket["parent"] = val
-            continue
-
-        # Rationale
-        if current_ticket and line_stripped.startswith("Rationale:"):
-            val = line_stripped.split(":", 1)[1].strip()
-            if val:
-                current_ticket["rationale"] = val
             continue
 
         # Depends
@@ -352,14 +344,14 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
             # Existing ticket — update fields from markdown (markdown wins)
             conn.execute("""
                 UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
-                    section=?, description=?, parent=?, rationale=?,
+                    section=?, description=?, parent=?,
                     sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
                     release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
             """, (
                 t["title"], t["priority"], t["complexity"], t["status"],
                 t["section"], t["description"], t["parent"],
-                t["rationale"], t["sort_order"],
+                t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
                 datetime.now().isoformat(),
                 tid, project_id,
@@ -405,13 +397,13 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
             # New ticket added directly to markdown — insert into DB
             conn.execute("""
                 INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, description, parent, rationale, sort_order,
+                                     section, description, parent, sort_order,
                                      commit_hash, release_tag)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 tid, project_id, t["title"], t["priority"], t["complexity"],
                 t["status"], t["section"], t["description"],
-                t["parent"], t["rationale"], t["sort_order"],
+                t["parent"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
@@ -493,10 +485,6 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             # Parent
             if t["parent"]:
                 lines.append(f"Parent: {t['parent']}")
-
-            # Rationale
-            if t["rationale"]:
-                lines.append(f"Rationale: {t['rationale']}")
 
             # Depends
             deps = conn.execute(
@@ -648,14 +636,14 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
             real_id = db_ids[tid.upper()]
             conn.execute("""
                 UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
-                    section=?, description=?, parent=?, rationale=?,
+                    section=?, description=?, parent=?,
                     sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
                     release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
             """, (
                 t["title"], t["priority"], t["complexity"], t["status"],
                 t["section"], t["description"], t["parent"],
-                t["rationale"], t["sort_order"],
+                t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
                 datetime.now().isoformat(),
                 real_id, project_id,
@@ -701,13 +689,13 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
             # New ticket added directly to markdown — insert into DB
             conn.execute("""
                 INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, description, parent, rationale, sort_order,
+                                     section, description, parent, sort_order,
                                      commit_hash, release_tag)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 tid, project_id, t["title"], t["priority"], t["complexity"],
                 t["status"], t["section"], t["description"],
-                t["parent"], t["rationale"], t["sort_order"],
+                t["parent"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
@@ -771,13 +759,13 @@ def cmd_seed(args):
         for t in tickets:
             conn.execute("""
                 INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, description, parent, rationale, sort_order,
+                                     section, description, parent, sort_order,
                                      commit_hash, release_tag)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 t["id"], project_id, t["title"], t["priority"], t["complexity"],
                 t["status"], t["section"], t["description"],
-                t["parent"], t["rationale"], t["sort_order"],
+                t["parent"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
 
@@ -891,7 +879,6 @@ def cmd_add(args):
         complexity=args.complexity or "M",
         description=args.description or "",
         parent=args.parent,
-        rationale=args.rationale or "",
     )
     conn.commit()
 
@@ -931,8 +918,6 @@ def cmd_update(args):
         kwargs["status"] = args.status
     if args.description is not None:
         kwargs["description"] = args.description
-    if args.rationale is not None:
-        kwargs["rationale"] = args.rationale
     if args.parent is not None:
         # Empty string means "clear parent"; non-empty means "set parent"
         kwargs["parent"] = args.parent if args.parent else None
@@ -1191,7 +1176,6 @@ def main():
     p_add.add_argument("--complexity", help="Complexity (S/M/L/XL)")
     p_add.add_argument("--parent", help="Parent ticket ID")
     p_add.add_argument("--description", help="Description text")
-    p_add.add_argument("--rationale", help="Rationale text")
 
     # update
     p_upd = sub.add_parser("update", help="Update a ticket")
@@ -1202,7 +1186,6 @@ def main():
     p_upd.add_argument("--complexity", help="New complexity")
     p_upd.add_argument("--status", help="New status")
     p_upd.add_argument("--description", help="New description")
-    p_upd.add_argument("--rationale", help="New rationale")
     p_upd.add_argument("--parent", help="New parent ID (empty to clear)")
     p_upd.add_argument("--summary", help="New summary")
     p_upd.add_argument("--add-criteria", action="append", help="Add acceptance criterion (repeatable)")

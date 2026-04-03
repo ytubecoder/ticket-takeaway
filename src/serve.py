@@ -78,7 +78,7 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
     """Update a single field on a ticket. Returns True on success."""
     ALLOWED_FIELDS = {
         "title", "priority", "complexity", "status", "description",
-        "parent", "rationale", "commit_hash", "release_tag",
+        "parent", "commit_hash", "release_tag",
     }
     if field not in ALLOWED_FIELDS:
         return False
@@ -863,7 +863,6 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "section": row["section"],
         "description": row["description"],
         "parent": row["parent"],
-        "rationale": row["rationale"],
         "commit_hash": row["commit_hash"] if "commit_hash" in row.keys() else "",
         "release_tag": row["release_tag"] if "release_tag" in row.keys() else "",
         "acceptance_criteria": criteria_list,

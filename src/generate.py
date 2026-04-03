@@ -46,7 +46,6 @@ class Ticket:
     description: str = ""
     acceptance_criteria: list = field(default_factory=list)
     parent: Optional[str] = None
-    rationale: str = ""
     depends: list = field(default_factory=list)
     summary: str = ""
     archived: bool = False
@@ -158,13 +157,6 @@ def parse_backlog(filepath: str) -> list[Ticket]:
             parent_value = line_stripped.split(":", 1)[1].strip()
             if parent_value:
                 current_ticket.parent = parent_value
-            continue
-
-        # Detect Rationale: field
-        if current_ticket and line_stripped.startswith("Rationale:"):
-            rationale_value = line_stripped.split(":", 1)[1].strip()
-            if rationale_value:
-                current_ticket.rationale = rationale_value
             continue
 
         # Detect Depends: field (comma-separated ticket IDs)
@@ -280,7 +272,6 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             description=r["description"],
             acceptance_criteria=criteria,
             parent=r["parent"],
-            rationale=r["rationale"],
             depends=depends,
             summary=r["summary"],
             archived=bool(r["archived"]),
@@ -775,6 +766,13 @@ a {{ color: var(--accent); text-decoration: none; }}
 .status-badge.wont-do {{ background: rgba(75,85,99,0.15); color: var(--status-wontdo); }}
 .status-badge.wontdo {{ background: rgba(75,85,99,0.15); color: var(--status-wontdo); }}
 
+.card-open-btn {{
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 12px; padding: 0 2px; line-height: 1; opacity: 0.4;
+  transition: opacity 0.15s;
+}}
+.card-open-btn:hover {{ opacity: 1; color: var(--accent); }}
+
 .card-desc {{ font-size: 11px; color: var(--text-secondary); line-height: 1.3; margin-top: 6px; display: none; }}
 .card-criteria {{ font-size: 11px; color: var(--text-tertiary); line-height: 1.4; margin-top: 4px; display: none; }}
 .card-criteria .criterion {{ margin: 2px 0; }}
@@ -799,8 +797,6 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 9px; color: var(--text-tertiary); font-family: var(--font-mono);
   margin-bottom: 4px;
 }}
-.card-rationale {{ font-size: 11px; color: var(--text-tertiary); line-height: 1.3; margin-top: 4px; font-style: italic; display: none; }}
-.card.expanded .card-rationale {{ display: block; }}
 .card-deps {{
   font-size: 9px; color: var(--text-tertiary); font-family: var(--font-mono);
   margin-bottom: 4px;
@@ -891,24 +887,20 @@ a {{ color: var(--accent); text-decoration: none; }}
 .edit-enabled .complexity-badge:hover {{ filter: brightness(1.3); transition: filter 0.15s; }}
 /* Click-to-edit text fields */
 .edit-enabled .card-title {{ cursor: text; }}
-.edit-enabled .card.expanded .card-desc,
-.edit-enabled .card.expanded .card-rationale {{ cursor: text; }}
+.edit-enabled .card.expanded .card-desc {{ cursor: text; }}
 .edit-enabled .card-title:hover,
-.edit-enabled .card.expanded .card-desc:hover,
-.edit-enabled .card.expanded .card-rationale:hover {{ background: var(--bg-hover); border-radius: 3px; }}
+.edit-enabled .card.expanded .card-desc:hover {{ background: var(--bg-hover); border-radius: 3px; }}
 /* Empty field placeholders (only visible on expanded cards) */
-.card-parent-link.empty, .card-deps.empty, .card-desc.empty, .card-rationale.empty {{
+.card-parent-link.empty, .card-deps.empty, .card-desc.empty {{
   display: none; color: var(--text-tertiary); font-size: 10px; cursor: pointer;
   opacity: 0.5; font-style: italic;
 }}
 .card.expanded .card-parent-link.empty,
 .card.expanded .card-deps.empty,
-.card.expanded .card-desc.empty,
-.card.expanded .card-rationale.empty {{ display: block; }}
+.card.expanded .card-desc.empty {{ display: block; }}
 .edit-enabled .card-parent-link.empty:hover,
 .edit-enabled .card-deps.empty:hover,
-.edit-enabled .card-desc.empty:hover,
-.edit-enabled .card-rationale.empty:hover {{ opacity: 1; background: var(--bg-hover); border-radius: 3px; }}
+.edit-enabled .card-desc.empty:hover {{ opacity: 1; background: var(--bg-hover); border-radius: 3px; }}
 .edit-enabled .card-parent-link {{ cursor: pointer; }}
 .edit-enabled .card-deps {{ cursor: pointer; }}
 /* Add criterion button */
@@ -2487,17 +2479,16 @@ a {{ color: var(--accent); text-decoration: none; }}
         }});
       }}, true);
 
-      // --- Click-to-edit for text fields (title, description, rationale) ---
+      // --- Click-to-edit for text fields (title, description) ---
       document.addEventListener('click', function(e) {{
         var titleEl = e.target.closest('.card-title');
         var descEl = e.target.closest('.card-desc');
-        var rationaleEl = e.target.closest('.card-rationale');
-        var target = titleEl || descEl || rationaleEl;
+        var target = titleEl || descEl;
         if (!target) return;
         var card = target.closest('.card');
         if (!card || !card.dataset.itemId) return;
-        // Title editable on collapsed cards; desc/rationale only when expanded
-        if ((descEl || rationaleEl) && !card.classList.contains('expanded')) return;
+        // Title editable on collapsed cards; desc only when expanded
+        if (descEl && !card.classList.contains('expanded')) return;
         e.stopPropagation();
         e.preventDefault();
         clearTimeout(card._clickTimer);
@@ -2514,7 +2505,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         function save() {{
           target.contentEditable = 'false';
           card.dataset.editing = '';
-          var field = titleEl ? 'title' : descEl ? 'description' : 'rationale';
+          var field = titleEl ? 'title' : 'description';
           var value = target.textContent.trim();
           if (value === origValue) {{
             target.removeEventListener('blur', save);
@@ -2624,6 +2615,19 @@ a {{ color: var(--accent); text-decoration: none; }}
         }});
       }}
     }}
+
+    // Open button — works in both server mode and file:// mode
+    document.addEventListener('click', function(e) {{
+      var btn = e.target.closest('.card-open-btn');
+      if (!btn) return;
+      var card = btn.closest('.card');
+      if (!card || !card.dataset.itemId) return;
+      e.stopPropagation();
+      e.preventDefault();
+      clearTimeout(card._clickTimer);
+      if (window.openDetailOverlay) window.openDetailOverlay(card.dataset.itemId, null);
+    }}, true);
+
     // Expose for overlay gate-check integration and testability
     window.showToast = showToast;
     window.startGateCheck = startGateCheck;
@@ -2642,9 +2646,9 @@ a {{ color: var(--accent); text-decoration: none; }}
       <div class="detail-dctrs-strip">
         <button class="readiness-dot" data-flag="description" title="Description">D</button>
         <button class="readiness-dot" data-flag="criteria" title="Criteria">C</button>
-        <button class="readiness-dot" data-flag="tests" title="Tests">T</button>
-        <button class="readiness-dot" data-flag="reviewed" title="Learnings">R</button>
         <button class="readiness-dot" data-flag="smoke" title="Smoke">S</button>
+        <button class="readiness-dot" data-flag="tests" title="Tests">T</button>
+        <button class="readiness-dot" data-flag="reviewed" title="Learnings">L</button>
       </div>
       <span class="detail-toast" role="status" aria-live="polite"></span>
       <button class="detail-close" aria-label="Close ticket detail">&times;</button>
@@ -2692,29 +2696,6 @@ a {{ color: var(--accent); text-decoration: none; }}
         <input type="text" class="criteria-add-input" placeholder="+ Add criterion and press Enter">
       </div>
 
-      <!-- Tests -->
-      <div class="detail-section" data-section="tests" id="section-tests">
-        <div class="detail-section-header">
-          <h3><span class="section-flag" data-cat="T">T</span> Tests</h3>
-          <button class="section-assess-btn" data-cat="T">Assess</button>
-        </div>
-        <div class="detail-assess-loading hidden" data-cat-loading="T">Assessing tests...</div>
-        <div class="detail-assessment hidden" data-cat-result="T"></div>
-        <ul class="detail-criteria-list" data-list-field="tests"></ul>
-        <input type="text" class="criteria-add-input" data-list-add="tests" placeholder="+ Add test item and press Enter">
-      </div>
-
-      <!-- Review -->
-      <div class="detail-section" data-section="reviewed" id="section-reviewed">
-        <div class="detail-section-header">
-          <h3><span class="section-flag" data-cat="R">R</span> Learnings / Sync</h3>
-          <button class="section-assess-btn" data-cat="R">Assess</button>
-        </div>
-        <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
-        <div class="detail-assessment hidden" data-cat-result="R"></div>
-        <textarea class="detail-editor" data-field="reviewed" placeholder="Learnings, sync notes, and decisions captured along the way..."></textarea>
-      </div>
-
       <!-- Smoke -->
       <div class="detail-section" data-section="smoke" id="section-smoke">
         <div class="detail-section-header">
@@ -2727,13 +2708,29 @@ a {{ color: var(--accent); text-decoration: none; }}
         <input type="text" class="criteria-add-input" data-list-add="smoke" placeholder="+ Add smoke test and press Enter">
       </div>
 
-      <!-- Rationale -->
-      <div class="detail-section" data-section="rationale" id="section-rationale">
+      <!-- Tests -->
+      <div class="detail-section" data-section="tests" id="section-tests">
         <div class="detail-section-header">
-          <h3>Rationale</h3>
+          <h3><span class="section-flag" data-cat="T">T</span> Tests</h3>
+          <button class="section-assess-btn" data-cat="T">Assess</button>
         </div>
-        <textarea class="detail-editor" data-field="rationale" placeholder="Why does this ticket exist? Click to explain."></textarea>
+        <div class="detail-assess-loading hidden" data-cat-loading="T">Assessing tests...</div>
+        <div class="detail-assessment hidden" data-cat-result="T"></div>
+        <ul class="detail-criteria-list" data-list-field="tests"></ul>
+        <input type="text" class="criteria-add-input" data-list-add="tests" placeholder="+ Add test item and press Enter">
       </div>
+
+      <!-- Learnings -->
+      <div class="detail-section" data-section="reviewed" id="section-reviewed">
+        <div class="detail-section-header">
+          <h3><span class="section-flag" data-cat="R">L</span> Learnings / Sync</h3>
+          <button class="section-assess-btn" data-cat="R">Assess</button>
+        </div>
+        <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
+        <div class="detail-assessment hidden" data-cat-result="R"></div>
+        <textarea class="detail-editor" data-field="reviewed" placeholder="Learnings, sync notes, and decisions captured along the way..."></textarea>
+      </div>
+
     </div>
   </div>
 </div>
@@ -2758,7 +2755,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Learnings', smoke:'Smoke Tests' }};
   var CAT_MAP = {{ description:'D', criteria:'C', tests:'T', reviewed:'R', smoke:'S' }};
-  var CAT_RMAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
+  var CAT_RMAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke', L:'reviewed' }};
   var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', tests: 'T', reviewed: 'R', smoke: 'S' }};
   var PRIORITY_CYCLE = ['high', 'medium', 'low'];
   var COMPLEXITY_CYCLE = ['S', 'M', 'L', 'XL'];
@@ -3069,7 +3066,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   }}
 
   // Field name mapping from cat key to data-field attribute on textarea
-  var CAT_FIELD_MAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
+  var CAT_FIELD_MAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke', L:'reviewed' }};
 
   function _getFieldContent(cat) {{
     if (cat === 'C') {{
@@ -3521,8 +3518,6 @@ a {{ color: var(--accent); text-decoration: none; }}
         ed._origValue = val;
         if (field === 'description') {{
           autosaveField('description', val).then(function() {{ toast('Description saved'); refreshDCTRS(currentData); }});
-        }} else if (field === 'rationale') {{
-          autosaveField('rationale', val).then(function() {{ toast('Rationale saved'); }});
         }} else {{
           // readiness flag: tests, reviewed, smoke
           fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{content:val}})}})
@@ -3570,9 +3565,6 @@ a {{ color: var(--accent); text-decoration: none; }}
     // Reviewed (Learnings) stays as textarea
     var reviewEd = overlay.querySelector('[data-field="reviewed"]');
     if(reviewEd) {{ reviewEd.value = fl['reviewed'] || ''; reviewEd._origValue = reviewEd.value; }}
-    // Rationale
-    var ratEd = overlay.querySelector('[data-field="rationale"]');
-    if(ratEd) {{ ratEd.value = data.rationale || ''; ratEd._origValue = ratEd.value; }}
     // Description orig value
     var descEd = overlay.querySelector('[data-field="description"]');
     if(descEd) descEd._origValue = descEd.value;
@@ -3849,12 +3841,6 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     else:
         desc_html = f'        <div class="card-desc empty">+ description</div>\n'
 
-    rationale_html = ""
-    if t.rationale:
-        rationale_html = f'        <div class="card-rationale"><em>Rationale:</em> {escape(t.rationale)}</div>\n'
-    else:
-        rationale_html = f'        <div class="card-rationale empty">+ rationale</div>\n'
-
     criteria_html = ""
     criteria_items = []
     if t.acceptance_criteria:
@@ -3885,9 +3871,10 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}</div>\n'
         f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
-        f'<span class="status-badge {status_class}">{status_class}</span></div>\n'
+        f'<span class="status-badge {status_class}">{status_class}</span>'
+        f'<button class="card-open-btn" title="Open ticket details">&#8599;</button></div>\n'
         f'{readiness_html}'
-        f'{parent_link_html}{deps_html}{desc_html}{rationale_html}{criteria_html}'
+        f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'
         f'{git_html}'
         f'{actions_html}'
         f'        <div class="card-footer"><span class="complexity-badge">{escape(t.complexity)}</span></div>\n'
@@ -3897,14 +3884,14 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
 
 def _render_readiness_row(t) -> str:
     """Render readiness indicator dots for a ticket."""
-    flag_map = {"D": "description", "C": "criteria", "T": "tests", "R": "reviewed", "S": "smoke"}
-    icon_map = {"D": "&#128196;", "C": "&#9745;", "T": "&#128300;", "R": "&#128065;", "S": "&#128168;"}
+    flag_map = {"D": "description", "C": "criteria", "S": "smoke", "T": "tests", "L": "reviewed"}
+    icon_map = {"D": "&#128196;", "C": "&#9745;", "S": "&#128168;", "T": "&#128300;", "L": "&#128065;"}
     indicators = [
         ("D", "Description", bool(t.description)),
         ("C", "Criteria", len(t.acceptance_criteria) > 0),
-        ("T", "Tests", "tests" in t.readiness_flags),
-        ("R", "Reviewed", "reviewed" in t.readiness_flags),
         ("S", "Smoke tested", "smoke" in t.readiness_flags),
+        ("T", "Tests", "tests" in t.readiness_flags),
+        ("L", "Learnings", "reviewed" in t.readiness_flags),
     ]
     dots = []
     for letter, title, filled in indicators:
@@ -3962,8 +3949,6 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         detail_parts = []
         if t.description:
             detail_parts.append(f'          <div class="card-desc" style="display:block">{desc_esc}</div>')
-        if t.rationale:
-            detail_parts.append(f'          <div class="card-rationale" style="display:block"><em>Rationale:</em> {escape(t.rationale)}</div>')
         if t.acceptance_criteria:
             criteria_items = []
             for checked, text in t.acceptance_criteria:
@@ -4063,7 +4048,6 @@ def generate_json_output(projects: list[Project]) -> str:
                 ],
                 "parent": t.parent,
                 "depends": t.depends,
-                "rationale": t.rationale,
                 "summary": t.summary,
                 "archived": t.archived,
                 "commit_hash": t.commit_hash,

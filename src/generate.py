@@ -1462,6 +1462,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   color: var(--text-primary); font-family: var(--font-mono); outline: none; min-width: 0;
 }}
 .settings-row input[type="text"]:focus {{ border-color: var(--accent); }}
+.settings-status-label {{ font-size: 10px; color: var(--text-tertiary); white-space: nowrap; }}
 .settings-status-dot {{
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary);
 }}
@@ -1640,6 +1641,7 @@ a {{ color: var(--accent); text-decoration: none; }}
           <span class="settings-toggle-slider"></span>
         </label>
         <span class="settings-status-dot" id="feedbacksStatusDot" title="Feedbacks status"></span>
+        <span class="settings-status-label" id="feedbacksStatusLabel"></span>
       </div>
       <div class="settings-row">
         <label>Path</label>
@@ -4142,6 +4144,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var enabledChk = document.getElementById('settingsFeedbacksEnabled');
   var pathInput = document.getElementById('settingsFeedbacksPath');
   var statusDot = document.getElementById('feedbacksStatusDot');
+  var statusLabel = document.getElementById('feedbacksStatusLabel');
   var installBtn = document.getElementById('settingsFeedbacksInstall');
 
   function openDrawer() {{
@@ -4196,19 +4199,21 @@ a {{ color: var(--accent); text-decoration: none; }}
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
         statusDot.className = 'settings-status-dot';
+        var label = '';
         if (!data.installed) {{
           statusDot.classList.add('err');
-          statusDot.title = 'Feedbacks not installed';
+          label = 'Not installed';
         }} else if (!data.enabled) {{
-          // No color — just neutral dot
-          statusDot.title = 'Feedbacks disabled';
+          label = '';
         }} else if (data.running) {{
           statusDot.classList.add('ok');
-          statusDot.title = 'Feedbacks server running \u2014 ready to capture';
+          label = 'Server running';
         }} else {{
           statusDot.classList.add('warn');
-          statusDot.title = 'Feedbacks installed but server not running';
+          label = 'Server not running';
         }}
+        statusDot.title = label;
+        if (statusLabel) statusLabel.textContent = label;
         // Enable toggle: disabled until installed
         if (enabledChk) {{
           enabledChk.disabled = !data.installed;
@@ -4239,7 +4244,7 @@ a {{ color: var(--accent); text-decoration: none; }}
           if (enabling) {{
             // Start the feedbacks server if not already running
             statusDot.className = 'settings-status-dot warn';
-            statusDot.title = 'Starting feedbacks server\u2026';
+            if (statusLabel) statusLabel.textContent = 'Starting\u2026';
             return fetch(EDIT_API + '/settings/feedbacks/start', {{
               method: 'POST',
               headers: {{ 'Content-Type': 'application/json' }},

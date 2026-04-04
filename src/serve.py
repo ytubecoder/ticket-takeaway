@@ -58,11 +58,65 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
 from db import get_db, init_db
 from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
 
+import html as _html
+
+# Registry cache — populated at startup, refreshed on /api/projects mutations
+_PROJECTS_CACHE: dict[str, dict] = {}
+_PROJECTS_CACHE_LOCK = threading.Lock()
+
+# Global route prefixes that must never be captured as project IDs
+_GLOBAL_PREFIXES = frozenset({"api", "settings", "static", "health", "favicon.ico", "index.html", ""})
+
+# Reserved project IDs that cannot be registered
+_RESERVED_IDS = frozenset({"api", "settings", "static", "health", "favicon.ico", "index.html"})
+
+
+def _refresh_projects_cache() -> None:
+    """Reload registry.json into the module-level cache. Thread-safe."""
+    if not REGISTRY_PATH.exists():
+        return
+    try:
+        with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return
+    projects = {p["id"]: p for p in data.get("projects", []) if p.get("active", True)}
+    with _PROJECTS_CACHE_LOCK:
+        _PROJECTS_CACHE.clear()
+        _PROJECTS_CACHE.update(projects)
+
+
+def _resolve_project_from_path(path: str) -> tuple[dict | None, str]:
+    """Extract project from URL prefix. Returns (project_dict, remaining_path).
+
+    /goodform/api/tickets  →  (goodform_project, "/api/tickets")
+    /api/projects          →  (None, "/api/projects")
+    /settings              →  (None, "/settings")
+    /                      →  (None, "/")
+    """
+    parts = path.split("/", 2)  # ["", "segment", "rest..."]
+    if len(parts) >= 2:
+        candidate = parts[1]
+        if candidate in _GLOBAL_PREFIXES:
+            return None, path
+        with _PROJECTS_CACHE_LOCK:
+            proj = _PROJECTS_CACHE.get(candidate)
+        if proj is not None:
+            remainder = "/" + parts[2] if len(parts) > 2 else "/"
+            return proj, remainder
+    return None, path
+
+
+def _safe_attr(s: str) -> str:
+    """Escape string for HTML attribute context."""
+    return _html.escape(str(s), quote=True)
+
+
 # ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------
 
-SERVER_PROJECT_ID = None  # Set from --project arg or auto-detect
+_LEGACY_PROJECT_ID = None  # Set from --project arg for backward compat
 SERVER_PORT = 8787
 
 # Lock for DB operations (sqlite3 connections aren't thread-safe)
@@ -248,17 +302,9 @@ def _run_triage(project_id, ticket_id, attachment_id):
             pass
         conn.close()
 
-
-def _get_project() -> dict:
-    """Get the target project dict from registry."""
-    projects = cli.load_registry()
-    if SERVER_PROJECT_ID:
-        return cli.find_project(projects, SERVER_PROJECT_ID)
-    return projects[0]
-
-
-def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> bool:
+def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
     """Update a single field on a ticket. Returns True on success."""
+    project_id = proj["id"]
     ALLOWED_FIELDS = {
         "title", "priority", "complexity", "status", "description",
         "parent", "commit_hash", "release_tag", "draft",
@@ -269,7 +315,6 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         # Verify ticket exists
@@ -293,12 +338,13 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
     return True
 
 
-def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
+def _move_ticket(proj: dict, ticket_id: str, section_name: str) -> bool:
     """Move a ticket to a different section. Returns True on success.
 
     Delegates to actions.move_ticket() which uses compute_status_on_move()
     to preserve valid statuses across section moves.
     """
+    project_id = proj["id"]
     try:
         section = cli.resolve_section(section_name)
     except (SystemExit, ValueError):
@@ -310,7 +356,6 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         project_path = os.path.expanduser(proj.get("path", ""))
@@ -327,12 +372,12 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
     return True
 
 
-def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
+def _toggle_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
     """Toggle a single acceptance criterion's checked state."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         # Find the criterion by ticket + sort_order
@@ -369,12 +414,12 @@ def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
     return True
 
 
-def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int, new_text: str) -> bool:
+def _update_criterion_text(proj: dict, ticket_id: str, criterion_index: int, new_text: str) -> bool:
     """Update the text of a criterion at a given index."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -404,12 +449,12 @@ def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int
     return True
 
 
-def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
+def _remove_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
     """Remove a criterion at a given index."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -447,12 +492,12 @@ def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
     return True
 
 
-def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
+def _add_criterion(proj: dict, ticket_id: str, text: str) -> bool:
     """Add a new criterion to the end of the list."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -482,12 +527,12 @@ def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
     return True
 
 
-def _update_depends(project_id: str, ticket_id: str, depends_list: list) -> bool:
+def _update_depends(proj: dict, ticket_id: str, depends_list: list) -> bool:
     """Replace all depends for a ticket with a new list."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -516,8 +561,9 @@ def _update_depends(project_id: str, ticket_id: str, depends_list: list) -> bool
     return True
 
 
-def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
+def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
     """Create a new ticket. Returns the ticket JSON on success."""
+    project_id = proj["id"]
     section_name = body.get("section", "Ideas")
     try:
         section = cli.resolve_section(section_name)
@@ -531,7 +577,6 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         ticket_id = _actions_add_ticket(
@@ -548,12 +593,12 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     return _get_ticket_json(project_id, ticket_id)
 
 
-def _delete_ticket(project_id: str, ticket_id: str) -> bool:
+def _delete_ticket(proj: dict, ticket_id: str) -> bool:
     """Delete a ticket. Returns True on success."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -575,12 +620,12 @@ def _delete_ticket(project_id: str, ticket_id: str) -> bool:
     return True
 
 
-def _accept_ticket(project_id: str, ticket_id: str) -> bool:
+def _accept_ticket(proj: dict, ticket_id: str) -> bool:
     """Accept a ticket — move to Done with status 'done'. Returns True on success."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         project_path = os.path.expanduser(proj.get("path", ""))
@@ -654,10 +699,11 @@ Respond with ONLY valid JSON (no markdown fences, no explanation) matching this 
 }}"""
 
 
-def _run_gate_check(project_id: str, ticket_id: str, target_section: str) -> dict:
+def _run_gate_check(proj: dict, ticket_id: str, target_section: str) -> dict:
     """Run the gate-check agent and return structured analysis."""
     import subprocess as _sp
 
+    project_id = proj["id"]
     ticket = _get_ticket_json(project_id, ticket_id)
     if not ticket:
         return {"error": "Ticket not found"}
@@ -668,7 +714,7 @@ def _run_gate_check(project_id: str, ticket_id: str, target_section: str) -> dic
         result = _sp.run(
             ["claude", "-p", prompt, "--output-format", "json"],
             capture_output=True, text=True, timeout=90,
-            cwd=os.path.expanduser(_get_project().get("path", "."))
+            cwd=os.path.expanduser(proj.get("path", "."))
         )
         # --output-format json wraps the response in {"type":"result","result":"..."}
         outer = json.loads(result.stdout)
@@ -755,10 +801,11 @@ Respond with ONLY valid JSON (no markdown fences, no explanation) matching this 
 }}"""
 
 
-def _run_category_assess(project_id: str, ticket_id: str, category: str, action: str) -> dict:
+def _run_category_assess(proj: dict, ticket_id: str, category: str, action: str) -> dict:
     """Run a focused single-category assessment and return structured result."""
     import subprocess as _sp
 
+    project_id = proj["id"]
     ticket = _get_ticket_json(project_id, ticket_id)
     if not ticket:
         return {"error": "Ticket not found"}
@@ -769,7 +816,7 @@ def _run_category_assess(project_id: str, ticket_id: str, category: str, action:
         result = _sp.run(
             ["claude", "-p", prompt, "--output-format", "json"],
             capture_output=True, text=True, timeout=45,
-            cwd=os.path.expanduser(_get_project().get("path", "."))
+            cwd=os.path.expanduser(proj.get("path", "."))
         )
         outer = json.loads(result.stdout)
         text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
@@ -876,10 +923,11 @@ def _compute_diff_hunks(original: str, suggested: str) -> list:
     return hunks
 
 
-def _run_enrich(project_id: str, ticket_id: str, field: str, content: str, action: str) -> dict:
+def _run_enrich(proj: dict, ticket_id: str, field: str, content: str, action: str) -> dict:
     """Run Claude CLI to enrich a single field and return diff hunks."""
     import subprocess as _sp
 
+    project_id = proj["id"]
     ticket = _get_ticket_json(project_id, ticket_id)
     if not ticket:
         return {"error": "Ticket not found"}
@@ -890,7 +938,7 @@ def _run_enrich(project_id: str, ticket_id: str, field: str, content: str, actio
         result = _sp.run(
             ["claude", "-p", prompt, "--output-format", "json"],
             capture_output=True, text=True, timeout=90,
-            cwd=os.path.expanduser(_get_project().get("path", "."))
+            cwd=os.path.expanduser(proj.get("path", "."))
         )
         outer = json.loads(result.stdout)
         text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
@@ -914,15 +962,15 @@ def _run_enrich(project_id: str, ticket_id: str, field: str, content: str, actio
     }
 
 
-def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
+def _toggle_readiness(proj: dict, ticket_id: str, flag: str) -> bool:
     """Toggle a readiness flag. If set, clear it; if unset, set it."""
+    project_id = proj["id"]
     if flag not in VALID_READINESS_FLAGS:
         return False
 
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
 
         row = conn.execute(
             "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
@@ -956,15 +1004,15 @@ def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
     return True
 
 
-def _update_readiness_content(project_id: str, ticket_id: str, flag: str, content: str) -> bool:
+def _update_readiness_content(proj: dict, ticket_id: str, flag: str, content: str) -> bool:
     """Update readiness flag content. Non-empty content upserts (auto-fills dot), empty deletes (auto-empties)."""
+    project_id = proj["id"]
     if flag not in VALID_READINESS_FLAGS:
         return False
 
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
 
         row = conn.execute(
             "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
@@ -1069,6 +1117,310 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Project picker renderer
+# ---------------------------------------------------------------------------
+
+_SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$')
+
+
+def _validate_project_registration(body: dict) -> str | None:
+    """Validate project registration fields. Returns error string or None."""
+    pid = body.get("id", "")
+    if not _SLUG_RE.match(pid):
+        return "id must be 2-40 chars, lowercase alphanumeric and hyphens"
+    if pid in _RESERVED_IDS:
+        return f"'{pid}' is a reserved name and cannot be used as a project ID"
+    path = body.get("path", "")
+    if not path:
+        return "path is required"
+    resolved = Path(os.path.realpath(os.path.expanduser(path)))
+    if not resolved.is_dir():
+        return "path does not exist or is not a directory"
+    home = Path.home().resolve()
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        return "path must be within the user's home directory"
+    if resolved == home:
+        return "path cannot be the home directory itself"
+    claude_dir = (home / ".claude").resolve()
+    if resolved == claude_dir or str(resolved).startswith(str(claude_dir) + os.sep):
+        return "path cannot be inside ~/.claude"
+    with _PROJECTS_CACHE_LOCK:
+        if pid in _PROJECTS_CACHE:
+            return f"project '{pid}' already exists"
+    return None
+
+
+def _render_project_settings(proj: dict, port: int) -> str:
+    """Render the settings page for a single project."""
+    pid = _safe_attr(proj["id"])
+    name = _safe_attr(proj.get("name", proj["id"]))
+    path = _safe_attr(proj.get("path", ""))
+    description = _safe_attr(proj.get("description", ""))
+    active = proj.get("active", True)
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name} — Settings</title>
+<style>
+:root {{
+  --bg-page: #0a0a0b; --bg-surface: #141417; --bg-card: #1a1a1f; --bg-hover: #222228;
+  --border-subtle: #1e1e24; --border-default: #2a2a32; --text-primary: #ededef;
+  --text-secondary: #a0a0ab; --text-tertiary: #6b6b76; --accent: #3b82f6;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; max-width: 600px; }}
+.back {{ color: var(--text-tertiary); text-decoration: none; font-size: 13px; }}
+.back:hover {{ color: var(--text-secondary); }}
+h1 {{ font-size: 18px; font-weight: 600; margin: 16px 0 24px; }}
+label {{ display: block; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; margin-top: 20px; }}
+input, textarea {{ width: 100%; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; padding: 8px 12px; color: var(--text-primary); font-size: 14px; font-family: inherit; }}
+input:focus, textarea:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
+input[readonly] {{ background: var(--bg-page); color: var(--text-tertiary); border-color: var(--border-subtle); }}
+textarea {{ min-height: 60px; resize: vertical; }}
+.toggle-wrap {{ display: flex; align-items: center; gap: 10px; margin-top: 20px; }}
+.toggle {{ width: 36px; height: 20px; border-radius: 10px; cursor: pointer; position: relative; transition: background 0.15s; border: none; }}
+.toggle.on {{ background: #22c55e; }}
+.toggle.off {{ background: var(--border-default); }}
+.toggle::after {{ content: ''; position: absolute; width: 16px; height: 16px; background: white; border-radius: 50%; top: 2px; transition: left 0.15s; }}
+.toggle.on::after {{ left: 18px; }}
+.toggle.off::after {{ left: 2px; }}
+.btn {{ display: inline-block; margin-top: 24px; padding: 8px 20px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: var(--accent); border-radius: 6px; cursor: pointer; font-size: 13px; }}
+.btn:hover {{ background: rgba(59,130,246,0.25); }}
+.danger {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border-default); }}
+.danger h3 {{ color: #ef4444; font-size: 12px; font-weight: 600; margin-bottom: 12px; }}
+.danger .btn {{ background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: #ef4444; margin-top: 0; }}
+.danger .btn:hover {{ background: rgba(239,68,68,0.25); }}
+.danger p {{ color: var(--text-tertiary); font-size: 11px; margin-top: 6px; }}
+.msg {{ font-size: 12px; margin-top: 8px; display: none; }}
+.msg.ok {{ color: #22c55e; }}
+.msg.err {{ color: #ef4444; }}
+</style>
+</head>
+<body>
+<a href="/{pid}" class="back" data-testid="settings-back">&larr; Back to board</a>
+<h1>{name} Settings</h1>
+<form id="settings-form" data-testid="project-settings-form">
+  <label>Project Name</label>
+  <input name="name" value="{name}" data-testid="settings-name">
+  <label>Project Path</label>
+  <input name="path" value="{path}" style="font-family:monospace" data-testid="settings-path">
+  <label>Description</label>
+  <textarea name="description" data-testid="settings-description">{description}</textarea>
+  <label>Project ID <span style="color:var(--text-tertiary)">(read-only)</span></label>
+  <input name="id" value="{pid}" readonly data-testid="settings-id">
+  <div class="toggle-wrap">
+    <button type="button" class="toggle {'on' if active else 'off'}" id="active-toggle" data-testid="settings-active-toggle"></button>
+    <span style="font-size:13px">Active</span>
+  </div>
+  <button type="submit" class="btn" data-testid="settings-save">Save Changes</button>
+  <div class="msg" id="save-msg"></div>
+</form>
+<div class="danger">
+  <h3>Danger Zone</h3>
+  <button class="btn" id="remove-btn" data-testid="settings-remove">Remove Project</button>
+  <p>Removes from registry only. Does not delete files, tickets, or database entries.</p>
+</div>
+<script>
+(function() {{
+  var activeOn = {'true' if active else 'false'};
+  var toggle = document.getElementById('active-toggle');
+  toggle.addEventListener('click', function() {{
+    activeOn = !activeOn;
+    toggle.className = 'toggle ' + (activeOn ? 'on' : 'off');
+  }});
+  var form = document.getElementById('settings-form');
+  var msg = document.getElementById('save-msg');
+  form.addEventListener('submit', function(e) {{
+    e.preventDefault();
+    msg.style.display = 'none';
+    fetch('/api/projects/{pid}', {{
+      method: 'PUT',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{
+        name: form.elements.name.value,
+        path: form.elements.path.value,
+        description: form.elements.description.value,
+        active: activeOn
+      }})
+    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+    .then(function(res) {{
+      if (res.ok) {{ msg.textContent = 'Saved!'; msg.className = 'msg ok'; }}
+      else {{ msg.textContent = res.data.error || 'Failed'; msg.className = 'msg err'; }}
+      msg.style.display = 'block';
+    }});
+  }});
+  document.getElementById('remove-btn').addEventListener('click', function() {{
+    if (!confirm('Remove this project from the registry? Tickets and files will not be deleted.')) return;
+    fetch('/api/projects/{pid}', {{ method: 'DELETE' }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (data.ok) window.location.href = '/';
+      else alert(data.error || 'Failed to remove');
+    }});
+  }});
+}})();
+</script>
+</body>
+</html>'''
+
+
+def _render_project_picker(port: int) -> str:
+    """Render the project picker page as self-contained HTML."""
+    conn = get_db()
+    init_db(conn)
+    counts_by_project = {}
+    rows = conn.execute(
+        "SELECT project_id, section, COUNT(*) as cnt FROM tickets GROUP BY project_id, section"
+    ).fetchall()
+    for r in rows:
+        pid = r["project_id"]
+        if pid not in counts_by_project:
+            counts_by_project[pid] = {}
+        counts_by_project[pid][r["section"]] = r["cnt"]
+    conn.close()
+
+    with _PROJECTS_CACHE_LOCK:
+        projects = list(_PROJECTS_CACHE.values())
+
+    cards_html = ""
+    for proj in projects:
+        pid = proj["id"]
+        name = _safe_attr(proj.get("name", pid))
+        raw_path = proj.get("path", "")
+        display_path = _safe_attr(raw_path.replace(str(Path.home()), "~"))
+        counts = counts_by_project.get(pid, {})
+        wip = counts.get("WIP", 0)
+        backlog = counts.get("Backlog", 0)
+        review = counts.get("For Review", 0)
+        path_exists = Path(os.path.expanduser(raw_path)).is_dir() if raw_path else False
+        opacity = "1" if path_exists else "0.5"
+
+        cards_html += f'''
+        <a href="/{_safe_attr(pid)}" class="proj-card" style="opacity:{opacity}" data-testid="proj-card-{_safe_attr(pid)}">
+          <div class="proj-card-name">{name}</div>
+          <div class="proj-card-path">{display_path}</div>
+          <div class="proj-card-counts">
+            <span class="count-wip">{wip} WIP</span>
+            <span class="count-backlog">{backlog} Backlog</span>
+            <span class="count-review">{review} Review</span>
+          </div>
+          {'' if path_exists else '<div class="proj-card-warn">Path not found</div>'}
+        </a>'''
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ticket Takeaway</title>
+<style>
+:root {{
+  --bg-page: #0a0a0b; --bg-surface: #141417; --bg-card: #1a1a1f; --bg-hover: #222228;
+  --border-subtle: #1e1e24; --border-default: #2a2a32; --text-primary: #ededef;
+  --text-secondary: #a0a0ab; --text-tertiary: #6b6b76; --accent: #3b82f6;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; }}
+.header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; padding-bottom: 16px; border-bottom: 1px solid var(--border-default); }}
+.header h1 {{ font-size: 20px; font-weight: 600; }}
+.header .count {{ color: var(--text-tertiary); font-size: 13px; }}
+.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; max-width: 900px; }}
+.proj-card {{ display: block; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 10px; padding: 20px; text-decoration: none; color: inherit; transition: border-color 0.15s, background 0.15s; }}
+.proj-card:hover {{ border-color: var(--accent); background: var(--bg-hover); }}
+.proj-card-name {{ font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }}
+.proj-card-path {{ font-size: 12px; color: var(--text-tertiary); font-family: monospace; margin-bottom: 12px; }}
+.proj-card-counts {{ display: flex; gap: 12px; font-size: 12px; }}
+.count-wip {{ color: #f59e0b; }} .count-backlog {{ color: #3b82f6; }} .count-review {{ color: #ec4899; }}
+.proj-card-warn {{ color: #ef4444; font-size: 11px; margin-top: 8px; }}
+.add-card {{ display: flex; align-items: center; justify-content: center; background: transparent; border: 2px dashed var(--border-default); border-radius: 10px; padding: 20px; min-height: 110px; cursor: pointer; transition: border-color 0.15s; color: var(--text-tertiary); }}
+.add-card:hover {{ border-color: var(--accent); }}
+.add-card-inner {{ text-align: center; }}
+.add-card-plus {{ font-size: 24px; color: var(--text-tertiary); }}
+.add-card-label {{ font-size: 13px; margin-top: 4px; }}
+.add-form {{ display: none; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 10px; padding: 20px; margin-top: 16px; max-width: 500px; }}
+.add-form.visible {{ display: block; }}
+.add-form label {{ display: block; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; margin-top: 14px; }}
+.add-form label:first-child {{ margin-top: 0; }}
+.add-form input {{ width: 100%; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; padding: 8px 12px; color: var(--text-primary); font-size: 14px; }}
+.add-form input:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
+.add-form .btn {{ display: inline-block; margin-top: 16px; padding: 8px 20px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: var(--accent); border-radius: 6px; cursor: pointer; font-size: 13px; }}
+.add-form .btn:hover {{ background: rgba(59,130,246,0.25); }}
+.add-form .error {{ color: #ef4444; font-size: 12px; margin-top: 8px; display: none; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Ticket Takeaway</h1>
+  <span class="count">{len(projects)} project{"s" if len(projects) != 1 else ""} registered</span>
+</div>
+<div class="grid">
+  {cards_html}
+  <div class="add-card" onclick="document.getElementById('add-form').classList.toggle('visible')" data-testid="add-project-card">
+    <div class="add-card-inner">
+      <div class="add-card-plus">+</div>
+      <div class="add-card-label">Add Project</div>
+    </div>
+  </div>
+</div>
+<form id="add-form" class="add-form" data-testid="add-project-form">
+  <label>Project Name</label>
+  <input name="name" placeholder="My Project" required data-testid="add-project-name">
+  <label>Project Path</label>
+  <input name="path" placeholder="~/projects/my-project" required data-testid="add-project-path">
+  <label>Project ID <span style="color:var(--text-tertiary)">(auto-generated from name)</span></label>
+  <input name="id" placeholder="my-project" data-testid="add-project-id">
+  <label>Description <span style="color:var(--text-tertiary)">(optional)</span></label>
+  <input name="description" placeholder="Brief description">
+  <button type="submit" class="btn">Add Project</button>
+  <div class="error" id="add-error"></div>
+</form>
+<script>
+(function() {{
+  var nameInput = document.querySelector('[name="name"]');
+  var idInput = document.querySelector('[name="id"]');
+  if (nameInput && idInput) {{
+    nameInput.addEventListener('input', function() {{
+      if (!idInput.dataset.manual) {{
+        idInput.value = nameInput.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      }}
+    }});
+    idInput.addEventListener('input', function() {{ idInput.dataset.manual = '1'; }});
+  }}
+  var form = document.getElementById('add-form');
+  var errorDiv = document.getElementById('add-error');
+  if (form) {{
+    form.addEventListener('submit', function(e) {{
+      e.preventDefault();
+      errorDiv.style.display = 'none';
+      var data = {{
+        id: form.elements.id.value || form.elements.name.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+        name: form.elements.name.value,
+        path: form.elements.path.value,
+        description: form.elements.description.value
+      }};
+      fetch('/api/projects', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(data)
+      }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+      .then(function(res) {{
+        if (res.ok) {{ window.location.href = '/' + res.data.id; }}
+        else {{ errorDiv.textContent = res.data.error || 'Failed'; errorDiv.style.display = 'block'; }}
+      }}).catch(function(err) {{ errorDiv.textContent = err.message; errorDiv.style.display = 'block'; }});
+    }});
+  }}
+}})();
+</script>
+</body>
+</html>'''
+
+
+# ---------------------------------------------------------------------------
 # HTTP Handler
 # ---------------------------------------------------------------------------
 
@@ -1120,27 +1472,84 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes (proj is None) ────────────────────────────
+        if proj is None:
+            # Legacy backward compat: --project flag redirects bare /api/ routes
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+
+            # Root: project picker page
+            if remainder == "/" or remainder == "":
+                html = _render_project_picker(SERVER_PORT)
+                self._send_html(html)
+                return
+
+            # GET /api/projects — list all projects with ticket counts
+            if remainder == "/api/projects":
+                with _PROJECTS_CACHE_LOCK:
+                    projects_list = list(_PROJECTS_CACHE.values())
+                conn = get_db()
+                init_db(conn)
+                counts_rows = conn.execute(
+                    "SELECT project_id, section, COUNT(*) as cnt FROM tickets GROUP BY project_id, section"
+                ).fetchall()
+                conn.close()
+                counts_map = {}
+                for r in counts_rows:
+                    counts_map.setdefault(r["project_id"], {})[r["section"]] = r["cnt"]
+                result = []
+                for p in projects_list:
+                    c = counts_map.get(p["id"], {})
+                    result.append({
+                        "id": p["id"], "name": p.get("name", p["id"]),
+                        "path": p.get("path", ""), "description": p.get("description", ""),
+                        "active": p.get("active", True),
+                        "ticket_counts": {"wip": c.get("WIP", 0), "backlog": c.get("Backlog", 0), "review": c.get("For Review", 0)}
+                    })
+                self._send_json({"projects": result})
+                return
+
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
+
+        # Project settings page
+        if remainder == "/settings":
+            html = _render_project_settings(proj, SERVER_PORT)
+            self._send_html(html)
+            return
 
         # Serve dashboard HTML
-        if path == "/" or path == "/index.html":
-            proj = _get_project()
+        if remainder == "/" or remainder == "/index.html":
             html_path = Path(os.path.expanduser(proj.get("path", ""))) / "docs" / "sdlc-dashboard.html"
             if html_path.exists():
                 html = html_path.read_text(encoding="utf-8")
                 # Inject edit-api meta tag if not present
                 if '<meta name="edit-api"' not in html:
-                    # Only inject in <head>, not inside JS strings — replace first occurrence only
                     idx = html.find('<meta name="gen-ts"')
                     if idx != -1:
-                        html = html[:idx] + f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/api">\n' + html[idx:]
+                        with _PROJECTS_CACHE_LOCK:
+                            proj_list = [{"id": p["id"], "name": p.get("name", p["id"])} for p in _PROJECTS_CACHE.values()]
+                        projects_json = json.dumps(proj_list)
+                        injection = (
+                            f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/{_safe_attr(proj["id"])}/api">\n'
+                            f'<meta name="current-project" content="{_safe_attr(proj["id"])}">\n'
+                            f"<meta name=\"projects-list\" content='{_safe_attr(projects_json)}'>\n"
+                        )
+                        html = html[:idx] + injection + html[idx:]
                 self._send_html(html)
             else:
                 self._send_json({"error": "Dashboard not generated yet. Run generate.py first."}, 404)
             return
 
         # JSON tickets API
-        if path == "/api/tickets":
-            proj = _get_project()
+        if remainder == "/api/tickets":
             project_id = proj["id"]
             conn = get_db()
             init_db(conn)
@@ -1158,9 +1567,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Single ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", remainder)
         if m:
-            proj = _get_project()
             t = _get_ticket_json(proj["id"], m.group(1))
             if t:
                 self._send_json(t)
@@ -1190,6 +1598,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes ───────────────────────────────────────────
+        if proj is None:
+            m = re.match(r"^/api/projects/([a-z0-9][a-z0-9-]*[a-z0-9])$", remainder)
+            if m:
+                pid = m.group(1)
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                try:
+                    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+                        registry = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    self._send_json({"error": "Registry not found"}, 500)
+                    return
+                found = False
+                updated_entry = None
+                for entry in registry["projects"]:
+                    if entry["id"] == pid:
+                        for field in ("name", "path", "description", "active"):
+                            if field in body:
+                                entry[field] = body[field]
+                        found = True
+                        updated_entry = entry
+                        break
+                if not found:
+                    self._send_json({"error": "Project not found"}, 404)
+                    return
+                with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                    json.dump(registry, f, indent=2)
+                _refresh_projects_cache()
+                self._send_json(updated_entry)
+                return
+
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
 
         # Settings update
         if path == "/api/settings":
@@ -1208,11 +1662,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Update readiness flag content
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", remainder)
         if m:
             ticket_id = m.group(1)
             flag = m.group(2)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1220,7 +1673,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             content = body.get("content", "")
-            if _update_readiness_content(proj["id"], ticket_id, flag, content):
+            if _update_readiness_content(proj, ticket_id, flag, content):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1228,13 +1681,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Update ticket fields
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", remainder)
         if not m:
             self._send_json({"error": "Not found"}, 404)
             return
 
         ticket_id = m.group(1)
-        proj = _get_project()
         project_id = proj["id"]
 
         try:
@@ -1254,8 +1706,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 with _db_lock:
                     conn = get_db()
                     init_db(conn)
-                    proj2 = _get_project()
-                    cli.ingest_markdown(conn, proj2)
+                    cli.ingest_markdown(conn, proj)
                     row = conn.execute(
                         "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
                         (ticket_id, project_id)
@@ -1271,8 +1722,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             (tid, project_id, text.strip(), sort_row["next_order"])
                         )
                         conn.commit()
-                        cli.sync_to_markdown(conn, proj2)
-                        cli.regenerate_dashboard(proj2)
+                        cli.sync_to_markdown(conn, proj)
+                        cli.regenerate_dashboard(proj)
                     conn.close()
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
@@ -1281,7 +1732,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle criterion toggle specially
         if "toggle_criterion" in body:
             idx = body["toggle_criterion"]
-            if isinstance(idx, int) and _toggle_criterion(project_id, ticket_id, idx):
+            if isinstance(idx, int) and _toggle_criterion(proj, ticket_id, idx):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1292,7 +1743,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if "criterion_index" in body and "criterion_text" in body:
             idx = body["criterion_index"]
             text = body["criterion_text"]
-            if isinstance(idx, int) and isinstance(text, str) and _update_criterion_text(project_id, ticket_id, idx, text):
+            if isinstance(idx, int) and isinstance(text, str) and _update_criterion_text(proj, ticket_id, idx, text):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1302,7 +1753,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle criterion removal
         if "remove_criterion" in body:
             idx = body["remove_criterion"]
-            if isinstance(idx, int) and _remove_criterion(project_id, ticket_id, idx):
+            if isinstance(idx, int) and _remove_criterion(proj, ticket_id, idx):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1312,7 +1763,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle add criterion
         if "add_criteria" in body:
             text = body["add_criteria"]
-            if isinstance(text, str) and text.strip() and _add_criterion(project_id, ticket_id, text.strip()):
+            if isinstance(text, str) and text.strip() and _add_criterion(proj, ticket_id, text.strip()):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1322,7 +1773,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle depends list update
         if "depends" in body:
             deps = body["depends"]
-            if isinstance(deps, list) and _update_depends(project_id, ticket_id, deps):
+            if isinstance(deps, list) and _update_depends(proj, ticket_id, deps):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1331,7 +1782,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # Update individual fields
         for field, value in body.items():
-            if not _update_ticket_field(project_id, ticket_id, field, value):
+            if not _update_ticket_field(proj, ticket_id, field, value):
                 self._send_json({"error": f"Failed to update field: {field}"}, 400)
                 return
 
@@ -1341,12 +1792,56 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes ───────────────────────────────────────────
+        if proj is None:
+            if remainder == "/api/projects":
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                error = _validate_project_registration(body)
+                if error:
+                    self._send_json({"error": error}, 400)
+                    return
+                new_project = {
+                    "id": body["id"],
+                    "name": body.get("name", body["id"]),
+                    "path": body["path"],
+                    "description": body.get("description", ""),
+                    "active": True,
+                }
+                try:
+                    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+                        registry = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    registry = {"projects": []}
+                registry["projects"].append(new_project)
+                with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                    json.dump(registry, f, indent=2)
+                _refresh_projects_cache()
+                conn = get_db()
+                init_db(conn)
+                conn.close()
+                self._send_json(new_project, 201)
+                return
+
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
 
         # Move ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/move$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/move$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1358,7 +1853,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Missing 'section' field"}, 400)
                 return
 
-            if _move_ticket(proj["id"], ticket_id, section):
+            if _move_ticket(proj, ticket_id, section):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1366,10 +1861,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # AI-powered field enrichment with diff hunks
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/enrich$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/enrich$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1388,7 +1882,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "action must be 'create' or 'review'"}, 400)
                 return
 
-            result = _run_enrich(proj["id"], ticket_id, field, content, action)
+            result = _run_enrich(proj, ticket_id, field, content, action)
             if "error" in result and "hunks" not in result:
                 self._send_json(result, 400)
             else:
@@ -1396,10 +1890,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Gate check before column move
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/gate-check$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/gate-check$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1411,7 +1904,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Missing 'section' field"}, 400)
                 return
 
-            result = _run_gate_check(proj["id"], ticket_id, section)
+            result = _run_gate_check(proj, ticket_id, section)
             if "error" in result and "verdict" not in result:
                 self._send_json(result, 400)
             else:
@@ -1419,11 +1912,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Per-category assessment
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/assess/([DCTRS])$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/assess/([DCTRS])$", remainder)
         if m:
             ticket_id = m.group(1)
             category = m.group(2)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1435,7 +1927,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "action must be 'create' or 'review'"}, 400)
                 return
 
-            result = _run_category_assess(proj["id"], ticket_id, category, action)
+            result = _run_category_assess(proj, ticket_id, category, action)
             if "error" in result and "status" not in result:
                 self._send_json(result, 400)
             else:
@@ -1443,12 +1935,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Toggle readiness flag
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", remainder)
         if m:
             ticket_id = m.group(1)
             flag = m.group(2)
-            proj = _get_project()
-            if _toggle_readiness(proj["id"], ticket_id, flag):
+            if _toggle_readiness(proj, ticket_id, flag):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1456,11 +1947,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Accept ticket (move to Done + append to PRODUCT_SPECIFICATION.md)
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/accept$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/accept$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
-            if _accept_ticket(proj["id"], ticket_id):
+            if _accept_ticket(proj, ticket_id):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1468,8 +1958,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Create ticket
-        if path == "/api/tickets":
-            proj = _get_project()
+        if remainder == "/api/tickets":
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1481,7 +1970,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Missing 'title' field"}, 400)
                 return
 
-            result = _create_ticket(proj["id"], title, body)
+            result = _create_ticket(proj, title, body)
             if result:
                 self._send_json(result, 201)
             else:
@@ -1608,13 +2097,49 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes ───────────────────────────────────────────
+        if proj is None:
+            m = re.match(r"^/api/projects/([a-z0-9][a-z0-9-]*[a-z0-9])$", remainder)
+            if m:
+                pid = m.group(1)
+                try:
+                    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+                        registry = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    self._send_json({"error": "Registry not found"}, 500)
+                    return
+                found = False
+                for entry in registry["projects"]:
+                    if entry["id"] == pid:
+                        entry["active"] = False
+                        found = True
+                        break
+                if not found:
+                    self._send_json({"error": "Project not found"}, 404)
+                    return
+                with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                    json.dump(registry, f, indent=2)
+                _refresh_projects_cache()
+                self._send_json({"ok": True, "deactivated": pid})
+                return
+
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
 
         # Delete attachment
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments/(\d+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments/(\d+)$", remainder)
         if m:
             ticket_id = m.group(1)
             attachment_id = int(m.group(2))
-            proj = _get_project()
             if _delete_attachment(proj["id"], ticket_id, attachment_id):
                 self._send_json({"ok": True, "deleted": attachment_id})
             else:
@@ -1622,14 +2147,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Delete ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", remainder)
         if not m:
             self._send_json({"error": "Not found"}, 404)
             return
 
         ticket_id = m.group(1)
-        proj = _get_project()
-        if _delete_ticket(proj["id"], ticket_id):
+        if _delete_ticket(proj, ticket_id):
             self._send_json({"ok": True, "deleted": ticket_id})
         else:
             self._send_json({"error": "Ticket not found"}, 404)
@@ -1639,30 +2163,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
 # Background watcher for external markdown edits
 # ---------------------------------------------------------------------------
 
-def _start_external_edit_watcher(project: dict, interval: float = 5.0):
-    """Start a daemon thread that polls for external PRODUCT_BACKLOG.md edits.
-
-    Every *interval* seconds it computes the file hash and compares with the
-    stored hash in ``_sync_state``.  Only when the hash differs does it parse
-    the markdown and merge deltas — keeping the hot-path cheap.
-    """
+def _start_external_edit_watcher(interval: float = 5.0):
+    """Daemon thread polling for external PRODUCT_BACKLOG.md edits across all projects."""
     import time
 
     def _poll():
         while True:
             try:
                 time.sleep(interval)
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    changed = cli.detect_external_edits(conn, project)
-                    if changed:
-                        cli.regenerate_dashboard(project)
-                        print(f"[watcher] External edits absorbed for {project.get('id', '?')}")
-                    conn.close()
-            except Exception as exc:
-                # Don't crash the watcher on transient errors
-                print(f"[watcher] Error: {exc}")
+                with _PROJECTS_CACHE_LOCK:
+                    snapshot = list(_PROJECTS_CACHE.values())
+                for project in snapshot:
+                    try:
+                        with _db_lock:
+                            conn = get_db()
+                            init_db(conn)
+                            changed = cli.detect_external_edits(conn, project)
+                            if changed:
+                                cli.regenerate_dashboard(project)
+                                print(f"[watcher] External edits absorbed for {project.get('id', '?')}")
+                            conn.close()
+                    except Exception as exc:
+                        print(f"[watcher] Error for {project.get('id', '?')}: {exc}")
+            except Exception:
+                import traceback
+                traceback.print_exc()
 
     t = threading.Thread(target=_poll, daemon=True, name="md-edit-watcher")
     t.start()
@@ -1672,14 +2197,8 @@ def _start_external_edit_watcher(project: dict, interval: float = 5.0):
 # Main
 # ---------------------------------------------------------------------------
 
-def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
-    """Start a daemon thread that polls scheduled_events every *interval* seconds.
-
-    Picks up unfired events whose fire_at <= now, executes the action via
-    execute_scheduled_event(), marks them fired, and syncs markdown/dashboard.
-    Each event is wrapped in its own try/except so one bad event cannot kill
-    the poller.
-    """
+def _start_scheduled_event_poller(interval: float = 30.0):
+    """Daemon thread executing scheduled events across all projects."""
     import time
 
     def _poll():
@@ -1695,7 +2214,7 @@ def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
                         "ORDER BY fire_at ASC",
                         (now,),
                     ).fetchall()
-                    executed_any = False
+                    projects_to_sync = set()
                     for event in due:
                         try:
                             execute_scheduled_event(conn, event)
@@ -1703,19 +2222,23 @@ def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
                                 "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
                                 (event["id"],),
                             )
-                            executed_any = True
-                        except Exception as exc:
-                            # Mark as fired to avoid retry-looping on permanently broken events
+                            projects_to_sync.add(event["project_id"])
+                        except Exception:
                             conn.execute(
                                 "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
                                 (event["id"],),
                             )
                             import traceback
                             traceback.print_exc()
-                    if executed_any:
+                    if projects_to_sync:
                         conn.commit()
-                        cli.sync_to_markdown(conn, project)
-                        cli.regenerate_dashboard(project)
+                        with _PROJECTS_CACHE_LOCK:
+                            cache_snap = dict(_PROJECTS_CACHE)
+                        for pid in projects_to_sync:
+                            proj = cache_snap.get(pid)
+                            if proj:
+                                cli.sync_to_markdown(conn, proj)
+                                cli.regenerate_dashboard(proj)
                     conn.close()
             except Exception:
                 import traceback
@@ -1726,7 +2249,7 @@ def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
 
 
 def main():
-    global SERVER_PROJECT_ID, SERVER_PORT
+    global _LEGACY_PROJECT_ID, SERVER_PORT
 
     args = sys.argv[1:]
     if "--port" in args:
@@ -1736,31 +2259,21 @@ def main():
     if "--project" in args:
         idx = args.index("--project")
         if idx + 1 < len(args):
-            SERVER_PROJECT_ID = args[idx + 1]
+            _LEGACY_PROJECT_ID = args[idx + 1]
 
-    # Auto-detect project from cwd
-    if not SERVER_PROJECT_ID:
-        cwd = os.path.realpath(os.getcwd())
-        try:
-            for proj in cli.load_registry():
-                proj_path = os.path.realpath(os.path.expanduser(proj.get("path", "")))
-                if cwd == proj_path or cwd.startswith(proj_path + os.sep):
-                    SERVER_PROJECT_ID = proj["id"]
-                    break
-        except SystemExit:
-            pass
+    # Populate registry cache
+    _refresh_projects_cache()
 
-    # Regenerate dashboard before starting
-    try:
-        proj = _get_project()
-        print(f"Serving: {proj.get('name', proj.get('id', 'unknown'))}")
-    except (SystemExit, IndexError):
-        print("No project found. Run from a registered project directory or use --project ID.", file=sys.stderr)
+    if not _PROJECTS_CACHE:
+        print("No active projects in registry. Register a project first.", file=sys.stderr)
         sys.exit(1)
 
-    # Start background threads
-    _start_external_edit_watcher(proj)
-    _start_scheduled_event_poller(proj)
+    project_names = [p.get("name", p["id"]) for p in _PROJECTS_CACHE.values()]
+    print(f"Serving {len(project_names)} project(s): {', '.join(project_names)}")
+
+    # Start background threads — both iterate all active projects from _PROJECTS_CACHE
+    _start_external_edit_watcher()
+    _start_scheduled_event_poller()
 
     server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"

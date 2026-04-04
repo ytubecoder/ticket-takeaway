@@ -501,16 +501,10 @@ def collect_code_stats(project_path: str) -> CodeStats:
 # HTML generation
 # ---------------------------------------------------------------------------
 
-def generate_html(projects: list[Project]) -> str:
-    """Generate the full self-contained HTML dashboard."""
-
-    # For now, use the first active project as primary display
-    primary = projects[0] if projects else None
-
-    # Aggregate all tickets across projects
-    all_tickets: list[Ticket] = []
-    for proj in projects:
-        all_tickets.extend(proj.tickets)
+def generate_html(project: Project) -> str:
+    """Generate the full self-contained HTML dashboard for a single project."""
+    primary = project
+    all_tickets: list[Ticket] = list(project.tickets)
 
     # Categorize tickets by section
     by_section: dict[str, list[Ticket]] = {s: [] for s in SECTION_ORDER}
@@ -646,6 +640,36 @@ a {{ color: var(--accent); text-decoration: none; }}
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }}
 .project-name {{ font-size: 13px; font-weight: 600; color: var(--text-primary); }}
+.proj-switcher {{ position: relative; display: inline-flex; align-items: center; }}
+.proj-switcher-btn {{
+  display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600;
+  color: var(--text-primary); background: none; border: none; padding: 2px 4px;
+  border-radius: 4px; cursor: pointer; transition: background 0.15s;
+  font-family: var(--font-sans); line-height: 1.4;
+}}
+.proj-switcher-btn:hover, .proj-switcher-btn[aria-expanded="true"] {{ background: var(--bg-hover); }}
+.proj-switcher-btn:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
+.proj-switcher-chevron {{ width: 10px; height: 10px; opacity: 0.5; flex-shrink: 0; transition: transform 0.15s; }}
+.proj-switcher-btn[aria-expanded="true"] .proj-switcher-chevron {{ transform: rotate(180deg); }}
+.proj-switcher-menu {{
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 500; min-width: 200px;
+  background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); padding: 4px 0; display: none;
+}}
+.proj-switcher-menu.open {{ display: block; }}
+.proj-switcher-item {{
+  display: block; padding: 7px 14px; font-size: 13px; color: var(--text-primary);
+  text-decoration: none; white-space: nowrap; cursor: pointer; transition: background 0.1s;
+}}
+.proj-switcher-item:hover, .proj-switcher-item:focus-visible {{ background: var(--bg-hover); outline: none; }}
+.proj-switcher-item.current {{ color: var(--accent); font-weight: 600; }}
+.proj-switcher-item.current::after {{ content: " \\2713"; font-size: 11px; }}
+.proj-switcher-divider {{ height: 1px; background: var(--border-subtle); margin: 4px 0; }}
+.proj-switcher-footer-item {{
+  display: block; padding: 6px 14px; font-size: 11px; color: var(--text-tertiary);
+  text-decoration: none; white-space: nowrap; transition: background 0.1s, color 0.1s;
+}}
+.proj-switcher-footer-item:hover, .proj-switcher-footer-item:focus-visible {{ background: var(--bg-hover); color: var(--text-secondary); outline: none; }}
 .version-badge {{
   font-size: 10px; font-weight: 600; background: var(--bg-card); color: var(--text-secondary);
   padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-default);
@@ -4431,6 +4455,139 @@ a {{ color: var(--accent); text-decoration: none; }}
   }};
 }})();
 </script>
+
+<script>
+/* Project switcher dropdown */
+(function () {{
+  var projectsMeta = document.querySelector('meta[name="projects-list"]');
+  var currentMeta  = document.querySelector('meta[name="current-project"]');
+  if (!projectsMeta || !currentMeta) return;
+
+  var projects;
+  try {{ projects = JSON.parse(projectsMeta.content); }} catch (e) {{ return; }}
+  var currentId = currentMeta.content || '';
+  if (!Array.isArray(projects) || projects.length === 0) return;
+
+  var nameSpan = document.querySelector('.project-name');
+  if (!nameSpan) return;
+
+  var currentLabel = (projects.find(function (p) {{ return p.id === currentId; }}) || {{}}).name
+                     || nameSpan.textContent;
+
+  var wrapper = document.createElement('div');
+  wrapper.className = 'proj-switcher';
+
+  var btn = document.createElement('button');
+  btn.className = 'proj-switcher-btn';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  btn.setAttribute('aria-expanded', 'false');
+  btn.setAttribute('aria-label', 'Switch project — current: ' + currentLabel);
+  btn.setAttribute('data-testid', 'proj-switcher-btn');
+
+  var labelSpan = document.createElement('span');
+  labelSpan.textContent = currentLabel;
+  labelSpan.setAttribute('data-testid', 'proj-switcher-label');
+
+  var chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  chevron.setAttribute('viewBox', '0 0 10 10');
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.className = 'proj-switcher-chevron';
+  var poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  poly.setAttribute('points', '1,3 5,7 9,3');
+  poly.setAttribute('fill', 'none');
+  poly.setAttribute('stroke', 'currentColor');
+  poly.setAttribute('stroke-width', '1.5');
+  poly.setAttribute('stroke-linecap', 'round');
+  poly.setAttribute('stroke-linejoin', 'round');
+  chevron.appendChild(poly);
+
+  btn.appendChild(labelSpan);
+  btn.appendChild(chevron);
+
+  var menu = document.createElement('div');
+  menu.className = 'proj-switcher-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('aria-label', 'Projects');
+  menu.setAttribute('data-testid', 'proj-switcher-menu');
+
+  projects.forEach(function (p) {{
+    var a = document.createElement('a');
+    a.href = '/' + p.id;
+    a.className = 'proj-switcher-item' + (p.id === currentId ? ' current' : '');
+    a.textContent = p.name;
+    a.setAttribute('role', 'option');
+    a.setAttribute('aria-selected', p.id === currentId ? 'true' : 'false');
+    a.setAttribute('data-testid', 'proj-item-' + p.id);
+    menu.appendChild(a);
+  }});
+
+  var divider = document.createElement('div');
+  divider.className = 'proj-switcher-divider';
+  divider.setAttribute('role', 'separator');
+  menu.appendChild(divider);
+
+  function addFooterItem(href, text, testId) {{
+    var a = document.createElement('a');
+    a.href = href;
+    a.className = 'proj-switcher-footer-item';
+    a.textContent = text;
+    a.setAttribute('data-testid', testId);
+    menu.appendChild(a);
+  }}
+
+  addFooterItem('/', 'All Projects', 'proj-switcher-all-projects');
+  addFooterItem(currentId ? '/' + currentId + '/settings' : '/settings', 'Settings', 'proj-switcher-settings');
+
+  wrapper.appendChild(btn);
+  wrapper.appendChild(menu);
+  nameSpan.parentNode.replaceChild(wrapper, nameSpan);
+
+  function isOpen() {{ return menu.classList.contains('open'); }}
+  function openMenu() {{
+    menu.classList.add('open');
+    btn.setAttribute('aria-expanded', 'true');
+    var first = menu.querySelector('.proj-switcher-item, .proj-switcher-footer-item');
+    if (first) first.focus();
+  }}
+  function closeMenu() {{
+    menu.classList.remove('open');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.focus();
+  }}
+
+  btn.addEventListener('click', function (e) {{
+    e.stopPropagation();
+    if (isOpen()) {{ closeMenu(); }} else {{ openMenu(); }}
+  }});
+
+  var FOCUSABLE_SEL = '.proj-switcher-item, .proj-switcher-footer-item';
+  menu.addEventListener('keydown', function (e) {{
+    var items = Array.prototype.slice.call(menu.querySelectorAll(FOCUSABLE_SEL));
+    var idx = items.indexOf(document.activeElement);
+    switch (e.key) {{
+      case 'Escape': e.preventDefault(); closeMenu(); break;
+      case 'ArrowDown': e.preventDefault(); items[(idx + 1) % items.length].focus(); break;
+      case 'ArrowUp': e.preventDefault(); items[(idx - 1 + items.length) % items.length].focus(); break;
+      case 'Home': e.preventDefault(); if (items.length) items[0].focus(); break;
+      case 'End': e.preventDefault(); if (items.length) items[items.length - 1].focus(); break;
+      case 'Tab': closeMenu(); break;
+    }}
+  }});
+
+  btn.addEventListener('keydown', function (e) {{
+    if (e.key === 'ArrowDown' && !isOpen()) {{ e.preventDefault(); openMenu(); }}
+    else if (e.key === 'Escape' && isOpen()) {{ e.preventDefault(); closeMenu(); }}
+  }});
+
+  document.addEventListener('click', function (e) {{
+    if (isOpen() && !wrapper.contains(e.target)) {{ closeMenu(); }}
+  }});
+
+  wrapper.addEventListener('focusout', function (e) {{
+    if (!wrapper.contains(e.relatedTarget)) {{ closeMenu(); }}
+  }});
+}})();
+</script>
 </body>
 </html>"""
 
@@ -4848,11 +5005,9 @@ def main():
         print(generate_json_output(projects))
         return
 
-    # Generate HTML and write to each project's docs/ folder
-    html = generate_html(projects)
-
     output_paths = []
     for proj in projects:
+        html = generate_html(proj)
         if proj.path:
             docs_dir = Path(proj.path) / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)

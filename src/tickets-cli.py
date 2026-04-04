@@ -879,6 +879,7 @@ def cmd_add(args):
         complexity=args.complexity or "M",
         description=args.description or "",
         parent=args.parent,
+        draft=args.draft,
     )
     conn.commit()
 
@@ -946,6 +947,10 @@ def cmd_update(args):
         print(str(e), file=sys.stderr)
         conn.close()
         sys.exit(1)
+
+    if args.confirm:
+        from actions import confirm_ticket
+        confirm_ticket(conn, project_id, args.id)
 
     conn.commit()
     sync_to_markdown(conn, proj)
@@ -1176,6 +1181,7 @@ def main():
     p_add.add_argument("--complexity", help="Complexity (S/M/L/XL)")
     p_add.add_argument("--parent", help="Parent ticket ID")
     p_add.add_argument("--description", help="Description text")
+    p_add.add_argument("--draft", action="store_true", help="Create as draft ticket")
 
     # update
     p_upd = sub.add_parser("update", help="Update a ticket")
@@ -1194,6 +1200,7 @@ def main():
     p_upd.add_argument("--remove-criteria", type=int, help="Remove Nth criterion (1-indexed)")
     p_upd.add_argument("--add-depends", action="append", help="Add dependency (repeatable)")
     p_upd.add_argument("--remove-depends", action="append", help="Remove dependency (repeatable)")
+    p_upd.add_argument("--confirm", action="store_true", help="Confirm a draft ticket (set draft=false)")
 
     # move
     p_move = sub.add_parser("move", help="Move ticket to section")

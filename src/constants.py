@@ -119,3 +119,13 @@ def compute_status_on_move(current_status: str, target_section: str) -> str:
     if current_status in valid:
         return current_status
     return DEFAULT_STATUS_BY_SECTION.get(target_section, "proposed")
+
+
+# ---------------------------------------------------------------------------
+# Feedbacks integration
+# ---------------------------------------------------------------------------
+
+FEEDBACKS_DEFAULT_PORT = 8080
+FEEDBACKS_REPO_URL = "https://github.com/user/feedbacks"
+FEEDBACKS_TRIAGE_TIMEOUT = 90  # seconds
+FEEDBACKS_DETECTION_CACHE_TTL = 30  # seconds

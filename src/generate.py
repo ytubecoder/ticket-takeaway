@@ -4146,8 +4146,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   function openDrawer() {{
     drawer.classList.remove('hidden');
-    loadSettings();
-    checkFeedbacksStatus();
+    loadSettings().then(function() {{ checkFeedbacksStatus(); }});
   }}
 
   function closeDrawer() {{
@@ -4174,7 +4173,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   }});
 
   function loadSettings() {{
-    fetch(EDIT_API + '/settings')
+    return fetch(EDIT_API + '/settings')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
         if (enabledChk) enabledChk.checked = (data['feedbacks.enabled'] === 'true' || data['feedbacks.enabled'] === 'True' || data['feedbacks.enabled'] === true);
@@ -4196,12 +4195,11 @@ a {{ color: var(--accent); text-decoration: none; }}
     fetch(EDIT_API + '/feedbacks/status')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var enabled = enabledChk && enabledChk.checked;
         statusDot.className = 'settings-status-dot';
         if (!data.installed) {{
           statusDot.classList.add('err');
           statusDot.title = 'Feedbacks not installed';
-        }} else if (!enabled) {{
+        }} else if (!data.enabled) {{
           statusDot.classList.add('err');
           statusDot.title = 'Feedbacks disabled';
         }} else if (data.running) {{

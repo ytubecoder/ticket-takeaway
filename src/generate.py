@@ -501,16 +501,10 @@ def collect_code_stats(project_path: str) -> CodeStats:
 # HTML generation
 # ---------------------------------------------------------------------------
 
-def generate_html(projects: list[Project]) -> str:
-    """Generate the full self-contained HTML dashboard."""
-
-    # For now, use the first active project as primary display
-    primary = projects[0] if projects else None
-
-    # Aggregate all tickets across projects
-    all_tickets: list[Ticket] = []
-    for proj in projects:
-        all_tickets.extend(proj.tickets)
+def generate_html(project: Project) -> str:
+    """Generate the full self-contained HTML dashboard for a single project."""
+    primary = project
+    all_tickets: list[Ticket] = list(project.tickets)
 
     # Categorize tickets by section
     by_section: dict[str, list[Ticket]] = {s: [] for s in SECTION_ORDER}
@@ -4837,11 +4831,9 @@ def main():
         print(generate_json_output(projects))
         return
 
-    # Generate HTML and write to each project's docs/ folder
-    html = generate_html(projects)
-
     output_paths = []
     for proj in projects:
+        html = generate_html(proj)
         if proj.path:
             docs_dir = Path(proj.path) / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)

@@ -4172,12 +4172,12 @@ a {{ color: var(--accent); text-decoration: none; }}
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
         statusDot.className = 'settings-status-dot';
-        if (data.installed && data.enabled) {{
+        if (data.running) {{
           statusDot.classList.add('ok');
-          statusDot.title = 'Feedbacks installed and enabled';
+          statusDot.title = 'Feedbacks server running — ready to capture';
         }} else if (data.installed) {{
           statusDot.classList.add('warn');
-          statusDot.title = 'Feedbacks installed but disabled';
+          statusDot.title = 'Feedbacks installed but server not running';
         }} else {{
           statusDot.classList.add('err');
           statusDot.title = 'Feedbacks not installed';

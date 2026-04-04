@@ -4522,7 +4522,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   chevron.setAttribute('viewBox', '0 0 10 10');
   chevron.setAttribute('aria-hidden', 'true');
-  chevron.className = 'proj-switcher-chevron';
+  chevron.setAttribute('class', 'proj-switcher-chevron');
   var poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
   poly.setAttribute('points', '1,3 5,7 9,3');
   poly.setAttribute('fill', 'none');

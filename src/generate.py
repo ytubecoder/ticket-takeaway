@@ -53,6 +53,8 @@ class Ticket:
     release_tag: str = ""
     readiness_flags: set = field(default_factory=set)  # explicit flags from DB
     readiness_content: dict = field(default_factory=dict)  # {flag: content_text}
+    draft: bool = False
+    attachment_count: int = 0
 
     @property
     def slug(self) -> str:
@@ -262,6 +264,22 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             flags = set()
             readiness_content = {}
 
+        # Draft flag
+        try:
+            is_draft = bool(r["draft"])
+        except (IndexError, KeyError):
+            is_draft = False
+
+        # Attachment count
+        try:
+            att_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM ticket_attachments WHERE ticket_id = ? AND project_id = ?",
+                (r["id"], project_id)
+            ).fetchone()
+            attachment_count = att_row["cnt"] if att_row else 0
+        except Exception:
+            attachment_count = 0
+
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -279,6 +297,8 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             release_tag=release_tag,
             readiness_flags=flags,
             readiness_content=readiness_content,
+            draft=is_draft,
+            attachment_count=attachment_count,
         ))
 
     conn.close()
@@ -1361,6 +1381,148 @@ a {{ color: var(--accent); text-decoration: none; }}
 /* Column collapse (unused but kept for safety) */
 .column.collapsed .column-body {{ display: none; }}
 .column.collapsed {{ flex: 0 0 280px; }}
+
+/* Draft tickets */
+.kanban-card.is-draft, .list-row.is-draft, .card.is-draft {{
+  opacity: 0.45; border-style: dashed;
+}}
+.card.is-draft::after {{
+  content: 'DRAFT';
+  position: absolute; top: 4px; right: 6px;
+  font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
+  color: var(--text-tertiary); background: var(--bg-hover);
+  padding: 1px 5px; border-radius: 3px; pointer-events: none;
+}}
+.card.is-draft .priority-dot {{ opacity: 0.4; }}
+
+/* Settings drawer */
+.settings-toggle {{
+  font-size: 15px; background: none; border: none; color: var(--text-tertiary);
+  cursor: pointer; padding: 4px 8px; border-radius: 6px; line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}}
+.settings-toggle:hover {{ color: var(--text-primary); background: var(--bg-hover); }}
+.settings-drawer {{
+  position: fixed; top: 0; right: 0; height: 100vh; width: 320px; z-index: 1100;
+  background: var(--bg-surface); border-left: 1px solid var(--border-default);
+  box-shadow: -8px 0 32px rgba(0,0,0,0.4); display: flex; flex-direction: column;
+  transform: translateX(0); transition: transform 0.25s ease;
+}}
+.settings-drawer.hidden {{ transform: translateX(100%); pointer-events: none; }}
+.settings-drawer-header {{
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border-subtle);
+}}
+.settings-drawer-header h2 {{ margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary); }}
+.settings-drawer-close {{
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 20px; line-height: 1; padding: 0 4px;
+}}
+.settings-drawer-close:hover {{ color: var(--text-primary); }}
+.settings-drawer-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
+.settings-section {{ margin-bottom: 20px; }}
+.settings-section-title {{
+  font-size: 11px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 12px;
+}}
+.settings-row {{
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 0; gap: 10px;
+}}
+.settings-row label {{
+  font-size: 12px; color: var(--text-secondary); flex-shrink: 0;
+}}
+.settings-row input[type="text"] {{
+  font-size: 11px; padding: 4px 8px; border-radius: 5px; flex: 1;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: var(--font-mono); outline: none; min-width: 0;
+}}
+.settings-row input[type="text"]:focus {{ border-color: var(--accent); }}
+.settings-status-dot {{
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary);
+}}
+.settings-status-dot.ok {{ background: #22c55e; }}
+.settings-status-dot.warn {{ background: #eab308; }}
+.settings-status-dot.err {{ background: #ef4444; }}
+.settings-toggle-switch {{
+  position: relative; width: 32px; height: 18px; flex-shrink: 0;
+}}
+.settings-toggle-switch input {{ opacity: 0; width: 0; height: 0; }}
+.settings-toggle-slider {{
+  position: absolute; inset: 0; background: var(--border-default); border-radius: 9px;
+  cursor: pointer; transition: background 0.2s;
+}}
+.settings-toggle-slider::before {{
+  content: ''; position: absolute; width: 12px; height: 12px; left: 3px; bottom: 3px;
+  background: #fff; border-radius: 50%; transition: transform 0.2s;
+}}
+.settings-toggle-switch input:checked + .settings-toggle-slider {{ background: var(--accent); }}
+.settings-toggle-switch input:checked + .settings-toggle-slider::before {{ transform: translateX(14px); }}
+.settings-install-btn {{
+  font-size: 11px; padding: 5px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--accent); background: rgba(59,130,246,0.1);
+  color: var(--accent); font-weight: 600; font-family: var(--font-sans); transition: all 0.15s;
+}}
+.settings-install-btn:hover {{ background: rgba(59,130,246,0.2); }}
+.settings-install-btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+.settings-link {{
+  font-size: 11px; color: var(--accent); text-decoration: none;
+}}
+.settings-link:hover {{ text-decoration: underline; }}
+
+/* Attachments section in detail overlay */
+.attachments-list {{
+  display: flex; flex-direction: column; gap: 6px; margin-top: 4px;
+}}
+.attachment-row {{
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}}
+.attachment-row:hover {{ background: var(--bg-hover); border-color: var(--border-default); }}
+.attachment-thumb {{
+  width: 60px; height: 40px; object-fit: cover; border-radius: 4px;
+  flex-shrink: 0; background: var(--bg-hover); display: block;
+}}
+.attachment-info {{ flex: 1; min-width: 0; }}
+.attachment-summary {{
+  font-size: 12px; color: var(--text-primary); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;
+}}
+.attachment-meta {{
+  font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono);
+}}
+.attachment-actions {{
+  display: flex; gap: 4px; flex-shrink: 0;
+}}
+.attachment-action-btn {{
+  font-size: 9px; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--border-default);
+  background: none; color: var(--text-tertiary); cursor: pointer; font-weight: 600;
+  white-space: nowrap; transition: all 0.15s;
+}}
+.attachment-action-btn:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
+.attachment-action-btn.danger:hover {{ color: #ef4444; border-color: #ef4444; background: rgba(239,68,68,0.06); }}
+.attachments-empty {{
+  font-size: 12px; color: var(--text-tertiary); padding: 16px 0;
+  text-align: center; font-style: italic;
+}}
+.attachments-actions {{ display: flex; gap: 6px; }}
+.record-feedback-btn, .link-session-btn {{
+  font-size: 10px; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--border-default);
+  background: none; color: var(--text-secondary); cursor: pointer; font-weight: 600;
+  font-family: var(--font-sans); transition: all 0.15s;
+}}
+.record-feedback-btn.active {{
+  background: rgba(34,197,94,0.12); color: #22c55e; border-color: rgba(34,197,94,0.4);
+}}
+.record-feedback-btn:hover {{ border-color: #22c55e; color: #22c55e; }}
+.link-session-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+.attachment-count-badge {{
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: 700; min-width: 14px; height: 14px; padding: 0 3px;
+  border-radius: 7px; background: rgba(59,130,246,0.15); color: var(--accent);
+  margin-left: 3px; font-family: var(--font-mono);
+}}
 </style>
 </head>
 <body>
@@ -1414,7 +1576,10 @@ a {{ color: var(--accent); text-decoration: none; }}
     <button class="filter-btn" data-filter="M" data-group="size">M <span class="count">{count_size_m}</span></button>
     <button class="filter-btn" data-filter="L" data-group="size">L <span class="count">{count_size_l}</span></button>
   </span>
+  <span class="filter-divider"></span>
+  <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
+  <button class="settings-toggle" id="settingsToggleBtn" title="Settings">&#9881;</button>
   <button class="new-ticket-btn" id="newTicketBtn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
     <div class="new-ticket-quick">
@@ -1430,6 +1595,35 @@ a {{ color: var(--accent); text-decoration: none; }}
     <button class="new-ticket-expand-btn" id="newTicketExpandBtn"><span class="arrow">&#9654;</span> Full ticket form</button>
     <div class="new-ticket-full" id="newTicketFull" style="display:none">
       <div class="coming-soon">Coming soon</div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings drawer -->
+<div id="settings-drawer" class="settings-drawer hidden">
+  <div class="settings-drawer-header">
+    <h2>Settings</h2>
+    <button class="settings-drawer-close" id="settingsDrawerClose">&times;</button>
+  </div>
+  <div class="settings-drawer-body">
+    <div class="settings-section">
+      <div class="settings-section-title">Feedbacks Integration</div>
+      <div class="settings-row">
+        <label>Enable</label>
+        <label class="settings-toggle-switch">
+          <input type="checkbox" id="settingsFeedbacksEnabled">
+          <span class="settings-toggle-slider"></span>
+        </label>
+        <span class="settings-status-dot" id="feedbacksStatusDot" title="Feedbacks status"></span>
+      </div>
+      <div class="settings-row">
+        <label>Path</label>
+        <input type="text" id="settingsFeedbacksPath" placeholder="~/projects/feedbacks">
+      </div>
+      <div class="settings-row">
+        <a class="settings-link" href="https://github.com/ytubecoder/feedbacks" target="_blank" rel="noopener">GitHub</a>
+        <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
+      </div>
     </div>
   </div>
 </div>
@@ -2335,7 +2529,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         clearTimeout(card._clickTimer);
         if (parentEl.querySelector('input')) return;
         card.dataset.editing = 'true';
-        var currentVal = parentEl.classList.contains('empty') ? '' : (parentEl.textContent.replace(/^\u21b3\s*/, '').trim());
+        var currentVal = parentEl.classList.contains('empty') ? '' : (parentEl.textContent.replace(/^\u21b3\\s*/, '').trim());
         var input = document.createElement('input');
         input.type = 'text';
         input.value = currentVal;
@@ -2729,6 +2923,18 @@ a {{ color: var(--accent); text-decoration: none; }}
         <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
         <div class="detail-assessment hidden" data-cat-result="R"></div>
         <textarea class="detail-editor" data-field="reviewed" placeholder="Learnings, sync notes, and decisions captured along the way..."></textarea>
+      </div>
+
+      <!-- Attachments -->
+      <div class="detail-section" id="section-attachments">
+        <div class="detail-section-header">
+          <h3>Attachments</h3>
+          <div class="attachments-actions">
+            <button class="record-feedback-btn" id="record-feedback-btn" style="display:none">Record</button>
+            <button class="link-session-btn" id="link-session-btn" style="display:none">+ Link</button>
+          </div>
+        </div>
+        <div id="attachments-list" class="attachments-list"></div>
       </div>
 
     </div>
@@ -3181,7 +3387,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         newEl.spellcheck = false;
         newEl.textContent = '+ ' + (hunk.suggested || '');
         newEl.addEventListener('input', function() {{
-          hunk.suggested = newEl.textContent.replace(/^\+\s?/, '');
+          hunk.suggested = newEl.textContent.replace(/^\\+\\s?/, '');
         }});
         newEl.addEventListener('keydown', function(e) {{
           if (e.key === 'Enter') e.preventDefault();
@@ -3758,6 +3964,462 @@ a {{ color: var(--accent); text-decoration: none; }}
   }})();
 }})();
 </script>
+
+<script>
+/* =========================================================
+   Task 9: Draft filter toggle
+   ========================================================= */
+(function() {{
+  var draftsBtn = document.getElementById('draftsToggleBtn');
+  if (!draftsBtn) return;
+  var showDrafts = false;
+
+  function applyDraftVisibility() {{
+    var draftCards = document.querySelectorAll('.card.is-draft');
+    draftCards.forEach(function(c) {{
+      if (!showDrafts) {{
+        c.style.display = 'none';
+      }} else {{
+        c.style.display = '';
+      }}
+    }});
+  }}
+
+  // Hide drafts by default on load
+  applyDraftVisibility();
+
+  draftsBtn.addEventListener('click', function() {{
+    showDrafts = !showDrafts;
+    draftsBtn.classList.toggle('active', showDrafts);
+    applyDraftVisibility();
+  }});
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Task 9: Draft confirm/reject in detail overlay
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  // We hook into the overlay open event by watching when the overlay is made visible
+  // and checking if current ticket is a draft — then we show confirm/reject buttons.
+
+  var overlay = document.getElementById('ticket-detail-overlay');
+  if (!overlay) return;
+
+  var _draftBanner = null;
+
+  function removeDraftBanner() {{
+    if (_draftBanner && _draftBanner.parentNode) {{
+      _draftBanner.parentNode.removeChild(_draftBanner);
+    }}
+    _draftBanner = null;
+  }}
+
+  function showDraftBanner(ticketId) {{
+    removeDraftBanner();
+    var body = overlay.querySelector('.detail-body');
+    if (!body) return;
+
+    var banner = document.createElement('div');
+    banner.style.cssText = 'padding:10px 14px;margin-bottom:12px;border-radius:8px;background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.3);display:flex;align-items:center;gap:10px;';
+
+    var label = document.createElement('span');
+    label.style.cssText = 'font-size:11px;font-weight:700;color:#eab308;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0;';
+    label.textContent = 'DRAFT';
+
+    var msg = document.createElement('span');
+    msg.style.cssText = 'font-size:12px;color:var(--text-secondary);flex:1;';
+    msg.textContent = 'This ticket was auto-generated from a feedback session.';
+
+    var confirmBtn = document.createElement('button');
+    confirmBtn.style.cssText = 'font-size:11px;padding:4px 12px;border-radius:5px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-weight:600;font-family:var(--font-sans);';
+    confirmBtn.textContent = 'Confirm';
+    confirmBtn.addEventListener('click', function() {{
+      fetch(EDIT_API + '/tickets/' + ticketId, {{
+        method: 'PUT',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ draft: false }})
+      }}).then(function() {{
+        removeDraftBanner();
+        // Remove is-draft class from the card
+        var card = document.querySelector('[data-item-id="' + ticketId + '"]');
+        if (card) {{ card.classList.remove('is-draft'); card.removeAttribute('data-draft'); card.style.display = ''; }}
+      }}).catch(function() {{ alert('Failed to confirm ticket'); }});
+    }});
+
+    var rejectBtn = document.createElement('button');
+    rejectBtn.style.cssText = 'font-size:11px;padding:4px 10px;border-radius:5px;border:1px solid rgba(239,68,68,0.5);background:none;color:#ef4444;cursor:pointer;font-weight:600;font-family:var(--font-sans);';
+    rejectBtn.textContent = 'Reject';
+    rejectBtn.addEventListener('click', function() {{
+      if (!confirm('Delete this draft ticket?')) return;
+      fetch(EDIT_API + '/tickets/' + ticketId, {{
+        method: 'DELETE'
+      }}).then(function() {{
+        // Close overlay and remove card
+        if (window.closeDetailOverlay) window.closeDetailOverlay();
+        var card = document.querySelector('[data-item-id="' + ticketId + '"]');
+        if (card) card.remove();
+      }}).catch(function() {{ alert('Failed to reject ticket'); }});
+    }});
+
+    banner.appendChild(label);
+    banner.appendChild(msg);
+    banner.appendChild(confirmBtn);
+    banner.appendChild(rejectBtn);
+    _draftBanner = banner;
+
+    // Insert at top of body (before the gate banner)
+    body.insertBefore(banner, body.firstChild);
+  }}
+
+  // Hook into openDetailOverlay — wrap it
+  var _origOpen = window.openDetailOverlay;
+  window.openDetailOverlay = function(tid, section) {{
+    removeDraftBanner();
+    if (_origOpen) _origOpen(tid, section);
+    // After data loads, check if draft
+    setTimeout(function() {{
+      var card = document.querySelector('[data-item-id="' + tid + '"]');
+      if (card && card.dataset.draft === 'true') {{
+        showDraftBanner(tid);
+      }}
+    }}, 300);
+  }};
+
+  // Also patch closeDetailOverlay to clean up banner
+  var _origClose = window.closeDetailOverlay;
+  window.closeDetailOverlay = function() {{
+    removeDraftBanner();
+    if (_origClose) _origClose();
+  }};
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Task 10: Settings panel
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var toggleBtn = document.getElementById('settingsToggleBtn');
+  var drawer = document.getElementById('settings-drawer');
+  var closeBtn = document.getElementById('settingsDrawerClose');
+  if (!toggleBtn || !drawer) return;
+
+  var enabledChk = document.getElementById('settingsFeedbacksEnabled');
+  var pathInput = document.getElementById('settingsFeedbacksPath');
+  var statusDot = document.getElementById('feedbacksStatusDot');
+  var installBtn = document.getElementById('settingsFeedbacksInstall');
+
+  function openDrawer() {{
+    drawer.classList.remove('hidden');
+    loadSettings();
+    checkFeedbacksStatus();
+  }}
+
+  function closeDrawer() {{
+    drawer.classList.add('hidden');
+  }}
+
+  toggleBtn.addEventListener('click', function() {{
+    if (drawer.classList.contains('hidden')) {{
+      openDrawer();
+    }} else {{
+      closeDrawer();
+    }}
+  }});
+
+  if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+
+  // Close when clicking outside
+  document.addEventListener('click', function(e) {{
+    if (!drawer.classList.contains('hidden') &&
+        !drawer.contains(e.target) &&
+        e.target !== toggleBtn) {{
+      closeDrawer();
+    }}
+  }});
+
+  function loadSettings() {{
+    fetch(EDIT_API + '/settings')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        if (enabledChk) enabledChk.checked = !!(data.feedbacks_enabled);
+        if (pathInput) pathInput.value = data.feedbacks_path || '';
+      }})
+      .catch(function() {{ /* settings endpoint may not exist yet */ }});
+  }}
+
+  function saveSettings(patch) {{
+    fetch(EDIT_API + '/settings', {{
+      method: 'PUT',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify(patch)
+    }}).catch(function() {{ /* ignore save errors */ }});
+  }}
+
+  function checkFeedbacksStatus() {{
+    if (!statusDot) return;
+    fetch(EDIT_API + '/feedbacks/status')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        statusDot.className = 'settings-status-dot';
+        if (data.installed && data.enabled) {{
+          statusDot.classList.add('ok');
+          statusDot.title = 'Feedbacks installed and enabled';
+        }} else if (data.installed) {{
+          statusDot.classList.add('warn');
+          statusDot.title = 'Feedbacks installed but disabled';
+        }} else {{
+          statusDot.classList.add('err');
+          statusDot.title = 'Feedbacks not installed';
+        }}
+      }})
+      .catch(function() {{
+        statusDot.className = 'settings-status-dot err';
+        statusDot.title = 'Could not check feedbacks status';
+      }});
+  }}
+
+  if (enabledChk) {{
+    enabledChk.addEventListener('change', function() {{
+      saveSettings({{ feedbacks_enabled: enabledChk.checked }});
+    }});
+  }}
+
+  if (pathInput) {{
+    pathInput.addEventListener('blur', function() {{
+      saveSettings({{ feedbacks_path: pathInput.value }});
+    }});
+  }}
+
+  if (installBtn) {{
+    installBtn.addEventListener('click', function() {{
+      installBtn.disabled = true;
+      installBtn.textContent = 'Installing...';
+      fetch(EDIT_API + '/settings/feedbacks/install', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: '{{}}'
+      }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        installBtn.textContent = data.ok ? 'Installed \u2714' : 'Failed';
+        installBtn.disabled = false;
+        checkFeedbacksStatus();
+      }})
+      .catch(function() {{
+        installBtn.textContent = 'Failed';
+        installBtn.disabled = false;
+      }});
+    }});
+  }}
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Task 11: Attachments + Record button
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var attachmentsList = document.getElementById('attachments-list');
+  var recordBtn = document.getElementById('record-feedback-btn');
+  var linkBtn = document.getElementById('link-session-btn');
+
+  function loadAttachments(ticketId) {{
+    if (!attachmentsList) return;
+    // Clear
+    while (attachmentsList.firstChild) attachmentsList.removeChild(attachmentsList.firstChild);
+
+    fetch(EDIT_API + '/tickets/' + ticketId + '/attachments')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var items = data.attachments || data || [];
+        if (!Array.isArray(items) || items.length === 0) {{
+          var empty = document.createElement('div');
+          empty.className = 'attachments-empty';
+          empty.textContent = 'No attachments yet.';
+          attachmentsList.appendChild(empty);
+          return;
+        }}
+        items.forEach(function(att) {{
+          var row = document.createElement('div');
+          row.className = 'attachment-row';
+
+          var thumb = document.createElement('img');
+          thumb.className = 'attachment-thumb';
+          thumb.alt = 'Session thumbnail';
+          if (att.thumbnail_url) {{
+            thumb.src = att.thumbnail_url;
+          }} else {{
+            thumb.style.cssText = 'background:var(--bg-hover);';
+          }}
+          row.appendChild(thumb);
+
+          var info = document.createElement('div');
+          info.className = 'attachment-info';
+
+          var summary = document.createElement('div');
+          summary.className = 'attachment-summary';
+          summary.textContent = att.summary || att.name || 'Feedback session';
+          info.appendChild(summary);
+
+          var meta = document.createElement('div');
+          meta.className = 'attachment-meta';
+          var metaParts = [];
+          if (att.created_at) metaParts.push(att.created_at.substring(0, 10));
+          if (att.attachment_type) metaParts.push(att.attachment_type);
+          meta.textContent = metaParts.join(' \u00b7 ');
+          info.appendChild(meta);
+
+          row.appendChild(info);
+
+          var actions = document.createElement('div');
+          actions.className = 'attachment-actions';
+
+          if (att.player_url || att.path) {{
+            var openBtn = document.createElement('button');
+            openBtn.className = 'attachment-action-btn';
+            openBtn.textContent = 'Play';
+            openBtn.addEventListener('click', function(e) {{
+              e.stopPropagation();
+              window.open(att.player_url || att.path, '_blank');
+            }});
+            actions.appendChild(openBtn);
+          }}
+
+          var unlinkBtn = document.createElement('button');
+          unlinkBtn.className = 'attachment-action-btn danger';
+          unlinkBtn.textContent = 'Unlink';
+          unlinkBtn.addEventListener('click', function(e) {{
+            e.stopPropagation();
+            if (!confirm('Unlink this attachment?')) return;
+            fetch(EDIT_API + '/tickets/' + ticketId + '/attachments/' + att.id, {{
+              method: 'DELETE'
+            }}).then(function() {{ loadAttachments(ticketId); }})
+              .catch(function() {{ alert('Failed to unlink attachment'); }});
+          }});
+          actions.appendChild(unlinkBtn);
+
+          row.appendChild(actions);
+
+          // Click row to open player
+          row.addEventListener('click', function() {{
+            if (att.player_url || att.path) window.open(att.player_url || att.path, '_blank');
+          }});
+
+          attachmentsList.appendChild(row);
+        }});
+      }})
+      .catch(function() {{
+        if (!attachmentsList) return;
+        var empty = document.createElement('div');
+        empty.className = 'attachments-empty';
+        empty.textContent = 'Could not load attachments.';
+        attachmentsList.appendChild(empty);
+      }});
+  }}
+
+  function updateRecordButton(ticketId) {{
+    if (!recordBtn || !linkBtn) return;
+    // Check feedbacks status
+    fetch(EDIT_API + '/feedbacks/status')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        if (data.installed && data.enabled) {{
+          recordBtn.style.display = 'inline-block';
+          recordBtn.classList.add('active');
+          recordBtn.title = 'Record a feedback session for this ticket';
+          linkBtn.style.display = 'inline-block';
+        }} else if (data.installed) {{
+          recordBtn.style.display = 'inline-block';
+          recordBtn.classList.remove('active');
+          recordBtn.style.opacity = '0.5';
+          recordBtn.title = 'Feedbacks disabled — enable in Settings';
+          linkBtn.style.display = 'none';
+        }} else {{
+          recordBtn.style.display = 'none';
+          linkBtn.style.display = 'none';
+        }}
+        // Store ticketId on buttons for click handler
+        recordBtn.dataset.ticketId = ticketId;
+        if (linkBtn) linkBtn.dataset.ticketId = ticketId;
+      }})
+      .catch(function() {{
+        recordBtn.style.display = 'none';
+        linkBtn.style.display = 'none';
+      }});
+  }}
+
+  // Record button click — start a feedbacks session
+  if (recordBtn) {{
+    recordBtn.addEventListener('click', function() {{
+      var tid = recordBtn.dataset.ticketId;
+      if (!tid) return;
+      fetch(EDIT_API + '/feedbacks/record', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ ticket_id: tid }})
+      }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        if (data.ok) {{
+          recordBtn.textContent = 'Recording...';
+          setTimeout(function() {{ recordBtn.textContent = 'Record'; }}, 3000);
+        }} else {{
+          alert(data.error || 'Failed to start recording');
+        }}
+      }})
+      .catch(function() {{ alert('Failed to start recording'); }});
+    }});
+  }}
+
+  // Link button click — link latest session
+  if (linkBtn) {{
+    linkBtn.addEventListener('click', function() {{
+      var tid = linkBtn.dataset.ticketId;
+      if (!tid) return;
+      fetch(EDIT_API + '/feedbacks/link', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ ticket_id: tid }})
+      }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        if (data.ok) {{
+          loadAttachments(tid);
+        }} else {{
+          alert(data.error || 'No session to link');
+        }}
+      }})
+      .catch(function() {{ alert('Failed to link session'); }});
+    }});
+  }}
+
+  // Hook into overlay open
+  var _origOpenForAttachments = window.openDetailOverlay;
+  window.openDetailOverlay = function(tid, section) {{
+    if (_origOpenForAttachments) _origOpenForAttachments(tid, section);
+    // Load attachments after a short delay to let overlay populate
+    setTimeout(function() {{
+      loadAttachments(tid);
+      updateRecordButton(tid);
+    }}, 150);
+  }};
+}})();
+</script>
 </body>
 </html>"""
 
@@ -3861,15 +4523,21 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     readiness_html = _render_readiness_row(t)
     actions_html = _render_action_buttons(slug, id_esc)
 
+    draft_class = " is-draft" if getattr(t, 'draft', False) else ""
+    draft_attr = ' data-draft="true"' if getattr(t, 'draft', False) else ""
+    att_count = getattr(t, 'attachment_count', 0)
+    att_badge_html = f'<span class="attachment-count-badge" title="{att_count} attachment(s)">{att_count}</span>' if att_count > 0 else ""
+
     return (
-        f'      <div class="card {card_class}{blocked_class}" data-section="{slug}" '
+        f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
         f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
-        f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}>\n'
+        f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
+        f'{draft_attr}>\n'
         f'        <div class="copied-toast">Copied!</div>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
-        f'<span class="card-title">{title_esc}</span>{child_badge_html}</div>\n'
+        f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
         f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
         f'<span class="status-badge {status_class}">{status_class}</span>'
         f'<button class="card-open-btn" title="Open ticket details">&#8599;</button></div>\n'

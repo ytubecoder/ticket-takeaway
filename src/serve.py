@@ -309,8 +309,9 @@ def _get_project() -> dict:
     return projects[0]
 
 
-def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> bool:
+def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
     """Update a single field on a ticket. Returns True on success."""
+    project_id = proj["id"]
     ALLOWED_FIELDS = {
         "title", "priority", "complexity", "status", "description",
         "parent", "commit_hash", "release_tag", "draft",
@@ -321,7 +322,6 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         # Verify ticket exists
@@ -345,12 +345,13 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
     return True
 
 
-def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
+def _move_ticket(proj: dict, ticket_id: str, section_name: str) -> bool:
     """Move a ticket to a different section. Returns True on success.
 
     Delegates to actions.move_ticket() which uses compute_status_on_move()
     to preserve valid statuses across section moves.
     """
+    project_id = proj["id"]
     try:
         section = cli.resolve_section(section_name)
     except (SystemExit, ValueError):
@@ -362,7 +363,6 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         project_path = os.path.expanduser(proj.get("path", ""))
@@ -379,12 +379,12 @@ def _move_ticket(project_id: str, ticket_id: str, section_name: str) -> bool:
     return True
 
 
-def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
+def _toggle_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
     """Toggle a single acceptance criterion's checked state."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         # Find the criterion by ticket + sort_order
@@ -421,12 +421,12 @@ def _toggle_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
     return True
 
 
-def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int, new_text: str) -> bool:
+def _update_criterion_text(proj: dict, ticket_id: str, criterion_index: int, new_text: str) -> bool:
     """Update the text of a criterion at a given index."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -456,12 +456,12 @@ def _update_criterion_text(project_id: str, ticket_id: str, criterion_index: int
     return True
 
 
-def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> bool:
+def _remove_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
     """Remove a criterion at a given index."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -499,12 +499,12 @@ def _remove_criterion(project_id: str, ticket_id: str, criterion_index: int) -> 
     return True
 
 
-def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
+def _add_criterion(proj: dict, ticket_id: str, text: str) -> bool:
     """Add a new criterion to the end of the list."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -534,12 +534,12 @@ def _add_criterion(project_id: str, ticket_id: str, text: str) -> bool:
     return True
 
 
-def _update_depends(project_id: str, ticket_id: str, depends_list: list) -> bool:
+def _update_depends(proj: dict, ticket_id: str, depends_list: list) -> bool:
     """Replace all depends for a ticket with a new list."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -568,8 +568,9 @@ def _update_depends(project_id: str, ticket_id: str, depends_list: list) -> bool
     return True
 
 
-def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
+def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
     """Create a new ticket. Returns the ticket JSON on success."""
+    project_id = proj["id"]
     section_name = body.get("section", "Ideas")
     try:
         section = cli.resolve_section(section_name)
@@ -583,7 +584,6 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         ticket_id = _actions_add_ticket(
@@ -600,12 +600,12 @@ def _create_ticket(project_id: str, title: str, body: dict) -> dict | None:
     return _get_ticket_json(project_id, ticket_id)
 
 
-def _delete_ticket(project_id: str, ticket_id: str) -> bool:
+def _delete_ticket(proj: dict, ticket_id: str) -> bool:
     """Delete a ticket. Returns True on success."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         row = conn.execute(
@@ -627,12 +627,12 @@ def _delete_ticket(project_id: str, ticket_id: str) -> bool:
     return True
 
 
-def _accept_ticket(project_id: str, ticket_id: str) -> bool:
+def _accept_ticket(proj: dict, ticket_id: str) -> bool:
     """Accept a ticket — move to Done with status 'done'. Returns True on success."""
+    project_id = proj["id"]
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
         cli.ingest_markdown(conn, proj)
 
         project_path = os.path.expanduser(proj.get("path", ""))
@@ -706,10 +706,11 @@ Respond with ONLY valid JSON (no markdown fences, no explanation) matching this 
 }}"""
 
 
-def _run_gate_check(project_id: str, ticket_id: str, target_section: str) -> dict:
+def _run_gate_check(proj: dict, ticket_id: str, target_section: str) -> dict:
     """Run the gate-check agent and return structured analysis."""
     import subprocess as _sp
 
+    project_id = proj["id"]
     ticket = _get_ticket_json(project_id, ticket_id)
     if not ticket:
         return {"error": "Ticket not found"}
@@ -720,7 +721,7 @@ def _run_gate_check(project_id: str, ticket_id: str, target_section: str) -> dic
         result = _sp.run(
             ["claude", "-p", prompt, "--output-format", "json"],
             capture_output=True, text=True, timeout=90,
-            cwd=os.path.expanduser(_get_project().get("path", "."))
+            cwd=os.path.expanduser(proj.get("path", "."))
         )
         # --output-format json wraps the response in {"type":"result","result":"..."}
         outer = json.loads(result.stdout)
@@ -807,10 +808,11 @@ Respond with ONLY valid JSON (no markdown fences, no explanation) matching this 
 }}"""
 
 
-def _run_category_assess(project_id: str, ticket_id: str, category: str, action: str) -> dict:
+def _run_category_assess(proj: dict, ticket_id: str, category: str, action: str) -> dict:
     """Run a focused single-category assessment and return structured result."""
     import subprocess as _sp
 
+    project_id = proj["id"]
     ticket = _get_ticket_json(project_id, ticket_id)
     if not ticket:
         return {"error": "Ticket not found"}
@@ -821,7 +823,7 @@ def _run_category_assess(project_id: str, ticket_id: str, category: str, action:
         result = _sp.run(
             ["claude", "-p", prompt, "--output-format", "json"],
             capture_output=True, text=True, timeout=45,
-            cwd=os.path.expanduser(_get_project().get("path", "."))
+            cwd=os.path.expanduser(proj.get("path", "."))
         )
         outer = json.loads(result.stdout)
         text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
@@ -928,10 +930,11 @@ def _compute_diff_hunks(original: str, suggested: str) -> list:
     return hunks
 
 
-def _run_enrich(project_id: str, ticket_id: str, field: str, content: str, action: str) -> dict:
+def _run_enrich(proj: dict, ticket_id: str, field: str, content: str, action: str) -> dict:
     """Run Claude CLI to enrich a single field and return diff hunks."""
     import subprocess as _sp
 
+    project_id = proj["id"]
     ticket = _get_ticket_json(project_id, ticket_id)
     if not ticket:
         return {"error": "Ticket not found"}
@@ -942,7 +945,7 @@ def _run_enrich(project_id: str, ticket_id: str, field: str, content: str, actio
         result = _sp.run(
             ["claude", "-p", prompt, "--output-format", "json"],
             capture_output=True, text=True, timeout=90,
-            cwd=os.path.expanduser(_get_project().get("path", "."))
+            cwd=os.path.expanduser(proj.get("path", "."))
         )
         outer = json.loads(result.stdout)
         text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
@@ -966,15 +969,15 @@ def _run_enrich(project_id: str, ticket_id: str, field: str, content: str, actio
     }
 
 
-def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
+def _toggle_readiness(proj: dict, ticket_id: str, flag: str) -> bool:
     """Toggle a readiness flag. If set, clear it; if unset, set it."""
+    project_id = proj["id"]
     if flag not in VALID_READINESS_FLAGS:
         return False
 
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
 
         row = conn.execute(
             "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
@@ -1008,15 +1011,15 @@ def _toggle_readiness(project_id: str, ticket_id: str, flag: str) -> bool:
     return True
 
 
-def _update_readiness_content(project_id: str, ticket_id: str, flag: str, content: str) -> bool:
+def _update_readiness_content(proj: dict, ticket_id: str, flag: str, content: str) -> bool:
     """Update readiness flag content. Non-empty content upserts (auto-fills dot), empty deletes (auto-empties)."""
+    project_id = proj["id"]
     if flag not in VALID_READINESS_FLAGS:
         return False
 
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        proj = _get_project()
 
         row = conn.execute(
             "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
@@ -1272,7 +1275,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             content = body.get("content", "")
-            if _update_readiness_content(proj["id"], ticket_id, flag, content):
+            if _update_readiness_content(proj, ticket_id, flag, content):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1333,7 +1336,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle criterion toggle specially
         if "toggle_criterion" in body:
             idx = body["toggle_criterion"]
-            if isinstance(idx, int) and _toggle_criterion(project_id, ticket_id, idx):
+            if isinstance(idx, int) and _toggle_criterion(proj, ticket_id, idx):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1344,7 +1347,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if "criterion_index" in body and "criterion_text" in body:
             idx = body["criterion_index"]
             text = body["criterion_text"]
-            if isinstance(idx, int) and isinstance(text, str) and _update_criterion_text(project_id, ticket_id, idx, text):
+            if isinstance(idx, int) and isinstance(text, str) and _update_criterion_text(proj, ticket_id, idx, text):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1354,7 +1357,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle criterion removal
         if "remove_criterion" in body:
             idx = body["remove_criterion"]
-            if isinstance(idx, int) and _remove_criterion(project_id, ticket_id, idx):
+            if isinstance(idx, int) and _remove_criterion(proj, ticket_id, idx):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1364,7 +1367,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle add criterion
         if "add_criteria" in body:
             text = body["add_criteria"]
-            if isinstance(text, str) and text.strip() and _add_criterion(project_id, ticket_id, text.strip()):
+            if isinstance(text, str) and text.strip() and _add_criterion(proj, ticket_id, text.strip()):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1374,7 +1377,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Handle depends list update
         if "depends" in body:
             deps = body["depends"]
-            if isinstance(deps, list) and _update_depends(project_id, ticket_id, deps):
+            if isinstance(deps, list) and _update_depends(proj, ticket_id, deps):
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1383,7 +1386,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # Update individual fields
         for field, value in body.items():
-            if not _update_ticket_field(project_id, ticket_id, field, value):
+            if not _update_ticket_field(proj, ticket_id, field, value):
                 self._send_json({"error": f"Failed to update field: {field}"}, 400)
                 return
 
@@ -1410,7 +1413,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Missing 'section' field"}, 400)
                 return
 
-            if _move_ticket(proj["id"], ticket_id, section):
+            if _move_ticket(proj, ticket_id, section):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1440,7 +1443,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "action must be 'create' or 'review'"}, 400)
                 return
 
-            result = _run_enrich(proj["id"], ticket_id, field, content, action)
+            result = _run_enrich(proj, ticket_id, field, content, action)
             if "error" in result and "hunks" not in result:
                 self._send_json(result, 400)
             else:
@@ -1463,7 +1466,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Missing 'section' field"}, 400)
                 return
 
-            result = _run_gate_check(proj["id"], ticket_id, section)
+            result = _run_gate_check(proj, ticket_id, section)
             if "error" in result and "verdict" not in result:
                 self._send_json(result, 400)
             else:
@@ -1487,7 +1490,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "action must be 'create' or 'review'"}, 400)
                 return
 
-            result = _run_category_assess(proj["id"], ticket_id, category, action)
+            result = _run_category_assess(proj, ticket_id, category, action)
             if "error" in result and "status" not in result:
                 self._send_json(result, 400)
             else:
@@ -1500,7 +1503,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ticket_id = m.group(1)
             flag = m.group(2)
             proj = _get_project()
-            if _toggle_readiness(proj["id"], ticket_id, flag):
+            if _toggle_readiness(proj, ticket_id, flag):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1512,7 +1515,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             ticket_id = m.group(1)
             proj = _get_project()
-            if _accept_ticket(proj["id"], ticket_id):
+            if _accept_ticket(proj, ticket_id):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
@@ -1533,7 +1536,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Missing 'title' field"}, 400)
                 return
 
-            result = _create_ticket(proj["id"], title, body)
+            result = _create_ticket(proj, title, body)
             if result:
                 self._send_json(result, 201)
             else:
@@ -1681,7 +1684,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         ticket_id = m.group(1)
         proj = _get_project()
-        if _delete_ticket(proj["id"], ticket_id):
+        if _delete_ticket(proj, ticket_id):
             self._send_json({"ok": True, "deleted": ticket_id})
         else:
             self._send_json({"error": "Ticket not found"}, 404)

@@ -15,8 +15,11 @@ import importlib.util
 import json
 import os
 import re
+import sqlite3
+import subprocess
 import sys
 import threading
+import urllib.request
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -66,6 +69,184 @@ SERVER_PORT = 8787
 _db_lock = threading.RLock()  # Reentrant — write functions call _get_ticket_json while holding lock
 
 
+# ---------------------------------------------------------------------------
+# Settings helpers
+# ---------------------------------------------------------------------------
+
+def _get_all_settings() -> dict:
+    """Read all settings as a dict."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        try:
+            rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        except Exception:
+            rows = []
+        conn.close()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def _set_settings(updates: dict) -> None:
+    """Upsert multiple settings."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        for k, v in updates.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (k, str(v)),
+            )
+        conn.commit()
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Feedbacks detection
+# ---------------------------------------------------------------------------
+
+_feedbacks_cache: dict = {"result": None, "expires": 0}
+
+
+def _detect_feedbacks() -> dict:
+    import time
+
+    now = time.time()
+    if _feedbacks_cache["result"] and now < _feedbacks_cache["expires"]:
+        return _feedbacks_cache["result"]
+
+    from constants import FEEDBACKS_DEFAULT_PORT, FEEDBACKS_REPO_URL, FEEDBACKS_DETECTION_CACHE_TTL
+
+    result = {
+        "available": False,
+        "running": False,
+        "installed": False,
+        "home": None,
+        "output_dir": None,
+        "install_url": FEEDBACKS_REPO_URL,
+    }
+
+    settings = _get_all_settings()
+    feedbacks_home = settings.get("feedbacks.home", "")
+
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{FEEDBACKS_DEFAULT_PORT}/config")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read())
+            result["running"] = True
+            result["available"] = True
+            result["installed"] = True
+            result["output_dir"] = data.get("outputDir")
+    except Exception:
+        pass
+
+    if feedbacks_home:
+        home_path = Path(os.path.expanduser(feedbacks_home))
+        if (home_path / "start.sh").exists():
+            result["installed"] = True
+            result["available"] = True
+            result["home"] = str(home_path)
+            if not result["output_dir"]:
+                sessions_dir = home_path / "sessions"
+                if sessions_dir.exists():
+                    result["output_dir"] = str(sessions_dir)
+
+    _feedbacks_cache["result"] = result
+    _feedbacks_cache["expires"] = now + FEEDBACKS_DETECTION_CACHE_TTL
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Attachment CRUD helpers
+# ---------------------------------------------------------------------------
+
+def _list_attachments(project_id: str, ticket_id: str) -> list:
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return []
+        tid = row["id"]
+        try:
+            rows = conn.execute(
+                "SELECT * FROM ticket_attachments WHERE ticket_id = ? AND project_id = ? ORDER BY created_at DESC",
+                (tid, project_id),
+            ).fetchall()
+        except Exception:
+            rows = []
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def _add_attachment(project_id, ticket_id, attachment_type, name, path="", summary="", metadata="{}"):
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return None
+        tid = row["id"]
+        try:
+            conn.execute(
+                "INSERT INTO ticket_attachments "
+                "(ticket_id, project_id, attachment_type, name, path, summary, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (tid, project_id, attachment_type, name, path, summary, metadata),
+            )
+            conn.commit()
+            att = conn.execute(
+                "SELECT * FROM ticket_attachments "
+                "WHERE ticket_id = ? AND project_id = ? AND name = ? AND attachment_type = ?",
+                (tid, project_id, name, attachment_type),
+            ).fetchone()
+            conn.close()
+            return dict(att) if att else None
+        except sqlite3.IntegrityError:
+            conn.close()
+            return None
+
+
+def _delete_attachment(project_id, ticket_id, attachment_id):
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        cur = conn.execute(
+            "DELETE FROM ticket_attachments WHERE id = ? AND project_id = ?",
+            (attachment_id, project_id),
+        )
+        conn.commit()
+        conn.close()
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Triage stub (full implementation in Phase 4)
+# ---------------------------------------------------------------------------
+
+def _run_triage(project_id, ticket_id, attachment_id):
+    """Stub — full implementation in Phase 4."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        try:
+            conn.execute(
+                "UPDATE ticket_attachments SET triage_status = 'done', triage_result = '[]' WHERE id = ?",
+                (attachment_id,),
+            )
+            conn.commit()
+        except Exception:
+            pass
+        conn.close()
+
+
 def _get_project() -> dict:
     """Get the target project dict from registry."""
     projects = cli.load_registry()
@@ -78,7 +259,7 @@ def _update_ticket_field(project_id: str, ticket_id: str, field: str, value) -> 
     """Update a single field on a ticket. Returns True on success."""
     ALLOWED_FIELDS = {
         "title", "priority", "complexity", "status", "description",
-        "parent", "commit_hash", "release_tag",
+        "parent", "commit_hash", "release_tag", "draft",
     }
     if field not in ALLOWED_FIELDS:
         return False
@@ -848,6 +1029,17 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         readiness_flags = {f["flag"]: f["content"] for f in flags}
     except Exception:
         readiness_flags = {}
+
+    # Attachment count
+    try:
+        att_count_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM ticket_attachments WHERE ticket_id = ? AND project_id = ?",
+            (row["id"], project_id),
+        ).fetchone()
+        attachment_count = att_count_row["cnt"] if att_count_row else 0
+    except Exception:
+        attachment_count = 0
+
     conn.close()
 
     # Build criteria text for clipboard prompts
@@ -865,10 +1057,12 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "parent": row["parent"],
         "commit_hash": row["commit_hash"] if "commit_hash" in row.keys() else "",
         "release_tag": row["release_tag"] if "release_tag" in row.keys() else "",
+        "draft": bool(row["draft"]) if "draft" in row.keys() else False,
         "acceptance_criteria": criteria_list,
         "criteria_text": criteria_text,
         "depends": [d["depends_on_id"] for d in deps],
         "readiness_flags": readiness_flags,
+        "attachment_count": attachment_count,
     }
 
 
@@ -972,10 +1166,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Ticket not found"}, 404)
             return
 
+        # Settings
+        if path == "/api/settings":
+            self._send_json(_get_all_settings())
+            return
+
+        # Feedbacks status
+        if path == "/api/feedbacks/status":
+            self._send_json(_detect_feedbacks())
+            return
+
+        # Ticket attachments list
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments$", path)
+        if m:
+            proj = _get_project()
+            atts = _list_attachments(proj["id"], m.group(1))
+            self._send_json(atts)
+            return
+
         self._send_json({"error": "Not found"}, 404)
 
     def do_PUT(self):
         path = urlparse(self.path).path
+
+        # Settings update
+        if path == "/api/settings":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            if not isinstance(body, dict):
+                self._send_json({"error": "Body must be a JSON object"}, 400)
+                return
+            _set_settings(body)
+            # Invalidate feedbacks cache on settings change
+            _feedbacks_cache["result"] = None
+            self._send_json({"ok": True})
+            return
 
         # Update readiness flag content
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", path)
@@ -1258,11 +1486,140 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Failed to create ticket"}, 400)
             return
 
+        # Add attachment to ticket
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments$", path)
+        if m:
+            ticket_id = m.group(1)
+            proj = _get_project()
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            att = _add_attachment(
+                proj["id"],
+                ticket_id,
+                attachment_type=body.get("attachment_type", "feedbacks"),
+                name=body.get("name", ""),
+                path=body.get("path", ""),
+                summary=body.get("summary", ""),
+                metadata=body.get("metadata", "{}"),
+            )
+            if att:
+                self._send_json(att, 201)
+            else:
+                self._send_json({"error": "Failed to add attachment"}, 400)
+            return
+
+        # Feedbacks callback — receive session, create attachment, start triage
+        if path == "/api/feedbacks/callback":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            ticket_id = body.get("ticket_id", "")
+            session_name = body.get("session_name", "")
+            session_path = body.get("session_path", "")
+            if not ticket_id or not session_name:
+                self._send_json({"error": "ticket_id and session_name required"}, 400)
+                return
+            proj = _get_project()
+            att = _add_attachment(
+                proj["id"],
+                ticket_id,
+                attachment_type="feedbacks",
+                name=session_name,
+                path=session_path,
+                summary=body.get("summary", ""),
+                metadata=json.dumps({k: v for k, v in body.items() if k not in ("ticket_id",)}),
+            )
+            if att:
+                att_id = att["id"]
+                t = threading.Thread(
+                    target=_run_triage,
+                    args=(proj["id"], ticket_id, att_id),
+                    daemon=True,
+                )
+                t.start()
+                self._send_json({"ok": True, "attachment_id": att_id})
+            else:
+                self._send_json({"error": "Failed to record session"}, 400)
+            return
+
+        # Record — returns URL to open feedbacks recorder for a ticket
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/record$", path)
+        if m:
+            ticket_id = m.group(1)
+            from constants import FEEDBACKS_DEFAULT_PORT
+            callback_url = f"http://localhost:{SERVER_PORT}/api/feedbacks/callback"
+            record_url = (
+                f"http://localhost:{FEEDBACKS_DEFAULT_PORT}/"
+                f"?ticket={ticket_id}&callback={callback_url}&mode=recorder"
+            )
+            self._send_json({"url": record_url})
+            return
+
+        # Start feedbacks server
+        if path == "/api/settings/feedbacks/start":
+            status = _detect_feedbacks()
+            home = status.get("home")
+            if not home:
+                self._send_json({"error": "feedbacks.home not configured or start.sh not found"}, 400)
+                return
+            start_sh = Path(home) / "start.sh"
+            try:
+                subprocess.Popen(
+                    ["bash", str(start_sh)],
+                    cwd=home,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                # Invalidate cache so next detection re-checks
+                _feedbacks_cache["result"] = None
+                self._send_json({"ok": True, "message": "feedbacks start.sh launched"})
+            except Exception as e:
+                self._send_json({"error": f"Failed to start feedbacks: {e}"}, 500)
+            return
+
+        # Install feedbacks via git clone
+        if path == "/api/settings/feedbacks/install":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            from constants import FEEDBACKS_REPO_URL
+            install_dir = body.get("install_dir", str(Path.home() / "projects" / "feedbacks"))
+            repo_url = body.get("repo_url", FEEDBACKS_REPO_URL)
+            try:
+                subprocess.Popen(
+                    ["git", "clone", repo_url, install_dir],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._send_json({"ok": True, "message": f"git clone started → {install_dir}"})
+            except Exception as e:
+                self._send_json({"error": f"Failed to clone feedbacks: {e}"}, 500)
+            return
+
         self._send_json({"error": "Not found"}, 404)
 
     def do_DELETE(self):
         path = urlparse(self.path).path
 
+        # Delete attachment
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments/(\d+)$", path)
+        if m:
+            ticket_id = m.group(1)
+            attachment_id = int(m.group(2))
+            proj = _get_project()
+            if _delete_attachment(proj["id"], ticket_id, attachment_id):
+                self._send_json({"ok": True, "deleted": attachment_id})
+            else:
+                self._send_json({"error": "Attachment not found"}, 404)
+            return
+
+        # Delete ticket
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
         if not m:
             self._send_json({"error": "Not found"}, 404)

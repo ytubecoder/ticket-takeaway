@@ -39,6 +39,10 @@ def install_system_files():
     # Core files
     copy_file(REPO_DIR / "src" / "tickets-cli.py", INSTALL_DIR / "tickets-cli.py", "CLI")
     copy_file(REPO_DIR / "src" / "generate.py", INSTALL_DIR / "generate.py", "Generator")
+    copy_file(REPO_DIR / "src" / "serve.py", INSTALL_DIR / "serve.py", "Server")
+    copy_file(REPO_DIR / "src" / "actions.py", INSTALL_DIR / "actions.py", "Actions")
+    copy_file(REPO_DIR / "src" / "constants.py", INSTALL_DIR / "constants.py", "Constants")
+    copy_file(REPO_DIR / "src" / "db.py", INSTALL_DIR / "db.py", "Database")
 
     # Dashboard copy (needs DASHBOARD_DIR path fix)
     dashboard_gen = DASHBOARD_DIR / "generate.py"

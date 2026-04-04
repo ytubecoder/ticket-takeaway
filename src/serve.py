@@ -1530,10 +1530,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 html = html_path.read_text(encoding="utf-8")
                 # Inject edit-api meta tag if not present
                 if '<meta name="edit-api"' not in html:
-                    # Only inject in <head>, not inside JS strings — replace first occurrence only
                     idx = html.find('<meta name="gen-ts"')
                     if idx != -1:
-                        html = html[:idx] + f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/{proj["id"]}/api">\n' + html[idx:]
+                        with _PROJECTS_CACHE_LOCK:
+                            proj_list = [{"id": p["id"], "name": p.get("name", p["id"])} for p in _PROJECTS_CACHE.values()]
+                        projects_json = json.dumps(proj_list)
+                        injection = (
+                            f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/{_safe_attr(proj["id"])}/api">\n'
+                            f'<meta name="current-project" content="{_safe_attr(proj["id"])}">\n'
+                            f"<meta name=\"projects-list\" content='{_safe_attr(projects_json)}'>\n"
+                        )
+                        html = html[:idx] + injection + html[idx:]
                 self._send_html(html)
             else:
                 self._send_json({"error": "Dashboard not generated yet. Run generate.py first."}, 404)

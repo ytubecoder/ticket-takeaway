@@ -4196,16 +4196,20 @@ a {{ color: var(--accent); text-decoration: none; }}
     fetch(EDIT_API + '/feedbacks/status')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
+        var enabled = enabledChk && enabledChk.checked;
         statusDot.className = 'settings-status-dot';
-        if (data.running) {{
-          statusDot.classList.add('ok');
-          statusDot.title = 'Feedbacks server running \u2014 ready to capture';
-        }} else if (data.installed) {{
-          statusDot.classList.add('warn');
-          statusDot.title = 'Feedbacks installed but server not running';
-        }} else {{
+        if (!data.installed) {{
           statusDot.classList.add('err');
           statusDot.title = 'Feedbacks not installed';
+        }} else if (!enabled) {{
+          statusDot.classList.add('err');
+          statusDot.title = 'Feedbacks disabled';
+        }} else if (data.running) {{
+          statusDot.classList.add('ok');
+          statusDot.title = 'Feedbacks server running \u2014 ready to capture';
+        }} else {{
+          statusDot.classList.add('warn');
+          statusDot.title = 'Feedbacks installed but server not running';
         }}
         // Enable toggle: disabled until installed
         if (enabledChk) {{
@@ -4227,6 +4231,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   if (enabledChk) {{
     enabledChk.addEventListener('change', function() {{
       saveSettings({{ 'feedbacks.enabled': enabledChk.checked }});
+      checkFeedbacksStatus();
     }});
   }}
 

@@ -2091,7 +2091,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                self._send_json({"ok": True, "message": f"git clone started → {install_dir}"})
+                # Save the install path to settings so detection finds it
+                _set_settings({"feedbacks.home": install_dir})
+                _feedbacks_cache["result"] = None
+                self._send_json({"ok": True, "message": f"git clone started → {install_dir}", "install_dir": install_dir})
             except Exception as e:
                 self._send_json({"error": f"Failed to clone feedbacks: {e}"}, 500)
             return

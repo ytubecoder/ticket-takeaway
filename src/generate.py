@@ -4200,7 +4200,7 @@ a {{ color: var(--accent); text-decoration: none; }}
           statusDot.classList.add('err');
           statusDot.title = 'Feedbacks not installed';
         }} else if (!data.enabled) {{
-          statusDot.classList.add('err');
+          // No color — just neutral dot
           statusDot.title = 'Feedbacks disabled';
         }} else if (data.running) {{
           statusDot.classList.add('ok');
@@ -4213,6 +4213,11 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (enabledChk) {{
           enabledChk.disabled = !data.installed;
           if (!data.installed) enabledChk.checked = false;
+        }}
+        // Path input: gray out when disabled
+        if (pathInput) {{
+          pathInput.disabled = !data.enabled;
+          pathInput.style.opacity = data.enabled ? '1' : '0.4';
         }}
         // Install button: "Re-install" if already installed
         if (installBtn) {{
@@ -4280,6 +4285,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       .then(function(data) {{
         installBtn.textContent = data.ok ? 'Installed \u2714' : 'Failed';
         installBtn.disabled = false;
+        if (data.install_dir && pathInput) pathInput.value = data.install_dir;
         checkFeedbacksStatus();
       }})
       .catch(function() {{

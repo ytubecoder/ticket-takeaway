@@ -116,3 +116,50 @@ class TestSettingsTable:
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('foo', 'baz')")
         row = conn.execute("SELECT value FROM settings WHERE key = 'foo'").fetchone()
         assert row["value"] == "baz"
+
+
+from actions import add_ticket, update_ticket
+
+
+class TestAddTicketDraft:
+    def test_add_ticket_default_not_draft(self, conn):
+        tid = add_ticket(conn, "test", "Normal ticket", section="Backlog")
+        row = conn.execute("SELECT draft FROM tickets WHERE id = ?", (tid,)).fetchone()
+        assert row["draft"] == 0
+
+    def test_add_ticket_with_draft_true(self, conn):
+        tid = add_ticket(conn, "test", "Draft ticket", section="Backlog", draft=True)
+        row = conn.execute("SELECT draft FROM tickets WHERE id = ?", (tid,)).fetchone()
+        assert row["draft"] == 1
+
+    def test_add_ticket_with_source_attachment_id(self, conn):
+        conn.execute("INSERT INTO tickets (id, project_id, title) VALUES ('P-01', 'test', 'Parent')")
+        conn.execute(
+            "INSERT INTO ticket_attachments (id, ticket_id, project_id, attachment_type, name) "
+            "VALUES (42, 'P-01', 'test', 'feedbacks_session', 'sess-1')"
+        )
+        tid = add_ticket(conn, "test", "From triage", section="Backlog", draft=True, source_attachment_id=42)
+        row = conn.execute("SELECT source_attachment_id FROM tickets WHERE id = ?", (tid,)).fetchone()
+        assert row["source_attachment_id"] == 42
+
+
+class TestConfirmTicket:
+    def test_confirm_draft_ticket(self, conn):
+        from actions import confirm_ticket
+        tid = add_ticket(conn, "test", "Draft", section="Backlog", draft=True)
+        assert conn.execute("SELECT draft FROM tickets WHERE id = ?", (tid,)).fetchone()["draft"] == 1
+        confirm_ticket(conn, "test", tid)
+        assert conn.execute("SELECT draft FROM tickets WHERE id = ?", (tid,)).fetchone()["draft"] == 0
+
+    def test_confirm_non_draft_is_noop(self, conn):
+        from actions import confirm_ticket
+        tid = add_ticket(conn, "test", "Normal", section="Backlog")
+        confirm_ticket(conn, "test", tid)
+        assert conn.execute("SELECT draft FROM tickets WHERE id = ?", (tid,)).fetchone()["draft"] == 0
+
+    def test_confirm_clears_source_attachment_id(self, conn):
+        from actions import confirm_ticket
+        tid = add_ticket(conn, "test", "From triage", section="Backlog", draft=True, source_attachment_id=99)
+        confirm_ticket(conn, "test", tid)
+        row = conn.execute("SELECT source_attachment_id FROM tickets WHERE id = ?", (tid,)).fetchone()
+        assert row["source_attachment_id"] is None

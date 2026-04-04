@@ -265,6 +265,8 @@ def add_ticket(
     complexity: str = "M",
     description: str = "",
     parent: Optional[str] = None,
+    draft: bool = False,
+    source_attachment_id: Optional[int] = None,
 ) -> str:
     """Add a new ticket.  Auto-generates the ID from *section* prefix.
 
@@ -276,10 +278,10 @@ def add_ticket(
 
     conn.execute(
         "INSERT INTO tickets (id, project_id, title, priority, complexity, status, "
-        "section, description, parent, sort_order) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "section, description, parent, sort_order, draft, source_attachment_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ticket_id, project_id, title, priority, complexity, status,
-         section, description, parent, sort_order),
+         section, description, parent, sort_order, int(draft), source_attachment_id),
     )
 
     return ticket_id
@@ -384,6 +386,18 @@ def update_ticket(
     if new_status != old_status:
         _after_status_change(conn, project_id, tid, old_status, new_status)
 
+    return tid
+
+
+def confirm_ticket(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> str:
+    """Confirm a draft ticket — sets draft=0 and clears source_attachment_id."""
+    ticket = _find_ticket(conn, project_id, ticket_id)
+    tid = ticket["id"]
+    conn.execute(
+        "UPDATE tickets SET draft = 0, source_attachment_id = NULL, updated_at = ? "
+        "WHERE id = ? AND project_id = ?",
+        (datetime.now().isoformat(), tid, project_id),
+    )
     return tid
 
 

@@ -1736,30 +1736,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
 # Background watcher for external markdown edits
 # ---------------------------------------------------------------------------
 
-def _start_external_edit_watcher(project: dict, interval: float = 5.0):
-    """Start a daemon thread that polls for external PRODUCT_BACKLOG.md edits.
-
-    Every *interval* seconds it computes the file hash and compares with the
-    stored hash in ``_sync_state``.  Only when the hash differs does it parse
-    the markdown and merge deltas — keeping the hot-path cheap.
-    """
+def _start_external_edit_watcher(interval: float = 5.0):
+    """Daemon thread polling for external PRODUCT_BACKLOG.md edits across all projects."""
     import time
 
     def _poll():
         while True:
             try:
                 time.sleep(interval)
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    changed = cli.detect_external_edits(conn, project)
-                    if changed:
-                        cli.regenerate_dashboard(project)
-                        print(f"[watcher] External edits absorbed for {project.get('id', '?')}")
-                    conn.close()
-            except Exception as exc:
-                # Don't crash the watcher on transient errors
-                print(f"[watcher] Error: {exc}")
+                with _PROJECTS_CACHE_LOCK:
+                    snapshot = list(_PROJECTS_CACHE.values())
+                for project in snapshot:
+                    try:
+                        with _db_lock:
+                            conn = get_db()
+                            init_db(conn)
+                            changed = cli.detect_external_edits(conn, project)
+                            if changed:
+                                cli.regenerate_dashboard(project)
+                                print(f"[watcher] External edits absorbed for {project.get('id', '?')}")
+                            conn.close()
+                    except Exception as exc:
+                        print(f"[watcher] Error for {project.get('id', '?')}: {exc}")
+            except Exception:
+                import traceback
+                traceback.print_exc()
 
     t = threading.Thread(target=_poll, daemon=True, name="md-edit-watcher")
     t.start()
@@ -1769,14 +1770,8 @@ def _start_external_edit_watcher(project: dict, interval: float = 5.0):
 # Main
 # ---------------------------------------------------------------------------
 
-def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
-    """Start a daemon thread that polls scheduled_events every *interval* seconds.
-
-    Picks up unfired events whose fire_at <= now, executes the action via
-    execute_scheduled_event(), marks them fired, and syncs markdown/dashboard.
-    Each event is wrapped in its own try/except so one bad event cannot kill
-    the poller.
-    """
+def _start_scheduled_event_poller(interval: float = 30.0):
+    """Daemon thread executing scheduled events across all projects."""
     import time
 
     def _poll():
@@ -1792,7 +1787,7 @@ def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
                         "ORDER BY fire_at ASC",
                         (now,),
                     ).fetchall()
-                    executed_any = False
+                    projects_to_sync = set()
                     for event in due:
                         try:
                             execute_scheduled_event(conn, event)
@@ -1800,19 +1795,23 @@ def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
                                 "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
                                 (event["id"],),
                             )
-                            executed_any = True
-                        except Exception as exc:
-                            # Mark as fired to avoid retry-looping on permanently broken events
+                            projects_to_sync.add(event["project_id"])
+                        except Exception:
                             conn.execute(
                                 "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
                                 (event["id"],),
                             )
                             import traceback
                             traceback.print_exc()
-                    if executed_any:
+                    if projects_to_sync:
                         conn.commit()
-                        cli.sync_to_markdown(conn, project)
-                        cli.regenerate_dashboard(project)
+                        with _PROJECTS_CACHE_LOCK:
+                            cache_snap = dict(_PROJECTS_CACHE)
+                        for pid in projects_to_sync:
+                            proj = cache_snap.get(pid)
+                            if proj:
+                                cli.sync_to_markdown(conn, proj)
+                                cli.regenerate_dashboard(proj)
                     conn.close()
             except Exception:
                 import traceback
@@ -1845,10 +1844,9 @@ def main():
     project_names = [p.get("name", p["id"]) for p in _PROJECTS_CACHE.values()]
     print(f"Serving {len(project_names)} project(s): {', '.join(project_names)}")
 
-    # Start background threads (pass first project for now — Task 5 will multi-project these)
-    first_proj = next(iter(_PROJECTS_CACHE.values()))
-    _start_external_edit_watcher(first_proj)
-    _start_scheduled_event_poller(first_proj)
+    # Start background threads — both iterate all active projects from _PROJECTS_CACHE
+    _start_external_edit_watcher()
+    _start_scheduled_event_poller()
 
     server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"

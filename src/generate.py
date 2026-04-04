@@ -4228,8 +4228,36 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   if (enabledChk) {{
     enabledChk.addEventListener('change', function() {{
-      saveSettings({{ 'feedbacks.enabled': enabledChk.checked ? 'true' : 'false' }})
-        .then(function() {{ checkFeedbacksStatus(); }});
+      var enabling = enabledChk.checked;
+      saveSettings({{ 'feedbacks.enabled': enabling ? 'true' : 'false' }})
+        .then(function() {{
+          if (enabling) {{
+            // Start the feedbacks server if not already running
+            statusDot.className = 'settings-status-dot warn';
+            statusDot.title = 'Starting feedbacks server\u2026';
+            return fetch(EDIT_API + '/settings/feedbacks/start', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: '{{}}'
+            }}).then(function() {{
+              // Poll until server is up (max 15s)
+              var attempts = 0;
+              function pollReady() {{
+                attempts++;
+                return fetch(EDIT_API + '/feedbacks/status')
+                  .then(function(r) {{ return r.json(); }})
+                  .then(function(d) {{
+                    if (d.running) return checkFeedbacksStatus();
+                    if (attempts < 15) return new Promise(function(ok) {{ setTimeout(ok, 1000); }}).then(pollReady);
+                    return checkFeedbacksStatus();
+                  }});
+              }}
+              return pollReady();
+            }}).catch(function() {{ checkFeedbacksStatus(); }});
+          }} else {{
+            return checkFeedbacksStatus();
+          }}
+        }});
     }});
   }}
 

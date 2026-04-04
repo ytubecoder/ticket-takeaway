@@ -4445,14 +4445,15 @@ a {{ color: var(--accent); text-decoration: none; }}
     recordBtn.addEventListener('click', function() {{
       var tid = recordBtn.dataset.ticketId;
       if (!tid) return;
-      fetch(EDIT_API + '/feedbacks/record', {{
+      fetch(EDIT_API + '/tickets/' + tid + '/record', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ ticket_id: tid }})
+        body: '{{}}'
       }})
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        if (data.ok) {{
+        if (data.url) {{
+          window.open(data.url, '_blank');
           recordBtn.textContent = 'Recording...';
           setTimeout(function() {{ recordBtn.textContent = 'Record'; }}, 3000);
         }} else {{

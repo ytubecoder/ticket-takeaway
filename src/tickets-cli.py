@@ -1112,6 +1112,95 @@ def cmd_sync(args):
 # Subcommand: watch
 # ---------------------------------------------------------------------------
 
+def cmd_register(args):
+    """Register a new project in the registry."""
+    import re as _re
+    _SLUG_RE = _re.compile(r'^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$')
+
+    pid = args.id
+    if not _SLUG_RE.match(pid):
+        print("Error: ID must be 2-40 chars, lowercase alphanumeric and hyphens", file=sys.stderr)
+        sys.exit(1)
+
+    path = os.path.realpath(os.path.expanduser(args.path))
+    if not os.path.isdir(path):
+        print(f"Error: Path does not exist: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    if REGISTRY_PATH.exists():
+        with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+            registry = json.load(f)
+    else:
+        registry = {"projects": []}
+
+    for p in registry["projects"]:
+        if p["id"] == pid:
+            print(f"Error: Project '{pid}' already exists in registry", file=sys.stderr)
+            sys.exit(1)
+
+    new_project = {
+        "id": pid,
+        "name": args.name or pid,
+        "path": path,
+        "description": args.description or "",
+        "active": True,
+    }
+    registry["projects"].append(new_project)
+
+    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+        json.dump(registry, f, indent=2)
+
+    conn = get_db()
+    init_db(conn)
+    conn.close()
+
+    print(f"Registered: {pid} → {path}")
+
+    backlog = Path(path) / "PRODUCT_BACKLOG.md"
+    if backlog.exists():
+        print(f"Found {backlog}. Run 'tickets-cli.py seed --project {pid}' to import existing tickets.")
+
+
+def cmd_unregister(args):
+    """Deactivate a project in the registry."""
+    if not REGISTRY_PATH.exists():
+        print("Registry not found.", file=sys.stderr)
+        sys.exit(1)
+
+    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+        registry = json.load(f)
+
+    found = False
+    for p in registry["projects"]:
+        if p["id"] == args.id:
+            p["active"] = False
+            found = True
+            break
+
+    if not found:
+        print(f"Project '{args.id}' not found in registry.", file=sys.stderr)
+        sys.exit(1)
+
+    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+        json.dump(registry, f, indent=2)
+
+    print(f"Deactivated: {args.id}")
+
+    if args.delete_tickets:
+        conn = get_db()
+        init_db(conn)
+        conn.execute("DELETE FROM acceptance_criteria WHERE project_id = ?", (args.id,))
+        conn.execute("DELETE FROM depends WHERE project_id = ?", (args.id,))
+        conn.execute("DELETE FROM readiness_flags WHERE project_id = ?", (args.id,))
+        conn.execute("DELETE FROM scheduled_events WHERE project_id = ?", (args.id,))
+        conn.execute("DELETE FROM tickets WHERE project_id = ?", (args.id,))
+        conn.execute("DELETE FROM _sync_state WHERE project_id = ?", (args.id,))
+        conn.commit()
+        conn.close()
+        print(f"Deleted all tickets for {args.id} from database.")
+
+
 def cmd_watch(args):
     """Watch PRODUCT_BACKLOG.md files for changes and auto-regenerate dashboard."""
     import time
@@ -1233,6 +1322,16 @@ def main():
     p_unflag.add_argument("ticket_id", help="Ticket ID")
     p_unflag.add_argument("flag", help="Flag name to clear")
 
+    p_reg = sub.add_parser("register", help="Register a new project")
+    p_reg.add_argument("--id", required=True, help="Project ID (lowercase, hyphens OK)")
+    p_reg.add_argument("--name", help="Display name (default: same as ID)")
+    p_reg.add_argument("--path", required=True, help="Path to project root")
+    p_reg.add_argument("--description", help="Project description")
+
+    p_unreg = sub.add_parser("unregister", help="Deactivate a project")
+    p_unreg.add_argument("id", help="Project ID to deactivate")
+    p_unreg.add_argument("--delete-tickets", action="store_true", help="Also delete tickets from DB (destructive)")
+
     args = parser.parse_args()
 
     commands = {
@@ -1246,6 +1345,8 @@ def main():
         "watch": cmd_watch,
         "flag": cmd_flag,
         "unflag": cmd_unflag,
+        "register": cmd_register,
+        "unregister": cmd_unregister,
     }
 
     commands[args.command](args)

@@ -100,6 +100,30 @@ Refactor ticket system from generated-HTML-with-scattered-logic to clean app arc
 - [ ] CLI commands still work identically
 - [ ] Dashboard renders correctly throughout
 
+### B-24: Draft ticket concept — boolean property, grayed rendering, confirm/reject
+Priority: high | Complexity: M | Status: for-review
+
+### B-25: Attachments data model — generic table, feedbacks sessions as first type
+Priority: high | Complexity: M | Status: for-review
+Generic ticket_attachments table in SQLite. Feedbacks sessions as first attachment_type. Metadata JSON blob for type-specific data (hero_image, duration, counts). Migration in db.py alongside draft column. Depends: B-24.
+
+### B-27: Settings panel — gear icon, drawer, feedbacks toggle/path/status
+Priority: medium | Complexity: M | Status: for-review
+
+### B-28: Feedbacks detection — probe server, check filesystem, cache status 30s
+Priority: medium | Complexity: M | Status: for-review
+
+### B-30: Feedbacks status indicator — green/gray dot, click-to-start server
+Priority: medium | Complexity: M | Status: for-review
+
+### B-26: Attachments UI — compact rows in ticket detail, player.html link, badge on cards
+Priority: high | Complexity: M | Status: for-review
+Compact rows in ticket detail overlay below DCSTL. Hero thumbnail, AI summary, metadata line. Click opens player.html in new tab. + Link button for picker. Attachment count badge on kanban cards. Depends: B-25, B-28.
+
+### B-29: Record flow — popup capture, callback endpoint, auto-attach to ticket
+Priority: high | Complexity: M | Status: for-review
+POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /api/feedbacks/callback receives session-complete. Auto-creates attachment. Depends: B-26, B-28, B-30, B-32 (feedbacks side).
+
 ## Backlog
 
 ### I-06: 3-line truncated description preview on collapsed cards
@@ -118,39 +142,15 @@ Priority: high | Complexity: M | Status: proposed
 Parent: B-17
 Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
 
-### B-24: Draft ticket concept — boolean property, grayed rendering, confirm/reject
-Priority: high | Complexity: M | Status: proposed
-
 ### B-21: Re-assess button — always visible with loading feedback
 Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
 
-### B-25: Attachments data model — generic table, feedbacks sessions as first type
-Priority: high | Complexity: M | Status: proposed
-Generic ticket_attachments table in SQLite. Feedbacks sessions as first attachment_type. Metadata JSON blob for type-specific data (hero_image, duration, counts). Migration in db.py alongside draft column. Depends: B-24.
-
 ### B-23: Editable AI suggestions before accepting
 Priority: medium | Complexity: M | Status: proposed
 Parent: B-17
 Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
-
-### B-26: Attachments UI — compact rows in ticket detail, player.html link, badge on cards
-Priority: high | Complexity: M | Status: proposed
-Compact rows in ticket detail overlay below DCSTL. Hero thumbnail, AI summary, metadata line. Click opens player.html in new tab. + Link button for picker. Attachment count badge on kanban cards. Depends: B-25, B-28.
-
-### B-27: Settings panel — gear icon, drawer, feedbacks toggle/path/status
-Priority: medium | Complexity: M | Status: proposed
-
-### B-28: Feedbacks detection — probe server, check filesystem, cache status 30s
-Priority: medium | Complexity: M | Status: proposed
-
-### B-29: Record flow — popup capture, callback endpoint, auto-attach to ticket
-Priority: high | Complexity: M | Status: proposed
-POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /api/feedbacks/callback receives session-complete. Auto-creates attachment. Depends: B-26, B-28, B-30, B-32 (feedbacks side).
-
-### B-30: Feedbacks status indicator — green/gray dot, click-to-start server
-Priority: medium | Complexity: M | Status: proposed
 
 ### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
 Priority: high | Complexity: M | Status: proposed

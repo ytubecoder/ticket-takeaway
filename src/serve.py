@@ -1115,6 +1115,193 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Project picker renderer
+# ---------------------------------------------------------------------------
+
+_SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$')
+
+
+def _validate_project_registration(body: dict) -> str | None:
+    """Validate project registration fields. Returns error string or None."""
+    pid = body.get("id", "")
+    if not _SLUG_RE.match(pid):
+        return "id must be 2-40 chars, lowercase alphanumeric and hyphens"
+    if pid in _RESERVED_IDS:
+        return f"'{pid}' is a reserved name and cannot be used as a project ID"
+    path = body.get("path", "")
+    if not path:
+        return "path is required"
+    resolved = Path(os.path.realpath(os.path.expanduser(path)))
+    if not resolved.is_dir():
+        return "path does not exist or is not a directory"
+    home = Path.home().resolve()
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        return "path must be within the user's home directory"
+    if resolved == home:
+        return "path cannot be the home directory itself"
+    claude_dir = (home / ".claude").resolve()
+    if resolved == claude_dir or str(resolved).startswith(str(claude_dir) + os.sep):
+        return "path cannot be inside ~/.claude"
+    with _PROJECTS_CACHE_LOCK:
+        if pid in _PROJECTS_CACHE:
+            return f"project '{pid}' already exists"
+    return None
+
+
+def _render_project_picker(port: int) -> str:
+    """Render the project picker page as self-contained HTML."""
+    conn = get_db()
+    init_db(conn)
+    counts_by_project = {}
+    rows = conn.execute(
+        "SELECT project_id, section, COUNT(*) as cnt FROM tickets GROUP BY project_id, section"
+    ).fetchall()
+    for r in rows:
+        pid = r["project_id"]
+        if pid not in counts_by_project:
+            counts_by_project[pid] = {}
+        counts_by_project[pid][r["section"]] = r["cnt"]
+    conn.close()
+
+    with _PROJECTS_CACHE_LOCK:
+        projects = list(_PROJECTS_CACHE.values())
+
+    cards_html = ""
+    for proj in projects:
+        pid = proj["id"]
+        name = _safe_attr(proj.get("name", pid))
+        raw_path = proj.get("path", "")
+        display_path = _safe_attr(raw_path.replace(str(Path.home()), "~"))
+        counts = counts_by_project.get(pid, {})
+        wip = counts.get("WIP", 0)
+        backlog = counts.get("Backlog", 0)
+        review = counts.get("For Review", 0)
+        path_exists = Path(os.path.expanduser(raw_path)).is_dir() if raw_path else False
+        opacity = "1" if path_exists else "0.5"
+
+        cards_html += f'''
+        <a href="/{_safe_attr(pid)}" class="proj-card" style="opacity:{opacity}" data-testid="proj-card-{_safe_attr(pid)}">
+          <div class="proj-card-name">{name}</div>
+          <div class="proj-card-path">{display_path}</div>
+          <div class="proj-card-counts">
+            <span class="count-wip">{wip} WIP</span>
+            <span class="count-backlog">{backlog} Backlog</span>
+            <span class="count-review">{review} Review</span>
+          </div>
+          {'' if path_exists else '<div class="proj-card-warn">Path not found</div>'}
+        </a>'''
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ticket Takeaway</title>
+<style>
+:root {{
+  --bg-page: #0a0a0b; --bg-surface: #141417; --bg-card: #1a1a1f; --bg-hover: #222228;
+  --border-subtle: #1e1e24; --border-default: #2a2a32; --text-primary: #ededef;
+  --text-secondary: #a0a0ab; --text-tertiary: #6b6b76; --accent: #3b82f6;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; }}
+.header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; padding-bottom: 16px; border-bottom: 1px solid var(--border-default); }}
+.header h1 {{ font-size: 20px; font-weight: 600; }}
+.header .count {{ color: var(--text-tertiary); font-size: 13px; }}
+.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; max-width: 900px; }}
+.proj-card {{ display: block; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 10px; padding: 20px; text-decoration: none; color: inherit; transition: border-color 0.15s, background 0.15s; }}
+.proj-card:hover {{ border-color: var(--accent); background: var(--bg-hover); }}
+.proj-card-name {{ font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }}
+.proj-card-path {{ font-size: 12px; color: var(--text-tertiary); font-family: monospace; margin-bottom: 12px; }}
+.proj-card-counts {{ display: flex; gap: 12px; font-size: 12px; }}
+.count-wip {{ color: #f59e0b; }} .count-backlog {{ color: #3b82f6; }} .count-review {{ color: #ec4899; }}
+.proj-card-warn {{ color: #ef4444; font-size: 11px; margin-top: 8px; }}
+.add-card {{ display: flex; align-items: center; justify-content: center; background: transparent; border: 2px dashed var(--border-default); border-radius: 10px; padding: 20px; min-height: 110px; cursor: pointer; transition: border-color 0.15s; color: var(--text-tertiary); }}
+.add-card:hover {{ border-color: var(--accent); }}
+.add-card-inner {{ text-align: center; }}
+.add-card-plus {{ font-size: 24px; color: var(--text-tertiary); }}
+.add-card-label {{ font-size: 13px; margin-top: 4px; }}
+.add-form {{ display: none; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 10px; padding: 20px; margin-top: 16px; max-width: 500px; }}
+.add-form.visible {{ display: block; }}
+.add-form label {{ display: block; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; margin-top: 14px; }}
+.add-form label:first-child {{ margin-top: 0; }}
+.add-form input {{ width: 100%; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; padding: 8px 12px; color: var(--text-primary); font-size: 14px; }}
+.add-form input:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
+.add-form .btn {{ display: inline-block; margin-top: 16px; padding: 8px 20px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: var(--accent); border-radius: 6px; cursor: pointer; font-size: 13px; }}
+.add-form .btn:hover {{ background: rgba(59,130,246,0.25); }}
+.add-form .error {{ color: #ef4444; font-size: 12px; margin-top: 8px; display: none; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Ticket Takeaway</h1>
+  <span class="count">{len(projects)} project{"s" if len(projects) != 1 else ""} registered</span>
+</div>
+<div class="grid">
+  {cards_html}
+  <div class="add-card" onclick="document.getElementById('add-form').classList.toggle('visible')" data-testid="add-project-card">
+    <div class="add-card-inner">
+      <div class="add-card-plus">+</div>
+      <div class="add-card-label">Add Project</div>
+    </div>
+  </div>
+</div>
+<form id="add-form" class="add-form" data-testid="add-project-form">
+  <label>Project Name</label>
+  <input name="name" placeholder="My Project" required data-testid="add-project-name">
+  <label>Project Path</label>
+  <input name="path" placeholder="~/projects/my-project" required data-testid="add-project-path">
+  <label>Project ID <span style="color:var(--text-tertiary)">(auto-generated from name)</span></label>
+  <input name="id" placeholder="my-project" data-testid="add-project-id">
+  <label>Description <span style="color:var(--text-tertiary)">(optional)</span></label>
+  <input name="description" placeholder="Brief description">
+  <button type="submit" class="btn">Add Project</button>
+  <div class="error" id="add-error"></div>
+</form>
+<script>
+(function() {{
+  var nameInput = document.querySelector('[name="name"]');
+  var idInput = document.querySelector('[name="id"]');
+  if (nameInput && idInput) {{
+    nameInput.addEventListener('input', function() {{
+      if (!idInput.dataset.manual) {{
+        idInput.value = nameInput.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      }}
+    }});
+    idInput.addEventListener('input', function() {{ idInput.dataset.manual = '1'; }});
+  }}
+  var form = document.getElementById('add-form');
+  var errorDiv = document.getElementById('add-error');
+  if (form) {{
+    form.addEventListener('submit', function(e) {{
+      e.preventDefault();
+      errorDiv.style.display = 'none';
+      var data = {{
+        id: form.elements.id.value || form.elements.name.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+        name: form.elements.name.value,
+        path: form.elements.path.value,
+        description: form.elements.description.value
+      }};
+      fetch('/api/projects', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(data)
+      }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+      .then(function(res) {{
+        if (res.ok) {{ window.location.href = '/' + res.data.id; }}
+        else {{ errorDiv.textContent = res.data.error || 'Failed'; errorDiv.style.display = 'block'; }}
+      }}).catch(function(err) {{ errorDiv.textContent = err.message; errorDiv.style.display = 'block'; }});
+    }});
+  }}
+}})();
+</script>
+</body>
+</html>'''
+
+
+# ---------------------------------------------------------------------------
 # HTTP Handler
 # ---------------------------------------------------------------------------
 
@@ -1177,16 +1364,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            # Root: project picker (placeholder for now)
+            # Root: project picker page
             if remainder == "/" or remainder == "":
+                html = _render_project_picker(SERVER_PORT)
+                self._send_html(html)
+                return
+
+            # GET /api/projects — list all projects with ticket counts
+            if remainder == "/api/projects":
                 with _PROJECTS_CACHE_LOCK:
-                    first = next(iter(_PROJECTS_CACHE.values()), None)
-                if first:
-                    self.send_response(302)
-                    self.send_header("Location", f"/{first['id']}")
-                    self.end_headers()
-                else:
-                    self._send_json({"error": "No projects registered"}, 404)
+                    projects_list = list(_PROJECTS_CACHE.values())
+                conn = get_db()
+                init_db(conn)
+                counts_rows = conn.execute(
+                    "SELECT project_id, section, COUNT(*) as cnt FROM tickets GROUP BY project_id, section"
+                ).fetchall()
+                conn.close()
+                counts_map = {}
+                for r in counts_rows:
+                    counts_map.setdefault(r["project_id"], {})[r["section"]] = r["cnt"]
+                result = []
+                for p in projects_list:
+                    c = counts_map.get(p["id"], {})
+                    result.append({
+                        "id": p["id"], "name": p.get("name", p["id"]),
+                        "path": p.get("path", ""), "description": p.get("description", ""),
+                        "active": p.get("active", True),
+                        "ticket_counts": {"wip": c.get("WIP", 0), "backlog": c.get("Backlog", 0), "review": c.get("For Review", 0)}
+                    })
+                self._send_json({"projects": result})
                 return
 
             self._send_json({"error": "Not found"}, 404)
@@ -1264,6 +1470,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes ───────────────────────────────────────────
         if proj is None:
+            m = re.match(r"^/api/projects/([a-z0-9][a-z0-9-]*[a-z0-9])$", remainder)
+            if m:
+                pid = m.group(1)
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                try:
+                    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+                        registry = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    self._send_json({"error": "Registry not found"}, 500)
+                    return
+                found = False
+                updated_entry = None
+                for entry in registry["projects"]:
+                    if entry["id"] == pid:
+                        for field in ("name", "path", "description", "active"):
+                            if field in body:
+                                entry[field] = body[field]
+                        found = True
+                        updated_entry = entry
+                        break
+                if not found:
+                    self._send_json({"error": "Project not found"}, 404)
+                    return
+                with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                    json.dump(registry, f, indent=2)
+                _refresh_projects_cache()
+                self._send_json(updated_entry)
+                return
+
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
                 self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
@@ -1425,6 +1664,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes ───────────────────────────────────────────
         if proj is None:
+            if remainder == "/api/projects":
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                error = _validate_project_registration(body)
+                if error:
+                    self._send_json({"error": error}, 400)
+                    return
+                new_project = {
+                    "id": body["id"],
+                    "name": body.get("name", body["id"]),
+                    "path": body["path"],
+                    "description": body.get("description", ""),
+                    "active": True,
+                }
+                try:
+                    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+                        registry = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    registry = {"projects": []}
+                registry["projects"].append(new_project)
+                with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                    json.dump(registry, f, indent=2)
+                _refresh_projects_cache()
+                conn = get_db()
+                init_db(conn)
+                conn.close()
+                self._send_json(new_project, 201)
+                return
+
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
                 self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
@@ -1698,6 +1969,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes ───────────────────────────────────────────
         if proj is None:
+            m = re.match(r"^/api/projects/([a-z0-9][a-z0-9-]*[a-z0-9])$", remainder)
+            if m:
+                pid = m.group(1)
+                try:
+                    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+                        registry = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    self._send_json({"error": "Registry not found"}, 500)
+                    return
+                found = False
+                for entry in registry["projects"]:
+                    if entry["id"] == pid:
+                        entry["active"] = False
+                        found = True
+                        break
+                if not found:
+                    self._send_json({"error": "Project not found"}, 404)
+                    return
+                with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                    json.dump(registry, f, indent=2)
+                _refresh_projects_cache()
+                self._send_json({"ok": True, "deactivated": pid})
+                return
+
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
                 self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")

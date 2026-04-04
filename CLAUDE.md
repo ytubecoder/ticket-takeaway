@@ -49,7 +49,7 @@ src/generate.py    — dashboard HTML renderer
 
 **Business rules:** Post-change hooks in `actions.py` fire after moves/status changes. Auto-promote parent when all children done. Scheduled events table + 30s poller for delayed rules (e.g., auto-accept after 5min).
 
-**`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
+**`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`, `register`, `unregister`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
 
 **`src/generate.py`** (~3000 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
 1. Reads `~/.claude/ticket-takeaway/registry.json` for project paths
@@ -84,6 +84,8 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 - **Keyboard shortcuts** — Ctrl+Enter saves textarea, Escape reverts without closing overlay.
 
 Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
+
+**Multi-project support:** serve.py handles multiple projects simultaneously via project-scoped URL routing (`/{project-id}/api/...`). Root `/` serves a project picker page. Each project page has a **project switcher dropdown** in the header (replaces the static project name span). The server injects `projects-list` and `current-project` meta tags for the JS switcher. Project settings available at `/{project-id}/settings`. Background threads (markdown watcher, scheduled events) iterate all registered projects. CLI commands `register`/`unregister` manage the project registry.
 
 **Progressive enhancement:** Same HTML works read-only via file://. Edit features only activate when `edit-api` meta tag present (injected by serve.py).
 

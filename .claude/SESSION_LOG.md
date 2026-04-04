@@ -1,5 +1,23 @@
 # Session Log
 
+## 2026-04-05 — Merge multi-project + feedbacks branches, deploy, fix switcher chevron
+
+### Summary
+- Merged `feat/feedbacks-integration` (9 commits) and `feature/multi-project-support` (9 commits) into main with conflict resolution
+- Resolved merge conflicts in `serve.py` (attachment DELETE route adapted to project-scoped routing) and `generate.py` (feedbacks scripts + project switcher scripts coexist)
+- Fixed project switcher chevron rendering as giant icon — SVG `className` doesn't work with `createElementNS`, must use `setAttribute('class', ...)`
+- Deployed to runtime, pushed to GitHub, cleaned up merged branches
+
+### Lessons Learned
+- **Gotcha:** After deploying new `generate.py`, must also regenerate the HTML (`generate.py --no-open`) — the server serves the pre-generated HTML file, not the template. Restarting the server alone doesn't help if the HTML was generated before the code change.
+- **Gotcha:** SVG elements created with `document.createElementNS()` don't support `.className` as a string property (it's an `SVGAnimatedString`). Must use `.setAttribute('class', ...)` instead. This caused the chevron CSS to never apply, rendering at default size.
+- **Gotcha:** Chrome aggressively caches localhost pages — users may need Ctrl+Shift+R after regenerating dashboard HTML. Firefox was unaffected.
+- **Accepted:** Rebasing feature branches onto main before merging keeps history clean but requires careful conflict resolution when two branches modify the same files (serve.py, generate.py).
+
+### Decisions
+- Merged both branches via rebase-then-merge-no-ff to keep linear commit history within each feature
+- Feedbacks attachment DELETE route adapted to use `remainder` (project-scoped path) instead of `path` (full URL) and `proj` from resolver instead of `_get_project()`
+
 ## 2026-04-04 — B-17 ticket screen AI cleanup + papercut fixes
 
 ### Summary

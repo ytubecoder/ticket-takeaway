@@ -172,7 +172,7 @@ def _detect_feedbacks() -> dict:
 
     settings = _get_all_settings()
     feedbacks_home = settings.get("feedbacks.home", "")
-    feedbacks_enabled = bool(settings.get("feedbacks.enabled", ""))
+    feedbacks_enabled = settings.get("feedbacks.enabled", "").lower() in ("true", "1", "yes")
 
     result = {
         "available": False,

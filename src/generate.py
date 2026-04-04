@@ -4177,14 +4177,14 @@ a {{ color: var(--accent); text-decoration: none; }}
     fetch(EDIT_API + '/settings')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        if (enabledChk) enabledChk.checked = !!(data['feedbacks.enabled']);
+        if (enabledChk) enabledChk.checked = (data['feedbacks.enabled'] === 'true' || data['feedbacks.enabled'] === 'True' || data['feedbacks.enabled'] === true);
         if (pathInput) pathInput.value = data['feedbacks.home'] || '';
       }})
       .catch(function() {{ /* settings endpoint may not exist yet */ }});
   }}
 
   function saveSettings(patch) {{
-    fetch(EDIT_API + '/settings', {{
+    return fetch(EDIT_API + '/settings', {{
       method: 'PUT',
       headers: {{ 'Content-Type': 'application/json' }},
       body: JSON.stringify(patch)
@@ -4230,8 +4230,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   if (enabledChk) {{
     enabledChk.addEventListener('change', function() {{
-      saveSettings({{ 'feedbacks.enabled': enabledChk.checked }});
-      checkFeedbacksStatus();
+      saveSettings({{ 'feedbacks.enabled': enabledChk.checked ? 'true' : 'false' }})
+        .then(function() {{ checkFeedbacksStatus(); }});
     }});
   }}
 

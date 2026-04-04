@@ -116,7 +116,7 @@ def _safe_attr(s: str) -> str:
 # Server state
 # ---------------------------------------------------------------------------
 
-SERVER_PROJECT_ID = None  # Set from --project arg or auto-detect
+_LEGACY_PROJECT_ID = None  # Set from --project arg for backward compat
 SERVER_PORT = 8787
 
 # Lock for DB operations (sqlite3 connections aren't thread-safe)
@@ -299,15 +299,6 @@ def _run_triage(project_id, ticket_id, attachment_id):
         except Exception:
             pass
         conn.close()
-
-
-def _get_project() -> dict:
-    """Get the target project dict from registry."""
-    projects = cli.load_registry()
-    if SERVER_PROJECT_ID:
-        return cli.find_project(projects, SERVER_PROJECT_ID)
-    return projects[0]
-
 
 def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
     """Update a single field on a ticket. Returns True on success."""
@@ -1175,10 +1166,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes (proj is None) ────────────────────────────
+        if proj is None:
+            # Legacy backward compat: --project flag redirects bare /api/ routes
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+
+            # Root: project picker (placeholder for now)
+            if remainder == "/" or remainder == "":
+                with _PROJECTS_CACHE_LOCK:
+                    first = next(iter(_PROJECTS_CACHE.values()), None)
+                if first:
+                    self.send_response(302)
+                    self.send_header("Location", f"/{first['id']}")
+                    self.end_headers()
+                else:
+                    self._send_json({"error": "No projects registered"}, 404)
+                return
+
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
 
         # Serve dashboard HTML
-        if path == "/" or path == "/index.html":
-            proj = _get_project()
+        if remainder == "/" or remainder == "/index.html":
             html_path = Path(os.path.expanduser(proj.get("path", ""))) / "docs" / "sdlc-dashboard.html"
             if html_path.exists():
                 html = html_path.read_text(encoding="utf-8")
@@ -1187,15 +1204,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # Only inject in <head>, not inside JS strings — replace first occurrence only
                     idx = html.find('<meta name="gen-ts"')
                     if idx != -1:
-                        html = html[:idx] + f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/api">\n' + html[idx:]
+                        html = html[:idx] + f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/{proj["id"]}/api">\n' + html[idx:]
                 self._send_html(html)
             else:
                 self._send_json({"error": "Dashboard not generated yet. Run generate.py first."}, 404)
             return
 
         # JSON tickets API
-        if path == "/api/tickets":
-            proj = _get_project()
+        if remainder == "/api/tickets":
             project_id = proj["id"]
             conn = get_db()
             init_db(conn)
@@ -1213,9 +1229,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Single ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", remainder)
         if m:
-            proj = _get_project()
             t = _get_ticket_json(proj["id"], m.group(1))
             if t:
                 self._send_json(t)
@@ -1245,6 +1260,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes ───────────────────────────────────────────
+        if proj is None:
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
 
         # Settings update
         if path == "/api/settings":
@@ -1263,11 +1291,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Update readiness flag content
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", remainder)
         if m:
             ticket_id = m.group(1)
             flag = m.group(2)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1283,13 +1310,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Update ticket fields
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", remainder)
         if not m:
             self._send_json({"error": "Not found"}, 404)
             return
 
         ticket_id = m.group(1)
-        proj = _get_project()
         project_id = proj["id"]
 
         try:
@@ -1309,8 +1335,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 with _db_lock:
                     conn = get_db()
                     init_db(conn)
-                    proj2 = _get_project()
-                    cli.ingest_markdown(conn, proj2)
+                    cli.ingest_markdown(conn, proj)
                     row = conn.execute(
                         "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
                         (ticket_id, project_id)
@@ -1326,8 +1351,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             (tid, project_id, text.strip(), sort_row["next_order"])
                         )
                         conn.commit()
-                        cli.sync_to_markdown(conn, proj2)
-                        cli.regenerate_dashboard(proj2)
+                        cli.sync_to_markdown(conn, proj)
+                        cli.regenerate_dashboard(proj)
                     conn.close()
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
@@ -1396,12 +1421,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes ───────────────────────────────────────────
+        if proj is None:
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
 
         # Move ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/move$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/move$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1421,10 +1458,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # AI-powered field enrichment with diff hunks
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/enrich$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/enrich$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1451,10 +1487,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Gate check before column move
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/gate-check$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/gate-check$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1474,11 +1509,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Per-category assessment
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/assess/([DCTRS])$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/assess/([DCTRS])$", remainder)
         if m:
             ticket_id = m.group(1)
             category = m.group(2)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1498,11 +1532,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Toggle readiness flag
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/readiness/([a-z]+)$", remainder)
         if m:
             ticket_id = m.group(1)
             flag = m.group(2)
-            proj = _get_project()
             if _toggle_readiness(proj, ticket_id, flag):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
@@ -1511,10 +1544,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Accept ticket (move to Done + append to PRODUCT_SPECIFICATION.md)
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/accept$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/accept$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             if _accept_ticket(proj, ticket_id):
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
@@ -1523,8 +1555,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Create ticket
-        if path == "/api/tickets":
-            proj = _get_project()
+        if remainder == "/api/tickets":
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1663,13 +1694,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        proj, remainder = _resolve_project_from_path(path)
+
+        # ── Global routes ───────────────────────────────────────────
+        if proj is None:
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+            self._send_json({"error": "Not found"}, 404)
+            return
+
+        # ── Project-scoped routes ────────────────────────────────────
 
         # Delete attachment
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments/(\d+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments/(\d+)$", remainder)
         if m:
             ticket_id = m.group(1)
             attachment_id = int(m.group(2))
-            proj = _get_project()
             if _delete_attachment(proj["id"], ticket_id, attachment_id):
                 self._send_json({"ok": True, "deleted": attachment_id})
             else:
@@ -1677,13 +1720,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Delete ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)$", remainder)
         if not m:
             self._send_json({"error": "Not found"}, 404)
             return
 
         ticket_id = m.group(1)
-        proj = _get_project()
         if _delete_ticket(proj, ticket_id):
             self._send_json({"ok": True, "deleted": ticket_id})
         else:
@@ -1781,7 +1823,7 @@ def _start_scheduled_event_poller(project: dict, interval: float = 30.0):
 
 
 def main():
-    global SERVER_PROJECT_ID, SERVER_PORT
+    global _LEGACY_PROJECT_ID, SERVER_PORT
 
     args = sys.argv[1:]
     if "--port" in args:
@@ -1791,31 +1833,22 @@ def main():
     if "--project" in args:
         idx = args.index("--project")
         if idx + 1 < len(args):
-            SERVER_PROJECT_ID = args[idx + 1]
+            _LEGACY_PROJECT_ID = args[idx + 1]
 
-    # Auto-detect project from cwd
-    if not SERVER_PROJECT_ID:
-        cwd = os.path.realpath(os.getcwd())
-        try:
-            for proj in cli.load_registry():
-                proj_path = os.path.realpath(os.path.expanduser(proj.get("path", "")))
-                if cwd == proj_path or cwd.startswith(proj_path + os.sep):
-                    SERVER_PROJECT_ID = proj["id"]
-                    break
-        except SystemExit:
-            pass
+    # Populate registry cache
+    _refresh_projects_cache()
 
-    # Regenerate dashboard before starting
-    try:
-        proj = _get_project()
-        print(f"Serving: {proj.get('name', proj.get('id', 'unknown'))}")
-    except (SystemExit, IndexError):
-        print("No project found. Run from a registered project directory or use --project ID.", file=sys.stderr)
+    if not _PROJECTS_CACHE:
+        print("No active projects in registry. Register a project first.", file=sys.stderr)
         sys.exit(1)
 
-    # Start background threads
-    _start_external_edit_watcher(proj)
-    _start_scheduled_event_poller(proj)
+    project_names = [p.get("name", p["id"]) for p in _PROJECTS_CACHE.values()]
+    print(f"Serving {len(project_names)} project(s): {', '.join(project_names)}")
+
+    # Start background threads (pass first project for now — Task 5 will multi-project these)
+    first_proj = next(iter(_PROJECTS_CACHE.values()))
+    _start_external_edit_watcher(first_proj)
+    _start_scheduled_event_poller(first_proj)
 
     server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"

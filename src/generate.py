@@ -1640,8 +1640,8 @@ a {{ color: var(--accent); text-decoration: none; }}
           <input type="checkbox" id="settingsFeedbacksEnabled">
           <span class="settings-toggle-slider"></span>
         </label>
-        <span class="settings-status-dot" id="feedbacksStatusDot" title="Feedbacks status"></span>
         <span class="settings-status-label" id="feedbacksStatusLabel"></span>
+        <span class="settings-status-dot" id="feedbacksStatusDot" title="Feedbacks status"></span>
       </div>
       <div class="settings-row">
         <label>Path</label>

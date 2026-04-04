@@ -58,6 +58,60 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
 from db import get_db, init_db
 from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
 
+import html as _html
+
+# Registry cache — populated at startup, refreshed on /api/projects mutations
+_PROJECTS_CACHE: dict[str, dict] = {}
+_PROJECTS_CACHE_LOCK = threading.Lock()
+
+# Global route prefixes that must never be captured as project IDs
+_GLOBAL_PREFIXES = frozenset({"api", "settings", "static", "health", "favicon.ico", "index.html", ""})
+
+# Reserved project IDs that cannot be registered
+_RESERVED_IDS = frozenset({"api", "settings", "static", "health", "favicon.ico", "index.html"})
+
+
+def _refresh_projects_cache() -> None:
+    """Reload registry.json into the module-level cache. Thread-safe."""
+    if not REGISTRY_PATH.exists():
+        return
+    try:
+        with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return
+    projects = {p["id"]: p for p in data.get("projects", []) if p.get("active", True)}
+    with _PROJECTS_CACHE_LOCK:
+        _PROJECTS_CACHE.clear()
+        _PROJECTS_CACHE.update(projects)
+
+
+def _resolve_project_from_path(path: str) -> tuple[dict | None, str]:
+    """Extract project from URL prefix. Returns (project_dict, remaining_path).
+
+    /goodform/api/tickets  →  (goodform_project, "/api/tickets")
+    /api/projects          →  (None, "/api/projects")
+    /settings              →  (None, "/settings")
+    /                      →  (None, "/")
+    """
+    parts = path.split("/", 2)  # ["", "segment", "rest..."]
+    if len(parts) >= 2:
+        candidate = parts[1]
+        if candidate in _GLOBAL_PREFIXES:
+            return None, path
+        with _PROJECTS_CACHE_LOCK:
+            proj = _PROJECTS_CACHE.get(candidate)
+        if proj is not None:
+            remainder = "/" + parts[2] if len(parts) > 2 else "/"
+            return proj, remainder
+    return None, path
+
+
+def _safe_attr(s: str) -> str:
+    """Escape string for HTML attribute context."""
+    return _html.escape(str(s), quote=True)
+
+
 # ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------

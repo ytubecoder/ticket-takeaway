@@ -116,17 +116,19 @@ def _detect_feedbacks() -> dict:
 
     from constants import FEEDBACKS_DEFAULT_PORT, FEEDBACKS_REPO_URL, FEEDBACKS_DETECTION_CACHE_TTL
 
+    settings = _get_all_settings()
+    feedbacks_home = settings.get("feedbacks.home", "")
+    feedbacks_enabled = bool(settings.get("feedbacks.enabled", ""))
+
     result = {
         "available": False,
         "running": False,
         "installed": False,
+        "enabled": feedbacks_enabled,
         "home": None,
         "output_dir": None,
         "install_url": FEEDBACKS_REPO_URL,
     }
-
-    settings = _get_all_settings()
-    feedbacks_home = settings.get("feedbacks.home", "")
 
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{FEEDBACKS_DEFAULT_PORT}/config")

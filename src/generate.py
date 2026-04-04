@@ -4152,8 +4152,8 @@ a {{ color: var(--accent); text-decoration: none; }}
     fetch(EDIT_API + '/settings')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        if (enabledChk) enabledChk.checked = !!(data.feedbacks_enabled);
-        if (pathInput) pathInput.value = data.feedbacks_path || '';
+        if (enabledChk) enabledChk.checked = !!(data['feedbacks.enabled']);
+        if (pathInput) pathInput.value = data['feedbacks.home'] || '';
       }})
       .catch(function() {{ /* settings endpoint may not exist yet */ }});
   }}
@@ -4191,13 +4191,13 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   if (enabledChk) {{
     enabledChk.addEventListener('change', function() {{
-      saveSettings({{ feedbacks_enabled: enabledChk.checked }});
+      saveSettings({{ 'feedbacks.enabled': enabledChk.checked }});
     }});
   }}
 
   if (pathInput) {{
     pathInput.addEventListener('blur', function() {{
-      saveSettings({{ feedbacks_path: pathInput.value }});
+      saveSettings({{ 'feedbacks.home': pathInput.value }});
     }});
   }}
 

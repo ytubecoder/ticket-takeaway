@@ -118,15 +118,46 @@ Priority: high | Complexity: M | Status: proposed
 Parent: B-17
 Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
 
+### B-24: Draft ticket concept — boolean property, grayed rendering, confirm/reject
+Priority: high | Complexity: M | Status: proposed
+
 ### B-21: Re-assess button — always visible with loading feedback
 Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
 
+### B-25: Attachments data model — generic table, feedbacks sessions as first type
+Priority: high | Complexity: M | Status: proposed
+Generic ticket_attachments table in SQLite. Feedbacks sessions as first attachment_type. Metadata JSON blob for type-specific data (hero_image, duration, counts). Migration in db.py alongside draft column. Depends: B-24.
+
 ### B-23: Editable AI suggestions before accepting
 Priority: medium | Complexity: M | Status: proposed
 Parent: B-17
 Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
+
+### B-26: Attachments UI — compact rows in ticket detail, player.html link, badge on cards
+Priority: high | Complexity: M | Status: proposed
+Compact rows in ticket detail overlay below DCSTL. Hero thumbnail, AI summary, metadata line. Click opens player.html in new tab. + Link button for picker. Attachment count badge on kanban cards. Depends: B-25, B-28.
+
+### B-27: Settings panel — gear icon, drawer, feedbacks toggle/path/status
+Priority: medium | Complexity: M | Status: proposed
+
+### B-28: Feedbacks detection — probe server, check filesystem, cache status 30s
+Priority: medium | Complexity: M | Status: proposed
+
+### B-29: Record flow — popup capture, callback endpoint, auto-attach to ticket
+Priority: high | Complexity: M | Status: proposed
+POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /api/feedbacks/callback receives session-complete. Auto-creates attachment. Depends: B-26, B-28, B-30, B-32 (feedbacks side).
+
+### B-30: Feedbacks status indicator — green/gray dot, click-to-start server
+Priority: medium | Complexity: M | Status: proposed
+
+### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
+Priority: high | Complexity: M | Status: proposed
+Auto-triggers when session attaches. Reads session.md + summary.json + ticket context. Claude CLI with structured prompt. Creates draft child tickets under parent. Re-triage button. 90s timeout. Depends: B-24, B-25, B-29.
+
+### B-32: Feedbacks integration brief — spec for feedbacks team (compact mode, callback, autostart)
+Priority: medium | Complexity: M | Status: proposed
 
 ## Ideas
 
@@ -184,6 +215,9 @@ This is just a test but the feature should be to add a text file called hello.tx
 ### I-16: MCP server for LLM tool integration
 Priority: medium | Complexity: M | Status: proposed
 
+### I-17: CLI draft test
+Priority: medium | Complexity: M | Status: proposed
+
 ## Bugs
 
 ## Icebox
@@ -220,8 +254,7 @@ Self-contained Python script that parses PRODUCT_BACKLOG.md + PRODUCT_SPECIFICAT
 
 ### B-03: Dashboard Skill Simplification
 Priority: medium | Complexity: S | Status: done
-Rationale: Original SKILL.md included HTML template details that are now in generate.py, causing unnecessary context bloat
-Simplify the SKILL.md now that generate.py handles HTML. The skill should focus on: when to run the script, how to edit PRODUCT_BACKLOG.md, and the status/add/accept/show commands.
+Rationale: Original SKILL.md included HTML template details that are now in generate.py, causing unnecessary context bloat Simplify the SKILL.md now that generate.py handles HTML. The skill should focus on: when to run the script, how to edit PRODUCT_BACKLOG.md, and the status/add/accept/show commands.
 - [ ] Remove HTML template details from SKILL.md
 - [ ] Keep only: mode detection, markdown editing rules, script invocation
 - [ ] Reduce skill file size for faster loading
@@ -396,9 +429,8 @@ Add inline editing to dashboard cards via a local HTTP server (stdlib http.serve
 
 ### B-16: Test Framework — Smoke, E2E Journey, TDD
 Priority: high | Complexity: L | Status: done
-Rationale: We need to define 3 types of tests that are "available" to tickets. It's likely that for the best process we want to use TDD first but it doesnt make sense in every case due to efficiency so sometimes we will 'take a shortcut' and go with e2e/smoke tests. There may also be more fuzzy acceptance criteria. I think by default we would want a bare minimum of testable human readable items that may then inspire more technical level unit/tdd type tests.
 Commit: 64aece0
-Three-category test framework: (1) Smoke tests — click everything, verify every UI element renders/responds/persists, organized per page (kanban, expanded card, detail overlay, gate panel). (2) E2E Journey tests — multi-step user workflows (ticket lifecycle, bug workflow, gate check, quick edit, external edit). (3) TDD tests — written before implementing complex new logic (business rules, status validation, compute_status_on_move). Smoke + E2E written against refactored actions.py API. Separate worktree recommended.
+Rationale: We need to define 3 types of tests that are "available" to tickets. It's likely that for the best process we want to use TDD first but it doesnt make sense in every case due to efficiency so sometimes we will 'take a shortcut' and go with e2e/smoke tests. There may also be more fuzzy acceptance criteria. I think by default we would want a bare minimum of testable human readable items that may then inspire more technical level unit/tdd type tests. Three-category test framework: (1) Smoke tests — click everything, verify every UI element renders/responds/persists, organized per page (kanban, expanded card, detail overlay, gate panel). (2) E2E Journey tests — multi-step user workflows (ticket lifecycle, bug workflow, gate check, quick edit, external edit). (3) TDD tests — written before implementing complex new logic (business rules, status validation, compute_status_on_move). Smoke + E2E written against refactored actions.py API. Separate worktree recommended.
 - [ ] Smoke tests: every API endpoint returns expected response
 - [ ] Smoke tests: every UI interactive element responds to click
 - [ ] E2E: ticket lifecycle journey (create → backlog → WIP → review → accept → Done)

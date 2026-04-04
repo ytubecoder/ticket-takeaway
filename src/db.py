@@ -135,3 +135,46 @@ def init_db(conn: sqlite3.Connection):
             pass  # Column already gone or never existed
         conn.execute("INSERT INTO _migrations (version) VALUES (2)")
         conn.commit()
+
+    # Migration 3: draft tickets, attachments, settings
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 3").fetchone():
+        try:
+            conn.execute("ALTER TABLE tickets ADD COLUMN draft INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE tickets ADD COLUMN source_attachment_id INTEGER DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ticket_attachments (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id       TEXT NOT NULL,
+                project_id      TEXT NOT NULL,
+                attachment_type TEXT NOT NULL,
+                name            TEXT NOT NULL,
+                path            TEXT NOT NULL DEFAULT '',
+                summary         TEXT NOT NULL DEFAULT '',
+                metadata        TEXT NOT NULL DEFAULT '{}',
+                triage_status   TEXT NOT NULL DEFAULT '',
+                triage_result   TEXT NOT NULL DEFAULT '',
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE,
+                UNIQUE(ticket_id, project_id, name, attachment_type)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_attachments_ticket
+                ON ticket_attachments(ticket_id, project_id)
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
+            )
+        """)
+
+        conn.execute("INSERT INTO _migrations (version) VALUES (3)")
+        conn.commit()

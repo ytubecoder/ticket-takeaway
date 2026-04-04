@@ -1577,19 +1577,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Settings
-        if path == "/api/settings":
+        if remainder == "/api/settings":
             self._send_json(_get_all_settings())
             return
 
         # Feedbacks status
-        if path == "/api/feedbacks/status":
+        if remainder == "/api/feedbacks/status":
             self._send_json(_detect_feedbacks())
             return
 
         # Ticket attachments list
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments$", remainder)
         if m:
-            proj = _get_project()
             atts = _list_attachments(proj["id"], m.group(1))
             self._send_json(atts)
             return
@@ -1646,7 +1645,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # ── Project-scoped routes ────────────────────────────────────
 
         # Settings update
-        if path == "/api/settings":
+        if remainder == "/api/settings":
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -1978,10 +1977,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Add attachment to ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments$", remainder)
         if m:
             ticket_id = m.group(1)
-            proj = _get_project()
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -2003,7 +2001,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Feedbacks callback — receive session, create attachment, start triage
-        if path == "/api/feedbacks/callback":
+        if remainder == "/api/feedbacks/callback":
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -2039,7 +2037,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Record — returns URL to open feedbacks recorder for a ticket
-        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/record$", path)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/record$", remainder)
         if m:
             ticket_id = m.group(1)
             from constants import FEEDBACKS_DEFAULT_PORT
@@ -2052,7 +2050,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Start feedbacks server
-        if path == "/api/settings/feedbacks/start":
+        if remainder == "/api/settings/feedbacks/start":
             status = _detect_feedbacks()
             home = status.get("home")
             if not home:
@@ -2074,7 +2072,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Install feedbacks via git clone
-        if path == "/api/settings/feedbacks/install":
+        if remainder == "/api/settings/feedbacks/install":
             try:
                 body = self._read_body()
             except (json.JSONDecodeError, ValueError):

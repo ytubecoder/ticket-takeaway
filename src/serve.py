@@ -1150,6 +1150,123 @@ def _validate_project_registration(body: dict) -> str | None:
     return None
 
 
+def _render_project_settings(proj: dict, port: int) -> str:
+    """Render the settings page for a single project."""
+    pid = _safe_attr(proj["id"])
+    name = _safe_attr(proj.get("name", proj["id"]))
+    path = _safe_attr(proj.get("path", ""))
+    description = _safe_attr(proj.get("description", ""))
+    active = proj.get("active", True)
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name} — Settings</title>
+<style>
+:root {{
+  --bg-page: #0a0a0b; --bg-surface: #141417; --bg-card: #1a1a1f; --bg-hover: #222228;
+  --border-subtle: #1e1e24; --border-default: #2a2a32; --text-primary: #ededef;
+  --text-secondary: #a0a0ab; --text-tertiary: #6b6b76; --accent: #3b82f6;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; max-width: 600px; }}
+.back {{ color: var(--text-tertiary); text-decoration: none; font-size: 13px; }}
+.back:hover {{ color: var(--text-secondary); }}
+h1 {{ font-size: 18px; font-weight: 600; margin: 16px 0 24px; }}
+label {{ display: block; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; margin-top: 20px; }}
+input, textarea {{ width: 100%; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; padding: 8px 12px; color: var(--text-primary); font-size: 14px; font-family: inherit; }}
+input:focus, textarea:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
+input[readonly] {{ background: var(--bg-page); color: var(--text-tertiary); border-color: var(--border-subtle); }}
+textarea {{ min-height: 60px; resize: vertical; }}
+.toggle-wrap {{ display: flex; align-items: center; gap: 10px; margin-top: 20px; }}
+.toggle {{ width: 36px; height: 20px; border-radius: 10px; cursor: pointer; position: relative; transition: background 0.15s; border: none; }}
+.toggle.on {{ background: #22c55e; }}
+.toggle.off {{ background: var(--border-default); }}
+.toggle::after {{ content: ''; position: absolute; width: 16px; height: 16px; background: white; border-radius: 50%; top: 2px; transition: left 0.15s; }}
+.toggle.on::after {{ left: 18px; }}
+.toggle.off::after {{ left: 2px; }}
+.btn {{ display: inline-block; margin-top: 24px; padding: 8px 20px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: var(--accent); border-radius: 6px; cursor: pointer; font-size: 13px; }}
+.btn:hover {{ background: rgba(59,130,246,0.25); }}
+.danger {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border-default); }}
+.danger h3 {{ color: #ef4444; font-size: 12px; font-weight: 600; margin-bottom: 12px; }}
+.danger .btn {{ background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: #ef4444; margin-top: 0; }}
+.danger .btn:hover {{ background: rgba(239,68,68,0.25); }}
+.danger p {{ color: var(--text-tertiary); font-size: 11px; margin-top: 6px; }}
+.msg {{ font-size: 12px; margin-top: 8px; display: none; }}
+.msg.ok {{ color: #22c55e; }}
+.msg.err {{ color: #ef4444; }}
+</style>
+</head>
+<body>
+<a href="/{pid}" class="back" data-testid="settings-back">&larr; Back to board</a>
+<h1>{name} Settings</h1>
+<form id="settings-form" data-testid="project-settings-form">
+  <label>Project Name</label>
+  <input name="name" value="{name}" data-testid="settings-name">
+  <label>Project Path</label>
+  <input name="path" value="{path}" style="font-family:monospace" data-testid="settings-path">
+  <label>Description</label>
+  <textarea name="description" data-testid="settings-description">{description}</textarea>
+  <label>Project ID <span style="color:var(--text-tertiary)">(read-only)</span></label>
+  <input name="id" value="{pid}" readonly data-testid="settings-id">
+  <div class="toggle-wrap">
+    <button type="button" class="toggle {'on' if active else 'off'}" id="active-toggle" data-testid="settings-active-toggle"></button>
+    <span style="font-size:13px">Active</span>
+  </div>
+  <button type="submit" class="btn" data-testid="settings-save">Save Changes</button>
+  <div class="msg" id="save-msg"></div>
+</form>
+<div class="danger">
+  <h3>Danger Zone</h3>
+  <button class="btn" id="remove-btn" data-testid="settings-remove">Remove Project</button>
+  <p>Removes from registry only. Does not delete files, tickets, or database entries.</p>
+</div>
+<script>
+(function() {{
+  var activeOn = {'true' if active else 'false'};
+  var toggle = document.getElementById('active-toggle');
+  toggle.addEventListener('click', function() {{
+    activeOn = !activeOn;
+    toggle.className = 'toggle ' + (activeOn ? 'on' : 'off');
+  }});
+  var form = document.getElementById('settings-form');
+  var msg = document.getElementById('save-msg');
+  form.addEventListener('submit', function(e) {{
+    e.preventDefault();
+    msg.style.display = 'none';
+    fetch('/api/projects/{pid}', {{
+      method: 'PUT',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{
+        name: form.elements.name.value,
+        path: form.elements.path.value,
+        description: form.elements.description.value,
+        active: activeOn
+      }})
+    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+    .then(function(res) {{
+      if (res.ok) {{ msg.textContent = 'Saved!'; msg.className = 'msg ok'; }}
+      else {{ msg.textContent = res.data.error || 'Failed'; msg.className = 'msg err'; }}
+      msg.style.display = 'block';
+    }});
+  }});
+  document.getElementById('remove-btn').addEventListener('click', function() {{
+    if (!confirm('Remove this project from the registry? Tickets and files will not be deleted.')) return;
+    fetch('/api/projects/{pid}', {{ method: 'DELETE' }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (data.ok) window.location.href = '/';
+      else alert(data.error || 'Failed to remove');
+    }});
+  }});
+}})();
+</script>
+</body>
+</html>'''
+
+
 def _render_project_picker(port: int) -> str:
     """Render the project picker page as self-contained HTML."""
     conn = get_db()
@@ -1399,6 +1516,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # ── Project-scoped routes ────────────────────────────────────
+
+        # Project settings page
+        if remainder == "/settings":
+            html = _render_project_settings(proj, SERVER_PORT)
+            self._send_html(html)
+            return
 
         # Serve dashboard HTML
         if remainder == "/" or remainder == "/index.html":

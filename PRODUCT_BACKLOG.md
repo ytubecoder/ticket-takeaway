@@ -124,6 +124,10 @@ Compact rows in ticket detail overlay below DCSTL. Hero thumbnail, AI summary, m
 Priority: high | Complexity: M | Status: for-review
 POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /api/feedbacks/callback receives session-complete. Auto-creates attachment. Depends: B-26, B-28, B-30, B-32 (feedbacks side).
 
+### B-32: Feedbacks integration brief — spec for feedbacks team (compact mode, callback, autostart)
+Priority: medium | Complexity: M | Status: for-review
+Spec for feedbacks team: compact recorder widget (?mode=recorder), callback on session complete, auto-close popup. See docs/superpowers/specs/2026-04-05-feedbacks-recorder-widget.md
+
 ## Backlog
 
 ### I-06: 3-line truncated description preview on collapsed cards
@@ -155,9 +159,6 @@ Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion
 ### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
 Priority: high | Complexity: M | Status: proposed
 Auto-triggers when session attaches. Reads session.md + summary.json + ticket context. Claude CLI with structured prompt. Creates draft child tickets under parent. Re-triage button. 90s timeout. Depends: B-24, B-25, B-29.
-
-### B-32: Feedbacks integration brief — spec for feedbacks team (compact mode, callback, autostart)
-Priority: medium | Complexity: M | Status: proposed
 
 ## Ideas
 

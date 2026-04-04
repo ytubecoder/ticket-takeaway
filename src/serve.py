@@ -206,8 +206,13 @@ def _detect_feedbacks() -> dict:
                 if sessions_dir.exists():
                     result["output_dir"] = str(sessions_dir)
 
-    _feedbacks_cache["result"] = result
-    _feedbacks_cache["expires"] = now + FEEDBACKS_DETECTION_CACHE_TTL
+    # Only cache positive running state; when not running, re-check each time
+    # so polling during startup gets a fresh answer
+    if result["running"]:
+        _feedbacks_cache["result"] = result
+        _feedbacks_cache["expires"] = now + FEEDBACKS_DETECTION_CACHE_TTL
+    else:
+        _feedbacks_cache["result"] = None
     return result
 
 

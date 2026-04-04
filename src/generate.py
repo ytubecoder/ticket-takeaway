@@ -1458,6 +1458,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 }}
 .settings-toggle-switch input:checked + .settings-toggle-slider {{ background: var(--accent); }}
 .settings-toggle-switch input:checked + .settings-toggle-slider::before {{ transform: translateX(14px); }}
+.settings-toggle-switch input:disabled + .settings-toggle-slider {{ opacity: 0.35; cursor: not-allowed; }}
 .settings-install-btn {{
   font-size: 11px; padding: 5px 14px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--accent); background: rgba(59,130,246,0.1);
@@ -4174,7 +4175,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         statusDot.className = 'settings-status-dot';
         if (data.running) {{
           statusDot.classList.add('ok');
-          statusDot.title = 'Feedbacks server running — ready to capture';
+          statusDot.title = 'Feedbacks server running \u2014 ready to capture';
         }} else if (data.installed) {{
           statusDot.classList.add('warn');
           statusDot.title = 'Feedbacks installed but server not running';
@@ -4182,10 +4183,20 @@ a {{ color: var(--accent); text-decoration: none; }}
           statusDot.classList.add('err');
           statusDot.title = 'Feedbacks not installed';
         }}
+        // Enable toggle: disabled until installed
+        if (enabledChk) {{
+          enabledChk.disabled = !data.installed;
+          if (!data.installed) enabledChk.checked = false;
+        }}
+        // Install button: "Re-install" if already installed
+        if (installBtn) {{
+          installBtn.textContent = data.installed ? 'Re-install' : 'Install';
+        }}
       }})
       .catch(function() {{
         statusDot.className = 'settings-status-dot err';
         statusDot.title = 'Could not check feedbacks status';
+        if (enabledChk) enabledChk.disabled = true;
       }});
   }}
 

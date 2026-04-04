@@ -5,15 +5,17 @@
 **To:** feedbacks team (provider)
 **Status:** Proposed
 
-## Problem
+## Context
 
-Ticket-takeaway opens the feedbacks app via URL (`http://localhost:8080/?ticket=B-24&callback=...&mode=recorder`) when a user clicks "Record" on a ticket. Currently this lands on the full feedbacks home page with no awareness of the URL params beyond `?ticket=`. The user has to manually navigate to start recording, and there's no way to return control to ticket-takeaway when done.
+Ticket-takeaway has a "Record" button on each ticket that opens the feedbacks app via URL (`http://localhost:8080/?ticket=B-24&mode=recorder`). The goal is a smooth record-and-return flow: user clicks Record, captures feedback, and the session automatically links back to the ticket.
+
+**We handle session detection on our side** — ticket-takeaway watches the output directory for new session folders and reads `meta.json` when it appears. No callback or webhook is needed from feedbacks. This brief only covers what we need from the feedbacks UI.
 
 ## What We Need
 
 ### 1. Compact Recorder Widget (`?mode=recorder`)
 
-When feedbacks opens with `?mode=recorder`, show a minimal popup-style UI instead of the full app. This is meant to be opened in a small window or popup from another app.
+When feedbacks opens with `?mode=recorder`, show a minimal popup-style UI instead of the full app. This is meant to be opened in a small popup window from another app.
 
 **Controls needed:**
 - **Start** button — begins screen capture + transcription
@@ -26,96 +28,84 @@ When feedbacks opens with `?mode=recorder`, show a minimal popup-style UI instea
 - Auto-starts recording on load (no extra click needed) OR shows a single "Start Recording" button — your call on UX
 - Window should be small/compact (think ~300x200px content area)
 - No navigation, no session list, no settings — just the recording controls
+- Uses the same capture + transcription path as the full app (no new backend work)
 
-### 2. Callback on Session Complete (`?callback=URL`)
+### 2. Auto-Close on Save
 
-When a recording session is saved, POST the session metadata to the callback URL.
+After the session is saved:
+- If opened as a popup (`window.opener` exists): close the window automatically
+- If opened as a tab: show a brief "Session saved" message, then close after 2-3 seconds (or let the user close manually)
 
-**POST payload:**
-```json
-{
-  "ticket_id": "B-24",
-  "session_name": "feedbacks-B-24-20260405-143022",
-  "session_path": "/home/user/projects/feedbacks/sessions/feedbacks-B-24-20260405-143022",
-  "summary": "User pointed at the settings drawer and noted the status dot doesn't update",
-  "image_count": 5,
-  "duration": "1m 23s",
-  "stt_count": 3
-}
-```
-
-**Timing:** Fire the callback after the session is fully saved (files written, summary generated if applicable). Don't wait for AI summary if it takes too long — send what's available immediately and optionally send a second callback when summary is ready.
-
-**Error handling:** If the callback URL is unreachable, save the session normally anyway. Don't block the user. Log the failure to console.
-
-### 3. Return to Referrer (`?referrer=URL` or auto-close)
-
-After the session is saved and callback fired:
-- If opened as a popup (`window.opener` exists): close the window
-- If opened as a tab: redirect to `?referrer` URL if provided, otherwise show a "Session saved, you can close this tab" message
-
-### 4. Output Directory from URL (`?output_dir=PATH`)
-
-Currently `FEEDBACKS_OUTPUT_DIR` is set via environment variable at server start. For per-ticket recording, we need to set it per-session:
-
-- If `?ticket=X` is provided and `FEEDBACKS_OUTPUT_DIR` is set, save to `{FEEDBACKS_OUTPUT_DIR}/feedbacks-{ticket}-{timestamp}/`
-- This already partially works (ticket ID is in the folder name). Just confirm it respects `FEEDBACKS_OUTPUT_DIR` for the base path.
+That's it. No callback POST, no redirect URL, no new API endpoints.
 
 ## What We Don't Need
 
-- No changes to the existing full-app UI — `?mode=recorder` is additive
-- No changes to the MCP server
-- No changes to whisper integration (recorder widget uses the same transcription path)
-- No authentication — this is all localhost
+- **No callback/webhook** — we detect new sessions by watching the output directory for new `meta.json` files
+- **No new API endpoints** — existing `/save`, `/config`, `/sessions` are sufficient
+- **No changes to the full-app UI** — `?mode=recorder` is additive
+- **No changes to the MCP server**
+- **No changes to whisper integration**
+- **No changes to session save format** — current `meta.json` structure is perfect
+- **No authentication** — this is all localhost
+
+## How We Detect Sessions (Our Side, FYI)
+
+You don't need to do anything for this — just documenting so you know how it works:
+
+1. User clicks "Record" on ticket B-24 in ticket-takeaway
+2. We snapshot the current contents of your output directory
+3. Feedbacks opens in a popup with `?ticket=B-24&mode=recorder`
+4. User records and clicks Stop — feedbacks saves as normal
+5. We poll the output directory every 2-3s for new subdirectories
+6. New directory appears → we check for `meta.json` inside it
+7. `meta.json` exists → session is complete (we verified this is the last file written in `_handle_save`)
+8. We read `meta.json`, match `ticketId` to the ticket, create an attachment record
+
+This relies on the existing save behavior where `meta.json` is written after all other files. If that write order ever changes, let us know.
 
 ## Existing Integration Points (Already Working)
-
-These are already implemented and working — no changes needed:
 
 | Feature | Status |
 |---------|--------|
 | `?ticket=X` pre-fills ticket ID | Working |
-| Session folder includes ticket ID | Working |
-| `GET /config` returns output dir | Working |
-| `GET /sessions` lists all sessions | Working |
-| `POST /save` saves session data | Working |
-| Live push events via `/live-push` | Working |
-| MCP tools for session access | Working |
+| Session folder named `feedbacks-{ticket}-{timestamp}` | Working |
+| `meta.json` includes `ticketId` field | Working |
+| `meta.json` written last in save sequence | Working |
+| `GET /config` returns output directory | Working |
+| `FEEDBACKS_OUTPUT_DIR` env var respected | Working |
 
 ## Integration Flow (End-to-End)
 
 ```
 ticket-takeaway                          feedbacks
      |                                       |
-     |  1. User clicks "Record" on ticket    |
+     |  1. User clicks "Record" on B-24     |
+     |  2. Snapshot output dir contents      |
+     |  3. Open popup:                       |
+     |     ?ticket=B-24&mode=recorder        |
      |                                       |
-     |  2. Opens popup:                      |
-     |     ?ticket=B-24                      |
-     |     &mode=recorder                    |
-     |     &callback=http://localhost:8787/  |
-     |      ticket-takeaway/api/feedbacks/   |
-     |      callback                         |
+     |                          4. Compact recorder UI loads
+     |                          5. User records session
+     |                          6. User clicks Stop
+     |                          7. Session saves to disk
+     |                             (meta.json written last)
+     |                          8. Popup auto-closes
      |                                       |
-     |                          3. Compact recorder UI loads
-     |                          4. User records session
-     |                          5. User clicks Stop
-     |                          6. Session saves to disk
-     |                                       |
-     |  7. POST callback with metadata  <----|
-     |                                       |
-     |  8. ticket-takeaway creates           |
-     |     attachment record in DB      9. Popup closes
-     |                                       |
-     |  10. Attachments list refreshes       |
-     |      showing the new session          |
+     |  9. File watcher detects new dir      |
+     | 10. Reads meta.json, matches ticket   |
+     | 11. Creates attachment in DB           |
+     | 12. Attachments list refreshes        |
 ```
 
-## Priority
+## Summary of Ask
 
-This is the last piece needed for the record flow (B-29) to work end-to-end. Everything else on the ticket-takeaway side is built and waiting. The recorder widget is the gating dependency.
+| Item | Effort | Priority |
+|------|--------|----------|
+| `?mode=recorder` compact UI | Medium | Required |
+| Auto-close popup on save | Small | Required |
+| (Everything else) | Zero | We handle it |
 
-## Questions for Feedbacks Team
+## Questions
 
 1. **Auto-start vs manual start** — Should the recorder auto-start capture when opened in `?mode=recorder`, or show a Start button? Auto-start is smoother but might surprise users.
-2. **Summary timing** — Do you want to generate the AI summary synchronously before firing the callback, or fire immediately with basic metadata and send a second callback when summary is ready?
-3. **Window sizing** — Any constraints on minimum window size for the capture overlay to work? We'll open it as `window.open(url, '_blank', 'width=350,height=250')`.
+2. **Window sizing** — Any constraints on minimum window size for the screen capture overlay to work? We'll open it as `window.open(url, '_blank', 'width=350,height=250')`.

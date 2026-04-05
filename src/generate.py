@@ -1586,6 +1586,14 @@ a {{ color: var(--accent); text-decoration: none; }}
 .attachment-meta {{
   font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono);
 }}
+.attachment-placeholder {{
+  animation: att-pulse 1.5s ease-in-out infinite;
+}}
+.attachment-placeholder .att-pulse-dot {{
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  animation: att-pulse 1.5s ease-in-out infinite; flex-shrink: 0;
+}}
+@keyframes att-pulse {{ 0%,100% {{ opacity: 0.4; }} 50% {{ opacity: 1; }} }}
 .attachment-actions {{
   display: flex; gap: 4px; flex-shrink: 0;
 }}
@@ -4492,20 +4500,27 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   function loadAttachments(ticketId) {{
     if (!attachmentsList) return;
-    // Clear
-    while (attachmentsList.firstChild) attachmentsList.removeChild(attachmentsList.firstChild);
+    // Preserve placeholder if present
+    var placeholder = attachmentsList.querySelector('.attachment-placeholder');
+    // Clear non-placeholder children
+    Array.from(attachmentsList.children).forEach(function(ch) {{
+      if (!ch.classList.contains('attachment-placeholder')) ch.remove();
+    }});
 
     fetch(EDIT_API + '/tickets/' + ticketId + '/attachments')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
         var items = data.attachments || data || [];
         if (!Array.isArray(items) || items.length === 0) {{
+          if (placeholder) return; // Keep showing placeholder, don't show "empty"
           var empty = document.createElement('div');
           empty.className = 'attachments-empty';
           empty.textContent = 'No attachments yet.';
           attachmentsList.appendChild(empty);
           return;
         }}
+        // Real attachments arrived — remove placeholder
+        if (placeholder) placeholder.remove();
         items.forEach(function(att) {{
           var row = document.createElement('div');
           row.className = 'attachment-row';
@@ -4644,15 +4659,73 @@ a {{ color: var(--accent); text-decoration: none; }}
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
         if (data.url) {{
-          window.open(data.url, '_blank', 'width=550,height=420');
+          var popup = window.open(data.url, '_blank', 'width=550,height=420');
           recordBtn.textContent = 'Recording...';
-          setTimeout(function() {{ recordBtn.textContent = 'Record'; }}, 3000);
+          recordBtn.disabled = true;
+
+          // Add placeholder row to attachments list
+          var placeholder = _createRecordingPlaceholder('Recording in progress\u2026');
+          if (attachmentsList) {{
+            // Remove "No attachments yet." if present
+            var empty = attachmentsList.querySelector('.attachments-empty');
+            if (empty) empty.remove();
+            attachmentsList.insertBefore(placeholder, attachmentsList.firstChild);
+          }}
+
+          // Poll for popup close, then switch to "processing" state
+          var prevCount = attachmentsList ? attachmentsList.querySelectorAll('.attachment-row:not(.attachment-placeholder)').length : 0;
+          var pollId = setInterval(function() {{
+            if (popup && !popup.closed) return;
+            // Popup closed — switch to processing state
+            clearInterval(pollId);
+            recordBtn.textContent = 'Record';
+            recordBtn.disabled = false;
+            var label = placeholder.querySelector('.attachment-summary');
+            if (label) label.textContent = 'Processing session\u2026';
+
+            // Poll for real attachment to appear
+            var attempts = 0;
+            var attPollId = setInterval(function() {{
+              attempts++;
+              if (attempts > 20) {{ // 60s safety timeout
+                clearInterval(attPollId);
+                if (placeholder.parentNode) placeholder.remove();
+                return;
+              }}
+              loadAttachments(tid);
+              // loadAttachments clears all children including placeholder
+              // so if it ran, placeholder is gone — stop polling
+              setTimeout(function() {{
+                if (!placeholder.parentNode) clearInterval(attPollId);
+              }}, 500);
+            }}, 3000);
+          }}, 500);
         }} else {{
           showAppToast(data.error || 'Failed to start recording', 'error');
         }}
       }})
       .catch(function() {{ showAppToast('Failed to start recording', 'error'); }});
     }});
+  }}
+
+  function _createRecordingPlaceholder(text) {{
+    var row = document.createElement('div');
+    row.className = 'attachment-row attachment-placeholder';
+    var dot = document.createElement('span');
+    dot.className = 'att-pulse-dot';
+    row.appendChild(dot);
+    var info = document.createElement('div');
+    info.className = 'attachment-info';
+    var summary = document.createElement('div');
+    summary.className = 'attachment-summary';
+    summary.textContent = text;
+    info.appendChild(summary);
+    var meta = document.createElement('div');
+    meta.className = 'attachment-meta';
+    meta.textContent = 'Just now';
+    info.appendChild(meta);
+    row.appendChild(info);
+    return row;
   }}
 
   // Link button click — link latest session

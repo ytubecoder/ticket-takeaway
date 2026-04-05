@@ -1235,23 +1235,6 @@ a {{ color: var(--accent); text-decoration: none; }}
 }}
 .new-ticket-submit:hover {{ background: #2563eb; }}
 .new-ticket-submit:disabled {{ opacity: 0.5; cursor: not-allowed; }}
-.new-ticket-expand-btn {{
-  display: inline-flex; align-items: center; gap: 4px; margin-top: 8px;
-  font-size: 10px; padding: 2px 0; border: none; background: none;
-  color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans);
-  transition: color 0.15s;
-}}
-.new-ticket-expand-btn:hover {{ color: var(--text-secondary); }}
-.new-ticket-expand-btn .arrow {{ display: inline-block; transition: transform 0.15s; font-size: 8px; }}
-.new-ticket-expand-btn.expanded .arrow {{ transform: rotate(90deg); }}
-.new-ticket-full {{
-  margin-top: 10px; padding: 20px; border-radius: 8px;
-  background: var(--bg-card); border: 1px solid var(--border-default);
-}}
-.coming-soon {{
-  color: var(--text-tertiary); font-size: 13px; text-align: center;
-  padding: 24px 0; font-style: italic;
-}}
 
 /* Inline editing (edit mode) */
 .edit-enabled .card-title {{ cursor: text; }}
@@ -1617,10 +1600,6 @@ a {{ color: var(--accent); text-decoration: none; }}
         <option value="bugs">Bug</option>
       </select>
       <button id="newTicketSubmit" class="new-ticket-submit">Create</button>
-    </div>
-    <button class="new-ticket-expand-btn" id="newTicketExpandBtn"><span class="arrow">&#9654;</span> Full ticket form</button>
-    <div class="new-ticket-full" id="newTicketFull" style="display:none">
-      <div class="coming-soon">Coming soon</div>
     </div>
   </div>
 </div>
@@ -2797,8 +2776,6 @@ a {{ color: var(--accent); text-decoration: none; }}
       var newTitle = document.getElementById('newTicketTitle');
       var newSection = document.getElementById('newTicketSection');
       var newSubmit = document.getElementById('newTicketSubmit');
-      var expandBtn = document.getElementById('newTicketExpandBtn');
-      var fullPanel = document.getElementById('newTicketFull');
 
       if (newBtn) {{
         newBtn.addEventListener('click', function() {{
@@ -2827,14 +2804,6 @@ a {{ color: var(--accent); text-decoration: none; }}
       if (newTitle) newTitle.addEventListener('keydown', function(e) {{
         if (e.key === 'Enter') {{ e.preventDefault(); submitNewTicket(); }}
       }});
-
-      if (expandBtn) {{
-        expandBtn.addEventListener('click', function() {{
-          var open = fullPanel.style.display !== 'none';
-          fullPanel.style.display = open ? 'none' : 'block';
-          expandBtn.classList.toggle('expanded', !open);
-        }});
-      }}
     }}
 
     // Open button — works in both server mode and file:// mode

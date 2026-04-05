@@ -684,6 +684,7 @@ def generate_html(project: Project) -> str:
   --status-idea-bg: rgba(124,58,237,0.08);
 }}
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
 body {{ background: var(--bg-page); color: var(--text-primary); font-family: var(--font-sans); font-size: 13px; line-height: 1.4; }}
 a {{ color: var(--accent); text-decoration: none; }}
 
@@ -827,8 +828,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 .column-body {{
   padding: 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 6px;
 }}
-.column-body::-webkit-scrollbar {{ width: 4px; }}
-.column-body::-webkit-scrollbar-thumb {{ background: var(--border-default); border-radius: 2px; }}
+.column-body::-webkit-scrollbar, .detail-body::-webkit-scrollbar, .bottom-section-body::-webkit-scrollbar {{ width: 4px; }}
+.column-body::-webkit-scrollbar-thumb, .detail-body::-webkit-scrollbar-thumb, .bottom-section-body::-webkit-scrollbar-thumb {{ background: var(--border-default); border-radius: 2px; }}
 
 /* Cards */
 .card {{
@@ -1615,6 +1616,13 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 8px; font-weight: 700; min-width: 14px; height: 14px; padding: 0 3px;
   border-radius: 7px; background: rgba(59,130,246,0.15); color: var(--accent);
   margin-left: 3px; font-family: var(--font-mono);
+}}
+@media (prefers-reduced-motion: reduce) {{
+  *, *::before, *::after {{
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }}
 }}
 </style>
 </head>

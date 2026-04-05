@@ -20,7 +20,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 from constants import (SECTION_ORDER, SECTION_SLUGS, SLUG_TO_SECTION,
-                       DEFAULT_STATUS_BY_SECTION, CARD_CLASS_BY_SLUG, STATUSES)
+                       DEFAULT_STATUS_BY_SECTION, CARD_CLASS_BY_SLUG, STATUSES, FEEDBACKS_REPO_URL)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1648,7 +1648,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         <input type="text" id="settingsFeedbacksPath" placeholder="~/projects/feedbacks">
       </div>
       <div class="settings-row">
-        <a class="settings-link" href="https://github.com/ytubecoder/feedbacks" target="_blank" rel="noopener">GitHub</a>
+        <a class="settings-link" href="{FEEDBACKS_REPO_URL}" target="_blank" rel="noopener">GitHub</a>
         <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
       </div>
     </div>

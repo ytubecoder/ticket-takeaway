@@ -126,6 +126,6 @@ def compute_status_on_move(current_status: str, target_section: str) -> str:
 # ---------------------------------------------------------------------------
 
 FEEDBACKS_DEFAULT_PORT = 8080
-FEEDBACKS_REPO_URL = "https://github.com/user/feedbacks"
+FEEDBACKS_REPO_URL = "https://github.com/ytubecoder/feedbacks"
 FEEDBACKS_TRIAGE_TIMEOUT = 90  # seconds
 FEEDBACKS_DETECTION_CACHE_TTL = 30  # seconds

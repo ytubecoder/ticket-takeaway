@@ -105,7 +105,7 @@ ticket-takeaway                          feedbacks
 | Auto-close popup on save | Small | Required |
 | (Everything else) | Zero | We handle it |
 
-## Questions
+## Decisions
 
-1. **Auto-start vs manual start** — Should the recorder auto-start capture when opened in `?mode=recorder`, or show a Start button? Auto-start is smoother but might surprise users.
-2. **Window sizing** — Any constraints on minimum window size for the screen capture overlay to work? We'll open it as `window.open(url, '_blank', 'width=350,height=250')`.
+1. **Manual start with opt-in auto-start** — First open shows a "Start Recording" button. Include a "Start automatically next time" checkbox. If checked, persist the preference (localStorage is fine) and auto-start on future opens.
+2. **Window size** — `window.open(url, '_blank', 'width=440,height=310')`. Design the compact UI to fit comfortably in that space.

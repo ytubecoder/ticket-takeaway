@@ -4453,7 +4453,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
         if (data.url) {{
-          window.open(data.url, '_blank');
+          window.open(data.url, '_blank', 'width=440,height=310');
           recordBtn.textContent = 'Recording...';
           setTimeout(function() {{ recordBtn.textContent = 'Record'; }}, 3000);
         }} else {{

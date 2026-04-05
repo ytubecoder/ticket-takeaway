@@ -591,7 +591,7 @@ def generate_html(project: Project) -> str:
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
 
     html = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -599,11 +599,20 @@ def generate_html(project: Project) -> str:
 <meta name="schema-version" content="2">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%233b82f6'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='3' y='2' width='26' height='28' rx='4' fill='url(%23g)'/%3E%3Ccircle cx='3' cy='12' r='3.5' fill='%230a0a0b'/%3E%3Ccircle cx='29' cy='12' r='3.5' fill='%230a0a0b'/%3E%3Cline x1='6.5' y1='12' x2='25.5' y2='12' stroke='%230a0a0b' stroke-width='1' stroke-dasharray='2.5 2'/%3E%3Crect x='8' y='5' width='11' height='2.5' rx='1.2' fill='%23ffffffcc'/%3E%3Crect x='8' y='16' width='16' height='1.5' rx='.7' fill='%23ffffff55'/%3E%3Crect x='8' y='19.5' width='12' height='1.5' rx='.7' fill='%23ffffff33'/%3E%3Crect x='8' y='23' width='14' height='1.5' rx='.7' fill='%23ffffff22'/%3E%3C/svg%3E">
 <title>Ticket Takeaway — {escape(project_short)}</title>
+<script>
+(function(){{
+  var s=localStorage.getItem('tt-theme');
+  if(s==='light')document.documentElement.setAttribute('data-theme','light');
+  else if(s==='dark')document.documentElement.setAttribute('data-theme','dark');
+  else document.documentElement.setAttribute('data-theme',
+    window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');
+}})();
+</script>
 <style>
-:root {{
-  --bg-page: #0a0a0b; --bg-surface: #141417; --bg-card: #1a1a1f; --bg-hover: #222228;
-  --border-subtle: #1e1e24; --border-default: #2a2a32; --border-strong: #3a3a44;
-  --text-primary: #ededef; --text-secondary: #a0a0ab; --text-tertiary: #6b6b76;
+:root, [data-theme="dark"] {{
+  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
+  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
+  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
   --accent: #3b82f6;
   --status-backlog: #6b7280; --status-wip: #3b82f6; --status-review: #f59e0b;
   --status-done: #22c55e; --status-idea: #8b5cf6; --status-wontdo: #4b5563;
@@ -613,6 +622,19 @@ def generate_html(project: Project) -> str:
   --status-done-bg: #22c55e15; --status-idea-bg: #8b5cf615;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+}}
+[data-theme="light"] {{
+  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
+  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
+  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
+  --accent: #2563eb;
+  --status-backlog: #6b7280; --status-wip: #2563eb; --status-review: #d97706;
+  --status-done: #059669; --status-idea: #7c3aed; --status-wontdo: #4b5563;
+  --status-icebox: #6b7280; --status-icebox-bg: rgba(107,114,128,0.08);
+  --priority-high: #dc2626; --priority-medium: #d97706; --priority-low: #2563eb;
+  --status-backlog-bg: rgba(107,114,128,0.08); --status-wip-bg: rgba(37,99,235,0.08);
+  --status-review-bg: rgba(217,119,6,0.08); --status-done-bg: rgba(5,150,105,0.08);
+  --status-idea-bg: rgba(124,58,237,0.08);
 }}
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{ background: var(--bg-page); color: var(--text-primary); font-family: var(--font-sans); font-size: 13px; line-height: 1.4; }}
@@ -1427,6 +1449,10 @@ a {{ color: var(--accent); text-decoration: none; }}
 }}
 .settings-drawer-close:hover {{ color: var(--text-primary); }}
 .settings-drawer-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
+.theme-toggle {{ display: inline-flex; gap: 2px; background: var(--bg-page); border: 1px solid var(--border-default); border-radius: 6px; padding: 2px; }}
+.theme-opt {{ font-size: 14px; padding: 3px 10px; border: none; border-radius: 4px; background: none; color: var(--text-tertiary); cursor: pointer; transition: all 0.15s; font-family: var(--font-sans); }}
+.theme-opt:hover {{ color: var(--text-secondary); }}
+.theme-opt.active {{ background: var(--bg-hover); color: var(--text-primary); }}
 .settings-section {{ margin-bottom: 20px; }}
 .settings-section-title {{
   font-size: 11px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase;
@@ -1611,6 +1637,17 @@ a {{ color: var(--accent); text-decoration: none; }}
     <button class="settings-drawer-close" id="settingsDrawerClose">&times;</button>
   </div>
   <div class="settings-drawer-body">
+    <div class="settings-section">
+      <div class="settings-section-title">Appearance</div>
+      <div class="settings-row">
+        <label>Theme</label>
+        <div class="theme-toggle" id="themeToggle">
+          <button class="theme-opt" data-theme="light" title="Light" aria-label="Light theme">&#9788;</button>
+          <button class="theme-opt" data-theme="system" title="System" aria-label="System theme">&#9684;</button>
+          <button class="theme-opt active" data-theme="dark" title="Dark" aria-label="Dark theme">&#9790;</button>
+        </div>
+      </div>
+    </div>
     <div class="settings-section">
       <div class="settings-section-title">Feedbacks Integration</div>
       <div class="settings-row">
@@ -4103,6 +4140,28 @@ a {{ color: var(--accent); text-decoration: none; }}
 (function() {{
   var editApiMeta = document.querySelector('meta[name="edit-api"]');
   var EDIT_API = editApiMeta ? editApiMeta.content : null;
+
+  // Theme toggle (works without edit-api)
+  var themeToggle = document.getElementById('themeToggle');
+  if (themeToggle) {{
+    var currentTheme = localStorage.getItem('tt-theme') || 'system';
+    themeToggle.querySelectorAll('.theme-opt').forEach(function(btn) {{
+      if (btn.dataset.theme === currentTheme) btn.classList.add('active');
+      else btn.classList.remove('active');
+      btn.addEventListener('click', function() {{
+        themeToggle.querySelectorAll('.theme-opt').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        var choice = btn.dataset.theme;
+        localStorage.setItem('tt-theme', choice);
+        var resolved = choice;
+        if (choice === 'system') {{
+          resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }}
+        document.documentElement.setAttribute('data-theme', resolved);
+      }});
+    }});
+  }}
+
   if (!EDIT_API) return;
 
   var toggleBtn = document.getElementById('settingsToggleBtn');

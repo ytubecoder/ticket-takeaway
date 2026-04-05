@@ -157,3 +157,117 @@ def test_dctrs_dots_visible_in_detail(page_no_js_errors):
     # Also check card-level dots as fallback
     card_dots = page.query_selector_all(".readiness-dot[data-flag]")
     assert len(detail_dots) > 0 or len(card_dots) > 0, "No DCTRS dots found"
+
+
+# ---------------------------------------------------------------------------
+# Settings drawer
+# ---------------------------------------------------------------------------
+
+
+def test_settings_drawer_opens(page_no_js_errors):
+    """Gear icon opens the settings drawer."""
+    page = page_no_js_errors
+    gear = page.query_selector("#settingsToggleBtn")
+    if gear is None:
+        pytest.skip("Settings gear button not present (edit features not injected)")
+    # Use JS click to avoid event propagation issues with click-outside handler
+    page.evaluate("document.getElementById('settingsToggleBtn').click()")
+    page.wait_for_timeout(500)
+
+    drawer = page.query_selector("#settings-drawer")
+    assert drawer is not None
+    cls = drawer.get_attribute("class") or ""
+    assert "hidden" not in cls, f"Drawer did not open, class='{cls}'"
+
+    # Check feedbacks toggle exists
+    toggle = page.query_selector("#settingsFeedbacksEnabled")
+    assert toggle is not None, "Feedbacks enable toggle not found"
+
+    # Check status dot exists
+    dot = page.query_selector("#feedbacksStatusDot")
+    assert dot is not None, "Status dot not found"
+
+    # Check status label exists
+    label = page.query_selector("#feedbacksStatusLabel")
+    assert label is not None, "Status label not found"
+
+
+# ---------------------------------------------------------------------------
+# Attachments section in detail overlay
+# ---------------------------------------------------------------------------
+
+
+def test_attachments_section_renders(page_no_js_errors):
+    """Attachments section appears in the detail overlay."""
+    page = page_no_js_errors
+    tid = page.evaluate(
+        "document.querySelector('.card[data-item-id]').dataset.itemId"
+    )
+    page.evaluate(f"window.openDetailOverlay('{tid}')")
+    page.wait_for_timeout(500)
+
+    att_list = page.query_selector("#attachments-list")
+    assert att_list is not None, "Attachments list container not found"
+
+
+def test_record_button_visible_when_feedbacks_enabled(page_no_js_errors):
+    """Record button appears in detail overlay when feedbacks is enabled."""
+    page = page_no_js_errors
+    tid = page.evaluate(
+        "document.querySelector('.card[data-item-id]').dataset.itemId"
+    )
+    page.evaluate(f"window.openDetailOverlay('{tid}')")
+    page.wait_for_timeout(500)
+
+    record_btn = page.query_selector("#record-feedback-btn")
+    assert record_btn is not None, "Record button not found in DOM"
+
+
+def test_attachment_row_has_play_button(page_no_js_errors):
+    """If a ticket has an attachment, the row has a play button."""
+    page = page_no_js_errors
+
+    # Use I-10 which has a real attachment
+    has_i10 = page.evaluate(
+        "!!document.querySelector('.card[data-item-id=\"I-10\"]')"
+    )
+    if not has_i10:
+        pytest.skip("Ticket I-10 not on dashboard")
+
+    page.evaluate("window.openDetailOverlay('I-10')")
+    page.wait_for_timeout(500)
+
+    # Wait for attachments to load
+    page.wait_for_timeout(500)
+
+    rows = page.query_selector_all("#attachments-list .attachment-row")
+    if len(rows) == 0:
+        pytest.skip("No attachments on I-10")
+
+    # Check first row has play button
+    # Play button uses class "attachment-action-btn" with text "Play"
+    play_btn = rows[0].query_selector(".attachment-action-btn")
+    assert play_btn is not None, "Attachment row missing action button"
+    assert play_btn.text_content().strip() == "Play", "First action button should be Play"
+
+
+def test_attachment_thumbnail_loads(page_no_js_errors):
+    """If a ticket has an attachment, the thumbnail image loads."""
+    page = page_no_js_errors
+
+    has_i10 = page.evaluate(
+        "!!document.querySelector('.card[data-item-id=\"I-10\"]')"
+    )
+    if not has_i10:
+        pytest.skip("Ticket I-10 not on dashboard")
+
+    page.evaluate("window.openDetailOverlay('I-10')")
+    page.wait_for_timeout(1000)
+
+    thumbs = page.query_selector_all("#attachments-list .attachment-thumb img")
+    if len(thumbs) == 0:
+        pytest.skip("No thumbnail images found")
+
+    # Check that the image src points to feedbacks server
+    src = thumbs[0].get_attribute("src") or ""
+    assert "localhost:8080" in src, f"Thumbnail src doesn't point to feedbacks: {src}"

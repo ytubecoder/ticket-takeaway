@@ -75,7 +75,7 @@ def dashboard_server():
     )
     port = _free_port()
     proc = subprocess.Popen(
-        [sys.executable, SERVE_PY, "--port", str(port)],
+        [sys.executable, SERVE_PY, "--port", str(port), "--project", "ticket-takeaway"],
         cwd=os.path.join(os.path.dirname(__file__), ".."),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -92,6 +92,8 @@ def dashboard_server():
     else:
         proc.kill()
         raise RuntimeError(f"Dashboard server failed to start on port {port}")
+    # Multi-project routing prefixes all API paths with /{project-id}
+    base_url = f"{base_url}/ticket-takeaway"
     yield base_url
     proc.kill()
     proc.wait()

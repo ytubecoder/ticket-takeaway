@@ -240,7 +240,15 @@ def _list_attachments(project_id: str, ticket_id: str) -> list:
         except Exception:
             rows = []
         conn.close()
-    return [dict(r) for r in rows]
+    result = [dict(r) for r in rows]
+    # Enrich feedbacks attachments with player/thumbnail URLs
+    from constants import FEEDBACKS_DEFAULT_PORT
+    for att in result:
+        if att.get("attachment_type") == "feedbacks" and att.get("name"):
+            base = f"http://localhost:{FEEDBACKS_DEFAULT_PORT}/sessions/{att['name']}"
+            att["player_url"] = f"{base}/player.html"
+            att["thumbnail_url"] = f"{base}/images/001.png"
+    return result
 
 
 def _add_attachment(project_id, ticket_id, attachment_type, name, path="", summary="", metadata="{}"):

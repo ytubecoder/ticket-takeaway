@@ -174,3 +174,110 @@ def test_delete_ticket(dashboard_server):
 
     status_code, data = api_delete(dashboard_server, f"/api/tickets/{tid}")
     assert status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Settings endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_get_settings(dashboard_server):
+    """GET /api/settings returns 200 with a JSON object."""
+    data = api_get(dashboard_server, "/api/settings")
+    assert isinstance(data, dict)
+
+
+def test_put_settings(dashboard_server):
+    """PUT /api/settings upserts a setting and returns ok."""
+    status_code, data = api_put(
+        dashboard_server, "/api/settings", {"test.key": "test-value"}
+    )
+    assert status_code == 200
+    assert data.get("ok") is True
+
+    # Verify it was saved
+    settings = api_get(dashboard_server, "/api/settings")
+    assert settings.get("test.key") == "test-value"
+
+    # Cleanup
+    api_put(dashboard_server, "/api/settings", {"test.key": ""})
+
+
+# ---------------------------------------------------------------------------
+# Feedbacks endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_get_feedbacks_status(dashboard_server):
+    """GET /api/feedbacks/status returns detection result."""
+    data = api_get(dashboard_server, "/api/feedbacks/status")
+    assert isinstance(data, dict)
+    assert "installed" in data
+    assert "running" in data
+    assert "enabled" in data
+
+
+# ---------------------------------------------------------------------------
+# Attachments endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_get_ticket_attachments_empty(dashboard_server):
+    """GET /api/tickets/{id}/attachments returns a list (possibly empty)."""
+    tid = _get_first_ticket_id(dashboard_server)
+    data = api_get(dashboard_server, f"/api/tickets/{tid}/attachments")
+    assert isinstance(data, list)
+
+
+def test_attachment_crud(dashboard_server):
+    """POST then DELETE an attachment on a ticket."""
+    tid = _get_first_ticket_id(dashboard_server)
+
+    # Create attachment
+    status_code, data = api_post(
+        dashboard_server,
+        f"/api/tickets/{tid}/attachments",
+        {
+            "attachment_type": "feedbacks",
+            "name": "smoke-test-session",
+            "path": "/tmp/smoke-test",
+            "summary": "Smoke test attachment",
+        },
+    )
+    assert status_code in (200, 201)
+    att_data = data[0] if isinstance(data, list) else data
+    att_id = att_data.get("id")
+    assert att_id is not None
+
+    # Verify it appears in the list
+    atts = api_get(dashboard_server, f"/api/tickets/{tid}/attachments")
+    assert any(a["id"] == att_id for a in atts)
+
+    # Feedbacks-type attachments should have player_url and thumbnail_url
+    att = next(a for a in atts if a["id"] == att_id)
+    assert "player_url" in att
+    assert "thumbnail_url" in att
+    assert "localhost:8080" in att["player_url"]
+
+    # Delete
+    status_code, data = api_delete(
+        dashboard_server, f"/api/tickets/{tid}/attachments/{att_id}"
+    )
+    assert status_code == 200
+    assert data.get("ok") is True
+
+    # Verify it's gone
+    atts = api_get(dashboard_server, f"/api/tickets/{tid}/attachments")
+    assert not any(a["id"] == att_id for a in atts)
+
+
+def test_record_endpoint_returns_url(dashboard_server):
+    """POST /api/tickets/{id}/record returns a feedbacks URL."""
+    tid = _get_first_ticket_id(dashboard_server)
+    status_code, data = api_post(
+        dashboard_server, f"/api/tickets/{tid}/record", {}
+    )
+    assert status_code == 200
+    assert "url" in data
+    assert tid in data["url"]
+    assert "localhost:8080" in data["url"]

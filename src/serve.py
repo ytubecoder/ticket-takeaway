@@ -1166,16 +1166,32 @@ def _render_project_settings(proj: dict, port: int) -> str:
     active = proj.get("active", True)
 
     return f'''<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{name} — Settings</title>
+<script>
+(function(){{
+  var s=localStorage.getItem('tt-theme');
+  if(s==='light')document.documentElement.setAttribute('data-theme','light');
+  else if(s==='dark')document.documentElement.setAttribute('data-theme','dark');
+  else document.documentElement.setAttribute('data-theme',
+    window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');
+}})();
+</script>
 <style>
-:root {{
-  --bg-page: #0a0a0b; --bg-surface: #141417; --bg-card: #1a1a1f; --bg-hover: #222228;
-  --border-subtle: #1e1e24; --border-default: #2a2a32; --text-primary: #ededef;
-  --text-secondary: #a0a0ab; --text-tertiary: #6b6b76; --accent: #3b82f6;
+:root, [data-theme="dark"] {{
+  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
+  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
+  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
+  --accent: #3b82f6;
+}}
+[data-theme="light"] {{
+  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
+  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
+  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
+  --accent: #2563eb;
 }}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; max-width: 600px; }}
@@ -1259,17 +1275,35 @@ textarea {{ min-height: 60px; resize: vertical; }}
       msg.style.display = 'block';
     }});
   }});
+  var modal = document.getElementById('confirm-modal');
+  var modalCancel = document.getElementById('modal-cancel');
+  var modalConfirm = document.getElementById('modal-confirm');
   document.getElementById('remove-btn').addEventListener('click', function() {{
-    if (!confirm('Remove this project from the registry? Tickets and files will not be deleted.')) return;
+    modal.style.display = 'flex';
+  }});
+  modalCancel.addEventListener('click', function() {{ modal.style.display = 'none'; }});
+  modal.addEventListener('click', function(e) {{ if (e.target === modal) modal.style.display = 'none'; }});
+  modalConfirm.addEventListener('click', function() {{
+    modal.style.display = 'none';
     fetch('/api/projects/{pid}', {{ method: 'DELETE' }})
     .then(function(r) {{ return r.json(); }})
     .then(function(data) {{
       if (data.ok) window.location.href = '/';
-      else alert(data.error || 'Failed to remove');
+      else {{ msg.textContent = data.error || 'Failed to remove'; msg.className = 'msg err'; msg.style.display = 'block'; }}
     }});
   }});
 }})();
 </script>
+<div id="confirm-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+  <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+    <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Remove Project</h3>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Remove this project from the registry? Tickets and files will not be deleted.</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button id="modal-cancel" style="font-size:12px;padding:6px 16px;border-radius:6px;border:1px solid var(--border-default);background:none;color:var(--text-secondary);cursor:pointer;font-family:inherit;">Cancel</button>
+      <button id="modal-confirm" style="font-size:12px;padding:6px 16px;border-radius:6px;border:none;background:rgba(239,68,68,0.15);color:#ef4444;cursor:pointer;font-weight:600;font-family:inherit;">Remove</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>'''
 
@@ -1318,16 +1352,32 @@ def _render_project_picker(port: int) -> str:
         </a>'''
 
     return f'''<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ticket Takeaway</title>
+<script>
+(function(){{
+  var s=localStorage.getItem('tt-theme');
+  if(s==='light')document.documentElement.setAttribute('data-theme','light');
+  else if(s==='dark')document.documentElement.setAttribute('data-theme','dark');
+  else document.documentElement.setAttribute('data-theme',
+    window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');
+}})();
+</script>
 <style>
-:root {{
-  --bg-page: #0a0a0b; --bg-surface: #141417; --bg-card: #1a1a1f; --bg-hover: #222228;
-  --border-subtle: #1e1e24; --border-default: #2a2a32; --text-primary: #ededef;
-  --text-secondary: #a0a0ab; --text-tertiary: #6b6b76; --accent: #3b82f6;
+:root, [data-theme="dark"] {{
+  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
+  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
+  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
+  --accent: #3b82f6;
+}}
+[data-theme="light"] {{
+  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
+  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
+  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
+  --accent: #2563eb;
 }}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; }}

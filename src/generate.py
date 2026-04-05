@@ -2314,6 +2314,85 @@ a {{ color: var(--accent); text-decoration: none; }}
     function showToast(el, text) {{ showAppToast(text || 'Saved!', 'success'); }}
     function showUndoToast(text) {{ showAppToast(text, 'success'); }}
 
+    // --- Inline confirm pattern ---
+    var _armedConfirm = null;
+    var _armedTimer = null;
+
+    function inlineConfirm(btn, opts) {{
+      // opts: {{ onConfirm: fn, confirmLabel: str }}
+      if (_armedConfirm && _armedConfirm !== btn && _armedConfirm._disarm) {{
+        _armedConfirm._disarm();
+      }}
+      var origHTML = btn.textContent;
+      _armedConfirm = btn;
+
+      var wrapper = document.createElement('span');
+      wrapper.appendChild(document.createTextNode((opts.confirmLabel || 'Sure?') + ' '));
+      var yesBtn = document.createElement('span');
+      yesBtn.textContent = 'Yes';
+      yesBtn.style.cssText = 'text-decoration:underline;cursor:pointer';
+      var noBtn = document.createElement('span');
+      noBtn.textContent = 'Cancel';
+      noBtn.style.cssText = 'text-decoration:underline;cursor:pointer;margin-left:6px';
+      wrapper.appendChild(yesBtn);
+      wrapper.appendChild(document.createTextNode(' / '));
+      wrapper.appendChild(noBtn);
+
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      btn.appendChild(wrapper);
+
+      function disarm() {{
+        while (btn.firstChild) btn.removeChild(btn.firstChild);
+        btn.textContent = origHTML;
+        clearTimeout(_armedTimer);
+        _armedConfirm = null;
+        btn._disarm = null;
+      }}
+      btn._disarm = disarm;
+
+      yesBtn.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        disarm();
+        opts.onConfirm();
+      }});
+      noBtn.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        disarm();
+      }});
+      _armedTimer = setTimeout(disarm, 3000);
+    }}
+
+    window.inlineConfirm = inlineConfirm;
+
+    // --- Confirm modal (for destructive actions with no undo) ---
+    function showConfirmModal(title, msg, confirmText, onConfirm) {{
+      var modal = document.getElementById('confirm-modal');
+      var titleEl = document.getElementById('confirm-modal-title');
+      var msgEl = document.getElementById('confirm-modal-msg');
+      var cancelBtn = document.getElementById('confirm-modal-cancel');
+      var okBtn = document.getElementById('confirm-modal-ok');
+      if (!modal) return;
+      titleEl.textContent = title;
+      msgEl.textContent = msg;
+      okBtn.textContent = confirmText || 'Delete';
+      modal.style.display = 'flex';
+
+      function close() {{
+        modal.style.display = 'none';
+        cancelBtn.removeEventListener('click', close);
+        okBtn.removeEventListener('click', handleOk);
+        modal.removeEventListener('click', handleBackdrop);
+      }}
+      function handleOk() {{ close(); onConfirm(); }}
+      function handleBackdrop(e) {{ if (e.target === modal) close(); }}
+
+      cancelBtn.addEventListener('click', close);
+      okBtn.addEventListener('click', handleOk);
+      modal.addEventListener('click', handleBackdrop);
+    }}
+
+    window.showConfirmModal = showConfirmModal;
+
     // --- Undo/Redo system (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) ---
     var undoStack = [];
     var redoStack = [];
@@ -4138,15 +4217,16 @@ a {{ color: var(--accent); text-decoration: none; }}
     rejectBtn.style.cssText = 'font-size:11px;padding:4px 10px;border-radius:5px;border:1px solid rgba(239,68,68,0.5);background:none;color:#ef4444;cursor:pointer;font-weight:600;font-family:var(--font-sans);';
     rejectBtn.textContent = 'Reject';
     rejectBtn.addEventListener('click', function() {{
-      if (!confirm('Delete this draft ticket?')) return;
-      fetch(EDIT_API + '/tickets/' + ticketId, {{
-        method: 'DELETE'
-      }}).then(function() {{
-        // Close overlay and remove card
-        if (window.closeDetailOverlay) window.closeDetailOverlay();
-        var card = document.querySelector('[data-item-id="' + ticketId + '"]');
-        if (card) card.remove();
-      }}).catch(function() {{ showAppToast('Failed to reject ticket', 'error'); }});
+      showConfirmModal('Delete Draft', 'Delete this draft ticket? This cannot be undone.', 'Delete', function() {{
+        fetch(EDIT_API + '/tickets/' + ticketId, {{
+          method: 'DELETE'
+        }}).then(function() {{
+          if (window.closeDetailOverlay) window.closeDetailOverlay();
+          var card = document.querySelector('[data-item-id="' + ticketId + '"]');
+          if (card) card.remove();
+          showAppToast('Draft deleted', 'success');
+        }}).catch(function() {{ showAppToast('Failed to reject ticket', 'error'); }});
+      }});
     }});
 
     banner.appendChild(label);
@@ -4459,11 +4539,27 @@ a {{ color: var(--accent); text-decoration: none; }}
           unlinkBtn.textContent = 'Unlink';
           unlinkBtn.addEventListener('click', function(e) {{
             e.stopPropagation();
-            if (!confirm('Unlink this attachment?')) return;
-            fetch(EDIT_API + '/tickets/' + ticketId + '/attachments/' + att.id, {{
-              method: 'DELETE'
-            }}).then(function() {{ loadAttachments(ticketId); }})
-              .catch(function() {{ showAppToast('Failed to unlink attachment', 'error'); }});
+            var attId = att.id;
+            var attPath = att.path || att.session_path || '';
+            inlineConfirm(unlinkBtn, {{
+              confirmLabel: 'Unlink?',
+              onConfirm: function() {{
+                fetch(EDIT_API + '/tickets/' + ticketId + '/attachments/' + attId, {{
+                  method: 'DELETE'
+                }}).then(function() {{
+                  loadAttachments(ticketId);
+                  showAppToast('Attachment unlinked', 'undo', 5000, function() {{
+                    fetch(EDIT_API + '/tickets/' + ticketId + '/attachments', {{
+                      method: 'POST',
+                      headers: {{ 'Content-Type': 'application/json' }},
+                      body: JSON.stringify({{ session_path: attPath }})
+                    }}).then(function() {{ loadAttachments(ticketId); }})
+                    .catch(function() {{ showAppToast('Undo failed', 'error'); }});
+                  }});
+                }})
+                .catch(function() {{ showAppToast('Failed to unlink attachment', 'error'); }});
+              }}
+            }});
           }});
           actions.appendChild(unlinkBtn);
 
@@ -4709,6 +4805,16 @@ a {{ color: var(--accent); text-decoration: none; }}
 }})();
 </script>
 <div id="app-toast" role="status" aria-live="polite"><span id="app-toast-msg"></span></div>
+<div id="confirm-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;" role="dialog" aria-modal="true">
+  <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+    <h3 id="confirm-modal-title" style="font-size:14px;font-weight:600;margin-bottom:8px;"></h3>
+    <p id="confirm-modal-msg" style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;"></p>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button id="confirm-modal-cancel" style="font-size:12px;padding:6px 16px;border-radius:6px;border:1px solid var(--border-default);background:none;color:var(--text-secondary);cursor:pointer;font-family:inherit;">Cancel</button>
+      <button id="confirm-modal-ok" style="font-size:12px;padding:6px 16px;border-radius:6px;border:none;background:rgba(239,68,68,0.15);color:#ef4444;cursor:pointer;font-weight:600;font-family:inherit;">Delete</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>"""
 

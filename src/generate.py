@@ -32,6 +32,41 @@ REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 
 
 # ---------------------------------------------------------------------------
+# SVG Icons (Lucide-style, 24x24 viewBox, stroke-based)
+# ---------------------------------------------------------------------------
+
+SVG_ICONS = {
+    "file-text": '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
+    "check-square": '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+    "flame": '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+    "flask-conical": '<path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16.5h10"/>',
+    "eye": '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+    "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    "arrow-up-right": '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+    "settings": '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+    "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    "trash-2": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+    "undo-2": '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
+    "search": '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    "arrow-right": '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+    "play": '<polygon points="6 3 20 12 6 21 6 3"/>',
+    "check": '<path d="M20 6 9 17l-5-5"/>',
+    "snowflake": '<line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
+    "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+}
+
+
+def _svg_icon(name: str, size: int = 16, cls: str = "") -> str:
+    """Return an inline SVG icon element."""
+    extra = f' class="{cls}"' if cls else ""
+    return (f'<svg{extra} width="{size}" height="{size}" viewBox="0 0 24 24" '
+            f'fill="none" stroke="currentColor" stroke-width="2" '
+            f'stroke-linecap="round" stroke-linejoin="round">'
+            f'{SVG_ICONS.get(name, "")}</svg>')
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
@@ -589,6 +624,18 @@ def generate_html(project: Project) -> str:
     bugs_cards = _render_list_rows(list(reversed(by_section["Bugs"])), "bugs", child_tickets, dep_state)
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
+
+    # Pre-computed SVG icons for use inside the HTML f-string
+    _icon_settings = _svg_icon("settings", 14)
+    _icon_close = _svg_icon("x", 14)
+    _icon_open = _svg_icon("arrow-up-right", 12)
+    _dctrs_icons = ''.join([
+        f'<button class="readiness-dot" data-flag="description" title="Description" aria-label="Description">{_svg_icon("file-text", 12)}</button>',
+        f'<button class="readiness-dot" data-flag="criteria" title="Criteria" aria-label="Criteria">{_svg_icon("check-square", 12)}</button>',
+        f'<button class="readiness-dot" data-flag="smoke" title="Smoke" aria-label="Smoke">{_svg_icon("flame", 12)}</button>',
+        f'<button class="readiness-dot" data-flag="tests" title="Tests" aria-label="Tests">{_svg_icon("flask-conical", 12)}</button>',
+        f'<button class="readiness-dot" data-flag="reviewed" title="Learnings" aria-label="Learnings">{_svg_icon("eye", 12)}</button>',
+    ])
 
     html = f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -1280,6 +1327,10 @@ a {{ color: var(--accent); text-decoration: none; }}
 }}
 .edit-enabled .readiness-dot {{ cursor: pointer; }}
 .edit-enabled .readiness-dot:hover {{ opacity: 1; border-color: var(--accent); }}
+.readiness-dot svg {{ width: 12px; height: 12px; flex-shrink: 0; }}
+.action-btn svg {{ width: 12px; height: 12px; vertical-align: -2px; margin-right: 2px; }}
+.settings-toggle svg, .detail-close svg, .settings-drawer-close svg {{ width: 14px; height: 14px; }}
+.card-open-btn svg {{ width: 12px; height: 12px; }}
 
 /* Detail overlay */
 .detail-overlay {{ position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }}
@@ -1614,7 +1665,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
-  <button class="settings-toggle" id="settingsToggleBtn" title="Settings">&#9881;</button>
+  <button class="settings-toggle" id="settingsToggleBtn" title="Settings">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
     <div class="new-ticket-quick">
@@ -1634,7 +1685,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 <div id="settings-drawer" class="settings-drawer hidden">
   <div class="settings-drawer-header">
     <h2>Settings</h2>
-    <button class="settings-drawer-close" id="settingsDrawerClose">&times;</button>
+    <button class="settings-drawer-close" id="settingsDrawerClose">{_icon_close}</button>
   </div>
   <div class="settings-drawer-body">
     <div class="settings-section">
@@ -2871,14 +2922,10 @@ a {{ color: var(--accent); text-decoration: none; }}
       <span class="detail-title" contenteditable="false" title="Click to rename"></span>
       <span class="detail-path"></span>
       <div class="detail-dctrs-strip">
-        <button class="readiness-dot" data-flag="description" title="Description">D</button>
-        <button class="readiness-dot" data-flag="criteria" title="Criteria">C</button>
-        <button class="readiness-dot" data-flag="smoke" title="Smoke">S</button>
-        <button class="readiness-dot" data-flag="tests" title="Tests">T</button>
-        <button class="readiness-dot" data-flag="reviewed" title="Learnings">L</button>
+        {_dctrs_icons}
       </div>
       <span class="detail-toast" role="status" aria-live="polite"></span>
-      <button class="detail-close" aria-label="Close ticket detail">&times;</button>
+      <button class="detail-close" aria-label="Close ticket detail">{_icon_close}</button>
     </div>
     <div class="detail-meta-strip">
       <span class="meta-chip meta-chip--priority" title="Click to change priority"><span class="chip-dot"></span><span class="chip-text"></span></span>
@@ -4779,7 +4826,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
         f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
         f'<span class="status-badge {status_class}">{status_class}</span>'
-        f'<button class="card-open-btn" title="Open ticket details">&#8599;</button></div>\n'
+        f'<button class="card-open-btn" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button></div>\n'
         f'{readiness_html}'
         f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'
         f'{git_html}'
@@ -4792,7 +4839,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
 def _render_readiness_row(t) -> str:
     """Render readiness indicator dots for a ticket."""
     flag_map = {"D": "description", "C": "criteria", "S": "smoke", "T": "tests", "L": "reviewed"}
-    icon_map = {"D": "&#128196;", "C": "&#9745;", "S": "&#128168;", "T": "&#128300;", "L": "&#128065;"}
+    icon_name_map = {"D": "file-text", "C": "check-square", "S": "flame", "T": "flask-conical", "L": "eye"}
     indicators = [
         ("D", "Description", bool(t.description)),
         ("C", "Criteria", len(t.acceptance_criteria) > 0),
@@ -4804,8 +4851,8 @@ def _render_readiness_row(t) -> str:
     for letter, title, filled in indicators:
         cls = "filled" if filled else "empty"
         flag_name = flag_map[letter]
-        icon = icon_map[letter]
-        dots.append(f'<span class="readiness-dot {cls}" title="{title}" data-flag="{flag_name}">{icon}</span>')
+        icon = _svg_icon(icon_name_map[letter], size=12)
+        dots.append(f'<span class="readiness-dot {cls}" title="{title}" data-flag="{flag_name}" aria-label="{title}">{icon}</span>')
     return '        <div class="readiness-row">' + "".join(dots) + '</div>\n'
 
 
@@ -4813,15 +4860,15 @@ def _render_action_buttons(slug: str, ticket_id: str) -> str:
     """Render contextual action buttons for a card (only visible in edit mode when expanded)."""
     buttons = []
     if slug == "ideas":
-        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="Backlog">&#8594; Backlog</button>')
+        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="Backlog">{_svg_icon("arrow-right", 12)} Backlog</button>')
     elif slug == "backlog":
-        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="WIP">&#9654; Start</button>')
+        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="WIP">{_svg_icon("play", 12)} Start</button>')
     elif slug == "wip":
-        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="For Review">&#10003; Done</button>')
-        buttons.append(f'<button class="action-btn" data-action="move" data-section="Icebox">&#10052; Icebox</button>')
+        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="For Review">{_svg_icon("check", 12)} Done</button>')
+        buttons.append(f'<button class="action-btn" data-action="move" data-section="Icebox">{_svg_icon("snowflake", 12)} Icebox</button>')
     elif slug == "review":
-        buttons.append(f'<button class="action-btn primary" data-action="accept">&#10003; Accept</button>')
-        buttons.append(f'<button class="action-btn" data-action="move" data-section="WIP">&#8592; Back to WIP</button>')
+        buttons.append(f'<button class="action-btn primary" data-action="accept">{_svg_icon("check", 12)} Accept</button>')
+        buttons.append(f'<button class="action-btn" data-action="move" data-section="WIP">{_svg_icon("arrow-left", 12)} Back to WIP</button>')
     if not buttons:
         return ""
     return '        <div class="card-actions">' + "".join(buttons) + '</div>\n'

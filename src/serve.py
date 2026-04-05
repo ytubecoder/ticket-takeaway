@@ -2169,6 +2169,130 @@ class DashboardHandler(BaseHTTPRequestHandler):
 # Background watcher for external markdown edits
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Feedbacks session watcher — polls output dir for new sessions
+# ---------------------------------------------------------------------------
+
+_session_watcher_known: set = set()  # session dir names already processed
+
+
+def _start_feedbacks_session_watcher(interval: float = 3.0):
+    """Daemon thread watching feedbacks output dir for new completed sessions."""
+    import time
+
+    def _poll():
+        global _session_watcher_known
+        # Initial snapshot: populate known sessions so we don't import old ones
+        _seed_known_sessions()
+
+        while True:
+            try:
+                time.sleep(interval)
+                status = _detect_feedbacks()
+                if not status.get("enabled") or not status.get("output_dir"):
+                    continue
+
+                output_dir = Path(status["output_dir"])
+                if not output_dir.is_dir():
+                    continue
+
+                # Scan for new session directories
+                for entry in output_dir.iterdir():
+                    if not entry.is_dir():
+                        continue
+                    if entry.name in _session_watcher_known:
+                        continue
+                    if not entry.name.startswith("feedbacks-"):
+                        continue
+
+                    # Check for meta.json (written last in save sequence)
+                    meta_file = entry / "meta.json"
+                    if not meta_file.exists():
+                        continue
+
+                    # New completed session found
+                    _session_watcher_known.add(entry.name)
+                    try:
+                        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError):
+                        continue
+
+                    ticket_id = meta.get("ticketId", "").strip()
+                    if not ticket_id:
+                        continue
+
+                    # Find which project this ticket belongs to
+                    project_id = _find_project_for_ticket(ticket_id)
+                    if not project_id:
+                        continue
+
+                    # Check if attachment already exists (idempotent)
+                    existing = _list_attachments(project_id, ticket_id)
+                    if any(a.get("name") == entry.name for a in existing):
+                        continue
+
+                    # Create attachment
+                    summary = f"Feedback session: {meta.get('duration', '?')}, {meta.get('imageCount', 0)} screenshots, {meta.get('sttCount', 0)} transcripts"
+                    att = _add_attachment(
+                        project_id=project_id,
+                        ticket_id=ticket_id,
+                        attachment_type="feedbacks",
+                        name=entry.name,
+                        path=str(entry.resolve()),
+                        summary=summary,
+                        metadata=json.dumps(meta),
+                    )
+                    if att:
+                        print(f"[feedbacks-watcher] Linked session {entry.name} → {ticket_id}")
+
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
+    t = threading.Thread(target=_poll, daemon=True, name="feedbacks-session-watcher")
+    t.start()
+
+
+def _seed_known_sessions():
+    """Populate known sessions from existing attachments + output dir scan."""
+    global _session_watcher_known
+    # Add all existing attachment names
+    try:
+        with _db_lock:
+            conn = get_db()
+            init_db(conn)
+            rows = conn.execute(
+                "SELECT name FROM ticket_attachments WHERE attachment_type = 'feedbacks'"
+            ).fetchall()
+            conn.close()
+        _session_watcher_known = {r["name"] for r in rows}
+    except Exception:
+        _session_watcher_known = set()
+
+    # Also add everything currently in the output dir so we don't re-import old sessions
+    status = _detect_feedbacks()
+    output_dir = status.get("output_dir")
+    if output_dir:
+        p = Path(output_dir)
+        if p.is_dir():
+            for entry in p.iterdir():
+                if entry.is_dir() and entry.name.startswith("feedbacks-"):
+                    _session_watcher_known.add(entry.name)
+
+
+def _find_project_for_ticket(ticket_id: str) -> str | None:
+    """Find which project a ticket belongs to."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute(
+            "SELECT project_id FROM tickets WHERE UPPER(id) = UPPER(?)",
+            (ticket_id,),
+        ).fetchone()
+        conn.close()
+    return row["project_id"] if row else None
+
+
 def _start_external_edit_watcher(interval: float = 5.0):
     """Daemon thread polling for external PRODUCT_BACKLOG.md edits across all projects."""
     import time
@@ -2277,9 +2401,10 @@ def main():
     project_names = [p.get("name", p["id"]) for p in _PROJECTS_CACHE.values()]
     print(f"Serving {len(project_names)} project(s): {', '.join(project_names)}")
 
-    # Start background threads — both iterate all active projects from _PROJECTS_CACHE
+    # Start background threads
     _start_external_edit_watcher()
     _start_scheduled_event_poller()
+    _start_feedbacks_session_watcher()
 
     server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"

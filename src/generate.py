@@ -1027,17 +1027,24 @@ a {{ color: var(--accent); text-decoration: none; }}
 /* Git traceability on expanded cards */
 .card-commit, .card-release {{ display: none; margin-top: 4px; }}
 .card.expanded .card-commit, .card.expanded .card-release {{ display: block; }}
-/* Undo toast */
-#undo-toast {{
+/* Unified toast system */
+#app-toast {{
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
   background: var(--bg-card); border: 1px solid var(--border-default);
-  border-radius: 8px; padding: 8px 16px; z-index: 9999;
-  box-shadow: 0 4px 20px rgba(0,0,0,.5); font-size: 12px; color: var(--text-secondary);
-  opacity: 0; transition: opacity 0.3s, transform 0.3s;
-  pointer-events: none; max-width: 500px; white-space: nowrap;
+  border-left: 3px solid var(--status-done); border-radius: 8px;
+  padding: 10px 16px; z-index: 9999;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5); font-size: 12px; color: var(--text-secondary);
+  opacity: 0; transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none; max-width: 500px; display: flex; align-items: center; gap: 8px;
 }}
-#undo-toast.visible {{ opacity: 1; transform: translateX(-50%) translateY(0); }}
-#undo-toast.undo-fail {{ color: #ef4444; }}
+#app-toast.visible {{ opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }}
+#app-toast.toast-error {{ border-left-color: var(--priority-high); }}
+#app-toast.toast-undo {{ border-left-color: var(--border-strong); }}
+#app-toast .toast-undo-btn {{
+  color: var(--accent); cursor: pointer; font-weight: 600; margin-left: 4px;
+  background: none; border: none; font-size: 12px; font-family: var(--font-sans);
+  text-decoration: underline; padding: 0;
+}}
 
 /* Drag-drop (edit mode) */
 .edit-enabled .card {{ cursor: grab; }}
@@ -1404,9 +1411,6 @@ a {{ color: var(--accent); text-decoration: none; }}
 .criteria-add-input:hover {{ border-color: var(--border-default); }}
 .criteria-add-input:focus {{ border-color: var(--accent); background: var(--bg-surface); }}
 .criteria-add-input::placeholder {{ color: var(--text-tertiary); font-style: italic; }}
-/* Toast */
-.detail-toast {{ position: absolute; top: 14px; right: 60px; font-size: 11px; font-weight: 600; color: var(--status-done); background: var(--status-done-bg); padding: 3px 10px; border-radius: 4px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 1020; }}
-.detail-toast.show {{ opacity: 1; }}
 @media (max-width: 560px) {{
   .detail-panel {{ max-width: 100vw; max-height: 100vh; border-radius: 0; inset: 0; }}
   .detail-meta-strip {{ gap: 6px; }}
@@ -1417,13 +1421,6 @@ a {{ color: var(--accent); text-decoration: none; }}
 .list-row-detail {{ display: none; padding: 6px 8px 4px 22px; }}
 .list-row.expanded .list-row-detail {{ display: block; }}
 
-/* Copied toast */
-.copied-toast {{
-  position: absolute; top: -6px; right: 8px; font-size: 9px; font-weight: 700;
-  color: var(--status-done); background: var(--status-done-bg); padding: 1px 6px;
-  border-radius: 4px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 10;
-}}
-.copied-toast.show {{ opacity: 1; }}
 
 /* Card moved highlight */
 @keyframes card-moved {{
@@ -1920,11 +1917,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       var prompt = this.dataset.prompt;
       if (prompt) {{
         navigator.clipboard.writeText(prompt).then(function() {{
-          var toast = document.createElement('span');
-          toast.className = 'copied-toast show';
-          toast.textContent = 'Copied!';
-          header.appendChild(toast);
-          setTimeout(function() {{ toast.remove(); }}, 1200);
+          showAppToast('Copied!', 'success', 1200);
         }});
       }}
     }});
@@ -1971,11 +1964,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         text = 'I want to work on ' + id + ': ' + title;
       }}
       navigator.clipboard.writeText(text).then(function() {{
-        var toast = el.querySelector('.copied-toast');
-        if (toast) {{
-          toast.classList.add('show');
-          setTimeout(function() {{ toast.classList.remove('show'); }}, 1200);
-        }}
+        showAppToast('Copied!', 'success', 1200);
       }});
     }});
   }});
@@ -2159,8 +2148,7 @@ a {{ color: var(--accent); text-decoration: none; }}
           else if (col === 'bugs') text = 'We need to come up with a plan to fix this bug ' + id + ': ' + title;
           else text = 'I want to work on ' + id + ': ' + title;
           navigator.clipboard.writeText(text).then(function() {{
-            var toast = el.querySelector('.copied-toast');
-            if (toast) {{ toast.classList.add('show'); setTimeout(function() {{ toast.classList.remove('show'); }}, 1200); }}
+            showAppToast('Copied!', 'success', 1200);
           }});
         }});
       }});
@@ -2270,46 +2258,73 @@ a {{ color: var(--accent); text-decoration: none; }}
         // Hide loading banner on failure
         var banner = document.getElementById('detail-gate-banner');
         if (banner) banner.classList.add('hidden');
-        showToast(card || document.body, 'Gate check failed');
+        showAppToast('Gate check failed', 'error');
       }});
     }}
 
-    function showToast(el, text) {{
-      var toast = el.querySelector('.copied-toast');
-      if (toast) {{
-        var orig = toast.textContent;
-        toast.textContent = text || 'Saved!';
-        toast.classList.add('show');
-        setTimeout(function() {{ toast.classList.remove('show'); toast.textContent = orig; }}, 1200);
+    // --- Unified toast system ---
+    var _toastTimer = null;
+    var _toastPriority = 0; // 0=none, 1=low (success/info/copy), 2=high (error/undo)
+    var _toastUndoFn = null;
+
+    function showAppToast(message, type, duration, undoFn) {{
+      type = type || 'success';
+      var priority = (type === 'error' || type === 'undo') ? 2 : 1;
+      // Don't displace higher-priority toast
+      if (_toastPriority > priority) return;
+
+      var el = document.getElementById('app-toast');
+      var msgEl = document.getElementById('app-toast-msg');
+      if (!el || !msgEl) return;
+
+      clearTimeout(_toastTimer);
+      _toastPriority = priority;
+      _toastUndoFn = undoFn || null;
+
+      // Reset classes
+      el.className = 'visible';
+      if (type === 'error') el.classList.add('toast-error');
+      else if (type === 'undo') el.classList.add('toast-undo');
+
+      // Build content safely using DOM methods
+      while (msgEl.firstChild) msgEl.removeChild(msgEl.firstChild);
+      msgEl.appendChild(document.createTextNode(message));
+      if (type === 'undo' && undoFn) {{
+        var undoBtn = document.createElement('button');
+        undoBtn.className = 'toast-undo-btn';
+        undoBtn.textContent = 'Undo';
+        undoBtn.addEventListener('click', function() {{
+          if (_toastUndoFn) {{ _toastUndoFn(); _toastUndoFn = null; }}
+          el.className = '';
+          clearTimeout(_toastTimer);
+          _toastPriority = 0;
+        }});
+        msgEl.appendChild(undoBtn);
       }}
+
+      duration = duration || (type === 'undo' ? 5000 : type === 'error' ? 4000 : 2500);
+      _toastTimer = setTimeout(function() {{
+        el.className = '';
+        _toastPriority = 0;
+        _toastUndoFn = null;
+      }}, duration);
     }}
+
+    // Backwards-compatible wrappers
+    function showToast(el, text) {{ showAppToast(text || 'Saved!', 'success'); }}
+    function showUndoToast(text) {{ showAppToast(text, 'success'); }}
 
     // --- Undo/Redo system (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) ---
     var undoStack = [];
     var redoStack = [];
     var MAX_UNDO = 50;
-    if (EDIT_API) {{
-      var undoEl = document.createElement('div');
-      undoEl.id = 'undo-toast';
-      undoEl.textContent = '';
-      document.body.appendChild(undoEl);
-    }}
-
-    function showUndoToast(text) {{
-      var el = document.getElementById('undo-toast');
-      if (!el) return;
-      el.classList.remove('undo-fail');
-      el.textContent = text;
-      el.classList.add('visible');
-      setTimeout(function() {{ el.classList.remove('visible'); }}, 2500);
-    }}
 
     function pushUndo(ticketId, description, revertFn, redoFn) {{
       if (!EDIT_API) return;
       undoStack.push({{ ticketId: ticketId, description: description, revertFn: revertFn, redoFn: redoFn }});
       if (undoStack.length > MAX_UNDO) undoStack.shift();
       redoStack = []; // new edit clears redo history
-      showUndoToast(description + '  (Ctrl+Z to undo)');
+      showAppToast(description + '  (Ctrl+Z to undo)', 'undo', 5000, function() {{ performUndo(); }});
     }}
 
     function performUndo() {{
@@ -2317,15 +2332,9 @@ a {{ color: var(--accent); text-decoration: none; }}
       var state = undoStack.pop();
       state.revertFn().then(function() {{
         redoStack.push(state);
-        showUndoToast('Undone: ' + state.description);
+        showAppToast('Undone: ' + state.description, 'success');
       }}).catch(function() {{
-        var el = document.getElementById('undo-toast');
-        if (el) {{
-          el.classList.add('undo-fail');
-          el.textContent = 'Undo failed';
-          el.classList.add('visible');
-          setTimeout(function() {{ el.classList.remove('visible', 'undo-fail'); }}, 2000);
-        }}
+        showAppToast('Undo failed', 'error');
       }});
     }}
 
@@ -2335,15 +2344,9 @@ a {{ color: var(--accent); text-decoration: none; }}
       if (state.redoFn) {{
         state.redoFn().then(function() {{
           undoStack.push(state);
-          showUndoToast('Redone: ' + state.description);
+          showAppToast('Redone: ' + state.description, 'success');
         }}).catch(function() {{
-          var el = document.getElementById('undo-toast');
-          if (el) {{
-            el.classList.add('undo-fail');
-            el.textContent = 'Redo failed';
-            el.classList.add('visible');
-            setTimeout(function() {{ el.classList.remove('visible', 'undo-fail'); }}, 2000);
-          }}
+          showAppToast('Redo failed', 'error');
         }});
       }}
     }}
@@ -2908,6 +2911,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 
     // Expose for overlay gate-check integration and testability
     window.showToast = showToast;
+    window.showAppToast = showAppToast;
     window.startGateCheck = startGateCheck;
   }})();
 }})();
@@ -2924,7 +2928,6 @@ a {{ color: var(--accent); text-decoration: none; }}
       <div class="detail-dctrs-strip">
         {_dctrs_icons}
       </div>
-      <span class="detail-toast" role="status" aria-live="polite"></span>
       <button class="detail-close" aria-label="Close ticket detail">{_icon_close}</button>
     </div>
     <div class="detail-meta-strip">
@@ -3031,7 +3034,6 @@ a {{ color: var(--accent); text-decoration: none; }}
   if (!overlay) return;
   var idEl = overlay.querySelector('.detail-id');
   var titleEl = overlay.querySelector('.detail-title');
-  var toastEl = overlay.querySelector('.detail-toast');
   var currentTicketId = null;
   var currentData = null;
   var _hasAssessmentData = false;
@@ -3053,7 +3055,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   var gateConfirm = document.getElementById('gate-banner-confirm');
   var gateCancel = document.getElementById('gate-banner-cancel');
 
-  function toast(msg) {{ toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(function() {{ toastEl.classList.remove('show'); }}, 1500); }}
+  function toast(msg) {{ showAppToast(msg, 'success'); }}
 
   /* --- Auto-save helper --- */
   function autosaveField(field, value) {{
@@ -4129,7 +4131,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         // Remove is-draft class from the card
         var card = document.querySelector('[data-item-id="' + ticketId + '"]');
         if (card) {{ card.classList.remove('is-draft'); card.removeAttribute('data-draft'); card.style.display = ''; }}
-      }}).catch(function() {{ alert('Failed to confirm ticket'); }});
+      }}).catch(function() {{ showAppToast('Failed to confirm ticket', 'error'); }});
     }});
 
     var rejectBtn = document.createElement('button');
@@ -4144,7 +4146,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (window.closeDetailOverlay) window.closeDetailOverlay();
         var card = document.querySelector('[data-item-id="' + ticketId + '"]');
         if (card) card.remove();
-      }}).catch(function() {{ alert('Failed to reject ticket'); }});
+      }}).catch(function() {{ showAppToast('Failed to reject ticket', 'error'); }});
     }});
 
     banner.appendChild(label);
@@ -4461,7 +4463,7 @@ a {{ color: var(--accent); text-decoration: none; }}
             fetch(EDIT_API + '/tickets/' + ticketId + '/attachments/' + att.id, {{
               method: 'DELETE'
             }}).then(function() {{ loadAttachments(ticketId); }})
-              .catch(function() {{ alert('Failed to unlink attachment'); }});
+              .catch(function() {{ showAppToast('Failed to unlink attachment', 'error'); }});
           }});
           actions.appendChild(unlinkBtn);
 
@@ -4532,10 +4534,10 @@ a {{ color: var(--accent); text-decoration: none; }}
           recordBtn.textContent = 'Recording...';
           setTimeout(function() {{ recordBtn.textContent = 'Record'; }}, 3000);
         }} else {{
-          alert(data.error || 'Failed to start recording');
+          showAppToast(data.error || 'Failed to start recording', 'error');
         }}
       }})
-      .catch(function() {{ alert('Failed to start recording'); }});
+      .catch(function() {{ showAppToast('Failed to start recording', 'error'); }});
     }});
   }}
 
@@ -4554,10 +4556,10 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (data.ok) {{
           loadAttachments(tid);
         }} else {{
-          alert(data.error || 'No session to link');
+          showAppToast(data.error || 'No session to link', 'error');
         }}
       }})
-      .catch(function() {{ alert('Failed to link session'); }});
+      .catch(function() {{ showAppToast('Failed to link session', 'error'); }});
     }});
   }}
 
@@ -4706,6 +4708,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   }});
 }})();
 </script>
+<div id="app-toast" role="status" aria-live="polite"><span id="app-toast-msg"></span></div>
 </body>
 </html>"""
 
@@ -4821,7 +4824,6 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
         f'{draft_attr}>\n'
-        f'        <div class="copied-toast">Copied!</div>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
         f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
@@ -4928,7 +4930,6 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
             f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
             f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}>\n'
-            f'        <div class="copied-toast">Copied!</div>\n'
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
             f'<span class="card-id">{id_esc}</span>'
@@ -4955,7 +4956,6 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
                     f'data-status="{child_status}" data-complexity="{escape(child.complexity)}"'
                     f'{"" if slug != "bugs" and child_status not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
                     f' data-parent="{id_esc}">\n'
-                    f'        <div class="copied-toast">Copied!</div>\n'
                     f'        <div class="list-row-main">'
                     f'<span class="priority-dot {child.priority}"></span>'
                     f'<span class="card-id">{child_id}</span>'

@@ -948,8 +948,9 @@ a {{ color: var(--accent); text-decoration: none; }}
   border: 1px solid var(--border-subtle); overflow: hidden;
 }}
 .bottom-section-header {{
-  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-  cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  font-size: 12px; font-weight: 600; cursor: pointer; user-select: none;
+  border-bottom: 1px solid var(--border-subtle);
 }}
 .bottom-section-header:hover {{ background: var(--bg-hover); }}
 .bottom-section-header .toggle-arrow {{ font-size: 10px; color: var(--text-tertiary); transition: transform 0.2s; }}
@@ -970,13 +971,19 @@ a {{ color: var(--accent); text-decoration: none; }}
 
 /* List rows — compact single-line items for bottom sections */
 .list-row {{
-  background: transparent; border: none; border-radius: 4px; padding: 4px 8px;
-  border-left: none !important;
+  display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: 6px; margin: 3px 8px;
+  transition: background 0.15s, border-color 0.15s;
 }}
-.list-row:hover {{ background: var(--bg-hover); }}
+.list-row:hover {{ background: var(--bg-hover); border-color: var(--border-default); }}
 .list-row-main {{
-  display: flex; align-items: center; gap: 8px; min-height: 24px;
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
 }}
+.list-row[data-section="bugs"] {{ border-left: 3px solid var(--priority-high); }}
+.list-row[data-section="done"] {{ border-left: 3px solid var(--status-done); }}
+.list-row[data-section="icebox"] {{ border-left: 3px solid var(--status-icebox); }}
+.list-row[data-section="wontdo"] {{ border-left: 3px solid var(--status-wontdo); }}
 .list-row-main .priority-dot {{ margin-top: 0; }}
 .list-row-main .card-id {{ min-width: 50px; }}
 .list-row-main .card-title {{ font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
@@ -990,6 +997,9 @@ a {{ color: var(--accent); text-decoration: none; }}
   padding: 0 4px; border-radius: 3px; font-weight: 600;
 }}
 .list-row-main .commit-badge, .list-row-main .release-badge {{ font-size: 8px; }}
+.list-row .readiness-row {{ padding: 2px 10px 6px; display: flex; gap: 3px; }}
+.list-row .readiness-dot {{ width: 14px; height: 14px; }}
+.list-row .readiness-dot svg {{ width: 10px; height: 10px; }}
 /* Quick-edit cursors (active only when edit-api meta tag is present) */
 .edit-enabled .priority-dot {{ cursor: pointer; }}
 .edit-enabled .status-badge {{ cursor: pointer; }}
@@ -5031,11 +5041,15 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         if t.release_tag:
             release_badge = f'<span class="release-badge">{escape(t.release_tag)}</span>'
 
+        readiness_html = _render_readiness_row(t)
+        open_btn = f'<button class="card-open-btn" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button>'
+
         lines.append(
             f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
             f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
-            f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}>\n'
+            f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
+            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}>\n'
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
             f'<span class="card-id">{id_esc}</span>'
@@ -5043,7 +5057,8 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
             f'<span class="status-badge {status_class}">{status_class}</span>'
             f'<span class="complexity-badge">{escape(t.complexity)}</span>'
             f'{commit_badge}{release_badge}'
-            f'{child_badge_html}</div>\n'
+            f'{child_badge_html}{open_btn}</div>\n'
+            f'{readiness_html}'
             f'{detail_html}'
             f'      </div>'
         )

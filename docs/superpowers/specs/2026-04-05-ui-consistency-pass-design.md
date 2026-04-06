@@ -83,9 +83,9 @@ Single `#app-toast` element, fixed position bottom-center of viewport. Handles a
 
 ### Mechanics
 
-- `showToast(message, type='success', duration=2500)` — single global function
+- `showAppToast(message, type, duration, undoFn)` — single global function
 - Type determines left-border color: green/red/neutral
-- Undo toasts include a clickable "Undo" text that triggers the undo action directly (in addition to Ctrl+Z)
+- Undo toasts: `undoFn` callback builds a clickable "Undo" button (via DOM methods, not innerHTML) that triggers the undo action directly (in addition to Ctrl+Z)
 - Duration: 2500ms for success, 4000ms for error, 5000ms for undo (longer to give time to act)
 - Position: fixed, bottom 24px, centered horizontally
 - Animation: slide up + fade in (0.2s), slide down + fade out (0.2s)
@@ -103,39 +103,41 @@ A clipboard "Copied!" toast must not overwrite an active undo toast. An error to
 
 ### Replaces
 
-All 6 `alert()` error calls → `showToast(msg, 'error')`
-All 3 toast implementations → single `showToast()` calls
+All 7 `alert()` error calls → `showAppToast(msg, 'error')`
+All 3 toast implementations → single `showAppToast()` calls
 
 ## 3. Replace Native Dialogs
 
 ### Reversible Actions → Inline Confirm + Undo
 
-**"Delete this draft ticket?"** and **"Unlink this attachment?"**
+**"Unlink this attachment?"**
 
 Inline confirm contract:
-- First click arms the confirm state — button text changes to "Sure? Yes / Cancel"
+- First click arms the confirm state — button text changes to "Unlink? Yes / Cancel"
 - Confirm executes on explicit second action (click "Yes")
 - "Cancel" or clicking elsewhere restores immediately
 - Armed state auto-resets after 3 seconds if no action
 - **Only one inline confirm may be armed at a time** within the same surface — arming a new one cancels any existing armed state
-- On confirm: execute action, push to undo stack, show undo toast
-- Ctrl+Z or clicking "Undo" in toast reverses the action
+- On confirm: execute action, show undo toast with clickable Undo button
+- Undo re-POSTs the attachment link to restore it
 
 ### Undo Reliability Requirement
 
 "Undoable" means actual restoration, not just a toast message:
-- Draft ticket delete: restores the ticket and its visible state (re-POST or soft state)
-- Attachment unlink: restores the attachment in UI and underlying state (re-link API call)
+- Attachment unlink: restores the attachment in UI and underlying state (re-link API call via POST)
 - If restoration requires a lightweight refetch from server, that is acceptable
 - **If reliable undo cannot be implemented cleanly for a given action, that action must use modal confirmation instead** — do not ship inline confirm without working undo
 
-### Truly Destructive Actions → Custom Modal
+### Destructive Actions → Custom Modal
 
-**"Remove this project?"** (settings page)
+**"Delete this draft ticket?"** and **"Remove this project?"**
+
+Draft ticket delete uses a custom modal because no restore/undo endpoint exists. This follows the undo reliability rule above — no reliable undo path means modal confirmation.
 
 - Custom modal matching overlay aesthetic: dark backdrop with blur, centered panel
-- Clear destructive language, red-tinted confirm button
-- No undo — this is permanent
+- Clear destructive language ("This cannot be undone"), red-tinted confirm button
+- No undo — deletion is permanent
+- Reusable `showConfirmModal(title, msg, confirmText, onConfirm)` JS helper drives the modal
 
 ### Files Changed
 
@@ -151,7 +153,9 @@ Inline confirm contract:
 
 ### Target State
 
-Inline SVG sprite in generated HTML. A single `<svg>` block with `<symbol>` definitions at the top of the document, referenced everywhere via `<use href="#icon-name">`. Uses `currentColor` so icons inherit text color and respond to theming automatically. Identical rendering on Windows, Mac, and Linux. Zero external dependencies, works in file:// mode.
+Inline SVG per-instance via a Python helper function `_svg_icon(name, size, cls)`. Each icon is a small `<svg>` element with `currentColor` stroke, so icons inherit text color and respond to theming automatically. Consistent rendering on Windows, Mac, and Linux. Zero external dependencies, works in file:// mode.
+
+Note: The `<symbol>` + `<use href>` sprite approach was considered but rejected — `<use href>` fails in file:// mode due to cross-origin restrictions. Inline per-instance adds slightly more HTML but works universally.
 
 ### Icon Set
 
@@ -171,11 +175,11 @@ All icon-only controls must include both `title` and `aria-label`. Readiness ind
 
 ### Cost
 
-~3-4KB added to HTML (~2% of current size). Faster than emoji (no font fallback lookup) and faster than CDN (no network request). SVG sprite is defined once; `<use>` references add ~30 bytes each.
+~3-4KB added to HTML (~2% of current size). Faster than emoji (no font fallback lookup) and faster than CDN (no network request).
 
 ### Files Changed
 
-- `src/generate.py`: add SVG sprite block in `<body>` top, replace emoji in cards, replace letters in overlay, replace Unicode symbols in action buttons (gear, arrows, close, etc.)
+- `src/generate.py`: add `SVG_ICONS` dict + `_svg_icon()` helper at module level, replace emoji in cards, replace letters in overlay, replace Unicode symbols in action buttons (gear, arrows, close, etc.)
 
 ## 5. Bottom Lane Cohesion
 
@@ -255,14 +259,13 @@ These are smaller consistency fixes applied throughout:
 
 All transitions stay at 0.15s standard.
 
-### New (Up to 2 allowed)
+### New
 
-- **Archive lane transition**: brief highlight when a card moves to a bottom lane (reuse `card-moved` glow, adapted for list row)
-- **Confirm/undo feedback**: subtle flash on inline confirm arm/execute (reuse `content-flash`)
+No new animations were added in this pass. The two candidates (archive lane highlight, confirm/undo flash) were deferred — existing animations cover the use cases adequately.
 
 ### Reduced Motion
 
-Wrap all animations and transitions in `@media (prefers-reduced-motion: no-preference)`. When reduced motion is preferred, all animations are disabled and transitions are instant.
+A single blanket `@media (prefers-reduced-motion: reduce)` rule at the end of the CSS block disables all animations and transitions (set to `0.01ms` duration, not `0s`, to avoid breaking JS `transitionend` event handlers). This is simpler than wrapping each animation individually in `prefers-reduced-motion: no-preference`.
 
 ## What Is Explicitly Out of Scope
 
@@ -318,8 +321,9 @@ Inner content of elements may change (emoji → SVG), but structural selectors a
 
 13. Trigger each toast type (success, error, undo), verify unified appearance and position
 14. Trigger clipboard copy while undo toast is active — undo toast not displaced
-15. Test inline confirm on draft delete — verify arm/cancel/auto-reset/undo cycle
-16. Test modal on project remove — verify backdrop, red button, no undo
+15. Test modal on draft delete — verify backdrop, destructive language, red button, no undo
+16. Test modal on project remove — verify same modal pattern, backdrop, red button
+17. Test inline confirm on attachment unlink — verify arm/cancel/auto-reset/undo cycle
 
 ### Manual — Icons & Visual
 

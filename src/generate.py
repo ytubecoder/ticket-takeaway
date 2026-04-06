@@ -1570,6 +1570,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 }}
 .settings-install-btn:hover {{ background: rgba(59,130,246,0.2); }}
 .settings-install-btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+.settings-hint {{ font-size: 10px; color: var(--text-tertiary); padding: 0 0 8px 0; line-height: 1.4; }}
 .settings-link {{
   font-size: 11px; color: var(--accent); text-decoration: none;
 }}
@@ -1748,6 +1749,14 @@ a {{ color: var(--accent); text-decoration: none; }}
         <label>Path</label>
         <input type="text" id="settingsFeedbacksPath" placeholder="~/projects/feedbacks">
       </div>
+      <div class="settings-row">
+        <label>Auto-start recording</label>
+        <label class="settings-toggle-switch">
+          <input type="checkbox" id="settingsFeedbacksAutostart">
+          <span class="settings-toggle-slider"></span>
+        </label>
+      </div>
+      <div class="settings-hint" id="settingsAutostartHint">Skip the Start button when opening the recorder — capture begins immediately.</div>
       <div class="settings-row">
         <a class="settings-link" href="{FEEDBACKS_REPO_URL}" target="_blank" rel="noopener">GitHub</a>
         <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
@@ -4338,6 +4347,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   var enabledChk = document.getElementById('settingsFeedbacksEnabled');
   var pathInput = document.getElementById('settingsFeedbacksPath');
+  var autostartChk = document.getElementById('settingsFeedbacksAutostart');
+  var autostartHint = document.getElementById('settingsAutostartHint');
   var statusDot = document.getElementById('feedbacksStatusDot');
   var statusLabel = document.getElementById('feedbacksStatusLabel');
   var installBtn = document.getElementById('settingsFeedbacksInstall');
@@ -4376,6 +4387,8 @@ a {{ color: var(--accent); text-decoration: none; }}
       .then(function(data) {{
         if (enabledChk) enabledChk.checked = (data['feedbacks.enabled'] === 'true' || data['feedbacks.enabled'] === 'True' || data['feedbacks.enabled'] === true);
         if (pathInput) pathInput.value = data['feedbacks.home'] || '';
+        var autoVal = data['feedbacks.autostart'];
+        if (autostartChk) autostartChk.checked = (autoVal === 'true' || autoVal === 'True' || autoVal === true);
       }})
       .catch(function() {{ /* settings endpoint may not exist yet */ }});
   }}
@@ -4418,6 +4431,13 @@ a {{ color: var(--accent); text-decoration: none; }}
         if (pathInput) {{
           pathInput.disabled = !data.enabled;
           pathInput.style.opacity = data.enabled ? '1' : '0.4';
+        }}
+        // Autostart toggle: disabled when feedbacks not enabled
+        if (autostartChk) {{
+          autostartChk.disabled = !data.enabled;
+        }}
+        if (autostartHint) {{
+          autostartHint.style.opacity = data.enabled ? '1' : '0.4';
         }}
         // Install button: "Re-install" if already installed
         if (installBtn) {{
@@ -4469,6 +4489,12 @@ a {{ color: var(--accent); text-decoration: none; }}
   if (pathInput) {{
     pathInput.addEventListener('blur', function() {{
       saveSettings({{ 'feedbacks.home': pathInput.value }});
+    }});
+  }}
+
+  if (autostartChk) {{
+    autostartChk.addEventListener('change', function() {{
+      saveSettings({{ 'feedbacks.autostart': autostartChk.checked ? 'true' : 'false' }});
     }});
   }}
 
@@ -4681,7 +4707,12 @@ a {{ color: var(--accent); text-decoration: none; }}
     .then(function(r) {{ return r.json(); }})
     .then(function(data) {{
       if (data.url) {{
-        var popup = window.open(data.url, '_blank', 'width=550,height=420');
+        var recordUrl = data.url;
+        // Append autostart param if setting is enabled
+        if (autostartChk && autostartChk.checked) {{
+          recordUrl += (recordUrl.indexOf('?') >= 0 ? '&' : '?') + 'autostart=1';
+        }}
+        var popup = window.open(recordUrl, '_blank', 'width=550,height=420');
 
         // Add placeholder row to attachments list
         var placeholder = _createRecordingPlaceholder('Recording in progress\u2026');

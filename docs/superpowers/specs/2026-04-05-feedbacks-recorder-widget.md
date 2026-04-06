@@ -97,15 +97,50 @@ ticket-takeaway                          feedbacks
      | 12. Attachments list refreshes        |
 ```
 
+### 3. Auto-Start via URL Param (`?autostart=1`)
+
+Ticket-takeaway manages an "Auto-start recording" user preference in its settings. When enabled, we append `&autostart=1` to the recorder URL. Feedbacks should:
+
+- If `?autostart=1` is present: skip the Start button and begin capture immediately on page load
+- If absent: show the Start button as normal (default behavior)
+
+This is controlled entirely from our side — no need for feedbacks to store this preference. Just read the URL param and act on it.
+
+### 4. Transcription Status Indicator
+
+During recording, the user needs visual confirmation that their speech is being captured. Whisper processes audio in ~10s chunks and the transcript appears in the timeline — but there's no clear indicator that transcription is actively happening.
+
+**What we need:**
+
+A visible status indicator in the recorder UI that shows transcription activity:
+
+- **Idle** — no speech detected, no indicator (or subtle "Listening..." text)
+- **Transcribing** — a chunk of audio has been sent to whisper and is being processed. Show a visual indicator (e.g., animated dots, a small waveform, or text like "Transcribing...") so the user knows their speech was captured
+- **Done** — the chunk was transcribed successfully. Brief flash of confirmation (e.g., checkmark or the first few words appearing)
+
+**Why this matters:**
+
+The user is recording feedback while looking at another window (the one being captured). They can't see the timeline building up. Without a transcription indicator, they have no way to know if whisper is actually processing their speech — and losing a spoken segment without knowing is a bad experience. The indicator gives confidence that "yes, the system heard me."
+
+**Scope:**
+
+This should work in both the full app and the `?mode=recorder` compact widget. In the compact widget it's especially important since the user can't see the timeline at all — the indicator is their only feedback that speech capture is working.
+
+**Implementation suggestion (your call):**
+
+When a chunk is sent to `/transcribe`, show "Transcribing..." near the recording timer. When the response comes back, briefly flash the first few words of the transcript (e.g., "✓ The settings drawer...") then fade back to the recording state. This reuses the existing whisper request/response cycle — no new backend work needed.
+
 ## Summary of Ask
 
 | Item | Effort | Priority |
 |------|--------|----------|
 | `?mode=recorder` compact UI | Medium | Required |
 | Auto-close popup on save | Small | Required |
+| `?autostart=1` support | Small | Required |
+| Transcription status indicator | Medium | Required |
 | (Everything else) | Zero | We handle it |
 
 ## Decisions
 
-1. **Manual start with opt-in auto-start** — First open shows a "Start Recording" button. Include a "Start automatically next time" checkbox. If checked, persist the preference (localStorage is fine) and auto-start on future opens.
-2. **Window size** — `window.open(url, '_blank', 'width=440,height=310')`. Design the compact UI to fit comfortably in that space.
+1. **Auto-start controlled by URL param** — ticket-takeaway sends `&autostart=1` when the user has the setting enabled. Feedbacks reads the param and skips the Start button if present. Default (no param) shows Start button.
+2. **Window size** — `window.open(url, '_blank', 'width=550,height=420')`. Design the compact UI to fit comfortably in that space.

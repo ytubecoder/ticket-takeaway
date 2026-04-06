@@ -54,6 +54,7 @@ SVG_ICONS = {
     "check": '<path d="M20 6 9 17l-5-5"/>',
     "snowflake": '<line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+    "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
 }
 
 
@@ -1369,6 +1370,16 @@ a {{ color: var(--accent); text-decoration: none; }}
 .detail-dctrs-strip .readiness-dot:hover {{ opacity: 1; border-color: var(--accent); }}
 .detail-close {{ background: none; border: none; color: var(--text-tertiary); font-size: 22px; cursor: pointer; padding: 0 4px; line-height: 1; flex-shrink: 0; }}
 .detail-close:hover {{ color: var(--text-primary); }}
+.detail-record-btn {{
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 4px 12px;
+  border-radius: 6px; border: 1px solid rgba(34,197,94,0.4); background: rgba(34,197,94,0.1);
+  color: #22c55e; cursor: pointer; font-weight: 600; font-family: var(--font-sans);
+  transition: all 0.15s; flex-shrink: 0; margin-left: auto;
+}}
+.detail-record-btn:hover {{ background: rgba(34,197,94,0.2); border-color: #22c55e; }}
+.detail-record-btn svg {{ fill: none; stroke: currentColor; stroke-width: 2; }}
+.record-action-btn {{ color: #22c55e !important; border-color: rgba(34,197,94,0.4) !important; }}
+.record-action-btn:hover {{ background: rgba(34,197,94,0.12) !important; }}
 /* Meta strip — fixed below header */
 .detail-meta-strip {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); }}
 .meta-chip {{ display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; font-family: var(--font-sans); background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); cursor: pointer; color: var(--text-secondary); transition: all 0.15s; user-select: none; white-space: nowrap; }}
@@ -3033,6 +3044,7 @@ a {{ color: var(--accent); text-decoration: none; }}
       <div class="detail-dctrs-strip">
         {_dctrs_icons}
       </div>
+      <button class="detail-record-btn" id="detail-record-btn" style="display:none" title="Record feedback session">{_svg_icon("mic", 14)} Record</button>
       <button class="detail-close" aria-label="Close ticket detail">{_icon_close}</button>
     </div>
     <div class="detail-meta-strip">
@@ -4615,98 +4627,118 @@ a {{ color: var(--accent); text-decoration: none; }}
       }});
   }}
 
+  var detailRecordBtn = document.getElementById('detail-record-btn');
+
   function updateRecordButton(ticketId) {{
-    if (!recordBtn || !linkBtn) return;
-    // Check feedbacks status
+    // Check feedbacks status and update all record buttons
     fetch(EDIT_API + '/feedbacks/status')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        if (data.installed && data.enabled) {{
-          recordBtn.style.display = 'inline-block';
-          recordBtn.classList.add('active');
-          recordBtn.title = 'Record a feedback session for this ticket';
-          linkBtn.style.display = 'inline-block';
-        }} else if (data.installed) {{
-          recordBtn.style.display = 'inline-block';
-          recordBtn.classList.remove('active');
-          recordBtn.style.opacity = '0.5';
-          recordBtn.title = 'Feedbacks disabled — enable in Settings';
-          linkBtn.style.display = 'none';
-        }} else {{
-          recordBtn.style.display = 'none';
-          linkBtn.style.display = 'none';
+        var enabled = data.installed && data.enabled;
+        // Attachment section buttons
+        if (recordBtn) {{
+          if (enabled) {{
+            recordBtn.style.display = 'inline-block';
+            recordBtn.classList.add('active');
+            recordBtn.title = 'Record a feedback session for this ticket';
+          }} else {{
+            recordBtn.style.display = 'none';
+          }}
+          recordBtn.dataset.ticketId = ticketId;
         }}
-        // Store ticketId on buttons for click handler
-        recordBtn.dataset.ticketId = ticketId;
-        if (linkBtn) linkBtn.dataset.ticketId = ticketId;
+        if (linkBtn) {{
+          linkBtn.style.display = enabled ? 'inline-block' : 'none';
+          linkBtn.dataset.ticketId = ticketId;
+        }}
+        // Detail header record button
+        if (detailRecordBtn) {{
+          detailRecordBtn.style.display = enabled ? 'inline-flex' : 'none';
+          detailRecordBtn.dataset.ticketId = ticketId;
+        }}
+        // Card action strip record buttons (all cards)
+        document.querySelectorAll('.record-action-btn').forEach(function(btn) {{
+          btn.style.display = enabled ? 'inline-flex' : 'none';
+        }});
       }})
       .catch(function() {{
-        recordBtn.style.display = 'none';
-        linkBtn.style.display = 'none';
+        if (recordBtn) recordBtn.style.display = 'none';
+        if (linkBtn) linkBtn.style.display = 'none';
+        if (detailRecordBtn) detailRecordBtn.style.display = 'none';
+        document.querySelectorAll('.record-action-btn').forEach(function(btn) {{
+          btn.style.display = 'none';
+        }});
       }});
   }}
 
-  // Record button click — start a feedbacks session
+  // Shared record handler — used by all record buttons
+  function startRecording(tid) {{
+    if (!tid) return;
+    fetch(EDIT_API + '/tickets/' + tid + '/record', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: '{{}}'
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (data.url) {{
+        var popup = window.open(data.url, '_blank', 'width=550,height=420');
+
+        // Add placeholder row to attachments list
+        var placeholder = _createRecordingPlaceholder('Recording in progress\u2026');
+        if (attachmentsList) {{
+          var empty = attachmentsList.querySelector('.attachments-empty');
+          if (empty) empty.remove();
+          attachmentsList.insertBefore(placeholder, attachmentsList.firstChild);
+        }}
+
+        // Poll for popup close, then switch to "processing" state
+        var pollId = setInterval(function() {{
+          if (popup && !popup.closed) return;
+          clearInterval(pollId);
+          var label = placeholder.querySelector('.attachment-summary');
+          if (label) label.textContent = 'Processing session\u2026';
+
+          // Poll for real attachment to appear
+          var attempts = 0;
+          var attPollId = setInterval(function() {{
+            attempts++;
+            if (attempts > 20) {{
+              clearInterval(attPollId);
+              if (placeholder.parentNode) placeholder.remove();
+              return;
+            }}
+            loadAttachments(tid);
+            setTimeout(function() {{
+              if (!placeholder.parentNode) clearInterval(attPollId);
+            }}, 500);
+          }}, 3000);
+        }}, 500);
+      }} else {{
+        showAppToast(data.error || 'Failed to start recording', 'error');
+      }}
+    }})
+    .catch(function() {{ showAppToast('Failed to start recording', 'error'); }});
+  }}
+
+  // Wire all record buttons to shared handler
   if (recordBtn) {{
     recordBtn.addEventListener('click', function() {{
-      var tid = recordBtn.dataset.ticketId;
-      if (!tid) return;
-      fetch(EDIT_API + '/tickets/' + tid + '/record', {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body: '{{}}'
-      }})
-      .then(function(r) {{ return r.json(); }})
-      .then(function(data) {{
-        if (data.url) {{
-          var popup = window.open(data.url, '_blank', 'width=550,height=420');
-          recordBtn.textContent = 'Recording...';
-          recordBtn.disabled = true;
-
-          // Add placeholder row to attachments list
-          var placeholder = _createRecordingPlaceholder('Recording in progress\u2026');
-          if (attachmentsList) {{
-            // Remove "No attachments yet." if present
-            var empty = attachmentsList.querySelector('.attachments-empty');
-            if (empty) empty.remove();
-            attachmentsList.insertBefore(placeholder, attachmentsList.firstChild);
-          }}
-
-          // Poll for popup close, then switch to "processing" state
-          var prevCount = attachmentsList ? attachmentsList.querySelectorAll('.attachment-row:not(.attachment-placeholder)').length : 0;
-          var pollId = setInterval(function() {{
-            if (popup && !popup.closed) return;
-            // Popup closed — switch to processing state
-            clearInterval(pollId);
-            recordBtn.textContent = 'Record';
-            recordBtn.disabled = false;
-            var label = placeholder.querySelector('.attachment-summary');
-            if (label) label.textContent = 'Processing session\u2026';
-
-            // Poll for real attachment to appear
-            var attempts = 0;
-            var attPollId = setInterval(function() {{
-              attempts++;
-              if (attempts > 20) {{ // 60s safety timeout
-                clearInterval(attPollId);
-                if (placeholder.parentNode) placeholder.remove();
-                return;
-              }}
-              loadAttachments(tid);
-              // loadAttachments clears all children including placeholder
-              // so if it ran, placeholder is gone — stop polling
-              setTimeout(function() {{
-                if (!placeholder.parentNode) clearInterval(attPollId);
-              }}, 500);
-            }}, 3000);
-          }}, 500);
-        }} else {{
-          showAppToast(data.error || 'Failed to start recording', 'error');
-        }}
-      }})
-      .catch(function() {{ showAppToast('Failed to start recording', 'error'); }});
+      startRecording(recordBtn.dataset.ticketId);
     }});
   }}
+  if (detailRecordBtn) {{
+    detailRecordBtn.addEventListener('click', function() {{
+      startRecording(detailRecordBtn.dataset.ticketId);
+    }});
+  }}
+  // Card action strip record buttons (delegated)
+  document.addEventListener('click', function(e) {{
+    var btn = e.target.closest('.record-action-btn[data-action="record"]');
+    if (btn) {{
+      e.stopPropagation();
+      startRecording(btn.dataset.ticketId);
+    }}
+  }});
 
   function _createRecordingPlaceholder(text) {{
     var row = document.createElement('div');
@@ -4760,6 +4792,17 @@ a {{ color: var(--accent); text-decoration: none; }}
       updateRecordButton(tid);
     }}, 150);
   }};
+
+  // On page load: show/hide card action strip record buttons
+  fetch(EDIT_API + '/feedbacks/status')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      var show = data.installed && data.enabled;
+      document.querySelectorAll('.record-action-btn').forEach(function(btn) {{
+        btn.style.display = show ? 'inline-flex' : 'none';
+      }});
+    }})
+    .catch(function() {{}});
 }})();
 </script>
 
@@ -5068,7 +5111,9 @@ def _render_action_buttons(slug: str, ticket_id: str) -> str:
     elif slug == "review":
         buttons.append(f'<button class="action-btn primary" data-action="accept">{_svg_icon("check", 12)} Accept</button>')
         buttons.append(f'<button class="action-btn" data-action="move" data-section="WIP">{_svg_icon("arrow-left", 12)} Back to WIP</button>')
-    if not buttons:
+    # Record button — shown conditionally by JS when feedbacks is enabled
+    buttons.append(f'<button class="action-btn record-action-btn" data-action="record" data-ticket-id="{ticket_id}" style="display:none">{_svg_icon("mic", 12)} Record</button>')
+    if len(buttons) <= 1:
         return ""
     return '        <div class="card-actions">' + "".join(buttons) + '</div>\n'
 

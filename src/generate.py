@@ -863,7 +863,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 .card-title {{ font-size: 12px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }}
 
 .card-meta {{ display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }}
-.card-id {{ font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); font-weight: 500; }}
+.card-id {{ font-size: 10px; color: var(--accent); opacity: 0.6; font-family: var(--font-mono); font-weight: 600; flex-shrink: 0; }}
 
 .status-badge {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 600; text-transform: uppercase; }}
 .status-badge.proposed {{ background: var(--status-backlog-bg); color: var(--status-backlog); }}
@@ -883,10 +883,17 @@ a {{ color: var(--accent); text-decoration: none; }}
 
 .card-open-btn {{
   background: none; border: none; color: var(--text-tertiary); cursor: pointer;
-  font-size: 12px; padding: 0 2px; line-height: 1; opacity: 0.4;
-  transition: opacity 0.15s;
+  font-size: 14px; padding: 2px 4px; line-height: 1; opacity: 0.6;
+  transition: all 0.15s; border-radius: 4px;
 }}
-.card-open-btn:hover {{ opacity: 1; color: var(--accent); }}
+.card-open-btn:hover {{ opacity: 1; color: var(--accent); background: var(--bg-hover); }}
+.card-record-btn {{
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 12px; padding: 1px 3px; line-height: 1; opacity: 0.4;
+  transition: all 0.15s; border-radius: 4px;
+}}
+.card-record-btn:hover {{ opacity: 1; color: #22c55e; background: rgba(34,197,94,0.1); }}
+.card-record-btn svg {{ fill: none; stroke: currentColor; stroke-width: 2; }}
 
 .card-desc {{ font-size: 11px; color: var(--text-secondary); line-height: 1.3; margin-top: 6px; display: none; }}
 .card-criteria {{ font-size: 11px; color: var(--text-tertiary); line-height: 1.4; margin-top: 4px; display: none; }}
@@ -1349,7 +1356,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 .readiness-dot svg {{ width: 12px; height: 12px; flex-shrink: 0; }}
 .action-btn svg {{ width: 12px; height: 12px; vertical-align: -2px; margin-right: 2px; }}
 .settings-toggle svg, .detail-close svg, .settings-drawer-close svg {{ width: 14px; height: 14px; }}
-.card-open-btn svg {{ width: 12px; height: 12px; }}
+.card-open-btn svg {{ width: 14px; height: 14px; }}
 
 /* Detail overlay */
 .detail-overlay {{ position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }}
@@ -3139,7 +3146,6 @@ a {{ color: var(--accent); text-decoration: none; }}
         <div class="detail-section-header">
           <h3>Attachments</h3>
           <div class="attachments-actions">
-            <button class="record-feedback-btn" id="record-feedback-btn" style="display:none">Record</button>
             <button class="link-session-btn" id="link-session-btn" style="display:none">+ Link</button>
           </div>
         </div>
@@ -4533,7 +4539,6 @@ a {{ color: var(--accent); text-decoration: none; }}
   if (!EDIT_API) return;
 
   var attachmentsList = document.getElementById('attachments-list');
-  var recordBtn = document.getElementById('record-feedback-btn');
   var linkBtn = document.getElementById('link-session-btn');
 
   function loadAttachments(ticketId) {{
@@ -4661,17 +4666,6 @@ a {{ color: var(--accent); text-decoration: none; }}
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
         var enabled = data.installed && data.enabled;
-        // Attachment section buttons
-        if (recordBtn) {{
-          if (enabled) {{
-            recordBtn.style.display = 'inline-block';
-            recordBtn.classList.add('active');
-            recordBtn.title = 'Record a feedback session for this ticket';
-          }} else {{
-            recordBtn.style.display = 'none';
-          }}
-          recordBtn.dataset.ticketId = ticketId;
-        }}
         if (linkBtn) {{
           linkBtn.style.display = enabled ? 'inline-block' : 'none';
           linkBtn.dataset.ticketId = ticketId;
@@ -4681,16 +4675,15 @@ a {{ color: var(--accent); text-decoration: none; }}
           detailRecordBtn.style.display = enabled ? 'inline-flex' : 'none';
           detailRecordBtn.dataset.ticketId = ticketId;
         }}
-        // Card action strip record buttons (all cards)
-        document.querySelectorAll('.record-action-btn').forEach(function(btn) {{
-          btn.style.display = enabled ? 'inline-flex' : 'none';
+        // Card record buttons (all cards)
+        document.querySelectorAll('.card-record-btn').forEach(function(btn) {{
+          btn.style.display = enabled ? 'inline-block' : 'none';
         }});
       }})
       .catch(function() {{
-        if (recordBtn) recordBtn.style.display = 'none';
         if (linkBtn) linkBtn.style.display = 'none';
         if (detailRecordBtn) detailRecordBtn.style.display = 'none';
-        document.querySelectorAll('.record-action-btn').forEach(function(btn) {{
+        document.querySelectorAll('.card-record-btn').forEach(function(btn) {{
           btn.style.display = 'none';
         }});
       }});
@@ -4752,12 +4745,7 @@ a {{ color: var(--accent); text-decoration: none; }}
     .catch(function() {{ showAppToast('Failed to start recording', 'error'); }});
   }}
 
-  // Wire all record buttons to shared handler
-  if (recordBtn) {{
-    recordBtn.addEventListener('click', function() {{
-      startRecording(recordBtn.dataset.ticketId);
-    }});
-  }}
+  // Wire record buttons to shared handler
   if (detailRecordBtn) {{
     detailRecordBtn.addEventListener('click', function() {{
       startRecording(detailRecordBtn.dataset.ticketId);
@@ -4765,7 +4753,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   }}
   // Card action strip record buttons (delegated)
   document.addEventListener('click', function(e) {{
-    var btn = e.target.closest('.record-action-btn[data-action="record"]');
+    var btn = e.target.closest('.card-record-btn[data-action="record"]');
     if (btn) {{
       e.stopPropagation();
       startRecording(btn.dataset.ticketId);
@@ -4825,13 +4813,13 @@ a {{ color: var(--accent); text-decoration: none; }}
     }}, 150);
   }};
 
-  // On page load: show/hide card action strip record buttons
+  // On page load: show/hide card record buttons
   fetch(EDIT_API + '/feedbacks/status')
     .then(function(r) {{ return r.json(); }})
     .then(function(data) {{
       var show = data.installed && data.enabled;
-      document.querySelectorAll('.record-action-btn').forEach(function(btn) {{
-        btn.style.display = show ? 'inline-flex' : 'none';
+      document.querySelectorAll('.card-record-btn').forEach(function(btn) {{
+        btn.style.display = show ? 'inline-block' : 'none';
       }});
     }})
     .catch(function() {{}});
@@ -5097,10 +5085,12 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
         f'{draft_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
+        f'<span class="card-id">{id_esc}</span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
-        f'        <div class="card-meta"><span class="card-id">{id_esc}</span>'
+        f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
-        f'<button class="card-open-btn" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button></div>\n'
+        f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
+        f'<button class="card-open-btn" title="Open ticket details" aria-label="Open {id_esc}">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
         f'{readiness_html}'
         f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'
         f'{git_html}'
@@ -5143,9 +5133,7 @@ def _render_action_buttons(slug: str, ticket_id: str) -> str:
     elif slug == "review":
         buttons.append(f'<button class="action-btn primary" data-action="accept">{_svg_icon("check", 12)} Accept</button>')
         buttons.append(f'<button class="action-btn" data-action="move" data-section="WIP">{_svg_icon("arrow-left", 12)} Back to WIP</button>')
-    # Record button — shown conditionally by JS when feedbacks is enabled
-    buttons.append(f'<button class="action-btn record-action-btn" data-action="record" data-ticket-id="{ticket_id}" style="display:none">{_svg_icon("mic", 12)} Record</button>')
-    if len(buttons) <= 1:
+    if not buttons:
         return ""
     return '        <div class="card-actions">' + "".join(buttons) + '</div>\n'
 

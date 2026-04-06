@@ -219,8 +219,8 @@ def test_record_button_visible_when_feedbacks_enabled(page_no_js_errors):
     page.evaluate(f"window.openDetailOverlay('{tid}')")
     page.wait_for_timeout(500)
 
-    record_btn = page.query_selector("#record-feedback-btn")
-    assert record_btn is not None, "Record button not found in DOM"
+    record_btn = page.query_selector("#detail-record-btn")
+    assert record_btn is not None, "Detail record button not found in DOM"
 
 
 def test_attachment_row_has_play_button(page_no_js_errors):

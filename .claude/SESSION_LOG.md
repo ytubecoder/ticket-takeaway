@@ -1,5 +1,27 @@
 # Session Log
 
+## 2026-04-06 — UI consistency pass: theming, icons, toasts, dialogs, bottom lanes
+
+### Summary
+- Designed, planned, and implemented a full UI consistency pass across generate.py, serve.py, and constants.py
+- Added light/dark/system theming (3 surfaces), inline SVG icon system (17 icons), unified toast with priority tiers, inline confirm + custom modal dialog patterns, bottom lane visual cohesion, focus rings, reduced-motion support
+- Removed Coming Soon placeholder, fixed feedbacks URL mismatch, eliminated all native alert()/confirm() calls
+
+### Lessons Learned
+- **Accepted:** Inline SVG per-instance over `<symbol>`/`<use>` sprite — `<use href>` fails in file:// mode due to cross-origin restrictions
+- **Accepted:** Blanket `@media (prefers-reduced-motion: reduce)` at end of CSS with `0.01ms` duration — simpler than wrapping each animation individually, `0.01ms` (not `0s`) avoids breaking JS `transitionend` handlers
+- **Accepted:** Draft delete uses modal (not inline confirm) because no restore endpoint exists — followed the spec's own undo reliability gate
+- **Rejected:** `<symbol>`/`<use>` SVG sprite — breaks in file:// mode
+- **Rejected:** Text-only visual companion mockups — user correctly called out that putting text descriptions in HTML is pointless; show actual rendered components or stay in the terminal
+- **Gotcha:** Theme init script must be synchronous in `<head>` before `<style>` to prevent flash of wrong theme — DOMContentLoaded is too late
+- **Gotcha:** Light theme initially felt "washed out" — borders too subtle (#e5e7eb), needs follow-up with slightly darker border tokens or faint card shadows
+
+### Decisions
+- Design direction: Blended (Primer restraint for chrome + Atlassian warmth for content)
+- Toast priority: error/undo cannot be displaced by success/copy; queue behind if needed
+- Inline confirm contract: one armed at a time, 3s auto-reset, only for actions with reliable undo
+- Deferred: icon library migration (staying with inline SVG), trash/bin lane (needs DB schema), new animations (existing set is sufficient)
+
 ## 2026-04-05 — Merge multi-project + feedbacks branches, deploy, fix switcher chevron
 
 ### Summary

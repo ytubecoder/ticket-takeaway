@@ -51,11 +51,11 @@ src/generate.py    — dashboard HTML renderer
 
 **`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`, `register`, `unregister`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
 
-**`src/generate.py`** (~3000 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
+**`src/generate.py`** (~5100 lines, Python 3.10+, no external deps) is the dashboard renderer. It:
 1. Reads `~/.claude/ticket-takeaway/registry.json` for project paths
 2. Loads tickets from SQLite (falls back to parsing PRODUCT_BACKLOG.md if no DB)
 3. Collects git/code stats via shell commands
-4. Renders a self-contained HTML file with inline CSS/JS (dark theme kanban)
+4. Renders a self-contained HTML file with inline CSS/JS (light/dark/system theming)
 5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
@@ -77,7 +77,7 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 - **Priority cycling** (click the colored dot), **Status dropdown** (click badge)
 - **Drag-to-move** (drag cards between columns), **Inline text editing** (dblclick title/description when expanded)
 - **Workflow buttons** (Start, Done, Accept — shown when expanded), **Create/Delete** via API
-- **New ticket panel** ("+ New" in filter bar) — overlay panel with title input, section dropdown, and expandable "Full ticket form" (coming soon placeholder)
+- **New ticket panel** ("+ New" in filter bar) — quick-create with title input + section dropdown
 - **Gate-check on column moves** — dragging/moving a ticket to a top column triggers an AI-powered readiness analysis (DCTRS flags), showing results in an expandable panel with per-section editable fields
 - **Ticket detail overlay** — single scrollable card. Header: ID + contenteditable title + DCSTL readiness dots (click to scroll). Meta strip: priority/status/complexity chips (click to cycle/dropdown), parent (click to edit), section badge. Body: D C S T L sections stacked with inline auto-save on blur. "Assess"/"Re-assess" button per section (always visible at 40% opacity). Criteria/Tests/Smoke as individual list items (add/edit/delete per-item). Learnings as prose textarea. AI responses cached per-ticket. ↗ open button on kanban cards.
 - **Undo/Redo** — Ctrl+Z undoes last edit, Ctrl+Shift+Z/Ctrl+Y redoes. Stack depth 50. Covers priority, status, complexity, criteria, text edits.
@@ -86,6 +86,14 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
 
 **Multi-project support:** serve.py handles multiple projects simultaneously via project-scoped URL routing (`/{project-id}/api/...`). Root `/` serves a project picker page. Each project page has a **project switcher dropdown** in the header (replaces the static project name span). The server injects `projects-list` and `current-project` meta tags for the JS switcher. Project settings available at `/{project-id}/settings`. Background threads (markdown watcher, scheduled events) iterate all registered projects. CLI commands `register`/`unregister` manage the project registry.
+
+**Theming:** Light/dark/system theme via `<html data-theme="dark|light">`. Preference stored in `localStorage('tt-theme')`. Synchronous `<script>` in `<head>` prevents flash. Three-way toggle in settings drawer. Applied to dashboard, project picker, and settings pages. file:// mode uses system preference with localStorage fallback.
+
+**Icons:** Inline SVG icons via `SVG_ICONS` dict + `_svg_icon(name, size, cls)` helper at module level. Lucide-style, `currentColor` stroke, consistent cross-platform. No external dependencies.
+
+**Toast system:** Single `showAppToast(message, type, duration, undoFn)` function replaces 3 prior implementations. Priority tiers: error/undo (high) cannot be displaced by success/copy (low). Undo toasts include clickable Undo button built via DOM methods. No native `alert()` or `confirm()` calls anywhere.
+
+**Dialog patterns:** Reversible actions (attachment unlink) use inline confirm with undo. Destructive actions (draft delete, project remove) use custom modal. Rule: no inline confirm without working undo path.
 
 **Progressive enhancement:** Same HTML works read-only via file://. Edit features only activate when `edit-api` meta tag present (injected by serve.py).
 
@@ -167,7 +175,7 @@ Bug sub-tickets with a `Parent: {ID}` field are **never shown as standalone card
 
 ## Bottom List Sections
 
-The bottom sections (Bugs, Done, Icebox, Won't Do) render as **compact list rows** instead of full kanban cards. Same click/dblclick behavior, different visual style. Orphan bugs (no parent) appear in the Bug Backlog list; parented bugs only appear nested under their parent.
+The bottom sections (Bugs, Done, Icebox, Won't Do) render as **compact list rows** with the same visual tokens as kanban cards — same card background, borders, priority dots, status badges, readiness dots, and left-border color coding. Different density (horizontal layout, denser padding) but visual continuity with the active board above. Each row has a card-open-btn. Orphan bugs (no parent) appear in the Bug Backlog list; parented bugs only appear nested under their parent.
 
 ## Testing
 

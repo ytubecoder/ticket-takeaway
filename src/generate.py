@@ -4709,7 +4709,8 @@ a {{ color: var(--accent); text-decoration: none; }}
       if (data.url) {{
         var recordUrl = data.url;
         // Append autostart param if setting is enabled
-        if (autostartChk && autostartChk.checked) {{
+        var _autoChk = document.getElementById('settingsFeedbacksAutostart');
+        if (_autoChk && _autoChk.checked) {{
           recordUrl += (recordUrl.indexOf('?') >= 0 ? '&' : '?') + 'autostart=1';
         }}
         var popup = window.open(recordUrl, '_blank', 'width=550,height=420');

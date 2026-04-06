@@ -2104,7 +2104,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             ticket_id = m.group(1)
             from constants import FEEDBACKS_DEFAULT_PORT
-            callback_url = f"http://localhost:{SERVER_PORT}/api/feedbacks/callback"
+            callback_url = f"http://localhost:{SERVER_PORT}/{proj['id']}/api/feedbacks/callback"
             record_url = (
                 f"http://localhost:{FEEDBACKS_DEFAULT_PORT}/"
                 f"?ticket={ticket_id}&callback={callback_url}&mode=recorder"

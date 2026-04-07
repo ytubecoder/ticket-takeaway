@@ -130,8 +130,6 @@ Ticket Takeaway integrates with [Feedbacks](https://github.com/ytubecoder/feedba
 
 <img width="1597" height="1303" alt="image" src="https://github.com/user-attachments/assets/86a6964e-9b0f-4c91-aea0-f31d16859cf6" />
 
-<img width="981" height="377" alt="image" src="https://github.com/user-attachments/assets/5a4d8da0-2254-4048-8adc-72958c3d073f" />
-
 
 
 When installed, you can:

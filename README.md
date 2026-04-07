@@ -39,19 +39,19 @@ Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via rea
 ### One-liner (from your project directory)
 
 ```bash
-git clone https://github.com/ytubecoder/ticket-takeaway.git ~/projects/ticket-takeaway && python3 ~/projects/ticket-takeaway/install.py --register
+git clone https://github.com/ytubecoder/ticket-takeaway.git ~/ticket-takeaway && python3 ~/ticket-takeaway/install.py --register
 ```
 
-This installs the CLI, generator, and skills, registers your project, and seeds the DB from your existing `PRODUCT_BACKLOG.md` (if you have one).
+This installs the CLI, generator, and skills, registers your project, and seeds the DB from your existing `PRODUCT_BACKLOG.md` (if you have one). You can clone to any directory you prefer — just replace `~/ticket-takeaway` with your chosen path.
 
 ### Or tell your agent
 
-> Clone https://github.com/ytubecoder/ticket-takeaway to ~/projects/ticket-takeaway and run `python3 ~/projects/ticket-takeaway/install.py --register`. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically.
+> Clone https://github.com/ytubecoder/ticket-takeaway to ~/ticket-takeaway and run `python3 ~/ticket-takeaway/install.py --register`. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically.
 
 ### Upgrade
 
 ```bash
-cd ~/projects/ticket-takeaway && git pull && python3 install.py
+cd ~/ticket-takeaway && git pull && python3 install.py
 ```
 
 The installer copies the latest CLI, generator, and skills. The registry and DB are preserved — only system files are updated.

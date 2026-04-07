@@ -32,7 +32,10 @@ Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via rea
 
 <img width="1595" height="1307" alt="image" src="https://github.com/user-attachments/assets/abfa8936-66c8-44c4-8baf-4fb7f41855ab" />
 
-<img width="1018" height="1174" alt="image" src="https://github.com/user-attachments/assets/8c919eea-9a89-4a6e-8250-c438d897b759" />
+<img width="1590" height="1302" alt="image" src="https://github.com/user-attachments/assets/ce529100-cdac-4bfd-a081-2148c9c7ca2b" />
+
+<img width="1594" height="1304" alt="image" src="https://github.com/user-attachments/assets/cc2a55ab-fb86-4aa5-b256-99cea2c0e0e9" />
+
 
 ## Install
 

@@ -30,8 +30,9 @@ Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Co
 
 Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via read-before-write sync. No data loss either way.
 
-Screenshot from early build
-<img width="1507" alt="Ticket Takeaway dashboard rendered in a browser" src="https://github.com/user-attachments/assets/7a10b450-9f84-4c4b-9481-515d448cbe2f" />
+<img width="1595" height="1307" alt="image" src="https://github.com/user-attachments/assets/abfa8936-66c8-44c4-8baf-4fb7f41855ab" />
+
+<img width="1018" height="1174" alt="image" src="https://github.com/user-attachments/assets/8c919eea-9a89-4a6e-8250-c438d897b759" />
 
 ## Install
 
@@ -126,6 +127,12 @@ Capture screen recordings with voice narration linked to specific tickets. Requi
 ## Feedbacks Integration
 
 Ticket Takeaway integrates with [Feedbacks](https://github.com/ytubecoder/feedbacks) — a screen + voice capture tool for LLM-ready UI feedback. The integration is optional; ticket-takeaway works fully without it.
+
+<img width="1597" height="1303" alt="image" src="https://github.com/user-attachments/assets/86a6964e-9b0f-4c91-aea0-f31d16859cf6" />
+
+<img width="981" height="377" alt="image" src="https://github.com/user-attachments/assets/5a4d8da0-2254-4048-8adc-72958c3d073f" />
+
+
 
 When installed, you can:
 

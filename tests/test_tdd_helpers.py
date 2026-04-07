@@ -181,3 +181,50 @@ def test_dependency_state_wont_do_resolves():
     ]
     result = compute_dependency_state(tickets)
     assert result["T-02"]["deps_resolved"] is True
+
+
+# ---------------------------------------------------------------------------
+# AI response text cleaning
+# ---------------------------------------------------------------------------
+
+
+def test_clean_ai_text_strips_header():
+    from serve import _clean_ai_text
+    assert _clean_ai_text("## Description\n\nActual content here") == "Actual content here"
+
+
+def test_clean_ai_text_strips_bold_header():
+    from serve import _clean_ai_text
+    assert _clean_ai_text("**Acceptance Criteria:**\n\nFirst item") == "First item"
+
+
+def test_clean_ai_text_preserves_normal_text():
+    from serve import _clean_ai_text
+    assert _clean_ai_text("Just normal text") == "Just normal text"
+
+
+def test_clean_ai_text_handles_empty():
+    from serve import _clean_ai_text
+    assert _clean_ai_text("") == ""
+    assert _clean_ai_text(None) == ""
+
+
+def test_clean_criteria_item_strips_bullet():
+    from serve import _clean_criteria_item
+    assert _clean_criteria_item("- [ ] Check the thing") == "Check the thing"
+    assert _clean_criteria_item("- Some criterion") == "Some criterion"
+    assert _clean_criteria_item("* Another one") == "Another one"
+    assert _clean_criteria_item("1. Numbered item") == "Numbered item"
+
+
+def test_clean_analysis_cleans_categories():
+    from serve import _clean_analysis
+    analysis = {
+        "categories": {
+            "D": {"status": "ok", "current_summary": "## Summary\n\nGood", "suggestion": None},
+            "C": {"status": "needs-work", "add_criteria": ["- [ ] New item", "* Another"]},
+        }
+    }
+    _clean_analysis(analysis)
+    assert analysis["categories"]["D"]["current_summary"] == "Good"
+    assert analysis["categories"]["C"]["add_criteria"] == ["New item", "Another"]

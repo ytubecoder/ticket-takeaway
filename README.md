@@ -15,7 +15,7 @@
                     /_______________________________________________/    |
                     |                                               |    |       /spec
      ___            |  ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐     |    |      ───▶
-    /   \    .--.   |  │ IDEAS │ │BACKLOG│ │  WIP  │ │REVIEW │     |   /      build
+    /   \    .--.   |  │ IDEAS │ │BACKLOG│ │  WIP  │ │REVIEW │     |    |      build
    | o o |  |    |  |  │ ░░░░  │ │ ░░░░░ │ │ ▓▓▓▓▓ │ │ ████  │     |  /      ───▶
     \ _ /   |    |  |  │ ░░    │ │ ░░░   │ │ ▓▓▓   │ │       │     | /      /review
      |||    '----'  |  └───────┘ └───────┘ └───────┘ └───────┘     |/      ───▶
@@ -30,26 +30,38 @@ Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Co
 
 Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via read-before-write sync. No data loss either way.
 
-Two skills gate the process: **`/spec`** turns ideas into specced tickets. **`/review`** verifies completed work and handles acceptance. Between those gates, you build however you want.
-
-For tasks that don't need your hands on the keyboard — security reviews, docs, compliance — we intend to make this compatible with agent orchestrators like [Paperclip](https://github.com/paperclipai/paperclip).
-
 Screenshot from early build
 <img width="1507" alt="Ticket Takeaway dashboard rendered in a browser" src="https://github.com/user-attachments/assets/7a10b450-9f84-4c4b-9481-515d448cbe2f" />
 
-## Stages and States
+## Install
 
-The board uses a **stage-and-state** model from Kanban methodology. **Stages** are the columns (defined by `## Section` headings in your markdown). **States** are the `Status:` values on tickets — finer detail within a stage. Same column, different next actions. If you've used JIRA or GitHub Projects, it's the same concept: column = lane, status = position within it.
+### One-liner (from your project directory)
 
-| Stage (Column) | States within it | Meaning |
-|----------------|-----------------|---------|
-| **Ideas** | `proposed` | Unvetted — just a title or rough notion |
-| **Backlog** | `proposed`, `specified`, `ready` | Being specced and queued for work |
-| **WIP** | `in-progress`, `blocked`, `rework` | Actively being built |
-| **For Review** | `for-review` | Code complete, awaiting sign-off |
-| **Done** | `done`, `released` | Accepted or shipped |
+```bash
+git clone https://github.com/ytubecoder/ticket-takeaway.git ~/projects/ticket-takeaway && python3 ~/projects/ticket-takeaway/install.py --register
+```
 
-Side lanes: **Bugs** (`bug`, `bug-fixed`), **Icebox** (`icebox`), **Won't Do** (`wont-do`) — reachable from any stage.
+This installs the CLI, generator, and skills, registers your project, and seeds the DB from your existing `PRODUCT_BACKLOG.md` (if you have one).
+
+### Or tell your agent
+
+> Clone https://github.com/ytubecoder/ticket-takeaway to ~/projects/ticket-takeaway and run `python3 ~/projects/ticket-takeaway/install.py --register`. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically.
+
+### Upgrade
+
+```bash
+cd ~/projects/ticket-takeaway && git pull && python3 install.py
+```
+
+The installer copies the latest CLI, generator, and skills. The registry and DB are preserved — only system files are updated.
+
+### After install
+
+1. Run `/dashboard` to generate and open the board
+2. Add tickets: `python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "First feature"`
+3. Or just add `### B-01: My Feature` to `PRODUCT_BACKLOG.md` — the CLI will pick it up
+
+Full deployment map: [`INSTALL.md`](INSTALL.md)
 
 ## How a Ticket Progresses
 
@@ -73,58 +85,64 @@ Side lanes: **Bugs** (`bug`, `bug-fixed`), **Icebox** (`icebox`), **Won't Do** (
 
 **Stage change** = `tickets-cli.py move <project> <id> <section>`. **State change** = `tickets-cli.py update <project> <id> --status <status>`. Or just edit the markdown — the CLI absorbs direct edits.
 
-## `/spec` — Ideas to Backlog
+## Stages and States
 
-Run `/spec` to walk through all ideas, or `/spec {ID}` for a specific one. The skill:
+The board uses a **stage-and-state** model from Kanban methodology. **Stages** are the columns (defined by `## Section` headings in your markdown). **States** are the `Status:` values on tickets — finer detail within a stage. Same column, different next actions. If you've used JIRA or GitHub Projects, it's the same concept: column = lane, status = position within it.
 
-1. Reads `## Ideas` (and any `proposed` tickets in Backlog)
-2. Helps you write a description and acceptance criteria for each
-3. Suggests test cases (non-mandatory — use `/tdd` later if you want full specs)
-4. Sets priority and complexity
-5. Moves the ticket to `## Backlog` with status `specified`
+| Stage (Column) | States within it | Meaning |
+|----------------|-----------------|---------|
+| **Ideas** | `proposed` | Unvetted — just a title or rough notion |
+| **Backlog** | `proposed`, `specified`, `ready` | Being specced and queued for work |
+| **WIP** | `in-progress`, `blocked`, `rework` | Actively being built |
+| **For Review** | `for-review` | Code complete, awaiting sign-off |
+| **Done** | `done`, `released` | Accepted or shipped |
 
-Double-clicking an idea card on the dashboard copies `/spec {ID}` to your clipboard.
+Side lanes: **Bugs** (`bug`, `bug-fixed`), **Icebox** (`icebox`), **Won't Do** (`wont-do`) — reachable from any stage.
 
-## `/review` — For Review to Done
+## Skills
 
-Run `/review` to walk through all completed work, or `/review {ID}` for one ticket. The skill:
+Skills are slash commands that guide your agent through specific workflow steps. They're assistive — you can always do things manually via the CLI or by editing markdown.
 
-1. Batches related tickets and presents them oldest-first
-2. Verifies each acceptance criterion (use Chrome DevTools MCP tools to inspect the running app)
-3. Creates `BUG-` sub-tickets from feedback, linked to the parent via `Parent:` field
-4. Bugs get fixed and verified before the parent can be re-reviewed
-5. On acceptance: `/accept` moves the ticket to `PRODUCT_SPECIFICATION.md`, summarizes development notes, and cleans up working files
+### `/dashboard`
 
-Double-clicking the For Review column header copies `/review` to your clipboard.
+Generates and opens the kanban board. The dashboard supports light, dark, and system themes, polls for live updates every 2 seconds, and works read-only via `file://` or fully interactive via the built-in server.
+
+### `/spec` — Ideas to Backlog
+
+Run `/spec` to walk through all ideas, or `/spec {ID}` for a specific one. The skill reads unvetted tickets, helps you write a description and acceptance criteria, sets priority and complexity, and moves the ticket to Backlog with status `specified`.
+
+### `/review` — For Review to Done
+
+Run `/review` to walk through completed work. The skill batches related tickets, verifies each acceptance criterion (using Chrome DevTools MCP tools to inspect the running app), creates `BUG-` sub-tickets from feedback, and manages the fix-and-verify loop until the parent can be accepted.
+
+### `/accept` — Close a ticket
+
+Moves a reviewed ticket to `PRODUCT_SPECIFICATION.md`, summarizes development notes, and cleans up working files.
+
+### `/feedbacks` — Visual feedback capture
+
+Capture screen recordings with voice narration linked to specific tickets. Requires [Feedbacks](https://github.com/ytubecoder/feedbacks) to be installed (see below). The skill starts a capture session, links it to a ticket, and analyzes the recording to surface UI/UX issues.
+
+## Feedbacks Integration
+
+Ticket Takeaway integrates with [Feedbacks](https://github.com/ytubecoder/feedbacks) — a screen + voice capture tool for LLM-ready UI feedback. The integration is optional; ticket-takeaway works fully without it.
+
+When installed, you can:
+
+- **Record from the dashboard** — click the mic icon on any card or in the ticket detail overlay to open a capture popup linked to that ticket
+- **Auto-link sessions** — a background watcher detects completed recordings and attaches them to the corresponding ticket automatically
+- **Review with evidence** — `/review` checks for linked sessions and uses them as visual context during acceptance review
+- **Manage in settings** — the dashboard settings drawer has a Feedbacks section for enable/disable, path configuration, and install
+
+Sessions save to `{project}/.feedbacks/{ticket-id}/` and appear as attachments in the ticket detail overlay with a Play button to open the session player.
+
+Install feedbacks separately:
+
+```bash
+git clone https://github.com/ytubecoder/feedbacks.git ~/projects/feedbacks
+cd ~/projects/feedbacks && pip install mcp
+```
+
+Then enable it in the dashboard settings drawer (gear icon → Feedbacks Integration → Install).
 
 **Compatible with:** [Claude Code](https://claude.ai/code) · [Codex CLI](https://github.com/openai/codex) · Any AI coding agent that reads markdown
-
-## Install
-
-### One-liner (from your project directory)
-
-```bash
-git clone https://github.com/ytubecoder/ticket-takeaway.git ~/projects/ticket-takeaway && python3 ~/projects/ticket-takeaway/install.py --register
-```
-
-This installs the CLI, generator, and skills, registers your project, and seeds the DB from your existing `PRODUCT_BACKLOG.md` (if you have one).
-
-### Or tell your agent
-
-> Clone https://github.com/ytubecoder/ticket-takeaway to my current project directory and run `python3 install.py --register` in the directory you install in. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically. If our features are stored elsewhere we should collect all of them and write a PRODUCT_BACKLOG.md
-
-### Upgrade
-
-```bash
-cd ~/projects/ticket-takeaway && git pull && python3 install.py
-```
-
-The installer copies the latest CLI, generator, and skills. The registry and DB are preserved — only system files are updated. If upgrading from the markdown-only version (v0.1.x), the `seed` step runs automatically and imports your existing tickets.
-
-### After install
-
-1. Run `/dashboard` to generate and open the board
-2. Add tickets: `python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "First feature"`
-3. Or just add `### B-01: My Feature` to `PRODUCT_BACKLOG.md` — the CLI will pick it up
-
-Full deployment map: [`INSTALL.md`](INSTALL.md)

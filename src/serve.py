@@ -2143,9 +2143,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
             from constants import FEEDBACKS_REPO_URL
             install_dir = body.get("install_dir", str(Path.home() / "projects" / "feedbacks"))
             repo_url = body.get("repo_url", FEEDBACKS_REPO_URL)
+            # Validate install_dir is within home directory
+            resolved_dir = Path(os.path.realpath(os.path.expanduser(install_dir)))
+            home = Path.home().resolve()
+            try:
+                resolved_dir.relative_to(home)
+            except ValueError:
+                self._send_json({"error": "install_dir must be within home directory"}, 400)
+                return
+            # Validate repo_url is a trusted HTTPS source
+            ALLOWED_REPO_PREFIXES = ("https://github.com/", "https://gitlab.com/")
+            if not any(repo_url.startswith(p) for p in ALLOWED_REPO_PREFIXES):
+                self._send_json({"error": "repo_url must be a GitHub or GitLab HTTPS URL"}, 400)
+                return
             try:
                 subprocess.Popen(
-                    ["git", "clone", repo_url, install_dir],
+                    ["git", "clone", repo_url, str(resolved_dir)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )

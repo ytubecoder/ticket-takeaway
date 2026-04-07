@@ -89,7 +89,9 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 
 **Theming:** Light/dark/system theme via `<html data-theme="dark|light">`. Preference stored in `localStorage('tt-theme')`. Synchronous `<script>` in `<head>` prevents flash. Three-way toggle in settings drawer. Applied to dashboard, project picker, and settings pages. file:// mode uses system preference with localStorage fallback.
 
-**Icons:** Inline SVG icons via `SVG_ICONS` dict + `_svg_icon(name, size, cls)` helper at module level. Lucide-style, `currentColor` stroke, consistent cross-platform. No external dependencies.
+**Card layout:** Ticket ID always precedes the title on cards (`B-24 Draft ticket concept`). ID in accent mono, title in primary sans — visual separation without a separator character. The edit (↗) button is 14px with 0.6 opacity and hover background.
+
+**Icons:** Inline SVG icons via `SVG_ICONS` dict + `_svg_icon(name, size, cls)` helper at module level. Lucide-style, `currentColor` stroke, consistent cross-platform. No external dependencies. Includes `mic` icon for record buttons.
 
 **Toast system:** Single `showAppToast(message, type, duration, undoFn)` function replaces 3 prior implementations. Priority tiers: error/undo (high) cannot be displaced by success/copy (low). Undo toasts include clickable Undo button built via DOM methods. No native `alert()` or `confirm()` calls anywhere.
 
@@ -189,9 +191,9 @@ python3 -m pytest tests/ -v                    # Everything
 ```
 
 - **TDD tests** cover: status-on-move mappings, `auto_promote_parents()`, `resolve_section()`, `auto_generate_id()`, `compute_dependency_state()`
-- **Smoke tests** cover: all API endpoints return expected responses, all UI elements respond to click
+- **Smoke tests** cover: all API endpoints (tickets, settings, feedbacks status, attachments CRUD, record URL), all UI elements (filter bar, cards, detail overlay, settings drawer, attachment rows)
 - **E2E tests** cover: ticket lifecycle journey, bug workflow + parent auto-promote, quick edit persistence
-- `conftest.py` provides: `dashboard_server` (starts serve.py on free port), `browser`/`page` (Playwright with mocked gate-check), `live_page` (no mocks), shared API helpers
+- `conftest.py` provides: `dashboard_server` (starts serve.py on free port, yields project-scoped URL `http://localhost:{port}/ticket-takeaway`), `browser`/`page` (Playwright with mocked gate-check), `live_page` (no mocks), shared API helpers
 
 **Key testability note:** Business logic lives in `actions.py` (importable). Constants in `constants.py`. DB layer in `db.py`. All importable without side effects.
 
@@ -227,3 +229,20 @@ Ticket Takeaway integrates with [feedbacks](https://github.com/ytubecoder/feedba
 - `session.md` (timestamped transcript + screenshot refs), `player.html` (playback), `images/` (screenshots with cursor), `meta.json`, `summary.json`
 
 **Detection:** Skills check for `~/projects/feedbacks/start.sh` — if absent, all feedbacks-related steps are silently skipped.
+
+**Dashboard integration:** Settings drawer (gear icon) has a Feedbacks Integration section:
+- Enable toggle — starts/stops the feedbacks whisper server. Disabled until installed.
+- Auto-start recording toggle — appends `&autostart=1` to recorder URL.
+- Path input — `feedbacks.home` setting, grayed when disabled.
+- Status dot — green (server running), yellow (installed, not running), neutral (disabled), red (not installed).
+- Install/Re-install button — clones feedbacks repo, saves path to settings.
+
+**Record flow:** Record button appears in card meta row (mic icon) and ticket detail header. Clicking opens feedbacks recorder in a 550x420 popup. A pulsing placeholder row appears in the attachments list ("Recording in progress..." → "Processing session..."). The file watcher detects new sessions automatically.
+
+**Session watcher:** Background thread in serve.py polls the feedbacks output directory every 3s for new `feedbacks-*` directories with `meta.json`. Reads `ticketId` from meta, matches to a ticket, creates an attachment record. Seeds known sessions on startup to avoid re-importing.
+
+**Attachments API:** `GET /api/tickets/{id}/attachments` enriches feedbacks-type attachments with `player_url` and `thumbnail_url` pointing to the feedbacks server. Play button opens `player.html` in a new tab.
+
+**Settings keys:** `feedbacks.enabled`, `feedbacks.home`, `feedbacks.autostart` — stored in the `settings` table as string values ("true"/"false"). Detection reads `feedbacks.home` for install path, `feedbacks.enabled` for toggle state.
+
+**Security:** Install endpoint validates `install_dir` within home directory and `repo_url` against GitHub/GitLab HTTPS allowlist.

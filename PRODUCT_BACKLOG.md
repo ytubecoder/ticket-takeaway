@@ -2,10 +2,9 @@
 
 ## WIP
 
-### I-10: touch bronwyn
+### I-10: test test ticket
 Priority: medium | Complexity: M | Status: for-review
-just get off the pc and go touch
-- [ ] touching has occurred and she provides feedback
+test pet
 - [ ] integration-test criterion 1775120298
 - [ ] markdown-criteria-test 1775120298
 - [ ] integration-test criterion 1775127571
@@ -130,6 +129,18 @@ Spec for feedbacks team: compact recorder widget (?mode=recorder), callback on s
 
 ## Backlog
 
+### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
+Priority: high | Complexity: M | Status: proposed
+Auto-triggers when session attaches. Reads session.md + summary.json + ticket context. Claude CLI with structured prompt. Creates draft child tickets under parent. Re-triage button. 90s timeout. Depends: B-24, B-25, B-29.
+
+### I-18: Add auto-start recording setting for feedbacks widget
+Priority: medium | Complexity: S | Status: specified
+Add feedbacks.autostart boolean setting so Record button opens widget with ?autostart=1, skipping the Start Recording click. Feedbacks already supports the param — just append it to the URL in serve.py and add a toggle in the settings UI.
+- [ ] New Auto-start recording toggle in Settings > Feedbacks Integration
+- [ ] When enabled, recorder URL includes &autostart=1
+- [ ] When disabled (default), widget opens with Start Recording button as before
+- [ ] Setting persists across page reloads
+
 ### I-06: 3-line truncated description preview on collapsed cards
 Priority: medium | Complexity: M | Status: proposed
 Collapsed cards show only title, ID, status badge, and metadata — no description preview. Add a 3-line truncated description preview visible on collapsed cards with CSS line-clamp for truncation. Uses secondary text color for visual hierarchy, hidden when card is expanded (full description shown instead). Only rendered if description exists. Inspired by cline/kanban card information hierarchy: status dot, title, truncated description, activity, metadata.
@@ -141,11 +152,6 @@ Collapsed cards show only title, ID, status badge, and metadata — no descripti
 - [ ] Preview text is selectable but not interactive
 - [ ] Works for both kanban cards and bottom list rows
 
-### B-19: Cache AI assessment responses
-Priority: high | Complexity: M | Status: proposed
-Parent: B-17
-Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
-
 ### B-21: Re-assess button — always visible with loading feedback
 Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
@@ -155,10 +161,6 @@ Make assess/re-assess button permanently visible (not just on hover). Set loadin
 Priority: medium | Complexity: M | Status: proposed
 Parent: B-17
 Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
-
-### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
-Priority: high | Complexity: M | Status: proposed
-Auto-triggers when session attaches. Reads session.md + summary.json + ticket context. Claude CLI with structured prompt. Creates draft child tickets under parent. Re-triage button. 90s timeout. Depends: B-24, B-25, B-29.
 
 ## Ideas
 
@@ -217,6 +219,9 @@ This is just a test but the feature should be to add a text file called hello.tx
 Priority: medium | Complexity: M | Status: proposed
 
 ### I-17: CLI draft test
+Priority: medium | Complexity: M | Status: proposed
+
+### I-19: make a 'bounce' sequence feature i.e. architecture codex > claude > codex > claude = filter decisions
 Priority: medium | Complexity: M | Status: proposed
 
 ## Bugs
@@ -440,6 +445,12 @@ Rationale: We need to define 3 types of tests that are "available" to tickets. I
 - [ ] TDD: compute_status_on_move edge cases
 - [ ] TDD: auto-promote parent logic
 - [ ] Tests runnable via python3 -m pytest or similar
+
+### B-19: Cache AI assessment responses
+Priority: high | Complexity: M | Status: done
+Parent: B-17
+Commit: baf1818
+Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
 
 ## Won't Do
 

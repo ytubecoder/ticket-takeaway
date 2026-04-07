@@ -1,5 +1,33 @@
 # Session Log
 
+## 2026-04-05/06/08 — Feedbacks integration: settings, recording, attachments, session watcher
+
+### Summary
+- Recovered from power outage: committed 674 uncommitted lines of generate.py UI work, fixed install.py to deploy serve.py/actions.py/constants.py/db.py
+- Built feedbacks settings panel (enable toggle, path, auto-start, install, status dot with server detection)
+- Built record flow: Record button on card meta row + detail header, popup opens feedbacks recorder, placeholder row during recording, file watcher auto-links sessions to tickets
+- Built attachments UI: enriched API with player_url/thumbnail_url, Play button opens player.html, unlink with undo
+- Wrote feedbacks integration brief for feedbacks team (recorder widget spec)
+- Card UX: ticket ID moved before title, edit button enlarged, record button on cards
+- Security hardening: install endpoint validates path + URL allowlists
+- Added 12 new smoke tests (API: settings, feedbacks status, attachments CRUD, record URL; UI: settings drawer, attachment rows, play button)
+
+### Lessons Learned
+- **Gotcha:** Multi-project routing — new API endpoints must match on `remainder` (project-prefix-stripped path), not `path` (full URL). Every new endpoint needs this check. Three rounds of debugging before catching this pattern.
+- **Gotcha:** Settings stored as strings in SQLite — `bool("false")` is `True` in Python, `!!"False"` is `true` in JS. Must use explicit string comparison (`"true"/"false"` lowercase) on both sides.
+- **Gotcha:** Detection cache with 30s TTL caches negative results during server startup. Fix: only cache when `running=true`, skip cache when `running=false` so polling during startup gets fresh answers.
+- **Gotcha:** JS IIFEs create separate scopes — a variable in the settings IIFE is not accessible from the attachments IIFE. Use `document.getElementById` directly instead of cross-referencing variables.
+- **Accepted:** File watcher over callback/webhook — simpler, zero changes needed from feedbacks team, uses existing `meta.json` write-last convention as completion signal.
+- **Accepted:** `loadSettings().then(checkFeedbacksStatus)` chain eliminates race condition where status check runs before settings are loaded.
+- **Rejected:** Callback POST from feedbacks → ticket-takeaway. Unnecessary complexity for localhost-to-localhost; file watching is simpler and requires no feedbacks changes.
+
+### Decisions
+- Feedbacks detection: status dot reflects server running state, not just settings toggle. Green = running, yellow = installed not running, neutral = disabled, red = not installed.
+- Enable toggle starts the feedbacks server (calls start.sh), doesn't just save a boolean.
+- Record button placement: card meta row (always visible) + detail overlay header. Removed from attachments section to avoid duplication.
+- Ticket ID always precedes title on cards — accent mono for ID, primary sans for title, no separator character.
+- Integration brief asks feedbacks team for only two things: compact recorder widget (?mode=recorder) and auto-close on save. Everything else handled on our side.
+
 ## 2026-04-06 — UI consistency pass: theming, icons, toasts, dialogs, bottom lanes
 
 ### Summary

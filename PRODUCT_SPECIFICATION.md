@@ -100,6 +100,17 @@ Priority: high | Complexity: L | Status: released
 Released: 2026-04-03 | Commit: 64aece0
 Three-category test framework: (1) Smoke tests — click everything, verify every UI element renders/responds/persists, organized per page (kanban, expanded card, detail overlay, gate panel). (2) E2E Journey tests — multi-step user workflows (ticket lifecycle, bug workflow, gate check, quick edit, external edit). (3) TDD tests — written before implementing complex new logic (business rules, status validation, compute_status_on_move). Smoke + E2E written against refactored actions.py API. Separate worktree recommended.
 
+
+### I-18: e2e-lifecycle-1775447438
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-06 | Commit: 7e8e1aa
+
+
+### B-19: Cache AI assessment responses
+Priority: high | Complexity: M | Status: released
+Released: 2026-04-06 | Commit: baf1818
+Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

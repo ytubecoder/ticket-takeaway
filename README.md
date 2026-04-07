@@ -123,6 +123,14 @@ Run `/review` to walk through completed work. The skill batches related tickets,
 
 Moves a reviewed ticket to `PRODUCT_SPECIFICATION.md`, summarizes development notes, and cleans up working files.
 
+### AI Readiness Assessment
+
+Every ticket has five readiness flags — **D**escription, **C**riteria, **T**ests, **R**eview (learnings), **S**moke tests — shown as dots on the card and in the ticket detail overlay.
+
+- **Gate-check on moves** — dragging a card between columns triggers an AI-powered readiness analysis. The gate panel shows a per-flag assessment with suggestions, and for Criteria, offers specific items you can add with one click.
+- **Assess/Re-assess buttons** — in the ticket detail overlay, each readiness section has an Assess button that runs a focused AI analysis for just that category. Results include a summary, suggestion, and optionally generated content you can apply directly.
+- **Content generation** — the AI can draft descriptions, criteria, test plans, and smoke test checklists. Generated content appears as a diff you can review and apply.
+
 ### `/feedbacks` — Visual feedback capture
 
 Capture screen recordings with voice narration linked to specific tickets. Requires [Feedbacks](https://github.com/ytubecoder/feedbacks) to be installed (see below). The skill starts a capture session, links it to a ticket, and analyzes the recording to surface UI/UX issues.

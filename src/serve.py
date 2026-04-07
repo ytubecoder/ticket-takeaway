@@ -57,6 +57,7 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH)
 from db import get_db, init_db
 from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
+from scenarios import discover_scenarios
 
 import html as _html
 
@@ -121,6 +122,10 @@ SERVER_PORT = 8787
 
 # Lock for DB operations (sqlite3 connections aren't thread-safe)
 _db_lock = threading.RLock()  # Reentrant — write functions call _get_ticket_json while holding lock
+
+# Scenario run tracking
+_scenario_runs: dict[str, dict] = {}  # run_id -> {status, scenario_id, process, output_dir, started_at}
+_scenario_runs_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +667,55 @@ VALID_READINESS_FLAGS = {"tests", "reviewed", "smoke"}
 GATED_SECTIONS = {"Ideas", "Backlog", "WIP", "For Review", "Done"}
 
 
+def _clean_ai_text(text: str) -> str:
+    """Strip leading markdown headers and blank lines from AI-generated text."""
+    if not isinstance(text, str) or not text.strip():
+        return text or ""
+    lines = text.strip().splitlines()
+    # Remove leading header line (# ..., ## ..., **...**:)
+    while lines and (
+        re.match(r"^#{1,4}\s", lines[0])
+        or re.match(r"^\*\*.*\*\*:?\s*$", lines[0])
+    ):
+        lines.pop(0)
+    # Remove leading blank lines
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def _clean_criteria_item(text: str) -> str:
+    """Strip bullet prefixes and markdown formatting from a criteria item."""
+    if not isinstance(text, str):
+        return text or ""
+    text = text.strip()
+    # Remove leading bullet/number prefixes: - [ ] , - , * , 1.
+    text = re.sub(r"^-\s*\[[ xX]?\]\s*", "", text)
+    text = re.sub(r"^[-*]\s+", "", text)
+    text = re.sub(r"^\d+\.\s+", "", text)
+    return text.strip()
+
+
+def _clean_analysis(analysis: dict) -> dict:
+    """Clean AI response fields to remove header artifacts."""
+    if not isinstance(analysis, dict):
+        return analysis
+    for key in ("suggestion", "current_summary", "content", "summary"):
+        if key in analysis and isinstance(analysis[key], str):
+            analysis[key] = _clean_ai_text(analysis[key])
+    if "add_criteria" in analysis and isinstance(analysis["add_criteria"], list):
+        analysis["add_criteria"] = [_clean_criteria_item(c) for c in analysis["add_criteria"] if c and c.strip()]
+    if "categories" in analysis and isinstance(analysis["categories"], dict):
+        for cat in analysis["categories"].values():
+            if isinstance(cat, dict):
+                for key in ("suggestion", "current_summary", "content"):
+                    if key in cat and isinstance(cat[key], str):
+                        cat[key] = _clean_ai_text(cat[key])
+                if "add_criteria" in cat and isinstance(cat["add_criteria"], list):
+                    cat["add_criteria"] = [_clean_criteria_item(c) for c in cat["add_criteria"] if c and c.strip()]
+    return analysis
+
+
 def _build_gate_prompt(ticket: dict, target_section: str) -> str:
     """Build the analysis prompt for the gate-check agent."""
     criteria_lines = []
@@ -740,6 +794,7 @@ def _run_gate_check(proj: dict, ticket_id: str, target_section: str) -> dict:
         return {"error": "Failed to parse agent response", "verdict": "needs-work", "summary": "Could not parse analysis — review manually."}
 
     # Attach metadata
+    _clean_analysis(analysis)
     analysis["ticket_id"] = ticket_id
     analysis["target_section"] = target_section
     return analysis
@@ -839,6 +894,7 @@ def _run_category_assess(proj: dict, ticket_id: str, category: str, action: str)
     except (json.JSONDecodeError, KeyError):
         return {"error": "Failed to parse response", "status": "needs-work", "current_summary": "Parse error", "suggestion": "Try again."}
 
+    _clean_analysis(analysis)
     analysis["ticket_id"] = ticket_id
     analysis["category"] = category
     analysis["action"] = action
@@ -962,7 +1018,7 @@ def _run_enrich(proj: dict, ticket_id: str, field: str, content: str, action: st
         return {"error": f"Failed to parse response: {e}"}
 
     original = data.get("original", content or "")
-    suggested = data.get("suggested", "")
+    suggested = _clean_ai_text(data.get("suggested", ""))
     hunks = _compute_diff_hunks(original, suggested)
 
     return {
@@ -1249,6 +1305,12 @@ textarea {{ min-height: 60px; resize: vertical; }}
   <button type="submit" class="btn" data-testid="settings-save">Save Changes</button>
   <div class="msg" id="save-msg"></div>
 </form>
+<div style="margin-top:32px;padding-top:16px;border-top:1px solid var(--border-default);">
+  <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:12px;">Scenarios</h3>
+  <div id="scenarios-section">
+    <p style="color:var(--text-secondary);font-size:12px;">Loading scenarios...</p>
+  </div>
+</div>
 <div class="danger">
   <h3>Danger Zone</h3>
   <button class="btn" id="remove-btn" data-testid="settings-remove">Remove Project</button>
@@ -1302,7 +1364,82 @@ textarea {{ min-height: 60px; resize: vertical; }}
   }});
 }})();
 </script>
-<div id="confirm-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+<script>
+// Scenarios section
+(function() {{
+  var section = document.getElementById('scenarios-section');
+  if (!section) return;
+  var pid = '{pid}';
+
+  function renderScenarios(data) {{
+    if (!data.scenarios || data.scenarios.length === 0) {{
+      section.innerHTML = '<p style="color:var(--text-secondary);font-size:12px;">No scenario manifests found in tests/scenarios/</p>';
+      return;
+    }}
+    var html = '';
+    data.scenarios.forEach(function(s) {{
+      var tags = (s.tags || []).map(function(t) {{
+        return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--bg-hover);color:var(--text-secondary);margin-right:4px;">' + t + '</span>';
+      }}).join('');
+      var lastRun = s.last_run ? '<span style="font-size:11px;color:' + (s.last_run.status === 'passed' ? '#22c55e' : s.last_run.status === 'failed' ? '#ef4444' : 'var(--text-secondary)') + ';">' + s.last_run.status + '</span>' : '';
+      html += '<div class="scenario-row" data-scenario-id="' + s.id + '" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-default);">'
+        + '<div style="flex:1;"><div style="font-size:13px;font-weight:500;color:var(--text-primary);">' + s.title + '</div><div style="margin-top:2px;">' + tags + '</div></div>'
+        + '<div style="min-width:60px;text-align:right;">' + lastRun + '</div>'
+        + '<div id="run-result-' + s.id + '"></div>'
+        + '<button onclick="runScenario(\'' + s.id + '\', false)" style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border-default);background:none;color:var(--text-primary);cursor:pointer;">Run</button>'
+        + '<button onclick="runScenario(\'' + s.id + '\', true)" style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border-default);background:none;color:var(--accent);cursor:pointer;">Run + Publish</button>'
+        + '</div>';
+    }});
+    section.innerHTML = html;
+  }}
+
+  fetch('/' + pid + '/api/scenarios').then(function(r) {{ return r.json(); }}).then(renderScenarios).catch(function() {{
+    section.innerHTML = '<p style="color:var(--text-secondary);font-size:12px;">Failed to load scenarios</p>';
+  }});
+
+  window.runScenario = function(scenarioId, publish) {{
+    var resultEl = document.getElementById('run-result-' + scenarioId);
+    if (resultEl) resultEl.innerHTML = '<span style="font-size:11px;color:var(--text-secondary);">Starting...</span>';
+
+    fetch('/' + pid + '/api/scenarios/run', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{scenario_id: scenarioId, publish: publish}})
+    }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      if (data.error) {{
+        if (resultEl) resultEl.innerHTML = '<span style="font-size:11px;color:#ef4444;">' + data.error + '</span>';
+        return;
+      }}
+      pollRun(data.run_id, scenarioId);
+    }});
+  }};
+
+  function pollRun(runId, scenarioId) {{
+    var resultEl = document.getElementById('run-result-' + scenarioId);
+    var interval = setInterval(function() {{
+      fetch('/' + pid + '/api/scenarios/runs/' + runId).then(function(r) {{ return r.json(); }}).then(function(data) {{
+        if (data.status === 'running') {{
+          if (resultEl) resultEl.innerHTML = '<span style="font-size:11px;color:var(--text-secondary);">Running...</span>';
+          return;
+        }}
+        clearInterval(interval);
+        var color = data.status === 'passed' ? '#22c55e' : '#ef4444';
+        var html = '<span style="font-size:11px;color:' + color + ';font-weight:600;">' + data.status + '</span>';
+        if (data.summary && data.summary.screenshots && data.summary.screenshots.length > 0) {{
+          html += '<div style="display:flex;gap:4px;margin-top:4px;">';
+          data.summary.screenshots.forEach(function(spath) {{
+            var fname = spath.split('/').pop();
+            html += '<img src="/' + pid + '/api/scenarios/runs/' + runId + '/artifacts/' + fname + '" style="width:60px;height:40px;object-fit:cover;border-radius:4px;border:1px solid var(--border-default);" title="' + fname + '">';
+          }});
+          html += '</div>';
+        }}
+        if (resultEl) resultEl.innerHTML = html;
+      }});
+    }}, 2000);
+  }}
+}})();
+</script>
+<div id="confirm-modal\" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
   <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
     <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Remove Project</h3>
     <p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Remove this project from the registry? Tickets and files will not be deleted.</p>
@@ -1654,6 +1791,92 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             atts = _list_attachments(proj["id"], m.group(1))
             self._send_json(atts)
+            return
+
+        # Scenario API: serve artifact files (must come before run status check)
+        if remainder.startswith("/api/scenarios/runs/") and "/artifacts/" in remainder:
+            parts = remainder[len("/api/scenarios/runs/"):].split("/artifacts/", 1)
+            if len(parts) == 2:
+                run_id, filename = parts
+                with _scenario_runs_lock:
+                    run = _scenario_runs.get(run_id)
+                if run and run.get("output_dir"):
+                    for root, dirs, files in os.walk(run["output_dir"]):
+                        if filename in files:
+                            filepath = os.path.join(root, filename)
+                            if filepath.endswith(".png"):
+                                self.send_response(200)
+                                self.send_header("Content-Type", "image/png")
+                                with open(filepath, "rb") as f:
+                                    data = f.read()
+                                self.send_header("Content-Length", str(len(data)))
+                                self.end_headers()
+                                self.wfile.write(data)
+                                return
+                            elif filepath.endswith(".json"):
+                                with open(filepath) as f:
+                                    self._send_json(json.load(f))
+                                return
+            self._send_json({"error": "Artifact not found"}, 404)
+            return
+
+        # Scenario API: get run status
+        if remainder.startswith("/api/scenarios/runs/"):
+            run_id = remainder[len("/api/scenarios/runs/"):]
+            with _scenario_runs_lock:
+                run = _scenario_runs.get(run_id)
+            if not run:
+                self._send_json({"error": "Run not found"}, 404)
+                return
+            # Check if process has finished
+            proc = run.get("process")
+            if proc and proc.poll() is not None:
+                with _scenario_runs_lock:
+                    run["status"] = "passed" if proc.returncode == 0 else "failed"
+                    run["returncode"] = proc.returncode
+            resp = {
+                "run_id": run_id,
+                "scenario_id": run["scenario_id"],
+                "status": run["status"],
+                "started_at": run.get("started_at"),
+                "returncode": run.get("returncode"),
+                "output_dir": run.get("output_dir", ""),
+            }
+            # If complete, try to read summary
+            summary_path = None
+            if run.get("output_dir"):
+                output_dir_path = Path(run["output_dir"])
+                if output_dir_path.is_dir():
+                    for d in output_dir_path.iterdir():
+                        sp = d / "summary.json"
+                        if sp.exists():
+                            summary_path = sp
+                            break
+            if summary_path and summary_path.exists():
+                try:
+                    with open(summary_path) as f:
+                        resp["summary"] = json.load(f)
+                except Exception:
+                    pass
+            self._send_json(resp)
+            return
+
+        # Scenario API: list discovered scenarios
+        if remainder == "/api/scenarios":
+            project_path = proj.get("path", "")
+            scenarios_dir = os.path.join(project_path, "tests", "scenarios")
+            try:
+                manifests = discover_scenarios(scenarios_dir) if os.path.isdir(scenarios_dir) else []
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+                return
+            # Attach last run status if available
+            with _scenario_runs_lock:
+                for m in manifests:
+                    for rid, run in _scenario_runs.items():
+                        if run["scenario_id"] == m["id"]:
+                            m["last_run"] = {"run_id": rid, "status": run["status"], "started_at": run.get("started_at")}
+            self._send_json({"scenarios": manifests})
             return
 
         self._send_json({"error": "Not found"}, 404)
@@ -2132,6 +2355,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "message": "feedbacks start.sh launched"})
             except Exception as e:
                 self._send_json({"error": f"Failed to start feedbacks: {e}"}, 500)
+            return
+
+        # Scenario API: start a run
+        if remainder == "/api/scenarios/run":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            scenario_id = body.get("scenario_id")
+            publish = body.get("publish", False)
+            if not scenario_id:
+                self._send_json({"error": "scenario_id required"}, 400)
+                return
+
+            project_path = proj.get("path", "")
+            run_id = f"{scenario_id}-{int(time.time())}"
+
+            cmd = [
+                sys.executable, "-m", "pytest",
+                "tests/test_scenarios.py", "-v",
+                f"--scenario-id={scenario_id}",
+            ]
+            if publish:
+                cmd.append("--publish")
+
+            env = {**os.environ, "TT_SCENARIO_BASE_URL": f"http://localhost:{SERVER_PORT}/{proj['id']}"}
+
+            proc = subprocess.Popen(
+                cmd,
+                cwd=project_path,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+
+            with _scenario_runs_lock:
+                _scenario_runs[run_id] = {
+                    "scenario_id": scenario_id,
+                    "status": "running",
+                    "process": proc,
+                    "output_dir": os.path.join(project_path, ".artifacts", "scenarios"),
+                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+
+            self._send_json({"run_id": run_id, "status": "running"})
             return
 
         # Install feedbacks via git clone

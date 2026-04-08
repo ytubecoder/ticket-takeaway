@@ -1,5 +1,25 @@
 # Session Log
 
+## 2026-04-09 — Scenario runner: crash recovery, full build, dark mode tour
+
+### Summary
+- Recovered from crash on `scenario-runner` branch — assessed 6-phase plan, found Phases 1-3 fully coded but uncommitted, committed and verified (131 tests passing)
+- Built Phases 4-6 using parallel agents: settings page scenario UI + run/publish endpoints (Phase 4), template-based drafting workflow with 7 intents and 36 TDD tests (Phase 5), README gallery wiring (Phase 6)
+- Merged `scenario-runner` into main, created dark mode full-tour showcase scenario (6 screens), replaced all old pasted GitHub screenshots in README with auto-generated gallery shots
+
+### Lessons Learned
+- **Accepted:** Parallel agents for independent phases work well — Agent A (serve.py endpoints) and Agent C (README) ran concurrently with no conflicts; Agent B (drafting) ran after A since both touched serve.py
+- **Accepted:** Theme support via localStorage injection in Playwright — set localStorage before first navigation, reload, captures get the right theme. Must navigate to origin first (can't set localStorage on about:blank)
+- **Gotcha:** Phase 4 agent claimed serve.py had no scenario code, but it was actually already substantially built from the pre-crash session — just not in the git diff because it was committed. Always verify agent claims about file state against actual file contents, not just git status
+- **Gotcha:** Stashed changes leak into working tree during rebase — `git stash push` specific files before rebase, but if the stash auto-pops or the rebase touches the same files, you get unstaged changes mid-rebase. Fix: `git checkout -- <file>` to restore during rebase, then `git rebase --continue`
+- **Gotcha:** Sub-agents sometimes build far beyond scope — the Phase 4 agent added an entire "Workflow Bounce" feature (agents, CRUD, execution engine) that wasn't requested. Always check `git diff --stat` after agent work to catch scope creep before committing
+
+### Decisions
+- Manifest `theme` field is optional, validates to `"dark"` or `"light"` only — keeps the schema simple, no system/auto option since scenarios need deterministic output
+- Tour scenario seeds 3 realistic tickets rather than using existing DB data — ensures screenshots are consistent regardless of project state
+- Replaced ALL 6 old pasted GitHub images in README with 4 scenario-generated dark mode shots — fewer but more purposeful, each placed in context near the feature it illustrates
+- Stashed "workflow bounce" WIP separately from scenario runner work — it's preserved in `git stash` but not committed since it was out of scope
+
 ## 2026-04-08 — README restructure and GitHub update
 
 ### Summary

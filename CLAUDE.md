@@ -41,6 +41,8 @@ src/actions.py     — move_ticket(), accept_ticket(), add_ticket(), update_tick
 src/tickets-cli.py — thin CLI wrapper calling actions.py
 src/serve.py       — HTTP server routing to actions.py + background threads
 src/generate.py    — dashboard HTML renderer
+src/scenarios.py   — scenario manifest discovery, validation, gallery publishing
+src/scenario_drafting.py — template-based draft generation from natural-language goals
 ```
 
 **Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `actions.py`.
@@ -196,6 +198,40 @@ python3 -m pytest tests/ -v                    # Everything
 - `conftest.py` provides: `dashboard_server` (starts serve.py on free port, yields project-scoped URL `http://localhost:{port}/ticket-takeaway`), `browser`/`page` (Playwright with mocked gate-check), `live_page` (no mocks), shared API helpers
 
 **Key testability note:** Business logic lives in `actions.py` (importable). Constants in `constants.py`. DB layer in `db.py`. All importable without side effects.
+
+## Scenario Runner
+
+Manifest-driven UI scenario execution with screenshot publishing. Scenarios are JSON files in `tests/scenarios/` that define multi-actor click paths with deterministic seed data and capture points.
+
+```bash
+# Run all scenarios
+python3 -m pytest tests/test_scenarios.py -v
+
+# Run one scenario
+python3 -m pytest tests/test_scenarios.py -v --scenario-id full-tour-showcase
+
+# Run and publish screenshots to gallery
+python3 -m pytest tests/test_scenarios.py -v --publish
+
+# Run a specific scenario and publish
+python3 -m pytest tests/test_scenarios.py -v --scenario-id full-tour-showcase --publish
+```
+
+**Architecture:**
+- `tests/scenarios/*.json` — checked-in scenario manifests (schema: id, title, tags, actors, seed, steps, optional theme/viewport)
+- `tests/scenario_runner.py` — Playwright execution engine (11 actions: open, reload, click, double_click, fill, select, press, wait_for, assert_visible, assert_text, capture)
+- `tests/scenario_seed.py` — deterministic ticket seeding via API + cleanup
+- `tests/test_scenarios.py` — pytest parametrized entrypoint with `--scenario-id` and `--publish` options
+- `src/scenarios.py` — manifest discovery, validation, gallery publishing
+- `src/scenario_drafting.py` — template-based draft generation from natural-language goals (7 intents: create, edit, move, review, lifecycle, delete, overview)
+
+**Artifacts:**
+- `.artifacts/scenarios/{run-id}/` — raw run output (gitignored): manifest.json, summary.json, screenshots/
+- `docs/scenarios/gallery/` — published stable screenshots (tracked): `{publish_slot}.png` + `index.json`
+
+**Theme support:** Manifests can specify `"theme": "dark"` or `"theme": "light"` to force a theme via localStorage before captures.
+
+**Settings page integration:** `GET /api/scenarios` lists manifests, `POST /api/scenarios/run` launches via subprocess, `GET /api/scenarios/runs/{id}` polls status. Draft endpoint: `POST /api/scenarios/draft` generates candidate manifests from a goal string.
 
 ## Generated Files
 

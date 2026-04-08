@@ -30,20 +30,7 @@ Double-click a ticket on the dashboard to copy a prompt, paste it into Claude Co
 
 Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via read-before-write sync. No data loss either way.
 
-<img width="1595" height="1307" alt="image" src="https://github.com/user-attachments/assets/abfa8936-66c8-44c4-8baf-4fb7f41855ab" />
-
-<img width="1590" height="1302" alt="image" src="https://github.com/user-attachments/assets/ce529100-cdac-4bfd-a081-2148c9c7ca2b" />
-
-<img width="1594" height="1304" alt="image" src="https://github.com/user-attachments/assets/cc2a55ab-fb86-4aa5-b256-99cea2c0e0e9" />
-
-
-## Screenshots
-
-![Kanban board overview showing Ideas, Backlog, WIP, and Review columns with ticket cards](docs/scenarios/gallery/gallery-board.png)
-
-![Ticket detail overlay showing handoff state with readiness flags and acceptance criteria](docs/scenarios/gallery/gallery-handoff.png)
-
-![Ticket detail overlay in edit mode with inline field editing](docs/scenarios/gallery/showcase-detail-edit.png)
+![Kanban board with Ideas, Backlog, WIP, and Review columns](docs/scenarios/gallery/tour-board-overview.png)
 
 ## Install
 
@@ -97,6 +84,8 @@ Full deployment map: [`INSTALL.md`](INSTALL.md)
 
 **Stage change** = `tickets-cli.py move <project> <id> <section>`. **State change** = `tickets-cli.py update <project> <id> --status <status>`. Or just edit the markdown — the CLI absorbs direct edits.
 
+![Ticket detail overlay showing status badges, readiness flags, and acceptance criteria](docs/scenarios/gallery/tour-detail-overlay.png)
+
 ## Stages and States
 
 The board uses a **stage-and-state** model from Kanban methodology. **Stages** are the columns (defined by `## Section` headings in your markdown). **States** are the `Status:` values on tickets — finer detail within a stage. Same column, different next actions. If you've used JIRA or GitHub Projects, it's the same concept: column = lane, status = position within it.
@@ -118,6 +107,8 @@ Skills are slash commands that guide your agent through specific workflow steps.
 ### `/dashboard`
 
 Generates and opens the kanban board. The dashboard supports light, dark, and system themes, polls for live updates every 2 seconds, and works read-only via `file://` or fully interactive via the built-in server.
+
+![Creating a new ticket from the dashboard](docs/scenarios/gallery/tour-new-ticket-panel.png)
 
 ### `/spec` — Ideas to Backlog
 
@@ -147,9 +138,7 @@ Capture screen recordings with voice narration linked to specific tickets. Requi
 
 Ticket Takeaway integrates with [Feedbacks](https://github.com/ytubecoder/feedbacks) — a screen + voice capture tool for LLM-ready UI feedback. The integration is optional; ticket-takeaway works fully without it.
 
-<img width="1597" height="1303" alt="image" src="https://github.com/user-attachments/assets/86a6964e-9b0f-4c91-aea0-f31d16859cf6" />
-
-
+![Settings drawer showing feedbacks integration and bottom sections](docs/scenarios/gallery/tour-settings.png)
 
 When installed, you can:
 

@@ -16,5 +16,41 @@
     "published_at": "2026-04-08T09:23:38.467327+00:00",
     "slot": "showcase-detail-edit",
     "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/quick-edit-detail-overlay-1775640216/screenshots/overlay-after-edit.png"
+  },
+  "tour-after-create": {
+    "file": "tour-after-create.png",
+    "published_at": "2026-04-08T15:57:30.919084+00:00",
+    "slot": "tour-after-create",
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/full-tour-showcase-1775663845/screenshots/03-after-create.png"
+  },
+  "tour-board-overview": {
+    "file": "tour-board-overview.png",
+    "published_at": "2026-04-08T15:57:30.919084+00:00",
+    "slot": "tour-board-overview",
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/full-tour-showcase-1775663845/screenshots/01-board-overview.png"
+  },
+  "tour-detail-edited": {
+    "file": "tour-detail-edited.png",
+    "published_at": "2026-04-08T15:57:30.919084+00:00",
+    "slot": "tour-detail-edited",
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/full-tour-showcase-1775663845/screenshots/05-detail-after-edit.png"
+  },
+  "tour-detail-overlay": {
+    "file": "tour-detail-overlay.png",
+    "published_at": "2026-04-08T15:57:30.919084+00:00",
+    "slot": "tour-detail-overlay",
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/full-tour-showcase-1775663845/screenshots/04-detail-overlay.png"
+  },
+  "tour-new-ticket-panel": {
+    "file": "tour-new-ticket-panel.png",
+    "published_at": "2026-04-08T15:57:30.919084+00:00",
+    "slot": "tour-new-ticket-panel",
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/full-tour-showcase-1775663845/screenshots/02-new-ticket-panel.png"
+  },
+  "tour-settings": {
+    "file": "tour-settings.png",
+    "published_at": "2026-04-08T15:57:30.919084+00:00",
+    "slot": "tour-settings",
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/full-tour-showcase-1775663845/screenshots/06-settings-drawer.png"
   }
 }

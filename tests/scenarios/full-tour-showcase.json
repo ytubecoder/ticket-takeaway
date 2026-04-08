@@ -1,0 +1,149 @@
+{
+  "id": "full-tour-showcase",
+  "title": "New user tours every screen of Ticket Takeaway",
+  "tags": ["showcase", "gallery", "onboarding"],
+  "actors": {
+    "visitor": {"label": "New User"}
+  },
+  "theme": "dark",
+  "viewport": {"width": 1440, "height": 1024},
+  "seed": {
+    "tickets": [
+      {
+        "title": "Add dark mode toggle",
+        "section": "Backlog",
+        "status": "proposed",
+        "description": "Users should be able to switch between light and dark themes from the settings drawer.",
+        "priority": "medium",
+        "complexity": "M"
+      },
+      {
+        "title": "Fix card drag animation stutter",
+        "section": "WIP",
+        "status": "in-progress",
+        "description": "Dragging cards between columns causes a visible stutter on Safari. Investigate requestAnimationFrame timing.",
+        "priority": "high",
+        "complexity": "S"
+      },
+      {
+        "title": "Write onboarding guide",
+        "section": "Backlog",
+        "status": "proposed",
+        "description": "Create a first-run experience that walks new users through the board, ticket detail, and settings.",
+        "priority": "low",
+        "complexity": "L"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "visitor",
+      "action": "open",
+      "path": ""
+    },
+    {
+      "actor": "visitor",
+      "action": "wait_for",
+      "target": {"testid": "board-root"}
+    },
+    {
+      "actor": "visitor",
+      "action": "capture",
+      "capture": {"name": "01-board-overview", "publish_slot": "tour-board-overview"}
+    },
+
+    {
+      "actor": "visitor",
+      "action": "click",
+      "target": {"testid": "new-ticket-btn"}
+    },
+    {
+      "actor": "visitor",
+      "action": "capture",
+      "capture": {"name": "02-new-ticket-panel", "publish_slot": "tour-new-ticket-panel"}
+    },
+    {
+      "actor": "visitor",
+      "action": "fill",
+      "target": {"testid": "new-ticket-title"},
+      "value": "My first ticket"
+    },
+    {
+      "actor": "visitor",
+      "action": "select",
+      "target": {"testid": "new-ticket-section"},
+      "value": "Backlog"
+    },
+    {
+      "actor": "visitor",
+      "action": "click",
+      "target": {"testid": "new-ticket-submit"}
+    },
+    {
+      "actor": "visitor",
+      "action": "capture",
+      "capture": {"name": "03-after-create", "publish_slot": "tour-after-create"}
+    },
+
+    {
+      "actor": "visitor",
+      "action": "click",
+      "target": {"title": "Fix card drag animation stutter", "open": true}
+    },
+    {
+      "actor": "visitor",
+      "action": "wait_for",
+      "target": {"testid": "detail-overlay"}
+    },
+    {
+      "actor": "visitor",
+      "action": "capture",
+      "capture": {"name": "04-detail-overlay", "publish_slot": "tour-detail-overlay"}
+    },
+
+    {
+      "actor": "visitor",
+      "action": "click",
+      "target": {"testid": "detail-description"}
+    },
+    {
+      "actor": "visitor",
+      "action": "fill",
+      "target": {"testid": "detail-description"},
+      "value": "Dragging cards between columns causes a visible stutter on Safari. Root cause: requestAnimationFrame timing conflict with CSS transitions. Fix: batch DOM updates before rAF callback."
+    },
+    {
+      "actor": "visitor",
+      "action": "press",
+      "target": {"testid": "detail-description"},
+      "key": "Tab"
+    },
+    {
+      "actor": "visitor",
+      "action": "capture",
+      "capture": {"name": "05-detail-after-edit", "publish_slot": "tour-detail-edited"}
+    },
+
+    {
+      "actor": "visitor",
+      "action": "click",
+      "target": {"testid": "detail-close"}
+    },
+    {
+      "actor": "visitor",
+      "action": "wait_for",
+      "target": {"testid": "board-root"}
+    },
+
+    {
+      "actor": "visitor",
+      "action": "click",
+      "target": {"testid": "settings-toggle"}
+    },
+    {
+      "actor": "visitor",
+      "action": "capture",
+      "capture": {"name": "06-settings-drawer", "publish_slot": "tour-settings"}
+    }
+  ]
+}

@@ -14,6 +14,9 @@ docs/features/
 # Feedbacks sessions (screenshots + transcripts from visual feedback capture)
 .feedbacks/
 
+# Scenario runner raw artifacts (rebuild with: pytest tests/test_scenarios.py)
+.artifacts/scenarios/
+
 # Editor
 *.swp
 *.swo

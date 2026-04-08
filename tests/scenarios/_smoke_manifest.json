@@ -1,0 +1,21 @@
+{
+  "id": "smoke-test",
+  "title": "Smoke test — verify runner loads a manifest",
+  "tags": ["smoke"],
+  "actors": {
+    "user": { "label": "Test User" }
+  },
+  "seed": {},
+  "steps": [
+    {
+      "actor": "user",
+      "action": "open",
+      "path": ""
+    },
+    {
+      "actor": "user",
+      "action": "assert_visible",
+      "target": { "testid": "board-root" }
+    }
+  ]
+}

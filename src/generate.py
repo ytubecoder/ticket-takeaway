@@ -1582,6 +1582,27 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 11px; color: var(--accent); text-decoration: none;
 }}
 .settings-link:hover {{ text-decoration: underline; }}
+.managed-files-list {{ display: flex; flex-direction: column; gap: 4px; }}
+.managed-file-row {{
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border-radius: 6px; background: var(--bg-card); border: 1px solid var(--border-subtle);
+}}
+.managed-file-dot {{
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}}
+.managed-file-dot.exists {{ background: #22c55e; }}
+.managed-file-dot.missing {{ background: var(--text-tertiary); opacity: 0.4; }}
+.managed-file-path {{
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px; color: var(--text-primary); white-space: nowrap;
+}}
+.managed-file-desc {{
+  font-size: 10px; color: var(--text-secondary); margin-left: auto; text-align: right;
+}}
+.managed-file-badge {{
+  font-size: 9px; padding: 1px 5px; border-radius: 3px;
+  background: var(--bg-badge); color: var(--text-tertiary);
+}}
 
 /* Attachments section in detail overlay */
 .attachments-list {{
@@ -1707,18 +1728,18 @@ a {{ color: var(--accent); text-decoration: none; }}
   <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
-  <button class="settings-toggle" id="settingsToggleBtn" title="Settings">{_icon_settings}</button>
-  <button class="new-ticket-btn" id="newTicketBtn">+ New</button>
+  <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
+  <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
     <div class="new-ticket-quick">
-      <input type="text" id="newTicketTitle" placeholder="What needs to be done?" class="new-ticket-input" />
-      <select id="newTicketSection" class="new-ticket-select">
+      <input type="text" id="newTicketTitle" data-testid="new-ticket-title" placeholder="What needs to be done?" class="new-ticket-input" />
+      <select id="newTicketSection" data-testid="new-ticket-section" class="new-ticket-select">
         <option value="ideas">Idea</option>
         <option value="backlog">Backlog</option>
         <option value="wip">WIP</option>
         <option value="bugs">Bug</option>
       </select>
-      <button id="newTicketSubmit" class="new-ticket-submit">Create</button>
+      <button id="newTicketSubmit" data-testid="new-ticket-submit" class="new-ticket-submit">Create</button>
     </div>
   </div>
 </div>
@@ -1769,13 +1790,18 @@ a {{ color: var(--accent); text-decoration: none; }}
         <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
       </div>
     </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Managed Files</div>
+      <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
+      <div id="managedFilesList" class="managed-files-list"></div>
+    </div>
   </div>
 </div>
 
-<div class="kanban" id="kanban">
+<div class="kanban" id="kanban" data-testid="board-root">
 
   <!-- Ideas -->
-  <div class="column" data-col="ideas" id="col-ideas">
+  <div class="column" data-col="ideas" id="col-ideas" data-testid="column-ideas">
     <div class="column-header" data-prompt="/spec">
       <div class="column-dot" style="background: var(--status-idea)"></div>
       <span class="column-name">Ideas</span>
@@ -1787,7 +1813,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   </div>
 
   <!-- Backlog -->
-  <div class="column" data-col="backlog" id="col-backlog">
+  <div class="column" data-col="backlog" id="col-backlog" data-testid="column-backlog">
     <div class="column-header" data-prompt="Help spec the next backlog items — which are ready to move to WIP?">
       <div class="column-dot" style="background: var(--status-backlog)"></div>
       <span class="column-name">Backlog</span>
@@ -1799,7 +1825,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   </div>
 
   <!-- WIP -->
-  <div class="column" data-col="wip" id="col-wip">
+  <div class="column" data-col="wip" id="col-wip" data-testid="column-wip">
     <div class="column-header" data-prompt="Show me current WIP status and any blockers">
       <div class="column-dot" style="background: var(--status-wip)"></div>
       <span class="column-name">WIP</span>
@@ -1811,7 +1837,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   </div>
 
   <!-- For Review -->
-  <div class="column" data-col="review" id="col-review">
+  <div class="column" data-col="review" id="col-review" data-testid="column-review">
     <div class="column-header" data-prompt="/review">
       <div class="column-dot" style="background: var(--status-review)"></div>
       <span class="column-name">For Review</span>
@@ -3050,22 +3076,22 @@ a {{ color: var(--accent); text-decoration: none; }}
 </script>
 
 <!-- Ticket detail screen -->
-<div id="ticket-detail-overlay" class="detail-overlay hidden" role="dialog" aria-modal="true">
+<div id="ticket-detail-overlay" class="detail-overlay hidden" role="dialog" aria-modal="true" data-testid="detail-overlay">
   <div class="detail-backdrop"></div>
   <div class="detail-panel">
     <div class="detail-header">
       <span class="detail-id"></span>
-      <span class="detail-title" contenteditable="false" title="Click to rename"></span>
+      <span class="detail-title" contenteditable="false" title="Click to rename" data-testid="detail-title"></span>
       <span class="detail-path"></span>
       <div class="detail-dctrs-strip">
         {_dctrs_icons}
       </div>
       <button class="detail-record-btn" id="detail-record-btn" style="display:none" title="Record feedback session">{_svg_icon("mic", 14)} Record</button>
-      <button class="detail-close" aria-label="Close ticket detail">{_icon_close}</button>
+      <button class="detail-close" aria-label="Close ticket detail" data-testid="detail-close">{_icon_close}</button>
     </div>
     <div class="detail-meta-strip">
       <span class="meta-chip meta-chip--priority" title="Click to change priority"><span class="chip-dot"></span><span class="chip-text"></span></span>
-      <span class="meta-chip meta-chip--status" title="Click to change status"><span class="chip-text"></span></span>
+      <span class="meta-chip meta-chip--status" title="Click to change status" data-testid="detail-status"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--complexity" title="Click to change complexity"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--parent"><span class="chip-label">Parent:</span> <span class="chip-value">None</span></span>
       <span class="meta-chip meta-chip--section"><span class="chip-text"></span></span>
@@ -3091,7 +3117,7 @@ a {{ color: var(--accent); text-decoration: none; }}
         </div>
         <div class="detail-assess-loading hidden" data-cat-loading="D">Assessing description...</div>
         <div class="detail-assessment hidden" data-cat-result="D"></div>
-        <textarea class="detail-editor desc-editor" data-field="description" placeholder="No description yet. Click to write one."></textarea>
+        <textarea class="detail-editor desc-editor" data-field="description" data-testid="detail-description" placeholder="No description yet. Click to write one."></textarea>
       </div>
 
       <!-- Acceptance Criteria -->
@@ -4362,6 +4388,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   function openDrawer() {{
     drawer.classList.remove('hidden');
     loadSettings().then(function() {{ checkFeedbacksStatus(); }});
+    loadManagedFiles();
   }}
 
   function closeDrawer() {{
@@ -4454,6 +4481,46 @@ a {{ color: var(--accent); text-decoration: none; }}
         statusDot.className = 'settings-status-dot err';
         statusDot.title = 'Could not check feedbacks status';
         if (enabledChk) enabledChk.disabled = true;
+      }});
+  }}
+
+  function loadManagedFiles() {{
+    var container = document.getElementById('managedFilesList');
+    if (!container || !EDIT_API) return;
+    fetch(EDIT_API + '/managed-files')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(files) {{
+        while (container.firstChild) container.removeChild(container.firstChild);
+        files.forEach(function(f) {{
+          var row = document.createElement('div');
+          row.className = 'managed-file-row';
+          var dot = document.createElement('span');
+          dot.className = 'managed-file-dot ' + (f.exists ? 'exists' : 'missing');
+          dot.title = f.exists ? 'Exists' : 'Not created yet';
+          var pathEl = document.createElement('span');
+          pathEl.className = 'managed-file-path';
+          pathEl.textContent = f.path;
+          var desc = document.createElement('span');
+          desc.className = 'managed-file-desc';
+          desc.textContent = f.description;
+          row.appendChild(dot);
+          row.appendChild(pathEl);
+          if (f.gitignored) {{
+            var badge = document.createElement('span');
+            badge.className = 'managed-file-badge';
+            badge.textContent = '.gitignored';
+            row.appendChild(badge);
+          }}
+          row.appendChild(desc);
+          container.appendChild(row);
+        }});
+      }})
+      .catch(function() {{
+        while (container.firstChild) container.removeChild(container.firstChild);
+        var hint = document.createElement('div');
+        hint.className = 'settings-hint';
+        hint.textContent = 'Could not load managed files.';
+        container.appendChild(hint);
       }});
   }}
 
@@ -5080,7 +5147,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
-        f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
+        f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
         f'{draft_attr}>\n'
@@ -5090,7 +5157,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
-        f'<button class="card-open-btn" title="Open ticket details" aria-label="Open {id_esc}">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
+        f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details" aria-label="Open {id_esc}">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
         f'{readiness_html}'
         f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'
         f'{git_html}'
@@ -5188,12 +5255,12 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
             release_badge = f'<span class="release-badge">{escape(t.release_tag)}</span>'
 
         readiness_html = _render_readiness_row(t)
-        open_btn = f'<button class="card-open-btn" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button>'
+        open_btn = f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button>'
 
         lines.append(
             f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
-            f'data-status="{status_class}" data-complexity="{escape(t.complexity)}"'
+            f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
             f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
             f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}>\n'
             f'        <div class="list-row-main">'

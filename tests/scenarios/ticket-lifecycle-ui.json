@@ -1,0 +1,99 @@
+{
+  "id": "ticket-lifecycle-ui",
+  "title": "Scheduler creates ticket, agent picks it up, reviewer verifies",
+  "tags": ["e2e", "regression"],
+  "actors": {
+    "scheduler": { "label": "Scheduler" },
+    "agent": { "label": "Agent" },
+    "reviewer": { "label": "Reviewer" }
+  },
+  "seed": {
+    "tickets": [
+      {
+        "title": "Lifecycle test \u2014 prepare release notes",
+        "section": "Backlog",
+        "description": "Compile the weekly release notes before Friday standup.",
+        "priority": "high",
+        "complexity": "M"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "scheduler",
+      "action": "open",
+      "path": "",
+      "capture": { "name": "board-overview", "publish_slot": "gallery-board" }
+    },
+    {
+      "actor": "scheduler",
+      "action": "wait_for",
+      "target": { "testid": "board-root" }
+    },
+    {
+      "actor": "scheduler",
+      "action": "click",
+      "target": { "title": "Lifecycle test \u2014 prepare release notes", "open": true }
+    },
+    {
+      "actor": "scheduler",
+      "action": "wait_for",
+      "target": { "testid": "detail-overlay" }
+    },
+    {
+      "actor": "scheduler",
+      "action": "capture",
+      "capture": { "name": "scheduler-views-ticket" }
+    },
+    {
+      "actor": "scheduler",
+      "action": "click",
+      "target": { "testid": "detail-close" }
+    },
+    {
+      "actor": "agent",
+      "action": "open",
+      "path": ""
+    },
+    {
+      "actor": "agent",
+      "action": "wait_for",
+      "target": { "testid": "board-root" }
+    },
+    {
+      "actor": "agent",
+      "action": "click",
+      "target": { "title": "Lifecycle test \u2014 prepare release notes", "open": true }
+    },
+    {
+      "actor": "agent",
+      "action": "wait_for",
+      "target": { "testid": "detail-overlay" }
+    },
+    {
+      "actor": "agent",
+      "action": "capture",
+      "capture": { "name": "agent-picks-up-ticket", "publish_slot": "gallery-handoff" }
+    },
+    {
+      "actor": "agent",
+      "action": "click",
+      "target": { "testid": "detail-close" }
+    },
+    {
+      "actor": "reviewer",
+      "action": "open",
+      "path": ""
+    },
+    {
+      "actor": "reviewer",
+      "action": "wait_for",
+      "target": { "testid": "board-root" }
+    },
+    {
+      "actor": "reviewer",
+      "action": "assert_visible",
+      "target": { "title": "Lifecycle test \u2014 prepare release notes" }
+    }
+  ]
+}

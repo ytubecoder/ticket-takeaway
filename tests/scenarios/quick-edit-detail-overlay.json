@@ -1,0 +1,79 @@
+{
+  "id": "quick-edit-detail-overlay",
+  "title": "Edit fields in detail overlay and verify persistence",
+  "tags": ["e2e", "regression", "showcase"],
+  "actors": {
+    "editor": { "label": "Editor" }
+  },
+  "seed": {
+    "tickets": [
+      {
+        "title": "Quick edit test ticket",
+        "section": "Backlog",
+        "status": "proposed",
+        "description": "Original description text",
+        "priority": "medium",
+        "complexity": "M"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "editor",
+      "action": "open",
+      "path": ""
+    },
+    {
+      "actor": "editor",
+      "action": "wait_for",
+      "target": { "testid": "board-root" }
+    },
+    {
+      "actor": "editor",
+      "action": "click",
+      "target": { "title": "Quick edit test ticket", "open": true }
+    },
+    {
+      "actor": "editor",
+      "action": "wait_for",
+      "target": { "testid": "detail-overlay" }
+    },
+    {
+      "actor": "editor",
+      "action": "assert_visible",
+      "target": { "testid": "detail-title" }
+    },
+    {
+      "actor": "editor",
+      "action": "capture",
+      "capture": { "name": "overlay-before-edit" }
+    },
+    {
+      "actor": "editor",
+      "action": "click",
+      "target": { "testid": "detail-description" }
+    },
+    {
+      "actor": "editor",
+      "action": "fill",
+      "target": { "testid": "detail-description" },
+      "value": "Updated description via scenario runner"
+    },
+    {
+      "actor": "editor",
+      "action": "press",
+      "target": { "testid": "detail-description" },
+      "key": "Tab"
+    },
+    {
+      "actor": "editor",
+      "action": "capture",
+      "capture": { "name": "overlay-after-edit", "publish_slot": "showcase-detail-edit" }
+    },
+    {
+      "actor": "editor",
+      "action": "click",
+      "target": { "testid": "detail-close" }
+    }
+  ]
+}

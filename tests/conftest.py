@@ -63,9 +63,40 @@ def _free_port():
         return s.getsockname()[1]
 
 
+def pytest_addoption(parser):
+    """Register custom CLI options for the scenario runner."""
+    parser.addoption(
+        "--scenario-id",
+        action="store",
+        default=None,
+        metavar="ID",
+        help="Run only the scenario with this exact ID (skips all others).",
+    )
+    parser.addoption(
+        "--publish",
+        action="store_true",
+        default=False,
+        help=(
+            "After each scenario run, write a run-summary.json file "
+            "alongside the captured screenshots (for gallery publishing)."
+        ),
+    )
+
+
 @pytest.fixture(scope="session")
 def dashboard_server():
-    """Start serve.py on a free port, yield the base URL, kill on teardown."""
+    """Start serve.py on a free port, yield the base URL, kill on teardown.
+
+    If the environment variable TT_SCENARIO_BASE_URL is set, that URL is
+    yielded directly without starting a local server — useful for running
+    scenario tests against an already-running instance (CI, staging, etc.).
+    """
+    external_url = os.environ.get("TT_SCENARIO_BASE_URL", "").strip()
+    if external_url:
+        # Use the externally provided URL as-is; no server to manage.
+        yield external_url.rstrip("/")
+        return
+
     # Regenerate dashboard HTML from current generate.py source
     project_dir = os.path.join(os.path.dirname(__file__), "..")
     subprocess.run(

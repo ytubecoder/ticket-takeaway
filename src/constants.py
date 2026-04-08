@@ -122,6 +122,14 @@ def compute_status_on_move(current_status: str, target_section: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Workflow bounce
+# ---------------------------------------------------------------------------
+
+WORKFLOW_AGENT_TIMEOUT = 120   # seconds per agent CLI call
+WORKFLOW_POLL_INTERVAL = 2000  # ms, frontend polling interval
+WORKFLOW_RUN_STATUSES = ("pending", "running", "paused", "completed", "failed", "cancelled")
+
+# ---------------------------------------------------------------------------
 # Feedbacks integration
 # ---------------------------------------------------------------------------
 

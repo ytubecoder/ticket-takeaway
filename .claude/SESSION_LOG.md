@@ -1,5 +1,28 @@
 # Session Log
 
+## 2026-04-09 — Project onboarding flow + folder picker + managed files settings
+
+### Summary
+- Built project onboarding: greenfield projects auto-scaffold (PRODUCT_BACKLOG.md + PRODUCT_SPECIFICATION.md), existing projects auto-seed from backlog on registration
+- Added browser folder picker to replace manual path typing — auto-fills project name and ID from directory name, removed description field
+- Added "Managed Files" section to settings drawer showing all files TT manages with existence indicators
+- Fixed global route ordering bug where `--project` legacy redirect blocked `/api/browse` and other global endpoints
+- Wrote 10 TDD tests + 3 E2E tests (API greenfield, API existing backlog, full browser flow)
+
+### Lessons Learned
+- **Gotcha:** Runtime files in `~/.claude/ticket-takeaway/` can diverge from `src/` — must deploy (copy) after editing source. Earlier check showed "SAME" for symlinked files but serve.py was a copy
+- **Gotcha:** Global route ordering with `_LEGACY_PROJECT_ID` — the legacy redirect (`301 /api/* → /{project}/api/*`) was catching ALL global API routes before they could be handled. Fix: move global route handlers before the legacy redirect, put redirect just before 404 fallback
+- **Gotcha:** Python f-strings interpret JS regex escapes — `\b\w` in JS regex inside f-string causes SyntaxWarning. Fix: rewrite JS to avoid backslash-letter sequences (use `.split().map()` instead of regex)
+- **Gotcha:** Surrogate pairs in f-strings — `\uD83D\uDCC1` (📁) can't encode in Python. Fix: use `String.fromCodePoint(0x1F4C1)` in JS instead
+- **Accepted:** `sync_to_markdown()` already handles empty projects correctly — generates all section headers with zero tickets, so scaffold just calls it rather than writing custom template
+- **Rejected:** Chrome DevTools MCP for E2E testing this session — browser process lock issues prevented use. Fell back to Playwright which worked reliably for automated tests
+
+### Decisions
+- Description field removed from Add Project form — unnecessary friction, name and ID auto-derive from folder name
+- `scaffold_project()` creates both PRODUCT_BACKLOG.md and PRODUCT_SPECIFICATION.md; `seed_project()` only imports backlog (spec is created on first `/accept`)
+- `regenerate_dashboard()` called after registration so new projects load immediately without "not generated" error
+- Managed files list is computed server-side (not hardcoded in UI) via `_MANAGED_FILES` constant + `_get_managed_files()` function
+
 ## 2026-04-09 — Scenario runner: crash recovery, full build, dark mode tour
 
 ### Summary

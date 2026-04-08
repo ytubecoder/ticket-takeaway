@@ -178,3 +178,128 @@ def init_db(conn: sqlite3.Connection):
 
         conn.execute("INSERT INTO _migrations (version) VALUES (3)")
         conn.commit()
+
+    # Migration 4: workflow bounce — agents, workflows, workflow runs
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 4").fetchone():
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_agents (
+                id            TEXT PRIMARY KEY,
+                name          TEXT NOT NULL,
+                command       TEXT NOT NULL DEFAULT 'claude',
+                args          TEXT NOT NULL DEFAULT '[]',
+                system_prompt TEXT NOT NULL DEFAULT '',
+                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflows (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                steps       TEXT NOT NULL DEFAULT '[]',
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                id            TEXT PRIMARY KEY,
+                ticket_id     TEXT NOT NULL,
+                project_id    TEXT NOT NULL,
+                workflow_id   TEXT NOT NULL,
+                status        TEXT NOT NULL DEFAULT 'pending',
+                current_step  INTEGER NOT NULL DEFAULT 0,
+                total_steps   INTEGER NOT NULL DEFAULT 0,
+                conversation  TEXT NOT NULL DEFAULT '[]',
+                started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at  TEXT,
+                FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_ticket
+                ON workflow_runs(ticket_id, project_id)
+        """)
+
+        conn.execute("INSERT INTO _migrations (version) VALUES (4)")
+        conn.commit()
+
+    # Migration 5: User Journeys — journeys, steps, runs, step results, ticket links
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 5").fetchone():
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS journeys (
+                id            TEXT NOT NULL,
+                project_id    TEXT NOT NULL,
+                title         TEXT NOT NULL,
+                description   TEXT NOT NULL DEFAULT '',
+                persona       TEXT NOT NULL DEFAULT '',
+                status        TEXT NOT NULL DEFAULT 'draft',
+                seed_json     TEXT NOT NULL DEFAULT '{}',
+                actors_json   TEXT NOT NULL DEFAULT '{"user": {"label": "User"}}',
+                viewport_json TEXT NOT NULL DEFAULT '{"width": 1440, "height": 1024}',
+                theme         TEXT NOT NULL DEFAULT '',
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (id, project_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS journey_steps (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                journey_id    TEXT NOT NULL,
+                project_id    TEXT NOT NULL,
+                sort_order    INTEGER NOT NULL DEFAULT 0,
+                label         TEXT NOT NULL DEFAULT '',
+                actor         TEXT NOT NULL DEFAULT 'user',
+                action        TEXT NOT NULL,
+                target_json   TEXT NOT NULL DEFAULT '{}',
+                value         TEXT NOT NULL DEFAULT '',
+                key           TEXT NOT NULL DEFAULT '',
+                capture_json  TEXT NOT NULL DEFAULT '',
+                assert_json   TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (journey_id, project_id) REFERENCES journeys(id, project_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS journey_runs (
+                id            TEXT PRIMARY KEY,
+                journey_id    TEXT NOT NULL,
+                project_id    TEXT NOT NULL,
+                status        TEXT NOT NULL DEFAULT 'pending',
+                started_at    TEXT,
+                finished_at   TEXT,
+                duration_ms   INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT NOT NULL DEFAULT '',
+                artifact_dir  TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (journey_id, project_id) REFERENCES journeys(id, project_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS journey_step_results (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id          TEXT NOT NULL,
+                step_id         INTEGER NOT NULL,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                status          TEXT NOT NULL,
+                error_message   TEXT NOT NULL DEFAULT '',
+                screenshot_path TEXT NOT NULL DEFAULT '',
+                duration_ms     INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (run_id) REFERENCES journey_runs(id) ON DELETE CASCADE,
+                FOREIGN KEY (step_id) REFERENCES journey_steps(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS journey_tickets (
+                journey_id  TEXT NOT NULL,
+                project_id  TEXT NOT NULL,
+                ticket_id   TEXT NOT NULL,
+                step_id     INTEGER,
+                PRIMARY KEY (journey_id, project_id, ticket_id),
+                FOREIGN KEY (journey_id, project_id) REFERENCES journeys(id, project_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_journey_steps_journey
+                ON journey_steps(journey_id, project_id);
+            CREATE INDEX IF NOT EXISTS idx_journey_runs_journey
+                ON journey_runs(journey_id, project_id);
+            CREATE INDEX IF NOT EXISTS idx_journey_step_results_run
+                ON journey_step_results(run_id);
+        """)
+        conn.execute("INSERT INTO _migrations (version) VALUES (5)")
+        conn.commit()

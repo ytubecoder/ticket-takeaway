@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 # ---------------------------------------------------------------------------
 # Import tickets-cli.py (hyphenated filename requires importlib)
@@ -55,11 +55,18 @@ _gen_spec.loader.exec_module(gen)
 sys.path.insert(0, str(Path(__file__).parent))
 from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        SECTION_PREFIX, STATUSES, VALID_STATUSES_BY_SECTION,
-                       compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH)
+                       compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
+                       WORKFLOW_AGENT_TIMEOUT, WORKFLOW_RUN_STATUSES)
 from db import get_db, init_db
 from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
-from scenarios import discover_scenarios
+from scenarios import discover_scenarios, validate_manifest, ScenarioValidationError
 from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN_TESTIDS
+from journeys import (
+    add_journey, update_journey, delete_journey, list_journeys, get_journey,
+    add_step, update_step, delete_step, reorder_steps,
+    compile_to_manifest, store_run_results, link_ticket, unlink_ticket,
+    infer_journeys,
+)
 
 import html as _html
 
@@ -128,6 +135,14 @@ _db_lock = threading.RLock()  # Reentrant — write functions call _get_ticket_j
 # Scenario run tracking
 _scenario_runs: dict[str, dict] = {}  # run_id -> {status, scenario_id, process, output_dir, started_at}
 _scenario_runs_lock = threading.Lock()
+
+# Journey run tracking
+_journey_runs: dict[str, dict] = {}  # run_id -> {status, journey_id, process, output_dir, started_at}
+_journey_runs_lock = threading.Lock()
+
+# Workflow bounce tracking
+_workflow_runs: dict[str, dict] = {}  # run_id -> {status, thread, ...}
+_workflow_runs_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +708,497 @@ def _accept_ticket(proj: dict, ticket_id: str) -> bool:
 
 VALID_READINESS_FLAGS = {"tests", "reviewed", "smoke"}
 
+
+# ---------------------------------------------------------------------------
+# Workflow Bounce — CRUD helpers + execution engine
+# ---------------------------------------------------------------------------
+
+def _list_workflow_agents() -> list[dict]:
+    """Return all custom workflow agents."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        rows = conn.execute("SELECT * FROM workflow_agents ORDER BY name").fetchall()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def _get_workflow_agent(agent_id: str) -> dict | None:
+    """Return a single workflow agent by ID."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute("SELECT * FROM workflow_agents WHERE id = ?", (agent_id,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+
+def _create_workflow_agent(agent_id: str, name: str, command: str, args: str, system_prompt: str) -> dict | None:
+    """Insert a new workflow agent. Returns None on duplicate ID."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        try:
+            conn.execute(
+                "INSERT INTO workflow_agents (id, name, command, args, system_prompt) VALUES (?, ?, ?, ?, ?)",
+                (agent_id, name, command, args, system_prompt),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM workflow_agents WHERE id = ?", (agent_id,)).fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except sqlite3.IntegrityError:
+            conn.close()
+            return None
+
+
+def _update_workflow_agent(agent_id: str, updates: dict) -> dict | None:
+    """Update an existing workflow agent. Returns updated record or None."""
+    allowed = {"name", "command", "args", "system_prompt"}
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return _get_workflow_agent(agent_id)
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [agent_id]
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        conn.execute(f"UPDATE workflow_agents SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        row = conn.execute("SELECT * FROM workflow_agents WHERE id = ?", (agent_id,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+
+def _delete_workflow_agent(agent_id: str) -> bool:
+    """Delete a workflow agent. Returns True if deleted."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        cur = conn.execute("DELETE FROM workflow_agents WHERE id = ?", (agent_id,))
+        conn.commit()
+        conn.close()
+    return cur.rowcount > 0
+
+
+def _discover_project_agents(proj: dict) -> list[dict]:
+    """Scan a project's .claude/agents/ directory for agent .md files."""
+    project_path = os.path.expanduser(proj.get("path", ""))
+    agents_dir = os.path.join(project_path, ".claude", "agents")
+    if not os.path.isdir(agents_dir):
+        return []
+    results = []
+    for fname in sorted(os.listdir(agents_dir)):
+        if not fname.endswith(".md"):
+            continue
+        fpath = os.path.join(agents_dir, fname)
+        slug = fname[:-3]  # strip .md
+        name = slug.replace("-", " ").replace("_", " ").title()
+        # Try to parse frontmatter for a name
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read(2048)
+            if content.startswith("---"):
+                end = content.find("---", 3)
+                if end > 0:
+                    fm = content[3:end]
+                    for line in fm.splitlines():
+                        if line.strip().lower().startswith("name:"):
+                            parsed = line.split(":", 1)[1].strip().strip("\"'")
+                            if parsed:
+                                name = parsed
+                            break
+        except Exception:
+            pass
+        results.append({
+            "id": f"_project_{slug}",
+            "name": name,
+            "command": "claude",
+            "args": "[]",
+            "system_prompt": "",
+            "source": "project",
+            "editable": False,
+        })
+    return results
+
+
+def _list_workflows() -> list[dict]:
+    """Return all workflows."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        rows = conn.execute("SELECT * FROM workflows ORDER BY name").fetchall()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def _get_workflow(workflow_id: str) -> dict | None:
+    """Return a single workflow by ID."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+
+def _create_workflow(workflow_id: str, name: str, description: str, steps: str) -> dict | None:
+    """Insert a new workflow. steps should be a JSON string."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        try:
+            conn.execute(
+                "INSERT INTO workflows (id, name, description, steps) VALUES (?, ?, ?, ?)",
+                (workflow_id, name, description, steps),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except sqlite3.IntegrityError:
+            conn.close()
+            return None
+
+
+def _update_workflow(workflow_id: str, updates: dict) -> dict | None:
+    """Update an existing workflow. Returns updated record or None."""
+    allowed = {"name", "description", "steps"}
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return _get_workflow(workflow_id)
+    fields["updated_at"] = datetime.utcnow().isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [workflow_id]
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        conn.execute(f"UPDATE workflows SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+
+def _delete_workflow(workflow_id: str) -> bool:
+    """Delete a workflow. Returns True if deleted."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        cur = conn.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
+        conn.commit()
+        conn.close()
+    return cur.rowcount > 0
+
+
+def _list_workflow_runs(project_id: str, ticket_id: str) -> list[dict]:
+    """Return all workflow runs for a ticket, with parsed conversation."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        rows = conn.execute(
+            "SELECT * FROM workflow_runs WHERE project_id = ? AND ticket_id = ? ORDER BY started_at DESC",
+            (project_id, ticket_id),
+        ).fetchall()
+        conn.close()
+    results = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["conversation"] = json.loads(d.get("conversation", "[]"))
+        except (json.JSONDecodeError, TypeError):
+            d["conversation"] = []
+        results.append(d)
+    return results
+
+
+def _get_workflow_run(run_id: str) -> dict | None:
+    """Return a single workflow run with parsed conversation."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+        conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["conversation"] = json.loads(d.get("conversation", "[]"))
+    except (json.JSONDecodeError, TypeError):
+        d["conversation"] = []
+    return d
+
+
+def _update_workflow_run(run_id: str, **kwargs) -> dict | None:
+    """Update a workflow run. Auto-serializes conversation to JSON."""
+    allowed = {"status", "current_step", "conversation", "completed_at"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return _get_workflow_run(run_id)
+    if "conversation" in fields and isinstance(fields["conversation"], (list, dict)):
+        fields["conversation"] = json.dumps(fields["conversation"])
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [run_id]
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        conn.execute(f"UPDATE workflow_runs SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        conn.close()
+    return _get_workflow_run(run_id)
+
+
+def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow: dict, proj: dict) -> None:
+    """Background thread that executes a workflow bounce.
+
+    For each step: loads the agent, builds a prompt with ticket context and
+    conversation history, runs the agent CLI, parses the response.  After
+    step > 0, asks the primary agent whether agents agree.  Pauses on
+    disagreement; creates an attachment on completion.
+    """
+    try:
+        # Load ticket context
+        ticket = _get_ticket_json(project_id, ticket_id)
+        if not ticket:
+            _update_workflow_run(run_id, status="failed",
+                                conversation=[{"role": "system", "content": "Ticket not found"}],
+                                completed_at=datetime.utcnow().isoformat())
+            with _workflow_runs_lock:
+                if run_id in _workflow_runs:
+                    _workflow_runs[run_id]["status"] = "failed"
+            return
+
+        # Build initial context from ticket
+        context_parts = [f"Ticket: {ticket.get('id', '')} — {ticket.get('title', '')}"]
+        if ticket.get("description"):
+            context_parts.append(f"Description: {ticket['description']}")
+        criteria = ticket.get("acceptance_criteria", [])
+        if criteria:
+            criteria_text = "\n".join(f"- {'[x]' if c.get('checked') else '[ ]'} {c.get('text', '')}" for c in criteria)
+            context_parts.append(f"Acceptance Criteria:\n{criteria_text}")
+        ticket_context = "\n\n".join(context_parts)
+
+        steps = []
+        try:
+            steps = json.loads(workflow.get("steps", "[]")) if isinstance(workflow.get("steps"), str) else workflow.get("steps", [])
+        except (json.JSONDecodeError, TypeError):
+            steps = []
+
+        if not steps:
+            _update_workflow_run(run_id, status="failed",
+                                conversation=[{"role": "system", "content": "Workflow has no steps"}],
+                                completed_at=datetime.utcnow().isoformat())
+            with _workflow_runs_lock:
+                if run_id in _workflow_runs:
+                    _workflow_runs[run_id]["status"] = "failed"
+            return
+
+        conversation = []
+        total_steps = len(steps)
+
+        for step_idx, step in enumerate(steps):
+            # Check for cancellation
+            with _workflow_runs_lock:
+                run_state = _workflow_runs.get(run_id, {})
+                if run_state.get("status") == "cancelled":
+                    _update_workflow_run(run_id, status="cancelled",
+                                        conversation=conversation,
+                                        completed_at=datetime.utcnow().isoformat())
+                    return
+
+            # Check for pause (from disagreement)
+            while True:
+                with _workflow_runs_lock:
+                    run_state = _workflow_runs.get(run_id, {})
+                    st = run_state.get("status", "running")
+                if st == "cancelled":
+                    _update_workflow_run(run_id, status="cancelled",
+                                        conversation=conversation,
+                                        completed_at=datetime.utcnow().isoformat())
+                    return
+                if st != "paused":
+                    break
+                time.sleep(1)
+
+            agent_id = step.get("agent_id", "")
+            prompt_modifier = step.get("prompt", "")
+
+            # Load agent config
+            agent = _get_workflow_agent(agent_id)
+            if not agent:
+                conversation.append({
+                    "role": "system",
+                    "step": step_idx,
+                    "content": f"Agent '{agent_id}' not found — skipping step",
+                })
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
+
+            # Build prompt
+            prompt_parts = []
+            if agent.get("system_prompt"):
+                prompt_parts.append(agent["system_prompt"])
+
+            # Include last 3 conversation turns for context
+            recent = conversation[-3:] if len(conversation) > 3 else conversation
+            if recent:
+                history = "\n\n".join(f"[{t.get('agent', 'system')}]: {t.get('content', '')}" for t in recent)
+                prompt_parts.append(f"Previous conversation:\n{history}")
+
+            prompt_parts.append(f"Ticket context:\n{ticket_context}")
+
+            if prompt_modifier:
+                prompt_parts.append(prompt_modifier)
+
+            prompt = "\n\n---\n\n".join(prompt_parts)
+
+            # Run agent CLI
+            try:
+                agent_args = json.loads(agent.get("args", "[]")) if isinstance(agent.get("args"), str) else agent.get("args", [])
+            except (json.JSONDecodeError, TypeError):
+                agent_args = []
+
+            cmd = [agent.get("command", "claude")] + agent_args + ["-p", prompt, "--output-format", "json"]
+
+            _update_workflow_run(run_id, current_step=step_idx, conversation=conversation, status="running")
+            with _workflow_runs_lock:
+                if run_id in _workflow_runs:
+                    _workflow_runs[run_id]["status"] = "running"
+                    _workflow_runs[run_id]["current_step"] = step_idx
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=WORKFLOW_AGENT_TIMEOUT,
+                    cwd=os.path.expanduser(proj.get("path", ".")),
+                )
+                # Parse response — same pattern as gate-check
+                response_text = result.stdout.strip()
+                try:
+                    response_json = json.loads(response_text)
+                    if isinstance(response_json, dict) and "result" in response_json:
+                        response_content = response_json["result"]
+                    elif isinstance(response_json, dict) and "content" in response_json:
+                        response_content = response_json["content"]
+                    else:
+                        response_content = response_text
+                except json.JSONDecodeError:
+                    response_content = response_text
+
+                conversation.append({
+                    "role": "agent",
+                    "agent": agent.get("name", agent_id),
+                    "agent_id": agent_id,
+                    "step": step_idx,
+                    "content": response_content,
+                })
+            except subprocess.TimeoutExpired:
+                conversation.append({
+                    "role": "system",
+                    "step": step_idx,
+                    "content": f"Agent '{agent.get('name', agent_id)}' timed out after {WORKFLOW_AGENT_TIMEOUT}s",
+                })
+            except Exception as e:
+                conversation.append({
+                    "role": "system",
+                    "step": step_idx,
+                    "content": f"Agent '{agent.get('name', agent_id)}' error: {e}",
+                })
+
+            _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+
+            # After step > 0, check if agents agree
+            if step_idx > 0 and len(steps) > 1:
+                primary_agent_id = steps[0].get("agent_id", "")
+                primary_agent = _get_workflow_agent(primary_agent_id)
+                if primary_agent:
+                    agree_prompt = (
+                        f"You are reviewing a multi-agent workflow discussion about ticket: {ticket.get('title', '')}.\n\n"
+                        f"The conversation so far:\n"
+                    )
+                    for turn in conversation:
+                        agree_prompt += f"\n[{turn.get('agent', 'system')}]: {turn.get('content', '')[:500]}\n"
+                    agree_prompt += (
+                        "\nDo the agents agree on the approach? Respond with JSON: "
+                        '{"agreed": true/false, "summary": "brief summary", "contention": "point of disagreement or null"}'
+                    )
+
+                    try:
+                        agree_args = json.loads(primary_agent.get("args", "[]")) if isinstance(primary_agent.get("args"), str) else primary_agent.get("args", [])
+                    except (json.JSONDecodeError, TypeError):
+                        agree_args = []
+
+                    agree_cmd = [primary_agent.get("command", "claude")] + agree_args + ["-p", agree_prompt, "--output-format", "json"]
+                    try:
+                        agree_result = subprocess.run(
+                            agree_cmd, capture_output=True, text=True,
+                            timeout=WORKFLOW_AGENT_TIMEOUT,
+                            cwd=os.path.expanduser(proj.get("path", ".")),
+                        )
+                        agree_text = agree_result.stdout.strip()
+                        try:
+                            agree_json = json.loads(agree_text)
+                            if isinstance(agree_json, dict) and "result" in agree_json:
+                                try:
+                                    agree_json = json.loads(agree_json["result"])
+                                except (json.JSONDecodeError, TypeError):
+                                    agree_json = {"agreed": True, "summary": agree_json["result"]}
+                        except json.JSONDecodeError:
+                            agree_json = {"agreed": True, "summary": agree_text}
+
+                        conversation.append({
+                            "role": "arbiter",
+                            "agent": primary_agent.get("name", primary_agent_id),
+                            "step": step_idx,
+                            "agreed": agree_json.get("agreed", True),
+                            "summary": agree_json.get("summary", ""),
+                            "contention": agree_json.get("contention"),
+                            "content": agree_json.get("summary", ""),
+                        })
+
+                        if not agree_json.get("agreed", True):
+                            _update_workflow_run(run_id, status="paused",
+                                                current_step=step_idx, conversation=conversation)
+                            with _workflow_runs_lock:
+                                if run_id in _workflow_runs:
+                                    _workflow_runs[run_id]["status"] = "paused"
+                    except (subprocess.TimeoutExpired, Exception):
+                        pass  # agreement check failed, continue anyway
+
+        # Completed — create attachment
+        summary_parts = []
+        for turn in conversation:
+            if turn.get("role") == "agent":
+                summary_parts.append(f"**{turn.get('agent', 'Agent')}**: {turn.get('content', '')[:200]}")
+        summary_text = "\n\n".join(summary_parts) if summary_parts else "Workflow completed"
+
+        _add_attachment(
+            project_id, ticket_id,
+            attachment_type="workflow_bounce",
+            name=f"workflow-{run_id[:8]}",
+            path="",
+            summary=summary_text[:1000],
+            metadata=json.dumps({"run_id": run_id, "workflow_id": workflow.get("id", "")}),
+        )
+
+        _update_workflow_run(run_id, status="completed", conversation=conversation,
+                            current_step=len(steps) - 1,
+                            completed_at=datetime.utcnow().isoformat())
+        with _workflow_runs_lock:
+            if run_id in _workflow_runs:
+                _workflow_runs[run_id]["status"] = "completed"
+
+    except Exception as e:
+        _update_workflow_run(run_id, status="failed",
+                            conversation=[{"role": "system", "content": f"Workflow error: {e}"}],
+                            completed_at=datetime.utcnow().isoformat())
+        with _workflow_runs_lock:
+            if run_id in _workflow_runs:
+                _workflow_runs[run_id]["status"] = "failed"
+
+
 # Sections that require a gate check before entry
 GATED_SECTIONS = {"Ideas", "Backlog", "WIP", "For Review", "Done"}
 
@@ -1249,6 +1755,715 @@ def _validate_project_registration(body: dict) -> str | None:
         if pid in _PROJECTS_CACHE:
             return f"project '{pid}' already exists"
     return None
+
+
+def _render_journeys_page(proj: dict, port: int) -> str:
+    """Render the journeys page for a single project.
+
+    Note: innerHTML usage is safe here — all dynamic values pass through the
+    esc() function which uses textContent-based escaping to prevent XSS.
+    Server-injected values use _safe_attr() for the same purpose.
+    """
+    pid = _safe_attr(proj["id"])
+    name = _safe_attr(proj.get("name", proj["id"]))
+    api_base = f"http://localhost:{port}/{pid}/api"
+
+    return f'''<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name} — Journeys</title>
+<script>
+(function(){{
+  var s=localStorage.getItem('tt-theme');
+  if(s==='light')document.documentElement.setAttribute('data-theme','light');
+  else if(s==='dark')document.documentElement.setAttribute('data-theme','dark');
+  else document.documentElement.setAttribute('data-theme',
+    window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');
+}})();
+</script>
+<style>
+:root, [data-theme="dark"] {{
+  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
+  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
+  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
+  --accent: #3b82f6; --green: #22c55e; --red: #ef4444; --yellow: #eab308;
+}}
+[data-theme="light"] {{
+  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
+  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
+  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
+  --accent: #2563eb; --green: #16a34a; --red: #dc2626; --yellow: #ca8a04;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+.header {{ display: flex; align-items: center; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--border-default); }}
+.header .back {{ color: var(--text-tertiary); text-decoration: none; font-size: 13px; }}
+.header .back:hover {{ color: var(--text-secondary); }}
+.header h1 {{ font-size: 16px; font-weight: 600; flex: 1; }}
+.btn {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; border: 1px solid; transition: background 0.15s; }}
+.btn-primary {{ background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.3); color: var(--accent); }}
+.btn-primary:hover {{ background: rgba(59,130,246,0.25); }}
+.btn-success {{ background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.3); color: var(--green); }}
+.btn-success:hover {{ background: rgba(34,197,94,0.25); }}
+.btn-danger {{ background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.2); color: var(--red); }}
+.btn-danger:hover {{ background: rgba(239,68,68,0.2); }}
+.btn-ghost {{ background: transparent; border-color: var(--border-default); color: var(--text-secondary); }}
+.btn-ghost:hover {{ background: var(--bg-hover); color: var(--text-primary); }}
+.btn-sm {{ padding: 4px 10px; font-size: 11px; }}
+.btn-icon {{ width: 28px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }}
+.badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }}
+.badge-draft {{ background: rgba(156,163,175,0.15); color: var(--text-tertiary); }}
+.badge-active {{ background: rgba(59,130,246,0.15); color: var(--accent); }}
+.badge-validated {{ background: rgba(34,197,94,0.15); color: var(--green); }}
+.badge-archived {{ background: rgba(156,163,175,0.1); color: var(--text-tertiary); }}
+.status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; }}
+.status-dot.passed {{ background: var(--green); }}
+.status-dot.failed {{ background: var(--red); }}
+.status-dot.skipped {{ background: var(--text-tertiary); }}
+.status-dot.pending {{ background: var(--border-strong); }}
+.content {{ padding: 24px; max-width: 1200px; }}
+.journey-list {{ display: flex; flex-direction: column; gap: 8px; }}
+.journey-card {{ background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }}
+.journey-card:hover {{ border-color: var(--border-strong); background: var(--bg-hover); }}
+.journey-card .top-row {{ display: flex; align-items: center; gap: 10px; }}
+.journey-card .title {{ font-size: 14px; font-weight: 600; flex: 1; }}
+.journey-card .meta {{ display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--text-tertiary); font-size: 11px; }}
+.journey-card .persona {{ color: var(--text-secondary); font-size: 11px; font-style: italic; }}
+.empty-state {{ text-align: center; padding: 60px 24px; color: var(--text-tertiary); font-size: 13px; }}
+.journey-detail {{ display: none; }}
+.journey-detail.active {{ display: block; }}
+.detail-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }}
+.detail-header .title-input {{ flex: 1; background: transparent; border: 1px solid transparent; padding: 4px 8px; font-size: 18px; font-weight: 600; color: var(--text-primary); border-radius: 4px; font-family: inherit; }}
+.detail-header .title-input:focus {{ border-color: var(--accent); outline: none; background: var(--bg-card); }}
+.steps-table {{ width: 100%; border-collapse: collapse; margin: 16px 0; }}
+.steps-table th {{ text-align: left; font-size: 10px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 10px; border-bottom: 1px solid var(--border-default); }}
+.steps-table td {{ padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-size: 13px; vertical-align: middle; }}
+.steps-table tr:hover td {{ background: var(--bg-hover); }}
+.steps-table .step-num {{ color: var(--text-tertiary); font-size: 11px; width: 30px; text-align: center; }}
+.steps-table .action-cell {{ font-family: "SF Mono", Monaco, monospace; font-size: 12px; color: var(--accent); }}
+.steps-table .target-cell {{ font-family: "SF Mono", Monaco, monospace; font-size: 11px; color: var(--text-secondary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.steps-table .label-cell {{ color: var(--text-primary); }}
+.steps-table .actions-cell {{ width: 80px; text-align: right; }}
+.steps-table .capture-icon {{ color: var(--yellow); font-size: 11px; }}
+.step-expand {{ display: none; }}
+.step-expand.active {{ display: table-row; }}
+.step-expand td {{ padding: 12px 10px; background: var(--bg-surface); }}
+.step-expand .field-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
+.step-expand label {{ font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; margin-bottom: 2px; display: block; }}
+.step-expand input, .step-expand select {{ width: 100%; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 4px; padding: 6px 8px; color: var(--text-primary); font-size: 12px; font-family: "SF Mono", Monaco, monospace; }}
+.step-expand input:focus, .step-expand select:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
+.run-results {{ margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-default); }}
+.run-summary {{ display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }}
+.run-status {{ font-size: 14px; font-weight: 600; }}
+.run-status.passed {{ color: var(--green); }}
+.run-status.failed {{ color: var(--red); }}
+.run-meta {{ font-size: 11px; color: var(--text-tertiary); }}
+.step-timeline {{ display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }}
+.tl-step {{ display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 8px; border-radius: 6px; cursor: pointer; min-width: 40px; transition: background 0.15s; }}
+.tl-step:hover {{ background: var(--bg-hover); }}
+.tl-step .tl-num {{ font-size: 10px; color: var(--text-tertiary); }}
+.tl-step .tl-label {{ font-size: 9px; color: var(--text-tertiary); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }}
+.step-result-detail {{ margin-top: 12px; padding: 12px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; font-size: 12px; }}
+.step-result-detail .error-msg {{ color: var(--red); font-family: "SF Mono", Monaco, monospace; white-space: pre-wrap; }}
+.step-result-detail img {{ max-width: 100%; border-radius: 4px; margin-top: 8px; border: 1px solid var(--border-default); }}
+.run-history {{ margin-top: 16px; }}
+.run-history h3 {{ font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }}
+.run-row {{ display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; color: var(--text-secondary); }}
+.run-row:hover {{ background: var(--bg-hover); }}
+.run-row .run-id {{ font-family: "SF Mono", Monaco, monospace; color: var(--text-tertiary); }}
+.form-row {{ display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }}
+.form-row label {{ font-size: 11px; color: var(--text-secondary); min-width: 80px; }}
+.form-row input {{ flex: 1; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 4px; padding: 6px 8px; color: var(--text-primary); font-size: 13px; font-family: inherit; }}
+.form-row input:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
+.toast {{ position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; border-radius: 6px; font-size: 12px; z-index: 1000; transition: opacity 0.3s; }}
+.toast.success {{ background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3); color: var(--green); }}
+.toast.error {{ background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); color: var(--red); }}
+</style>
+</head>
+<body>
+<div class="header">
+  <a href="/{pid}" class="back" data-testid="journeys-back">&larr; Board</a>
+  <h1>Journeys</h1>
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-ghost" onclick="inferJourneys()" data-testid="infer-btn">Infer from Tickets</button>
+    <button class="btn btn-primary" onclick="createJourney()" data-testid="new-journey-btn">+ New Journey</button>
+  </div>
+</div>
+<div class="content">
+  <div id="list-view">
+    <div id="journey-list" class="journey-list" data-testid="journey-list"></div>
+  </div>
+  <div id="detail-view" class="journey-detail" data-testid="journey-detail">
+    <div class="detail-header">
+      <button class="btn btn-ghost btn-sm" onclick="showList()" data-testid="detail-back">&larr;</button>
+      <input class="title-input" id="detail-title" data-testid="detail-title" placeholder="Journey title...">
+      <span id="detail-badge" class="badge badge-draft" data-testid="detail-badge">draft</span>
+      <div style="margin-left:auto;display:flex;gap:6px;">
+        <button class="btn btn-ghost btn-sm" onclick="validateJourney()" data-testid="validate-btn">Validate</button>
+        <button class="btn btn-success btn-sm" onclick="runJourney()" data-testid="run-btn">&#9654; Run</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteJourney()" data-testid="delete-btn">Delete</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Persona</label>
+      <input id="detail-persona" data-testid="detail-persona" placeholder="Who is this journey for?">
+    </div>
+    <div class="form-row">
+      <label>Description</label>
+      <input id="detail-description" data-testid="detail-description" placeholder="What does this journey validate?">
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 8px;">
+      <h3 style="font-size:13px;font-weight:600;">Steps</h3>
+      <button class="btn btn-ghost btn-sm" onclick="addStep()" data-testid="add-step-btn">+ Add Step</button>
+    </div>
+    <table class="steps-table" data-testid="steps-table">
+      <thead><tr><th style="width:30px">#</th><th style="width:12px"></th><th>Label</th><th>Action</th><th>Target</th><th style="width:24px"></th><th style="width:80px"></th></tr></thead>
+      <tbody id="steps-body" data-testid="steps-body"></tbody>
+    </table>
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-default);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <h3 style="font-size:13px;font-weight:600;">Linked Tickets</h3>
+        <button class="btn btn-ghost btn-sm" onclick="linkTicket()" data-testid="link-ticket-btn">+ Link Ticket</button>
+      </div>
+      <div id="linked-tickets" data-testid="linked-tickets" style="font-size:12px;color:var(--text-secondary);"></div>
+    </div>
+    <div id="run-results" class="run-results" style="display:none;" data-testid="run-results">
+      <div class="run-summary">
+        <span id="run-status-label" class="run-status" data-testid="run-status"></span>
+        <span id="run-meta" class="run-meta" data-testid="run-meta"></span>
+      </div>
+      <div id="step-timeline" class="step-timeline" data-testid="step-timeline"></div>
+      <div id="step-result-detail" class="step-result-detail" style="display:none;" data-testid="step-result-detail"></div>
+    </div>
+    <div id="run-history" class="run-history" style="display:none;" data-testid="run-history">
+      <h3>Run History</h3>
+      <div id="run-history-list" data-testid="run-history-list"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function() {{
+  var API = '{api_base}';
+  var currentJourney = null;
+  var currentSteps = [];
+  var lastRunResults = null;
+
+  /* ── Helpers ─────────────────────────────────────────── */
+  function toast(msg, type) {{
+    var el = document.createElement('div');
+    el.className = 'toast ' + (type || 'success');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function() {{ el.style.opacity = '0'; setTimeout(function() {{ el.remove(); }}, 300); }}, 2500);
+  }}
+  function esc(s) {{ var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }}
+  function timeAgo(ts) {{
+    if (!ts) return 'never';
+    var d = new Date(ts + 'Z'), diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }}
+
+  /* ── API ─────────────────────────────────────────────── */
+  function apiGet(path) {{ return fetch(API + path).then(function(r) {{ return r.json(); }}); }}
+  function apiPost(path, body) {{ return fetch(API + path, {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(body||{{}}) }}).then(function(r) {{ return r.json().then(function(d) {{ return {{status:r.status,data:d}}; }}); }}); }}
+  function apiPut(path, body) {{ return fetch(API + path, {{ method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(body) }}).then(function(r) {{ return r.json(); }}); }}
+  function apiDel(path) {{ return fetch(API + path, {{ method:'DELETE' }}).then(function(r) {{ return r.json(); }}); }}
+
+  /* ── Journey List ────────────────────────────────────── */
+  function loadList() {{
+    apiGet('/journeys').then(function(data) {{
+      var list = document.getElementById('journey-list');
+      var journeys = data.journeys || [];
+      list.textContent = '';
+      if (journeys.length === 0) {{
+        var empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.setAttribute('data-testid', 'journeys-empty');
+        var p1 = document.createElement('p');
+        p1.style.cssText = 'font-size:24px;margin-bottom:8px';
+        p1.textContent = 'No journeys yet';
+        var p2 = document.createElement('p');
+        p2.textContent = 'Define user flows to validate your features work end-to-end.';
+        empty.appendChild(p1);
+        empty.appendChild(p2);
+        list.appendChild(empty);
+        return;
+      }}
+      journeys.forEach(function(j) {{
+        var card = document.createElement('div');
+        card.className = 'journey-card';
+        card.setAttribute('data-testid', 'journey-card-' + j.id);
+        card.onclick = function() {{ openJourney(j.id); }};
+        // Top row
+        var topRow = document.createElement('div');
+        topRow.className = 'top-row';
+        var dot = document.createElement('span');
+        dot.className = 'status-dot ' + (j.last_run_status === 'passed' ? 'passed' : j.last_run_status === 'failed' ? 'failed' : 'pending');
+        var titleSpan = document.createElement('span');
+        titleSpan.className = 'title';
+        titleSpan.textContent = j.title;
+        var badge = document.createElement('span');
+        badge.className = 'badge badge-' + j.status;
+        badge.textContent = j.status;
+        topRow.appendChild(dot);
+        topRow.appendChild(titleSpan);
+        topRow.appendChild(badge);
+        card.appendChild(topRow);
+        // Meta
+        var meta = document.createElement('div');
+        meta.className = 'meta';
+        var stepCount = document.createElement('span');
+        stepCount.textContent = (j.step_count || 0) + ' steps';
+        meta.appendChild(stepCount);
+        if (j.persona) {{
+          var persona = document.createElement('span');
+          persona.className = 'persona';
+          persona.textContent = j.persona;
+          meta.appendChild(persona);
+        }}
+        if (j.last_run_at) {{
+          var runAt = document.createElement('span');
+          runAt.textContent = 'Last run: ' + timeAgo(j.last_run_at);
+          meta.appendChild(runAt);
+        }}
+        card.appendChild(meta);
+        list.appendChild(card);
+      }});
+    }});
+  }}
+
+  /* ── Create ──────────────────────────────────────────── */
+  window.createJourney = function() {{
+    var title = prompt('Journey title:');
+    if (!title) return;
+    apiPost('/journeys', {{title:title}}).then(function(r) {{
+      if (r.status === 201) {{ toast('Journey created'); openJourney(r.data.id); }}
+      else toast(r.data.error || 'Failed', 'error');
+    }});
+  }};
+
+  /* ── Open Detail ─────────────────────────────────────── */
+  function openJourney(id) {{
+    apiGet('/journeys/' + id).then(function(j) {{
+      currentJourney = j;
+      currentSteps = j.steps || [];
+      document.getElementById('detail-title').value = j.title;
+      document.getElementById('detail-persona').value = j.persona || '';
+      document.getElementById('detail-description').value = j.description || '';
+      var badge = document.getElementById('detail-badge');
+      badge.textContent = j.status;
+      badge.className = 'badge badge-' + j.status;
+      renderSteps();
+      renderLinkedTickets();
+      loadRunResults(j);
+      document.getElementById('list-view').style.display = 'none';
+      var dv = document.getElementById('detail-view');
+      dv.style.display = 'block';
+      dv.className = 'journey-detail active';
+      document.getElementById('detail-title').onblur = saveJourneyMeta;
+      document.getElementById('detail-persona').onblur = saveJourneyMeta;
+      document.getElementById('detail-description').onblur = saveJourneyMeta;
+    }});
+  }}
+  function saveJourneyMeta() {{
+    if (!currentJourney) return;
+    apiPut('/journeys/' + currentJourney.id, {{
+      title: document.getElementById('detail-title').value,
+      persona: document.getElementById('detail-persona').value,
+      description: document.getElementById('detail-description').value,
+    }});
+  }}
+  window.showList = function() {{
+    currentJourney = null;
+    document.getElementById('list-view').style.display = 'block';
+    var dv = document.getElementById('detail-view');
+    dv.style.display = 'none';
+    dv.className = 'journey-detail';
+    loadList();
+  }};
+
+  /* ── Steps ───────────────────────────────────────────── */
+  var ACTIONS = ['open','reload','click','double_click','fill','select','press','wait_for','assert_visible','assert_text','capture'];
+
+  function renderSteps() {{
+    var tbody = document.getElementById('steps-body');
+    tbody.textContent = '';
+    currentSteps.forEach(function(step, idx) {{
+      var tr = document.createElement('tr');
+      tr.setAttribute('data-testid', 'step-row-' + step.id);
+      var target = '';
+      try {{ var t = JSON.parse(step.target_json || '{{}}'); target = t.testid || t.css || t.text || t.title || t.role || ''; }} catch(e) {{}}
+      var hasCapture = step.capture_json && step.capture_json !== '';
+      var dotClass = 'pending';
+      if (lastRunResults && lastRunResults[idx]) dotClass = lastRunResults[idx].status;
+
+      // Build cells with DOM methods
+      var numTd = document.createElement('td'); numTd.className = 'step-num'; numTd.textContent = idx + 1;
+      var dotTd = document.createElement('td'); var dotEl = document.createElement('span'); dotEl.className = 'status-dot ' + dotClass; dotTd.appendChild(dotEl);
+      var labelTd = document.createElement('td'); labelTd.className = 'label-cell'; labelTd.textContent = step.label || '(no label)';
+      var actionTd = document.createElement('td'); actionTd.className = 'action-cell'; actionTd.textContent = step.action;
+      var targetTd = document.createElement('td'); targetTd.className = 'target-cell'; targetTd.textContent = target || '\u2014'; targetTd.title = step.target_json || '';
+      var capTd = document.createElement('td');
+      if (hasCapture) {{ var capSpan = document.createElement('span'); capSpan.className = 'capture-icon'; capSpan.textContent = '[capture]'; capTd.appendChild(capSpan); }}
+      var actTd = document.createElement('td'); actTd.className = 'actions-cell';
+      var editBtn = document.createElement('button'); editBtn.className = 'btn btn-ghost btn-sm btn-icon'; editBtn.textContent = '\u270E'; editBtn.title = 'Edit';
+      (function(sid) {{ editBtn.onclick = function() {{ toggleExpand(sid); }}; }})(step.id);
+      var delBtn = document.createElement('button'); delBtn.className = 'btn btn-danger btn-sm btn-icon'; delBtn.textContent = '\u00D7'; delBtn.title = 'Remove';
+      (function(sid) {{ delBtn.onclick = function() {{ removeStep(sid); }}; }})(step.id);
+      actTd.appendChild(editBtn); actTd.appendChild(delBtn);
+
+      tr.appendChild(numTd); tr.appendChild(dotTd); tr.appendChild(labelTd); tr.appendChild(actionTd); tr.appendChild(targetTd); tr.appendChild(capTd); tr.appendChild(actTd);
+      tbody.appendChild(tr);
+
+      // Expand row
+      var expandTr = document.createElement('tr');
+      expandTr.className = 'step-expand';
+      expandTr.id = 'expand-' + step.id;
+      var expandTd = document.createElement('td'); expandTd.colSpan = 7;
+      var grid = document.createElement('div'); grid.className = 'field-grid';
+      var targetObj = {{}};
+      try {{ targetObj = JSON.parse(step.target_json || '{{}}'); }} catch(e) {{}}
+
+      function makeField(labelText, val, onChange) {{
+        var wrap = document.createElement('div');
+        var lbl = document.createElement('label'); lbl.textContent = labelText; wrap.appendChild(lbl);
+        var inp = document.createElement('input'); inp.value = val || ''; inp.onblur = function() {{ onChange(inp.value); }};
+        wrap.appendChild(inp);
+        return wrap;
+      }}
+      function makeSelect(labelText, options, current, onChange) {{
+        var wrap = document.createElement('div');
+        var lbl = document.createElement('label'); lbl.textContent = labelText; wrap.appendChild(lbl);
+        var sel = document.createElement('select');
+        options.forEach(function(o) {{
+          var opt = document.createElement('option'); opt.value = o; opt.textContent = o;
+          if (o === current) opt.selected = true;
+          sel.appendChild(opt);
+        }});
+        sel.onchange = function() {{ onChange(sel.value); }};
+        wrap.appendChild(sel);
+        return wrap;
+      }}
+
+      (function(sid, stp) {{
+        grid.appendChild(makeField('Label', stp.label, function(v) {{ updateField(sid, 'label', v); }}));
+        grid.appendChild(makeSelect('Action', ACTIONS, stp.action, function(v) {{ updateField(sid, 'action', v); }}));
+        grid.appendChild(makeField('Actor', stp.actor, function(v) {{ updateField(sid, 'actor', v); }}));
+        grid.appendChild(makeField('Value', stp.value, function(v) {{ updateField(sid, 'value', v); }}));
+        grid.appendChild(makeField('Target (testid)', targetObj.testid || '', function(v) {{ updateTarget(sid, 'testid', v); }}));
+        grid.appendChild(makeField('Target (css)', targetObj.css || '', function(v) {{ updateTarget(sid, 'css', v); }}));
+        grid.appendChild(makeField('Target (text)', targetObj.text || '', function(v) {{ updateTarget(sid, 'text', v); }}));
+        grid.appendChild(makeField('Key (for press)', stp.key || '', function(v) {{ updateField(sid, 'key', v); }}));
+      }})(step.id, step);
+
+      expandTd.appendChild(grid);
+      expandTr.appendChild(expandTd);
+      tbody.appendChild(expandTr);
+    }});
+  }}
+
+  function toggleExpand(stepId) {{
+    var row = document.getElementById('expand-' + stepId);
+    if (row) row.classList.toggle('active');
+  }}
+
+  function updateField(stepId, field, value) {{
+    var body = {{}}; body[field] = value;
+    apiPut('/journeys/' + currentJourney.id + '/steps/' + stepId, body).then(function(updated) {{
+      var idx = currentSteps.findIndex(function(s) {{ return s.id === stepId; }});
+      if (idx >= 0) {{ currentSteps[idx] = updated; renderSteps(); }}
+    }});
+  }}
+
+  function updateTarget(stepId, key, value) {{
+    var idx = currentSteps.findIndex(function(s) {{ return s.id === stepId; }});
+    if (idx < 0) return;
+    var target = {{}};
+    try {{ target = JSON.parse(currentSteps[idx].target_json || '{{}}'); }} catch(e) {{}}
+    if (value) target[key] = value; else delete target[key];
+    apiPut('/journeys/' + currentJourney.id + '/steps/' + stepId, {{target: target}});
+    currentSteps[idx].target_json = JSON.stringify(target);
+    renderSteps();
+  }}
+
+  window.addStep = function() {{
+    apiPost('/journeys/' + currentJourney.id + '/steps', {{action:'click',label:'New step'}}).then(function(r) {{
+      if (r.status === 201) {{
+        currentSteps.push(r.data);
+        renderSteps();
+        var ex = document.getElementById('expand-' + r.data.id);
+        if (ex) ex.classList.add('active');
+      }}
+    }});
+  }};
+
+  function removeStep(stepId) {{
+    apiDel('/journeys/' + currentJourney.id + '/steps/' + stepId).then(function() {{
+      currentSteps = currentSteps.filter(function(s) {{ return s.id !== stepId; }});
+      renderSteps();
+    }});
+  }}
+
+  /* ── Validate & Run ──────────────────────────────────── */
+  window.validateJourney = function() {{
+    apiPost('/journeys/' + currentJourney.id + '/validate', {{}}).then(function(r) {{
+      if (r.data.ok) toast('Validation passed');
+      else toast(r.data.error || 'Validation failed', 'error');
+    }});
+  }};
+  window.runJourney = function() {{
+    toast('Starting run...');
+    apiPost('/journeys/' + currentJourney.id + '/run', {{}}).then(function(r) {{
+      if (r.data.error) {{ toast(r.data.error, 'error'); return; }}
+      toast('Run started: ' + r.data.run_id);
+      setTimeout(function() {{ openJourney(currentJourney.id); }}, 2000);
+    }});
+  }};
+
+  /* ── Run Results ─────────────────────────────────────── */
+  function loadRunResults(journey) {{
+    var resultsDiv = document.getElementById('run-results');
+    var historyDiv = document.getElementById('run-history');
+    lastRunResults = null;
+    var runs = journey.runs || [];
+    if (runs.length === 0) {{ resultsDiv.style.display = 'none'; historyDiv.style.display = 'none'; return; }}
+
+    var latest = runs[0];
+    apiGet('/journeys/' + journey.id + '/runs/' + latest.id).then(function(data) {{
+      var run = data.run, stepResults = data.step_results || [];
+      lastRunResults = stepResults;
+      renderSteps();
+      var statusEl = document.getElementById('run-status-label');
+      statusEl.textContent = run.status === 'passed' ? '\\u2713 Passed' : run.status === 'failed' ? '\\u2717 Failed' : run.status;
+      statusEl.className = 'run-status ' + run.status;
+      document.getElementById('run-meta').textContent = (run.duration_ms ? run.duration_ms + 'ms' : '') + (run.started_at ? ' \\u2022 ' + timeAgo(run.started_at) : '');
+
+      var timeline = document.getElementById('step-timeline');
+      timeline.textContent = '';
+      stepResults.forEach(function(sr, i) {{
+        var step = document.createElement('div');
+        step.className = 'tl-step';
+        step.onclick = function() {{ showStepDetail(sr); }};
+        var d = document.createElement('span'); d.className = 'status-dot ' + sr.status; step.appendChild(d);
+        var n = document.createElement('span'); n.className = 'tl-num'; n.textContent = i + 1; step.appendChild(n);
+        var l = document.createElement('span'); l.className = 'tl-label'; l.textContent = sr.label || sr.action; step.appendChild(l);
+        timeline.appendChild(step);
+      }});
+      resultsDiv.style.display = 'block';
+    }});
+
+    if (runs.length > 1) {{
+      historyDiv.style.display = 'block';
+      var histList = document.getElementById('run-history-list');
+      histList.textContent = '';
+      runs.slice(1, 10).forEach(function(run) {{
+        var row = document.createElement('div');
+        row.className = 'run-row';
+        var d = document.createElement('span'); d.className = 'status-dot ' + run.status; row.appendChild(d);
+        var rid = document.createElement('span'); rid.className = 'run-id'; rid.textContent = run.id; row.appendChild(rid);
+        var t = document.createElement('span'); t.textContent = timeAgo(run.started_at); row.appendChild(t);
+        var dur = document.createElement('span'); dur.textContent = run.duration_ms ? run.duration_ms + 'ms' : ''; row.appendChild(dur);
+        row.onclick = function() {{ loadRunDetail(journey.id, run.id); }};
+        histList.appendChild(row);
+      }});
+    }} else {{ historyDiv.style.display = 'none'; }}
+  }}
+
+  function showStepDetail(sr) {{
+    var detail = document.getElementById('step-result-detail');
+    detail.textContent = '';
+    if (sr.status === 'failed' && sr.error_message) {{
+      var errDiv = document.createElement('div'); errDiv.className = 'error-msg'; errDiv.textContent = sr.error_message;
+      detail.appendChild(errDiv);
+    }} else if (sr.screenshot_path) {{
+      var img = document.createElement('img'); img.src = sr.screenshot_path; img.alt = 'Screenshot';
+      detail.appendChild(img);
+    }} else {{
+      var noData = document.createElement('span'); noData.style.color = 'var(--text-tertiary)'; noData.textContent = 'No details for this step';
+      detail.appendChild(noData);
+    }}
+    detail.style.display = 'block';
+  }}
+
+  function loadRunDetail(journeyId, runId) {{
+    apiGet('/journeys/' + journeyId + '/runs/' + runId).then(function(data) {{
+      var run = data.run, stepResults = data.step_results || [];
+      var statusEl = document.getElementById('run-status-label');
+      statusEl.textContent = run.status === 'passed' ? '\\u2713 Passed' : run.status === 'failed' ? '\\u2717 Failed' : run.status;
+      statusEl.className = 'run-status ' + run.status;
+      document.getElementById('run-meta').textContent = (run.duration_ms ? run.duration_ms + 'ms' : '') + (run.started_at ? ' \\u2022 ' + timeAgo(run.started_at) : '');
+      var timeline = document.getElementById('step-timeline');
+      timeline.textContent = '';
+      stepResults.forEach(function(sr, i) {{
+        var step = document.createElement('div'); step.className = 'tl-step';
+        step.onclick = function() {{ showStepDetail(sr); }};
+        var d = document.createElement('span'); d.className = 'status-dot ' + sr.status; step.appendChild(d);
+        var n = document.createElement('span'); n.className = 'tl-num'; n.textContent = i + 1; step.appendChild(n);
+        var l = document.createElement('span'); l.className = 'tl-label'; l.textContent = sr.label || sr.action; step.appendChild(l);
+        timeline.appendChild(step);
+      }});
+    }});
+  }}
+
+  /* ── Delete ──────────────────────────────────────────── */
+  window.deleteJourney = function() {{
+    if (!confirm('Delete journey "' + currentJourney.title + '"?')) return;
+    apiDel('/journeys/' + currentJourney.id).then(function() {{ toast('Deleted'); showList(); }});
+  }};
+
+  /* ── Linked Tickets ───────────────────────────────────── */
+  function renderLinkedTickets() {{
+    var container = document.getElementById('linked-tickets');
+    container.textContent = '';
+    var links = (currentJourney && currentJourney.linked_tickets) || [];
+    if (links.length === 0) {{
+      var noLinks = document.createElement('span');
+      noLinks.style.color = 'var(--text-tertiary)';
+      noLinks.textContent = 'No tickets linked yet';
+      container.appendChild(noLinks);
+      return;
+    }}
+    links.forEach(function(link) {{
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;';
+      var idSpan = document.createElement('span');
+      idSpan.style.cssText = 'font-family:"SF Mono",Monaco,monospace;color:var(--accent);';
+      idSpan.textContent = link.ticket_id;
+      var unlinkBtn = document.createElement('button');
+      unlinkBtn.className = 'btn btn-danger btn-sm btn-icon';
+      unlinkBtn.textContent = '\u00D7';
+      unlinkBtn.title = 'Unlink';
+      (function(tid) {{
+        unlinkBtn.onclick = function() {{
+          apiDel('/journeys/' + currentJourney.id + '/link/' + tid).then(function() {{
+            currentJourney.linked_tickets = currentJourney.linked_tickets.filter(function(l) {{ return l.ticket_id !== tid; }});
+            renderLinkedTickets();
+            toast('Unlinked ' + tid);
+          }});
+        }};
+      }})(link.ticket_id);
+      row.appendChild(idSpan);
+      row.appendChild(unlinkBtn);
+      container.appendChild(row);
+    }});
+  }}
+
+  window.linkTicket = function() {{
+    var ticketId = prompt('Ticket ID to link (e.g. B-01):');
+    if (!ticketId) return;
+    apiPost('/journeys/' + currentJourney.id + '/link', {{ticket_id: ticketId.trim()}}).then(function(r) {{
+      if (r.data.ok) {{
+        if (!currentJourney.linked_tickets) currentJourney.linked_tickets = [];
+        currentJourney.linked_tickets.push({{ticket_id: ticketId.trim(), journey_id: currentJourney.id, project_id: '', step_id: null}});
+        renderLinkedTickets();
+        toast('Linked ' + ticketId);
+      }} else {{
+        toast(r.data.error || 'Failed', 'error');
+      }}
+    }});
+  }};
+
+  /* ── Infer from Tickets ───────────────────────────────── */
+  window.inferJourneys = function() {{
+    toast('Analyzing tickets...');
+    apiPost('/journeys/infer', {{}}).then(function(r) {{
+      var suggestions = r.data.suggestions || [];
+      if (suggestions.length === 0) {{
+        toast('No suggestions \u2014 add some tickets first', 'error');
+        return;
+      }}
+      // Show suggestions as a list with approve buttons
+      var list = document.getElementById('journey-list');
+      list.textContent = '';
+      var header = document.createElement('div');
+      header.style.cssText = 'margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;';
+      var h = document.createElement('h3');
+      h.style.cssText = 'font-size:14px;font-weight:600;';
+      h.textContent = 'Suggested Journeys (' + suggestions.length + ')';
+      var cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-ghost btn-sm';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = function() {{ loadList(); }};
+      header.appendChild(h);
+      header.appendChild(cancelBtn);
+      list.appendChild(header);
+
+      suggestions.forEach(function(s) {{
+        var card = document.createElement('div');
+        card.className = 'journey-card';
+        card.style.cursor = 'default';
+        var topRow = document.createElement('div');
+        topRow.className = 'top-row';
+        var titleSpan = document.createElement('span');
+        titleSpan.className = 'title';
+        titleSpan.textContent = s.title;
+        var approveBtn = document.createElement('button');
+        approveBtn.className = 'btn btn-success btn-sm';
+        approveBtn.textContent = 'Approve';
+        approveBtn.onclick = function() {{ approveSuggestion(s); }};
+        topRow.appendChild(titleSpan);
+        topRow.appendChild(approveBtn);
+        card.appendChild(topRow);
+        var meta = document.createElement('div');
+        meta.className = 'meta';
+        var descSpan = document.createElement('span');
+        descSpan.textContent = s.description;
+        var stepsSpan = document.createElement('span');
+        stepsSpan.textContent = s.steps.length + ' steps';
+        var personaSpan = document.createElement('span');
+        personaSpan.className = 'persona';
+        personaSpan.textContent = s.persona;
+        meta.appendChild(descSpan);
+        meta.appendChild(stepsSpan);
+        meta.appendChild(personaSpan);
+        card.appendChild(meta);
+        list.appendChild(card);
+      }});
+    }});
+  }};
+
+  function approveSuggestion(s) {{
+    apiPost('/journeys', {{title:s.title, description:s.description, persona:s.persona}}).then(function(r) {{
+      if (r.status !== 201) {{ toast(r.data.error || 'Failed', 'error'); return; }}
+      var jid = r.data.id;
+      // Update journey metadata
+      apiPut('/journeys/' + jid, {{
+        actors_json: s.actors_json,
+        seed_json: s.seed_json,
+      }});
+      // Add steps sequentially
+      var chain = Promise.resolve();
+      s.steps.forEach(function(step) {{
+        chain = chain.then(function() {{
+          return apiPost('/journeys/' + jid + '/steps', {{
+            action: step.action,
+            label: step.label || '',
+            actor: step.actor || 'user',
+            target: step.target,
+            value: step.value || '',
+            key: step.key || '',
+            capture: step.capture,
+          }});
+        }});
+      }});
+      chain.then(function() {{
+        toast('Journey created: ' + s.title);
+        loadList();
+      }});
+    }});
+  }}
+
+  /* ── Init ────────────────────────────────────────────── */
+  loadList();
+}})();
+</script>
+</body>
+</html>'''
 
 
 def _render_project_settings(proj: dict, port: int) -> str:
@@ -1835,6 +3050,26 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .add-form .btn {{ display: inline-block; margin-top: 16px; padding: 8px 20px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: var(--accent); border-radius: 6px; cursor: pointer; font-size: 13px; }}
 .add-form .btn:hover {{ background: rgba(59,130,246,0.25); }}
 .add-form .error {{ color: #ef4444; font-size: 12px; margin-top: 8px; display: none; }}
+.browse-btn {{ display: inline-block; padding: 8px 16px; background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3); color: var(--accent); border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit; }}
+.browse-btn:hover {{ background: rgba(59,130,246,0.22); }}
+.path-display {{ font-family: monospace; font-size: 13px; color: var(--text-secondary); padding: 8px 0 0; min-height: 20px; }}
+.picker-overlay {{ display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center; }}
+.picker-overlay.visible {{ display: flex; }}
+.picker-box {{ background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 12px; padding: 20px; width: 460px; max-width: 90vw; max-height: 70vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }}
+.picker-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }}
+.picker-header h3 {{ font-size: 14px; font-weight: 600; }}
+.picker-breadcrumb {{ font-size: 11px; color: var(--text-tertiary); font-family: monospace; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.picker-list {{ flex: 1; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 8px; }}
+.picker-item {{ display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--border-subtle); }}
+.picker-item:last-child {{ border-bottom: none; }}
+.picker-item:hover {{ background: var(--bg-hover); }}
+.picker-item.selected {{ background: rgba(59,130,246,0.12); }}
+.picker-icon {{ color: var(--text-tertiary); font-size: 14px; }}
+.picker-footer {{ display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; align-items: center; }}
+.picker-footer .btn-cancel {{ padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border-default); background: none; color: var(--text-secondary); cursor: pointer; font-size: 12px; font-family: inherit; }}
+.picker-footer .btn-select {{ padding: 6px 16px; border-radius: 6px; border: none; background: rgba(59,130,246,0.2); color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; }}
+.picker-footer .btn-select:hover {{ background: rgba(59,130,246,0.3); }}
+.picker-footer .btn-select:disabled {{ opacity: 0.4; cursor: not-allowed; }}
 </style>
 </head>
 <body>
@@ -1852,21 +3087,50 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   </div>
 </div>
 <form id="add-form" class="add-form" data-testid="add-project-form">
+  <label>Project Folder</label>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <button type="button" class="browse-btn" id="browse-btn" data-testid="add-project-browse">Browse...</button>
+    <div class="path-display" id="path-display" data-testid="add-project-path-display"></div>
+  </div>
+  <input type="hidden" name="path" id="add-path" data-testid="add-project-path">
   <label>Project Name</label>
   <input name="name" placeholder="My Project" required data-testid="add-project-name">
-  <label>Project Path</label>
-  <input name="path" placeholder="~/projects/my-project" required data-testid="add-project-path">
   <label>Project ID <span style="color:var(--text-tertiary)">(auto-generated from name)</span></label>
   <input name="id" placeholder="my-project" data-testid="add-project-id">
-  <label>Description <span style="color:var(--text-tertiary)">(optional)</span></label>
-  <input name="description" placeholder="Brief description">
   <button type="submit" class="btn">Add Project</button>
   <div class="error" id="add-error"></div>
 </form>
+<div id="folder-picker" class="picker-overlay" data-testid="folder-picker">
+  <div class="picker-box">
+    <div class="picker-header">
+      <h3>Select Project Folder</h3>
+    </div>
+    <div class="picker-breadcrumb" id="picker-breadcrumb"></div>
+    <div class="picker-list" id="picker-list"></div>
+    <div class="picker-footer">
+      <button type="button" class="btn-cancel" id="picker-cancel">Cancel</button>
+      <button type="button" class="btn-select" id="picker-select-current" title="Use the current directory">Select This Folder</button>
+    </div>
+  </div>
+</div>
 <script>
 (function() {{
-  var nameInput = document.querySelector('[name="name"]');
-  var idInput = document.querySelector('[name="id"]');
+  var nameInput = document.querySelector('#add-form [name="name"]');
+  var idInput = document.querySelector('#add-form [name="id"]');
+  var pathHidden = document.getElementById('add-path');
+  var pathDisplay = document.getElementById('path-display');
+  var browseBtn = document.getElementById('browse-btn');
+  var picker = document.getElementById('folder-picker');
+  var pickerList = document.getElementById('picker-list');
+  var pickerBreadcrumb = document.getElementById('picker-breadcrumb');
+  var pickerCancel = document.getElementById('picker-cancel');
+  var pickerSelectCurrent = document.getElementById('picker-select-current');
+
+  var currentBrowsePath = '~/projects';
+  var currentAbsPath = '';
+  var selectedDir = null;
+
+  // Name → ID auto-derive
   if (nameInput && idInput) {{
     nameInput.addEventListener('input', function() {{
       if (!idInput.dataset.manual) {{
@@ -1875,17 +3139,119 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     }});
     idInput.addEventListener('input', function() {{ idInput.dataset.manual = '1'; }});
   }}
+
+  function toSlug(name) {{
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }}
+
+  function selectPath(displayPath, absPath) {{
+    pathHidden.value = absPath;
+    pathDisplay.textContent = displayPath;
+    // Auto-fill name and ID from directory name
+    var dirName = displayPath.split('/').filter(Boolean).pop() || '';
+    if (nameInput && !nameInput.value) {{
+      // Title-case the directory name
+      nameInput.value = dirName.replace(/[-_]/g, ' ').split(' ').map(function(w) {{ return w.charAt(0).toUpperCase() + w.slice(1); }}).join(' ');
+    }}
+    if (idInput && !idInput.dataset.manual && !idInput.value) {{
+      idInput.value = toSlug(dirName);
+    }}
+    picker.classList.remove('visible');
+  }}
+
+  function loadDir(browsePath) {{
+    currentBrowsePath = browsePath;
+    selectedDir = null;
+    var items = pickerList.querySelectorAll('.picker-item');
+    for (var i = 0; i < items.length; i++) items[i].classList.remove('selected');
+
+    fetch('/api/browse?path=' + encodeURIComponent(browsePath))
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        if (data.error) {{ pickerBreadcrumb.textContent = data.error; return; }}
+        currentAbsPath = data.absolute;
+        pickerBreadcrumb.textContent = data.path;
+        while (pickerList.firstChild) pickerList.removeChild(pickerList.firstChild);
+
+        // Parent dir entry
+        if (data.path !== '~') {{
+          var parentPath = data.path.split('/').slice(0, -1).join('/') || '~';
+          var upItem = document.createElement('div');
+          upItem.className = 'picker-item';
+          var upIcon = document.createElement('span');
+          upIcon.className = 'picker-icon';
+          upIcon.textContent = '\u2190';
+          var upLabel = document.createElement('span');
+          upLabel.textContent = '..';
+          upItem.appendChild(upIcon);
+          upItem.appendChild(upLabel);
+          upItem.addEventListener('click', function() {{ loadDir(parentPath); }});
+          pickerList.appendChild(upItem);
+        }}
+
+        data.dirs.forEach(function(name) {{
+          var item = document.createElement('div');
+          item.className = 'picker-item';
+          item.setAttribute('data-testid', 'picker-dir-' + name);
+          var icon = document.createElement('span');
+          icon.className = 'picker-icon';
+          icon.textContent = String.fromCodePoint(0x1F4C1);
+          var label = document.createElement('span');
+          label.textContent = name;
+          item.appendChild(icon);
+          item.appendChild(label);
+          var dirPath = data.path + '/' + name;
+          var dirAbs = data.absolute + '/' + name;
+          item.addEventListener('dblclick', function() {{ loadDir(dirPath); }});
+          item.addEventListener('click', function() {{
+            var prev = pickerList.querySelector('.selected');
+            if (prev) prev.classList.remove('selected');
+            item.classList.add('selected');
+            selectedDir = {{ display: dirPath, absolute: dirAbs }};
+          }});
+          pickerList.appendChild(item);
+        }});
+      }});
+  }}
+
+  browseBtn.addEventListener('click', function() {{
+    picker.classList.add('visible');
+    loadDir(currentBrowsePath);
+  }});
+
+  pickerCancel.addEventListener('click', function() {{
+    picker.classList.remove('visible');
+  }});
+
+  picker.addEventListener('click', function(e) {{
+    if (e.target === picker) picker.classList.remove('visible');
+  }});
+
+  pickerSelectCurrent.addEventListener('click', function() {{
+    if (selectedDir) {{
+      selectPath(selectedDir.display, selectedDir.absolute);
+    }} else {{
+      selectPath(currentBrowsePath, currentAbsPath);
+    }}
+  }});
+
+  // Form submit
   var form = document.getElementById('add-form');
   var errorDiv = document.getElementById('add-error');
   if (form) {{
     form.addEventListener('submit', function(e) {{
       e.preventDefault();
       errorDiv.style.display = 'none';
+      if (!pathHidden.value) {{
+        errorDiv.textContent = 'Please select a project folder first';
+        errorDiv.style.display = 'block';
+        return;
+      }}
       var data = {{
-        id: form.elements.id.value || form.elements.name.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+        id: form.elements.id.value || toSlug(form.elements.name.value),
         name: form.elements.name.value,
-        path: form.elements.path.value,
-        description: form.elements.description.value
+        path: pathHidden.value,
+        description: ''
       }};
       fetch('/api/projects', {{
         method: 'POST',
@@ -1960,13 +3326,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes (proj is None) ────────────────────────────
         if proj is None:
-            # Legacy backward compat: --project flag redirects bare /api/ routes
-            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
-                self.send_response(301)
-                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
-                self.end_headers()
-                return
-
             # Root: project picker page
             if remainder == "/" or remainder == "":
                 html = _render_project_picker(SERVER_PORT)
@@ -1998,6 +3357,40 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"projects": result})
                 return
 
+            # GET /api/browse?path=~ — list subdirectories for folder picker
+            if remainder.startswith("/api/browse"):
+                query = urlparse(self.path).query
+                params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+                browse_path = unquote(params.get("path", "~/projects"))
+                resolved = Path(os.path.realpath(os.path.expanduser(browse_path)))
+                home = Path.home().resolve()
+                # Safety: must be within home dir
+                try:
+                    resolved.relative_to(home)
+                except ValueError:
+                    self._send_json({"error": "path must be within home directory"}, 400)
+                    return
+                if not resolved.is_dir():
+                    self._send_json({"error": "path does not exist"}, 400)
+                    return
+                dirs = []
+                try:
+                    for entry in sorted(resolved.iterdir()):
+                        if entry.is_dir() and not entry.name.startswith("."):
+                            dirs.append(entry.name)
+                except PermissionError:
+                    pass
+                display = str(resolved).replace(str(home), "~")
+                self._send_json({"path": display, "absolute": str(resolved), "dirs": dirs})
+                return
+
+            # Legacy backward compat: --project flag redirects bare /api/ routes
+            if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
+                self.send_response(301)
+                self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
+                self.end_headers()
+                return
+
             self._send_json({"error": "Not found"}, 404)
             return
 
@@ -2006,6 +3399,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Project settings page
         if remainder == "/settings":
             html = _render_project_settings(proj, SERVER_PORT)
+            self._send_html(html)
+            return
+
+        # Journeys page
+        if remainder == "/journeys":
+            html = _render_journeys_page(proj, SERVER_PORT)
             self._send_html(html)
             return
 
@@ -2080,6 +3479,58 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             atts = _list_attachments(proj["id"], m.group(1))
             self._send_json(atts)
+            return
+
+        # ── Workflow Bounce GET routes ──────────────────────────────
+
+        # List workflow agents (custom + discovered project agents)
+        if remainder == "/api/workflow/agents":
+            custom = _list_workflow_agents()
+            for a in custom:
+                a["source"] = "custom"
+                a["editable"] = True
+            discovered = _discover_project_agents(proj)
+            self._send_json({"agents": custom + discovered})
+            return
+
+        # List workflows
+        if remainder == "/api/workflow/workflows":
+            workflows = _list_workflows()
+            self._send_json({"workflows": workflows})
+            return
+
+        # List workflow runs for a ticket
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/workflow/runs$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            runs = _list_workflow_runs(proj["id"], ticket_id)
+            # Enrich with in-memory status
+            for r in runs:
+                with _workflow_runs_lock:
+                    mem = _workflow_runs.get(r["id"])
+                if mem:
+                    r["status"] = mem.get("status", r["status"])
+                    if "current_step" in mem:
+                        r["current_step"] = mem["current_step"]
+            self._send_json({"runs": runs})
+            return
+
+        # Get single workflow run
+        m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            run_id = m.group(1)
+            run = _get_workflow_run(run_id)
+            if not run:
+                self._send_json({"error": "Run not found"}, 404)
+                return
+            # Enrich with in-memory status
+            with _workflow_runs_lock:
+                mem = _workflow_runs.get(run_id)
+            if mem:
+                run["status"] = mem.get("status", run["status"])
+                if "current_step" in mem:
+                    run["current_step"] = mem["current_step"]
+            self._send_json(run)
             return
 
         # Scenario API: serve artifact files (must come before run status check)
@@ -2168,6 +3619,91 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"scenarios": manifests})
             return
 
+        # ── Journey API: GET routes ─────────────────────────────────
+        if remainder == "/api/journeys":
+            project_id = proj["id"]
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                result = list_journeys(conn, project_id)
+                conn.close()
+            self._send_json({"journeys": result})
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/steps$", remainder)
+        if m:
+            journey_id = m.group(1)
+            project_id = proj["id"]
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    j = get_journey(conn, project_id, journey_id)
+                    conn.close()
+                self._send_json({"steps": j["steps"]})
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 404)
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/runs$", remainder)
+        if m:
+            journey_id = m.group(1)
+            project_id = proj["id"]
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    j = get_journey(conn, project_id, journey_id)
+                    conn.close()
+                self._send_json({"runs": j["runs"]})
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 404)
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/runs/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            run_id = m.group(2)
+            project_id = proj["id"]
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                run = conn.execute(
+                    "SELECT * FROM journey_runs WHERE id = ? AND project_id = ?",
+                    (run_id, project_id),
+                ).fetchone()
+                if not run:
+                    conn.close()
+                    self._send_json({"error": "Run not found"}, 404)
+                    return
+                step_results = conn.execute(
+                    "SELECT jsr.*, js.label, js.action FROM journey_step_results jsr "
+                    "JOIN journey_steps js ON jsr.step_id = js.id "
+                    "WHERE jsr.run_id = ? ORDER BY jsr.sort_order",
+                    (run_id,),
+                ).fetchall()
+                conn.close()
+            self._send_json({
+                "run": dict(run),
+                "step_results": [dict(r) for r in step_results],
+            })
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            project_id = proj["id"]
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    j = get_journey(conn, project_id, journey_id)
+                    conn.close()
+                self._send_json(j)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 404)
+            return
+
         self._send_json({"error": "Not found"}, 404)
 
     def do_PUT(self):
@@ -2252,6 +3788,86 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t or {"ok": True})
             else:
                 self._send_json({"error": "Invalid flag or ticket"}, 400)
+            return
+
+        # ── Journey PUT routes ───────────────────────────────────────
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/steps/(\d+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            step_id = int(m.group(2))
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    updated = update_step(conn, step_id, **body)
+                    conn.commit()
+                    conn.close()
+                self._send_json(updated)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            project_id = proj["id"]
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    updated = update_journey(conn, project_id, journey_id, **body)
+                    conn.commit()
+                    conn.close()
+                self._send_json(updated)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+            return
+
+        # ── Workflow Bounce PUT routes ──────────────────────────────
+
+        # Update workflow agent
+        m = re.match(r"^/api/workflow/agents/([a-z0-9][a-z0-9_-]*)$", remainder)
+        if m:
+            agent_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            updated = _update_workflow_agent(agent_id, body)
+            if updated:
+                self._send_json(updated)
+            else:
+                self._send_json({"error": "Agent not found"}, 404)
+            return
+
+        # Update workflow
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_-]*)$", remainder)
+        if m:
+            workflow_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            # Auto-serialize steps list to JSON
+            if "steps" in body and isinstance(body["steps"], list):
+                body["steps"] = json.dumps(body["steps"])
+            updated = _update_workflow(workflow_id, body)
+            if updated:
+                self._send_json(updated)
+            else:
+                self._send_json({"error": "Workflow not found"}, 404)
             return
 
         # Update ticket fields
@@ -2407,6 +4023,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     cli.scaffold_project(conn, new_project)
                     result["scaffolded"] = True
                 conn.close()
+                cli.regenerate_dashboard(new_project)
                 self._send_json(result, 201)
                 return
 
@@ -2791,7 +4408,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             # Validate the manifest
-            from scenarios import validate_manifest, ScenarioValidationError
             try:
                 validate_manifest(manifest, filepath=filename)
             except ScenarioValidationError as exc:
@@ -2814,6 +4430,189 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"ok": True, "filename": filename, "path": dest})
+            return
+
+        # ── Journey POST routes ──────────────────────────────────────
+        if remainder == "/api/journeys":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            title = body.get("title", "").strip()
+            if not title:
+                self._send_json({"error": "title is required"}, 400)
+                return
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    j = add_journey(
+                        conn, proj["id"], title,
+                        body.get("description", ""),
+                        body.get("persona", ""),
+                        journey_id=body.get("id"),
+                    )
+                    conn.commit()
+                    conn.close()
+                self._send_json(j, 201)
+            except (ValueError, sqlite3.IntegrityError) as e:
+                self._send_json({"error": str(e)}, 400)
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/steps$", remainder)
+        if m:
+            journey_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            action = body.get("action", "").strip()
+            if not action:
+                self._send_json({"error": "action is required"}, 400)
+                return
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    s = add_step(
+                        conn, journey_id, proj["id"],
+                        action=action,
+                        label=body.get("label", ""),
+                        actor=body.get("actor", "user"),
+                        target=body.get("target"),
+                        value=body.get("value", ""),
+                        key=body.get("key", ""),
+                        capture=body.get("capture"),
+                        assertion=body.get("assert"),
+                    )
+                    conn.commit()
+                    conn.close()
+                self._send_json(s, 201)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/steps/reorder$", remainder)
+        if m:
+            journey_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            step_ids = body.get("step_ids", [])
+            if not isinstance(step_ids, list):
+                self._send_json({"error": "step_ids must be a list"}, 400)
+                return
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                reorder_steps(conn, journey_id, proj["id"], step_ids)
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True})
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/validate$", remainder)
+        if m:
+            journey_id = m.group(1)
+            project_id = proj["id"]
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    manifest = compile_to_manifest(conn, project_id, journey_id)
+                    conn.close()
+                validate_manifest(manifest)
+                self._send_json({"ok": True, "manifest": manifest})
+            except (ValueError, Exception) as e:
+                self._send_json({"error": str(e)}, 400)
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/run$", remainder)
+        if m:
+            journey_id = m.group(1)
+            project_id = proj["id"]
+            run_id = f"{journey_id}-{int(time.time())}"
+            project_path = proj.get("path", "")
+
+            # Compile and validate before launching subprocess
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    manifest = compile_to_manifest(conn, project_id, journey_id)
+                    conn.close()
+                validate_manifest(manifest)
+            except (ValueError, Exception) as e:
+                self._send_json({"error": f"Compilation failed: {e}"}, 400)
+                return
+
+            # Write compiled manifest to temp file for subprocess execution
+            import tempfile
+            output_dir = os.path.join(project_path, ".artifacts", "journeys", journey_id, run_id)
+            os.makedirs(output_dir, exist_ok=True)
+            manifest_path = os.path.join(output_dir, "manifest.json")
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f, indent=2)
+
+            # Store run record in DB
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                conn.execute(
+                    "INSERT INTO journey_runs (id, journey_id, project_id, status, started_at, artifact_dir) "
+                    "VALUES (?, ?, ?, 'running', datetime('now'), ?)",
+                    (run_id, journey_id, project_id, output_dir),
+                )
+                conn.commit()
+                conn.close()
+
+            # Track the run
+            with _journey_runs_lock:
+                _journey_runs[run_id] = {
+                    "journey_id": journey_id,
+                    "project_id": project_id,
+                    "status": "running",
+                    "output_dir": output_dir,
+                    "manifest_path": manifest_path,
+                    "started_at": datetime.utcnow().isoformat(),
+                }
+
+            self._send_json({"run_id": run_id, "status": "running", "output_dir": output_dir})
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/link$", remainder)
+        if m:
+            journey_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            ticket_id = body.get("ticket_id", "").strip()
+            if not ticket_id:
+                self._send_json({"error": "ticket_id is required"}, 400)
+                return
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                link_ticket(conn, journey_id, proj["id"], ticket_id, body.get("step_id"))
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True})
+            return
+
+        if remainder == "/api/journeys/infer":
+            project_id = proj["id"]
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                suggestions = infer_journeys(conn, project_id)
+                conn.close()
+            self._send_json({"suggestions": suggestions})
             return
 
         # Install feedbacks via git clone
@@ -2850,6 +4649,132 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "message": f"git clone started → {install_dir}", "install_dir": install_dir})
             except Exception as e:
                 self._send_json({"error": f"Failed to clone feedbacks: {e}"}, 500)
+            return
+
+        # ── Workflow Bounce POST routes ─────────────────────────────
+
+        # Create workflow agent
+        if remainder == "/api/workflow/agents":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            agent_id = body.get("id", "").strip()
+            if not agent_id or not re.match(r"^[a-z0-9][a-z0-9_-]*$", agent_id):
+                self._send_json({"error": "Invalid agent id — must match ^[a-z0-9][a-z0-9_-]*$"}, 400)
+                return
+            name = body.get("name", agent_id)
+            command = body.get("command", "claude")
+            args = body.get("args", "[]")
+            if isinstance(args, list):
+                args = json.dumps(args)
+            system_prompt = body.get("system_prompt", "")
+            agent = _create_workflow_agent(agent_id, name, command, args, system_prompt)
+            if agent:
+                self._send_json(agent, 201)
+            else:
+                self._send_json({"error": f"Agent '{agent_id}' already exists"}, 409)
+            return
+
+        # Create workflow
+        if remainder == "/api/workflow/workflows":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            workflow_id = body.get("id", "").strip()
+            if not workflow_id or not re.match(r"^[a-z0-9][a-z0-9_-]*$", workflow_id):
+                self._send_json({"error": "Invalid workflow id — must match ^[a-z0-9][a-z0-9_-]*$"}, 400)
+                return
+            name = body.get("name", workflow_id)
+            description = body.get("description", "")
+            steps = body.get("steps", [])
+            if isinstance(steps, list):
+                steps = json.dumps(steps)
+            wf = _create_workflow(workflow_id, name, description, steps)
+            if wf:
+                self._send_json(wf, 201)
+            else:
+                self._send_json({"error": f"Workflow '{workflow_id}' already exists"}, 409)
+            return
+
+        # Start a workflow run for a ticket
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/workflow/run$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            workflow_id = body.get("workflow_id", "").strip()
+            if not workflow_id:
+                self._send_json({"error": "workflow_id is required"}, 400)
+                return
+            workflow = _get_workflow(workflow_id)
+            if not workflow:
+                self._send_json({"error": f"Workflow '{workflow_id}' not found"}, 404)
+                return
+            # Parse steps to get total
+            try:
+                steps = json.loads(workflow.get("steps", "[]")) if isinstance(workflow.get("steps"), str) else workflow.get("steps", [])
+            except (json.JSONDecodeError, TypeError):
+                steps = []
+            import uuid
+            run_id = str(uuid.uuid4())[:12]
+            # Create DB record
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                conn.execute(
+                    "INSERT INTO workflow_runs (id, ticket_id, project_id, workflow_id, status, total_steps) VALUES (?, ?, ?, ?, ?, ?)",
+                    (run_id, ticket_id, proj["id"], workflow_id, "running", len(steps)),
+                )
+                conn.commit()
+                conn.close()
+            # Spawn background thread
+            t = threading.Thread(
+                target=_run_workflow_thread,
+                args=(run_id, proj["id"], ticket_id, workflow, proj),
+                daemon=True,
+            )
+            with _workflow_runs_lock:
+                _workflow_runs[run_id] = {
+                    "status": "running",
+                    "thread": t,
+                    "workflow_id": workflow_id,
+                    "started_at": datetime.utcnow().isoformat(),
+                    "current_step": 0,
+                }
+            t.start()
+            self._send_json({"run_id": run_id, "status": "running"})
+            return
+
+        # Cancel a workflow run
+        m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_-]+)/cancel$", remainder)
+        if m:
+            run_id = m.group(1)
+            with _workflow_runs_lock:
+                mem = _workflow_runs.get(run_id)
+                if mem:
+                    mem["status"] = "cancelled"
+            _update_workflow_run(run_id, status="cancelled",
+                                completed_at=datetime.utcnow().isoformat())
+            self._send_json({"ok": True, "run_id": run_id, "status": "cancelled"})
+            return
+
+        # Resume a paused workflow run
+        m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_-]+)/resume$", remainder)
+        if m:
+            run_id = m.group(1)
+            with _workflow_runs_lock:
+                mem = _workflow_runs.get(run_id)
+                if mem:
+                    mem["status"] = "running"
+            _update_workflow_run(run_id, status="running")
+            self._send_json({"ok": True, "run_id": run_id, "status": "running"})
             return
 
         self._send_json({"error": "Not found"}, 404)
@@ -2893,6 +4818,70 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # ── Project-scoped routes ────────────────────────────────────
+
+        # ── Journey DELETE routes ────────────────────────────────────
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/steps/(\d+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            step_id = int(m.group(2))
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                delete_step(conn, step_id)
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True, "deleted": step_id})
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/link/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            ticket_id = m.group(2)
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                unlink_ticket(conn, journey_id, proj["id"], ticket_id)
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True})
+            return
+
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    delete_journey(conn, proj["id"], journey_id)
+                    conn.commit()
+                    conn.close()
+                self._send_json({"ok": True, "deleted": journey_id})
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 404)
+            return
+
+        # ── Workflow Bounce DELETE routes ───────────────────────────
+
+        # Delete workflow agent
+        m = re.match(r"^/api/workflow/agents/([a-z0-9][a-z0-9_-]*)$", remainder)
+        if m:
+            agent_id = m.group(1)
+            if _delete_workflow_agent(agent_id):
+                self._send_json({"ok": True, "deleted": agent_id})
+            else:
+                self._send_json({"error": "Agent not found"}, 404)
+            return
+
+        # Delete workflow
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_-]*)$", remainder)
+        if m:
+            workflow_id = m.group(1)
+            if _delete_workflow(workflow_id):
+                self._send_json({"ok": True, "deleted": workflow_id})
+            else:
+                self._send_json({"error": "Workflow not found"}, 404)
+            return
 
         # Delete attachment
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments/(\d+)$", remainder)

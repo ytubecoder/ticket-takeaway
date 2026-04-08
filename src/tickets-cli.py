@@ -1274,6 +1274,160 @@ def cmd_watch(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: agent
+# ---------------------------------------------------------------------------
+
+def cmd_agent(args):
+    """Manage workflow agents."""
+    conn = get_db()
+    init_db(conn)
+
+    if args.agent_command == "list":
+        rows = conn.execute("SELECT * FROM workflow_agents ORDER BY name").fetchall()
+        if not rows:
+            print("No workflow agents defined.")
+        else:
+            print(f"{'ID':<20} {'Name':<25} {'Command':<15} {'Args':<20} {'Prompt'}")
+            print("-" * 95)
+            for r in rows:
+                prompt_preview = (r["system_prompt"] or "")[:40]
+                if len(r["system_prompt"] or "") > 40:
+                    prompt_preview += "..."
+                print(f"{r['id']:<20} {r['name']:<25} {r['command']:<15} {r['args']:<20} {prompt_preview}")
+
+    elif args.agent_command == "add":
+        name = args.name or args.agent_id.replace("-", " ").replace("_", " ").title()
+        try:
+            conn.execute(
+                "INSERT INTO workflow_agents (id, name, command, args, system_prompt) VALUES (?, ?, ?, ?, ?)",
+                (args.agent_id, name, args.cmd, args.args, args.system_prompt)
+            )
+            conn.commit()
+            print(f"Added agent: {args.agent_id} ({name})")
+        except sqlite3.IntegrityError:
+            print(f"Error: Agent '{args.agent_id}' already exists.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+    elif args.agent_command == "update":
+        fields = {}
+        if args.name is not None:
+            fields["name"] = args.name
+        if args.cmd is not None:
+            fields["command"] = args.cmd
+        if args.args is not None:
+            fields["args"] = args.args
+        if args.system_prompt is not None:
+            fields["system_prompt"] = args.system_prompt
+
+        if not fields:
+            print("Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [args.agent_id]
+        conn.execute(f"UPDATE workflow_agents SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        if conn.total_changes:
+            print(f"Updated agent: {args.agent_id}")
+        else:
+            print(f"Agent '{args.agent_id}' not found.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+    elif args.agent_command == "remove":
+        conn.execute("DELETE FROM workflow_agents WHERE id = ?", (args.agent_id,))
+        conn.commit()
+        print(f"Removed agent: {args.agent_id}")
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: workflow
+# ---------------------------------------------------------------------------
+
+def cmd_workflow(args):
+    """Manage workflow definitions."""
+    conn = get_db()
+    init_db(conn)
+
+    if args.workflow_command == "list":
+        rows = conn.execute("SELECT * FROM workflows ORDER BY name").fetchall()
+        if not rows:
+            print("No workflows defined.")
+        else:
+            for r in rows:
+                steps = json.loads(r["steps"] or "[]")
+                desc = r["description"] or ""
+                print(f"{r['id']:<20} {r['name']:<30} ({len(steps)} steps)  {desc}")
+                for i, step in enumerate(steps):
+                    label = step.get("label", step.get("agent_id", "?"))
+                    agent = step.get("agent_id", "?")
+                    modifier = step.get("prompt_modifier", "")
+                    mod_preview = f"  [{modifier[:30]}...]" if len(modifier) > 30 else (f"  [{modifier}]" if modifier else "")
+                    print(f"  {i}: agent={agent}  label={label}{mod_preview}")
+
+    elif args.workflow_command == "add":
+        name = args.name or args.workflow_id.replace("-", " ").replace("_", " ").title()
+        try:
+            conn.execute(
+                "INSERT INTO workflows (id, name, description, steps) VALUES (?, ?, ?, ?)",
+                (args.workflow_id, name, args.description or "", "[]")
+            )
+            conn.commit()
+            print(f"Added workflow: {args.workflow_id} ({name})")
+        except sqlite3.IntegrityError:
+            print(f"Error: Workflow '{args.workflow_id}' already exists.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+    elif args.workflow_command == "add-step":
+        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (args.workflow_id,)).fetchone()
+        if not row:
+            print(f"Workflow '{args.workflow_id}' not found.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+        steps = json.loads(row["steps"] or "[]")
+        steps.append({
+            "agent_id": args.agent,
+            "label": args.label or args.agent,
+            "prompt_modifier": args.prompt_modifier or "",
+        })
+        conn.execute("UPDATE workflows SET steps = ? WHERE id = ?", (json.dumps(steps), args.workflow_id))
+        conn.commit()
+        print(f"Added step {len(steps) - 1} (agent={args.agent}) to workflow {args.workflow_id}")
+
+    elif args.workflow_command == "remove-step":
+        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (args.workflow_id,)).fetchone()
+        if not row:
+            print(f"Workflow '{args.workflow_id}' not found.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+        steps = json.loads(row["steps"] or "[]")
+        idx = args.step
+        if idx < 0 or idx >= len(steps):
+            print(f"Step index {idx} out of range (0-{len(steps) - 1}).", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+        removed = steps.pop(idx)
+        conn.execute("UPDATE workflows SET steps = ? WHERE id = ?", (json.dumps(steps), args.workflow_id))
+        conn.commit()
+        print(f"Removed step {idx} (agent={removed.get('agent_id', '?')}) from workflow {args.workflow_id}")
+
+    elif args.workflow_command == "remove":
+        conn.execute("DELETE FROM workflows WHERE id = ?", (args.workflow_id,))
+        conn.commit()
+        print(f"Removed workflow: {args.workflow_id}")
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -1365,6 +1519,53 @@ def main():
     p_unreg.add_argument("id", help="Project ID to deactivate")
     p_unreg.add_argument("--delete-tickets", action="store_true", help="Also delete tickets from DB (destructive)")
 
+    # agent
+    p_agent = sub.add_parser("agent", help="Manage workflow agents")
+    agent_sub = p_agent.add_subparsers(dest="agent_command", required=True)
+
+    agent_sub.add_parser("list", help="List all workflow agents")
+
+    p_agent_add = agent_sub.add_parser("add", help="Add a workflow agent")
+    p_agent_add.add_argument("agent_id", help="Agent ID")
+    p_agent_add.add_argument("--name", help="Display name (default: derived from ID)")
+    p_agent_add.add_argument("--cmd", default="claude", help="Command to run (default: claude)")
+    p_agent_add.add_argument("--args", default="[]", help="JSON array of command args")
+    p_agent_add.add_argument("--system-prompt", default="", help="System prompt for the agent")
+
+    p_agent_upd = agent_sub.add_parser("update", help="Update a workflow agent")
+    p_agent_upd.add_argument("agent_id", help="Agent ID")
+    p_agent_upd.add_argument("--name", help="New display name")
+    p_agent_upd.add_argument("--cmd", help="New command")
+    p_agent_upd.add_argument("--args", help="New JSON array of command args")
+    p_agent_upd.add_argument("--system-prompt", help="New system prompt")
+
+    p_agent_rm = agent_sub.add_parser("remove", help="Remove a workflow agent")
+    p_agent_rm.add_argument("agent_id", help="Agent ID to remove")
+
+    # workflow
+    p_wf = sub.add_parser("workflow", help="Manage workflow definitions")
+    wf_sub = p_wf.add_subparsers(dest="workflow_command", required=True)
+
+    wf_sub.add_parser("list", help="List all workflows")
+
+    p_wf_add = wf_sub.add_parser("add", help="Add a workflow")
+    p_wf_add.add_argument("workflow_id", help="Workflow ID")
+    p_wf_add.add_argument("--name", help="Display name (default: derived from ID)")
+    p_wf_add.add_argument("--description", help="Workflow description")
+
+    p_wf_step = wf_sub.add_parser("add-step", help="Add a step to a workflow")
+    p_wf_step.add_argument("workflow_id", help="Workflow ID")
+    p_wf_step.add_argument("--agent", required=True, help="Agent ID for this step")
+    p_wf_step.add_argument("--label", help="Step label (default: agent ID)")
+    p_wf_step.add_argument("--prompt-modifier", default="", help="Prompt modifier for this step")
+
+    p_wf_rmstep = wf_sub.add_parser("remove-step", help="Remove a step from a workflow")
+    p_wf_rmstep.add_argument("workflow_id", help="Workflow ID")
+    p_wf_rmstep.add_argument("--step", type=int, required=True, help="Step index to remove (0-based)")
+
+    p_wf_rm = wf_sub.add_parser("remove", help="Remove a workflow")
+    p_wf_rm.add_argument("workflow_id", help="Workflow ID to remove")
+
     args = parser.parse_args()
 
     commands = {
@@ -1380,6 +1581,8 @@ def main():
         "unflag": cmd_unflag,
         "register": cmd_register,
         "unregister": cmd_unregister,
+        "agent": cmd_agent,
+        "workflow": cmd_workflow,
     }
 
     commands[args.command](args)

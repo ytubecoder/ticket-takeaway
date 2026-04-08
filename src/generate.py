@@ -1355,7 +1355,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 .edit-enabled .readiness-dot:hover {{ opacity: 1; border-color: var(--accent); }}
 .readiness-dot svg {{ width: 12px; height: 12px; flex-shrink: 0; }}
 .action-btn svg {{ width: 12px; height: 12px; vertical-align: -2px; margin-right: 2px; }}
-.settings-toggle svg, .detail-close svg, .settings-drawer-close svg {{ width: 14px; height: 14px; }}
+.settings-toggle svg, .detail-close svg, .settings-drawer-close svg {{ width: 14px; height: 14px; pointer-events: none; }}
 .card-open-btn svg {{ width: 14px; height: 14px; }}
 
 /* Detail overlay */
@@ -1504,8 +1504,9 @@ a {{ color: var(--accent); text-decoration: none; }}
 /* Settings drawer */
 .settings-toggle {{
   font-size: 15px; background: none; border: none; color: var(--text-tertiary);
-  cursor: pointer; padding: 4px 8px; border-radius: 6px; line-height: 1;
-  transition: color 0.15s, background 0.15s;
+  cursor: pointer; padding: 8px 12px; border-radius: 6px; line-height: 1;
+  transition: color 0.15s, background 0.15s; min-width: 36px; min-height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
 }}
 .settings-toggle:hover {{ color: var(--text-primary); background: var(--bg-hover); }}
 .settings-drawer {{
@@ -1672,6 +1673,98 @@ a {{ color: var(--accent); text-decoration: none; }}
     transition-duration: 0.01ms !important;
   }}
 }}
+/* Workflow Bounce UI */
+.wf-agents-list, .wf-workflows-list {{ display: flex; flex-direction: column; gap: 4px; }}
+.wf-agent-row, .wf-workflow-row {{
+  display: flex; align-items: center; gap: 6px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-size: 11px;
+}}
+.wf-agent-row.readonly {{ opacity: 0.5; }}
+.wf-row-name {{ font-weight: 600; min-width: 80px; }}
+.wf-row-cmd {{ font-family: var(--font-mono); font-size: 10px; color: var(--fg-dim); }}
+.wf-row-source {{ font-size: 8px; text-transform: uppercase; color: var(--fg-dim); letter-spacing: 0.5px; }}
+.wf-row-steps {{ font-size: 10px; color: var(--fg-dim); margin-left: auto; }}
+.wf-row-actions {{ display: flex; gap: 4px; margin-left: auto; }}
+.wf-row-actions button {{
+  font-size: 9px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px;
+  background: transparent; color: var(--fg); cursor: pointer;
+}}
+.wf-row-actions button:hover {{ background: var(--bg-card); border-color: var(--accent); }}
+.wf-row-actions button.danger:hover {{ border-color: #ef4444; color: #ef4444; }}
+.wf-add-btn {{
+  display: block; width: 100%; padding: 5px; font-size: 11px; border: 1px dashed var(--border);
+  border-radius: 4px; background: transparent; color: var(--fg-dim); cursor: pointer;
+  margin-top: 4px; text-align: center;
+}}
+.wf-add-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+.wf-form {{
+  display: flex; flex-direction: column; gap: 6px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 4px; padding: 8px; margin-top: 4px;
+}}
+.wf-form.hidden {{ display: none; }}
+.wf-input, .wf-textarea {{
+  font-size: 11px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg); color: var(--fg); font-family: var(--font-sans);
+}}
+.wf-textarea {{ font-family: var(--font-mono); resize: vertical; }}
+.wf-form-actions {{ display: flex; gap: 6px; }}
+.wf-save-btn {{
+  font-size: 11px; padding: 3px 10px; border: none; border-radius: 3px;
+  background: var(--accent); color: #fff; cursor: pointer;
+}}
+.wf-save-btn:hover {{ opacity: 0.9; }}
+.wf-cancel-btn {{
+  font-size: 11px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 3px;
+  background: transparent; color: var(--fg); cursor: pointer;
+}}
+.wf-cancel-btn:hover {{ background: var(--bg-card); }}
+.wf-step-list {{ display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }}
+.wf-step-row {{ display: flex; align-items: center; gap: 6px; font-size: 11px; }}
+.wf-step-idx {{ font-weight: 600; min-width: 16px; text-align: center; }}
+.wf-step-primary {{ font-size: 8px; text-transform: uppercase; color: var(--accent); letter-spacing: 0.5px; }}
+#section-workflow {{ margin-top: 8px; }}
+.workflow-select {{
+  font-size: 11px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg); color: var(--fg); min-width: 140px;
+}}
+.workflow-run-btn {{
+  font-size: 11px; padding: 3px 10px; border: none; border-radius: 3px;
+  background: var(--accent); color: #fff; cursor: pointer;
+}}
+.workflow-run-btn:disabled {{ opacity: 0.4; cursor: default; }}
+.workflow-run-btn:hover:not(:disabled) {{ opacity: 0.9; }}
+.workflow-runs-list {{ display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }}
+.workflow-run-block {{
+  border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  background: var(--bg-card);
+}}
+.workflow-run-header {{
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  cursor: pointer; font-size: 11px;
+}}
+.workflow-run-header:hover {{ background: var(--bg); }}
+.wf-run-status {{
+  font-size: 9px; font-weight: 600; text-transform: uppercase; padding: 1px 6px;
+  border-radius: 3px; letter-spacing: 0.5px;
+}}
+.wf-run-status.running {{ background: rgba(59,130,246,0.15); color: #3b82f6; }}
+.wf-run-status.paused {{ background: rgba(234,179,8,0.15); color: #eab308; }}
+.wf-run-status.completed {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.wf-run-status.failed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+.wf-run-status.cancelled {{ background: rgba(107,114,128,0.15); color: #6b7280; }}
+.wf-run-status.pending {{ background: rgba(107,114,128,0.1); color: #9ca3af; }}
+.workflow-conversation {{ display: none; }}
+.workflow-run-block.expanded .workflow-conversation {{ display: block; }}
+.workflow-turn {{ padding: 8px 10px; border-top: 1px solid var(--border); }}
+.workflow-turn-header {{
+  display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+}}
+.workflow-turn-header .agent-name {{ font-weight: 600; font-size: 11px; }}
+.workflow-turn-header .turn-meta {{ font-size: 10px; font-family: var(--font-mono); color: var(--fg-dim); }}
+.workflow-turn-content {{ font-size: 11px; white-space: pre-wrap; line-height: 1.5; }}
+.workflow-turn.disagreement {{
+  background: rgba(234,179,8,0.08); border-left: 3px solid rgba(234,179,8,0.4);
+}}
 </style>
 </head>
 <body>
@@ -1794,6 +1887,38 @@ a {{ color: var(--accent); text-decoration: none; }}
       <div class="settings-section-title">Managed Files</div>
       <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
       <div id="managedFilesList" class="managed-files-list"></div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Workflow Agents</div>
+      <div class="settings-hint">Custom agents for workflow bounce. Project agents (read-only) shown below.</div>
+      <div id="workflowAgentsList" class="wf-agents-list"></div>
+      <button class="wf-add-btn" id="wfAddAgentBtn">+ Add Agent</button>
+      <div id="wfAgentForm" class="wf-form hidden">
+        <input type="text" id="wfAgentId" placeholder="agent-slug" class="wf-input">
+        <input type="text" id="wfAgentName" placeholder="Display Name" class="wf-input">
+        <input type="text" id="wfAgentCmd" placeholder="CLI command (default: claude)" class="wf-input" value="claude">
+        <input type="text" id="wfAgentArgs" placeholder='CLI args JSON (default: [])' class="wf-input" value="[]">
+        <textarea id="wfAgentPrompt" placeholder="System prompt (optional)" class="wf-textarea" rows="3"></textarea>
+        <div class="wf-form-actions">
+          <button class="wf-save-btn" id="wfAgentSave">Save</button>
+          <button class="wf-cancel-btn" id="wfAgentCancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Workflows</div>
+      <div class="settings-hint">Reusable agent sequences. First step is the primary (mediator) agent.</div>
+      <div id="workflowsList" class="wf-workflows-list"></div>
+      <button class="wf-add-btn" id="wfAddWorkflowBtn">+ Add Workflow</button>
+      <div id="wfWorkflowForm" class="wf-form hidden">
+        <input type="text" id="wfWorkflowId" placeholder="workflow-slug" class="wf-input">
+        <input type="text" id="wfWorkflowName" placeholder="Display Name" class="wf-input">
+        <input type="text" id="wfWorkflowDesc" placeholder="Description" class="wf-input">
+        <div class="wf-form-actions">
+          <button class="wf-save-btn" id="wfWorkflowSave">Save</button>
+          <button class="wf-cancel-btn" id="wfWorkflowCancel">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -3176,6 +3301,20 @@ a {{ color: var(--accent); text-decoration: none; }}
           </div>
         </div>
         <div id="attachments-list" class="attachments-list"></div>
+      </div>
+
+      <!-- Workflows -->
+      <div class="detail-section" id="section-workflow">
+        <div class="detail-section-header">
+          <h3>Workflows</h3>
+          <div class="workflow-actions">
+            <select id="workflow-select" class="workflow-select">
+              <option value="">Select workflow...</option>
+            </select>
+            <button id="workflow-run-btn" class="workflow-run-btn" disabled>Run</button>
+          </div>
+        </div>
+        <div id="workflow-runs-list" class="workflow-runs-list"></div>
       </div>
 
     </div>
@@ -4598,6 +4737,305 @@ a {{ color: var(--accent); text-decoration: none; }}
 
 <script>
 /* =========================================================
+   Task 10.5: Workflow Agents & Workflows settings
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var agentsList = document.getElementById('workflowAgentsList');
+  var addAgentBtn = document.getElementById('wfAddAgentBtn');
+  var agentForm = document.getElementById('wfAgentForm');
+  var agentIdInput = document.getElementById('wfAgentId');
+  var agentNameInput = document.getElementById('wfAgentName');
+  var agentCmdInput = document.getElementById('wfAgentCmd');
+  var agentArgsInput = document.getElementById('wfAgentArgs');
+  var agentPromptInput = document.getElementById('wfAgentPrompt');
+  var agentSaveBtn = document.getElementById('wfAgentSave');
+  var agentCancelBtn = document.getElementById('wfAgentCancel');
+
+  var workflowsList = document.getElementById('workflowsList');
+  var addWorkflowBtn = document.getElementById('wfAddWorkflowBtn');
+  var workflowForm = document.getElementById('wfWorkflowForm');
+  var workflowIdInput = document.getElementById('wfWorkflowId');
+  var workflowNameInput = document.getElementById('wfWorkflowName');
+  var workflowDescInput = document.getElementById('wfWorkflowDesc');
+  var workflowSaveBtn = document.getElementById('wfWorkflowSave');
+  var workflowCancelBtn = document.getElementById('wfWorkflowCancel');
+
+  var editingAgentId = null;
+  var editingWorkflowId = null;
+
+  function loadAgents() {{
+    fetch(EDIT_API + '/workflow/agents')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var agents = data.agents || data || [];
+        while (agentsList.firstChild) agentsList.removeChild(agentsList.firstChild);
+        agents.forEach(function(a) {{
+          var row = document.createElement('div');
+          row.className = 'wf-agent-row' + (a.source === 'project' ? ' readonly' : '');
+
+          var nameSpan = document.createElement('span');
+          nameSpan.className = 'wf-row-name';
+          nameSpan.textContent = a.name || a.id;
+          row.appendChild(nameSpan);
+
+          var cmdSpan = document.createElement('span');
+          cmdSpan.className = 'wf-row-cmd';
+          cmdSpan.textContent = a.command || 'claude';
+          row.appendChild(cmdSpan);
+
+          var sourceSpan = document.createElement('span');
+          sourceSpan.className = 'wf-row-source';
+          sourceSpan.textContent = a.source || 'user';
+          row.appendChild(sourceSpan);
+
+          if (a.source !== 'project') {{
+            var actions = document.createElement('div');
+            actions.className = 'wf-row-actions';
+
+            var editBtn = document.createElement('button');
+            editBtn.textContent = 'Edit';
+            editBtn.addEventListener('click', function() {{ editAgent(a); }});
+            actions.appendChild(editBtn);
+
+            var delBtn = document.createElement('button');
+            delBtn.textContent = 'Del';
+            delBtn.className = 'danger';
+            delBtn.addEventListener('click', function() {{ deleteAgent(a.id); }});
+            actions.appendChild(delBtn);
+
+            row.appendChild(actions);
+          }}
+
+          agentsList.appendChild(row);
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  function editAgent(a) {{
+    editingAgentId = a.id;
+    agentIdInput.value = a.id;
+    agentIdInput.disabled = true;
+    agentNameInput.value = a.name || '';
+    agentCmdInput.value = a.cmd || 'claude';
+    agentArgsInput.value = JSON.stringify(a.args || []);
+    agentPromptInput.value = a.prompt || '';
+    agentForm.classList.remove('hidden');
+  }}
+
+  function deleteAgent(id) {{
+    fetch(EDIT_API + '/workflow/agents/' + encodeURIComponent(id), {{ method: 'DELETE' }})
+      .then(function() {{ loadAgents(); }})
+      .catch(function() {{}});
+  }}
+
+  if (addAgentBtn) {{
+    addAgentBtn.addEventListener('click', function() {{
+      editingAgentId = null;
+      agentIdInput.value = '';
+      agentIdInput.disabled = false;
+      agentNameInput.value = '';
+      agentCmdInput.value = 'claude';
+      agentArgsInput.value = '[]';
+      agentPromptInput.value = '';
+      agentForm.classList.remove('hidden');
+    }});
+  }}
+
+  if (agentCancelBtn) {{
+    agentCancelBtn.addEventListener('click', function() {{
+      agentForm.classList.add('hidden');
+      editingAgentId = null;
+    }});
+  }}
+
+  if (agentSaveBtn) {{
+    agentSaveBtn.addEventListener('click', function() {{
+      var payload = {{
+        id: agentIdInput.value.trim(),
+        name: agentNameInput.value.trim(),
+        command: agentCmdInput.value.trim() || 'claude',
+        args: agentArgsInput.value.trim() || '[]',
+        system_prompt: agentPromptInput.value
+      }};
+      var method = editingAgentId ? 'PUT' : 'POST';
+      var url = editingAgentId
+        ? EDIT_API + '/workflow/agents/' + encodeURIComponent(editingAgentId)
+        : EDIT_API + '/workflow/agents';
+      fetch(url, {{
+        method: method,
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload)
+      }})
+        .then(function(r) {{
+          if (r.ok) {{
+            agentForm.classList.add('hidden');
+            editingAgentId = null;
+            loadAgents();
+          }} else {{
+            r.json().then(function(d) {{ showAppToast(d.error || 'Failed to save', 'error'); }});
+          }}
+        }})
+        .catch(function() {{ showAppToast('Failed to save agent', 'error'); }});
+    }});
+  }}
+
+  function loadWorkflows() {{
+    fetch(EDIT_API + '/workflow/workflows')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var workflows = data.workflows || data || [];
+        while (workflowsList.firstChild) workflowsList.removeChild(workflowsList.firstChild);
+        workflows.forEach(function(wf) {{
+          var row = document.createElement('div');
+          row.className = 'wf-workflow-row';
+
+          var nameSpan = document.createElement('span');
+          nameSpan.className = 'wf-row-name';
+          nameSpan.textContent = wf.name || wf.id;
+          row.appendChild(nameSpan);
+
+          var parsedSteps = [];
+          try {{ parsedSteps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []); }} catch(e) {{}}
+
+          var stepsSpan = document.createElement('span');
+          stepsSpan.className = 'wf-row-steps';
+          stepsSpan.textContent = parsedSteps.length + ' steps';
+          row.appendChild(stepsSpan);
+
+          if (parsedSteps.length > 0) {{
+            var stepList = document.createElement('div');
+            stepList.className = 'wf-step-list';
+            parsedSteps.forEach(function(step, idx) {{
+              var stepRow = document.createElement('div');
+              stepRow.className = 'wf-step-row';
+
+              var idxSpan = document.createElement('span');
+              idxSpan.className = 'wf-step-idx';
+              idxSpan.textContent = (idx + 1) + '.';
+              stepRow.appendChild(idxSpan);
+
+              var agentSpan = document.createElement('span');
+              agentSpan.textContent = step.agent || step.agent_id || '?';
+              stepRow.appendChild(agentSpan);
+
+              if (idx === 0) {{
+                var primarySpan = document.createElement('span');
+                primarySpan.className = 'wf-step-primary';
+                primarySpan.textContent = 'primary';
+                stepRow.appendChild(primarySpan);
+              }}
+
+              stepList.appendChild(stepRow);
+            }});
+            row.appendChild(stepList);
+          }}
+
+          var actions = document.createElement('div');
+          actions.className = 'wf-row-actions';
+
+          var editBtn = document.createElement('button');
+          editBtn.textContent = 'Edit';
+          editBtn.addEventListener('click', function() {{ editWorkflow(wf); }});
+          actions.appendChild(editBtn);
+
+          var delBtn = document.createElement('button');
+          delBtn.textContent = 'Del';
+          delBtn.className = 'danger';
+          delBtn.addEventListener('click', function() {{ deleteWorkflow(wf.id); }});
+          actions.appendChild(delBtn);
+
+          row.appendChild(actions);
+          workflowsList.appendChild(row);
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  function editWorkflow(wf) {{
+    editingWorkflowId = wf.id;
+    workflowIdInput.value = wf.id;
+    workflowIdInput.disabled = true;
+    workflowNameInput.value = wf.name || '';
+    workflowDescInput.value = wf.description || '';
+    workflowForm.classList.remove('hidden');
+  }}
+
+  function deleteWorkflow(id) {{
+    fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(id), {{ method: 'DELETE' }})
+      .then(function() {{ loadWorkflows(); }})
+      .catch(function() {{}});
+  }}
+
+  if (addWorkflowBtn) {{
+    addWorkflowBtn.addEventListener('click', function() {{
+      editingWorkflowId = null;
+      workflowIdInput.value = '';
+      workflowIdInput.disabled = false;
+      workflowNameInput.value = '';
+      workflowDescInput.value = '';
+      workflowForm.classList.remove('hidden');
+    }});
+  }}
+
+  if (workflowCancelBtn) {{
+    workflowCancelBtn.addEventListener('click', function() {{
+      workflowForm.classList.add('hidden');
+      editingWorkflowId = null;
+    }});
+  }}
+
+  if (workflowSaveBtn) {{
+    workflowSaveBtn.addEventListener('click', function() {{
+      var payload = {{
+        id: workflowIdInput.value.trim(),
+        name: workflowNameInput.value.trim(),
+        description: workflowDescInput.value.trim()
+      }};
+      var method = editingWorkflowId ? 'PUT' : 'POST';
+      var url = editingWorkflowId
+        ? EDIT_API + '/workflow/workflows/' + encodeURIComponent(editingWorkflowId)
+        : EDIT_API + '/workflow/workflows';
+      fetch(url, {{
+        method: method,
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload)
+      }})
+        .then(function(r) {{
+          if (r.ok) {{
+            workflowForm.classList.add('hidden');
+            editingWorkflowId = null;
+            loadWorkflows();
+          }} else {{
+            r.json().then(function(d) {{ showAppToast(d.error || 'Failed to save', 'error'); }});
+          }}
+        }})
+        .catch(function() {{ showAppToast('Failed to save workflow', 'error'); }});
+    }});
+  }}
+
+  window._wfLoadAgents = loadAgents;
+  window._wfLoadWorkflows = loadWorkflows;
+
+  // Load on settings open
+  var settingsBtn = document.getElementById('settingsToggleBtn');
+  if (settingsBtn) {{
+    settingsBtn.addEventListener('click', function() {{
+      setTimeout(function() {{
+        loadAgents();
+        loadWorkflows();
+      }}, 100);
+    }});
+  }}
+}})();
+</script>
+
+<script>
+/* =========================================================
    Task 11: Attachments + Record button
    ========================================================= */
 (function() {{
@@ -4890,6 +5328,278 @@ a {{ color: var(--accent); text-decoration: none; }}
       }});
     }})
     .catch(function() {{}});
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Task 11.5: Workflow Bounce — ticket detail panel
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var workflowSelect = document.getElementById('workflow-select');
+  var workflowRunBtn = document.getElementById('workflow-run-btn');
+  var workflowRunsList = document.getElementById('workflow-runs-list');
+  var overlay = document.getElementById('ticket-detail-overlay');
+  var currentTicketId = null;
+  var pollTimers = {{}};
+
+  function loadWorkflowOptions() {{
+    fetch(EDIT_API + '/workflow/workflows')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(workflows) {{
+        // Clear existing options except the placeholder
+        while (workflowSelect.options.length > 1) {{
+          workflowSelect.removeChild(workflowSelect.options[1]);
+        }}
+        workflows.forEach(function(wf) {{
+          var opt = document.createElement('option');
+          opt.value = wf.id;
+          opt.textContent = wf.name || wf.id;
+          workflowSelect.appendChild(opt);
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  if (workflowSelect) {{
+    workflowSelect.addEventListener('change', function() {{
+      workflowRunBtn.disabled = !workflowSelect.value;
+    }});
+  }}
+
+  function loadWorkflowRuns(ticketId) {{
+    fetch(EDIT_API + '/tickets/' + encodeURIComponent(ticketId) + '/workflow/runs')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(runs) {{
+        if (!Array.isArray(runs)) return;
+        // Clear stale poll timers
+        Object.keys(pollTimers).forEach(function(k) {{
+          clearInterval(pollTimers[k]);
+          delete pollTimers[k];
+        }});
+        while (workflowRunsList.firstChild) workflowRunsList.removeChild(workflowRunsList.firstChild);
+        runs.forEach(function(run) {{
+          var block = renderRunBlock(run);
+          workflowRunsList.appendChild(block);
+          if (run.status === 'running' || run.status === 'paused') {{
+            startPolling(run.id);
+          }}
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  function renderRunBlock(run) {{
+    var block = document.createElement('div');
+    block.className = 'workflow-run-block';
+    block.dataset.runId = run.id;
+
+    var header = document.createElement('div');
+    header.className = 'workflow-run-header';
+
+    var statusBadge = document.createElement('span');
+    statusBadge.className = 'wf-run-status ' + (run.status || 'pending');
+    statusBadge.textContent = run.status || 'pending';
+    header.appendChild(statusBadge);
+
+    var info = document.createElement('span');
+    info.textContent = (run.workflow_name || run.workflow_id || '') + ' — step ' + ((run.current_step || 0) + 1);
+    header.appendChild(info);
+
+    var spacer = document.createElement('span');
+    spacer.style.flex = '1';
+    header.appendChild(spacer);
+
+    if (run.status === 'running') {{
+      var cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.style.cssText = 'font-size:9px;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--fg);cursor:pointer;';
+      cancelBtn.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        cancelRun(run.id);
+      }});
+      header.appendChild(cancelBtn);
+    }}
+
+    if (run.status === 'paused') {{
+      var resumeBtn = document.createElement('button');
+      resumeBtn.textContent = 'Resume';
+      resumeBtn.style.cssText = 'font-size:9px;padding:1px 5px;border:1px solid var(--accent);border-radius:3px;background:transparent;color:var(--accent);cursor:pointer;';
+      resumeBtn.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        resumeRun(run.id);
+      }});
+      header.appendChild(resumeBtn);
+    }}
+
+    header.addEventListener('click', function() {{
+      block.classList.toggle('expanded');
+    }});
+    block.appendChild(header);
+
+    var conversation = document.createElement('div');
+    conversation.className = 'workflow-conversation';
+    if (run.conversation && run.conversation.length > 0) {{
+      renderConversation(conversation, run.conversation);
+    }}
+    block.appendChild(conversation);
+
+    return block;
+  }}
+
+  function updateRunBlock(block, run) {{
+    var statusBadge = block.querySelector('.wf-run-status');
+    if (statusBadge) {{
+      statusBadge.className = 'wf-run-status ' + (run.status || 'pending');
+      statusBadge.textContent = run.status || 'pending';
+    }}
+    var info = block.querySelector('.workflow-run-header span:nth-child(2)');
+    if (info) {{
+      info.textContent = (run.workflow_name || run.workflow_id || '') + ' — step ' + ((run.current_step || 0) + 1);
+    }}
+    var conversation = block.querySelector('.workflow-conversation');
+    if (conversation && run.conversation) {{
+      renderConversation(conversation, run.conversation);
+    }}
+  }}
+
+  function renderConversation(container, conversation) {{
+    while (container.firstChild) container.removeChild(container.firstChild);
+    conversation.forEach(function(turn) {{
+      var turnDiv = document.createElement('div');
+      turnDiv.className = 'workflow-turn' + (turn.type === 'disagreement' ? ' disagreement' : '');
+
+      var headerDiv = document.createElement('div');
+      headerDiv.className = 'workflow-turn-header';
+
+      var agentName = document.createElement('span');
+      agentName.className = 'agent-name';
+      agentName.textContent = turn.agent || 'unknown';
+      headerDiv.appendChild(agentName);
+
+      var meta = document.createElement('span');
+      meta.className = 'turn-meta';
+      meta.textContent = turn.timestamp || '';
+      headerDiv.appendChild(meta);
+
+      turnDiv.appendChild(headerDiv);
+
+      var content = document.createElement('div');
+      content.className = 'workflow-turn-content';
+      content.textContent = turn.content || '';
+      turnDiv.appendChild(content);
+
+      if (turn.contention_points && turn.contention_points.length > 0) {{
+        turn.contention_points.forEach(function(point) {{
+          var cp = document.createElement('div');
+          cp.style.cssText = 'font-size:10px;color:var(--fg-dim);margin-top:4px;padding-left:8px;border-left:2px solid rgba(234,179,8,0.4);';
+          cp.textContent = point;
+          turnDiv.appendChild(cp);
+        }});
+      }}
+
+      container.appendChild(turnDiv);
+    }});
+  }}
+
+  function startPolling(runId) {{
+    if (pollTimers[runId]) return;
+    pollTimers[runId] = setInterval(function() {{
+      fetch(EDIT_API + '/workflow/runs/' + encodeURIComponent(runId))
+        .then(function(r) {{ return r.json(); }})
+        .then(function(run) {{
+          var block = workflowRunsList.querySelector('[data-run-id="' + runId + '"]');
+          if (block) {{
+            updateRunBlock(block, run);
+          }}
+          if (run.status !== 'running' && run.status !== 'paused') {{
+            clearInterval(pollTimers[runId]);
+            delete pollTimers[runId];
+          }}
+        }})
+        .catch(function() {{
+          clearInterval(pollTimers[runId]);
+          delete pollTimers[runId];
+        }});
+    }}, 2000);
+  }}
+
+  function cancelRun(runId) {{
+    fetch(EDIT_API + '/workflow/runs/' + encodeURIComponent(runId) + '/cancel', {{ method: 'POST' }})
+      .then(function() {{
+        if (currentTicketId) loadWorkflowRuns(currentTicketId);
+      }})
+      .catch(function() {{ showAppToast('Failed to cancel run', 'error'); }});
+  }}
+
+  function resumeRun(runId) {{
+    fetch(EDIT_API + '/workflow/runs/' + encodeURIComponent(runId) + '/resume', {{ method: 'POST' }})
+      .then(function() {{
+        if (currentTicketId) loadWorkflowRuns(currentTicketId);
+      }})
+      .catch(function() {{ showAppToast('Failed to resume run', 'error'); }});
+  }}
+
+  if (workflowRunBtn) {{
+    workflowRunBtn.addEventListener('click', function() {{
+      if (!currentTicketId || !workflowSelect.value) return;
+      workflowRunBtn.disabled = true;
+      fetch(EDIT_API + '/tickets/' + encodeURIComponent(currentTicketId) + '/workflow/run', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ workflow_id: workflowSelect.value }})
+      }})
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+          workflowRunBtn.disabled = false;
+          if (data.run_id) {{
+            loadWorkflowRuns(currentTicketId);
+          }} else {{
+            showAppToast(data.error || 'Failed to start workflow', 'error');
+          }}
+        }})
+        .catch(function() {{
+          workflowRunBtn.disabled = false;
+          showAppToast('Failed to start workflow', 'error');
+        }});
+    }});
+  }}
+
+  // Hook into overlay open (chain pattern)
+  var _origOpenForWorkflow = window.openDetailOverlay;
+  window.openDetailOverlay = function(tid, section) {{
+    if (_origOpenForWorkflow) _origOpenForWorkflow(tid, section);
+    currentTicketId = tid;
+    setTimeout(function() {{
+      loadWorkflowOptions();
+      loadWorkflowRuns(tid);
+    }}, 200);
+  }};
+
+  // Clear poll timers when overlay closes
+  if (overlay) {{
+    var observer = new MutationObserver(function(mutations) {{
+      mutations.forEach(function(m) {{
+        if (m.attributeName === 'class' || m.attributeName === 'style') {{
+          var isHidden = overlay.classList.contains('hidden') ||
+            overlay.style.display === 'none' ||
+            !overlay.classList.contains('visible');
+          if (isHidden) {{
+            Object.keys(pollTimers).forEach(function(k) {{
+              clearInterval(pollTimers[k]);
+              delete pollTimers[k];
+            }});
+            currentTicketId = null;
+          }}
+        }}
+      }});
+    }});
+    observer.observe(overlay, {{ attributes: true }});
+  }}
 }})();
 </script>
 

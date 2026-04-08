@@ -111,6 +111,21 @@ Priority: high | Complexity: M | Status: released
 Released: 2026-04-06 | Commit: baf1818
 Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
 
+
+### I-20: e2e-lifecycle-1775598720
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-08 | Commit: 2546bef
+
+
+### I-20: e2e-lifecycle-1775600110
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-08 | Commit: 8a111ec
+
+
+### I-20: e2e-lifecycle-1775601928
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-08 | Commit: bbd6ebf
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

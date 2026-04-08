@@ -129,12 +129,17 @@ Spec for feedbacks team: compact recorder widget (?mode=recorder), callback on s
 
 ## Backlog
 
+### B-23: Editable AI suggestions before accepting
+Priority: medium | Complexity: M | Status: proposed
+Parent: B-17
+Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
+
 ### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
 Priority: high | Complexity: M | Status: proposed
 Auto-triggers when session attaches. Reads session.md + summary.json + ticket context. Claude CLI with structured prompt. Creates draft child tickets under parent. Re-triage button. 90s timeout. Depends: B-24, B-25, B-29.
 
 ### I-18: Add auto-start recording setting for feedbacks widget
-Priority: medium | Complexity: S | Status: specified
+Priority: medium | Complexity: S | Status: proposed
 Add feedbacks.autostart boolean setting so Record button opens widget with ?autostart=1, skipping the Start Recording click. Feedbacks already supports the param — just append it to the URL in serve.py and add a toggle in the settings UI.
 - [ ] New Auto-start recording toggle in Settings > Feedbacks Integration
 - [ ] When enabled, recorder URL includes &autostart=1
@@ -156,11 +161,6 @@ Collapsed cards show only title, ID, status badge, and metadata — no descripti
 Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
-
-### B-23: Editable AI suggestions before accepting
-Priority: medium | Complexity: M | Status: proposed
-Parent: B-17
-Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
 
 ## Ideas
 

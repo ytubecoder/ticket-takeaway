@@ -37,6 +37,14 @@ Agents can edit PRODUCT_BACKLOG.md directly — the CLI picks up changes via rea
 <img width="1594" height="1304" alt="image" src="https://github.com/user-attachments/assets/cc2a55ab-fb86-4aa5-b256-99cea2c0e0e9" />
 
 
+## Screenshots
+
+![Kanban board overview showing Ideas, Backlog, WIP, and Review columns with ticket cards](docs/scenarios/gallery/gallery-board.png)
+
+![Ticket detail overlay showing handoff state with readiness flags and acceptance criteria](docs/scenarios/gallery/gallery-handoff.png)
+
+![Ticket detail overlay in edit mode with inline field editing](docs/scenarios/gallery/showcase-detail-edit.png)
+
 ## Install
 
 ### One-liner (from your project directory)

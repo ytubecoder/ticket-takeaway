@@ -19,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -58,6 +59,7 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
 from db import get_db, init_db
 from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
 from scenarios import discover_scenarios
+from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN_TESTIDS
 
 import html as _html
 
@@ -157,6 +159,34 @@ def _set_settings(updates: dict) -> None:
             )
         conn.commit()
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Managed files
+# ---------------------------------------------------------------------------
+
+_MANAGED_FILES = [
+    ("PRODUCT_BACKLOG.md", "Ticket backlog \u2014 auto-regenerated from DB on every write", False),
+    ("PRODUCT_SPECIFICATION.md", "Accepted feature specs \u2014 append-only on /accept", False),
+    ("docs/sdlc-dashboard.html", "Visual dashboard snapshot", True),
+    ("docs/features/", "Per-feature working files (ephemeral)", True),
+    (".feedbacks/", "Feedbacks session recordings", True),
+]
+
+
+def _get_managed_files(project: dict) -> list[dict]:
+    """Return list of files/dirs managed by Ticket Takeaway in a project."""
+    project_path = os.path.expanduser(project.get("path", ""))
+    result = []
+    for rel_path, description, gitignored in _MANAGED_FILES:
+        full = os.path.join(project_path, rel_path)
+        result.append({
+            "path": rel_path,
+            "description": description,
+            "exists": os.path.exists(full),
+            "gitignored": gitignored,
+        })
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1439,6 +1469,260 @@ textarea {{ min-height: 60px; resize: vertical; }}
   }}
 }})();
 </script>
+<script>
+// Scenario Drafting section
+(function() {{
+  var pid = '{pid}';
+
+  function escHtml(s) {{
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(String(s)));
+    return d.innerHTML;
+  }}
+
+  // Build and insert the drafting panel before the danger zone
+  var dangerZone = document.querySelector('.danger');
+  if (!dangerZone) return;
+
+  var draftSection = document.createElement('div');
+  draftSection.style.cssText = 'margin-top:32px;padding-top:16px;border-top:1px solid var(--border-default);';
+
+  var heading = document.createElement('h3');
+  heading.style.cssText = 'font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:12px;';
+  heading.textContent = 'Generate Draft Scenario';
+  draftSection.appendChild(heading);
+
+  var hint = document.createElement('p');
+  hint.style.cssText = 'color:var(--text-secondary);font-size:12px;margin-bottom:10px;';
+  hint.textContent = 'Describe what the scenario should demonstrate in plain language.';
+  draftSection.appendChild(hint);
+
+  var inputRow = document.createElement('div');
+  inputRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;';
+
+  var goalInput = document.createElement('textarea');
+  goalInput.id = 'draft-goal';
+  goalInput.rows = 2;
+  goalInput.placeholder = 'e.g. user creates a ticket and moves it to WIP';
+  goalInput.style.cssText = 'flex:1;resize:vertical;font-size:13px;';
+
+  var draftBtn = document.createElement('button');
+  draftBtn.id = 'draft-btn';
+  draftBtn.style.cssText = 'padding:8px 14px;font-size:13px;border-radius:6px;border:1px solid rgba(59,130,246,0.3);background:rgba(59,130,246,0.12);color:var(--accent);cursor:pointer;white-space:nowrap;font-family:inherit;';
+  draftBtn.textContent = 'Generate Drafts';
+
+  inputRow.appendChild(goalInput);
+  inputRow.appendChild(draftBtn);
+  draftSection.appendChild(inputRow);
+
+  var draftResults = document.createElement('div');
+  draftResults.id = 'draft-results';
+  draftResults.style.marginTop = '12px';
+  draftSection.appendChild(draftResults);
+
+  dangerZone.parentNode.insertBefore(draftSection, dangerZone);
+
+  function confidenceBadge(c) {{
+    var color = c === 'high' ? '#22c55e' : c === 'medium' ? '#f59e0b' : '#ef4444';
+    var span = document.createElement('span');
+    span.style.cssText = 'display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;';
+    span.textContent = c;
+    return span;
+  }}
+
+  var lastCandidates = [];
+
+  window.previewDraft = function(idx) {{
+    var pre = document.getElementById('draft-preview-' + idx);
+    if (!pre) return;
+    if (pre.style.display === 'none') {{
+      pre.textContent = JSON.stringify(lastCandidates[idx] && lastCandidates[idx].manifest, null, 2);
+      pre.style.display = 'block';
+    }} else {{
+      pre.style.display = 'none';
+    }}
+  }};
+
+  window.approveDraft = function(idx) {{
+    var c = lastCandidates[idx];
+    if (!c) return;
+    var msgEl = document.getElementById('draft-approve-msg-' + idx);
+    if (msgEl) {{ msgEl.style.color = 'var(--text-secondary)'; msgEl.textContent = 'Saving...'; }}
+    fetch('/' + pid + '/api/scenarios/drafts/approve', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{ manifest: c.manifest, filename: c.manifest.id + '.json' }})
+    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+    .then(function(res) {{
+      if (!msgEl) return;
+      if (res.ok) {{
+        msgEl.style.color = '#22c55e';
+        msgEl.textContent = 'Saved as ' + (res.data.filename || '?');
+      }} else {{
+        msgEl.style.color = '#ef4444';
+        msgEl.textContent = res.data.error || 'Failed';
+      }}
+    }}).catch(function() {{
+      if (msgEl) {{ msgEl.style.color = '#ef4444'; msgEl.textContent = 'Network error'; }}
+    }});
+  }};
+
+  function buildCandidateCard(c, i) {{
+    var card = document.createElement('div');
+    card.id = 'draft-candidate-' + i;
+    card.style.cssText = 'margin-bottom:12px;padding:12px;border-radius:8px;border:1px solid var(--border-default);background:var(--bg-card);';
+
+    var titleRow = document.createElement('div');
+    titleRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px;';
+
+    var titleEl = document.createElement('span');
+    titleEl.style.cssText = 'font-size:13px;font-weight:600;color:var(--text-primary);flex:1;';
+    titleEl.textContent = c.title;
+    titleRow.appendChild(titleEl);
+    titleRow.appendChild(confidenceBadge(c.confidence));
+    card.appendChild(titleRow);
+
+    var summaryEl = document.createElement('div');
+    summaryEl.style.cssText = 'font-size:12px;color:var(--text-secondary);margin-bottom:6px;';
+    summaryEl.textContent = c.summary;
+    card.appendChild(summaryEl);
+
+    if (c.assumptions && c.assumptions.length) {{
+      var details = document.createElement('details');
+      details.style.marginBottom = '4px';
+      var summary = document.createElement('summary');
+      summary.style.cssText = 'font-size:11px;color:var(--text-tertiary);cursor:pointer;';
+      summary.textContent = 'Assumptions (' + c.assumptions.length + ')';
+      details.appendChild(summary);
+      var ul = document.createElement('ul');
+      ul.style.cssText = 'margin:4px 0 0 14px;font-size:11px;color:var(--text-secondary);';
+      c.assumptions.forEach(function(a) {{
+        var li = document.createElement('li');
+        li.textContent = a;
+        ul.appendChild(li);
+      }});
+      details.appendChild(ul);
+      card.appendChild(details);
+    }}
+
+    if (c.prerequisites && c.prerequisites.length) {{
+      var prereqBox = document.createElement('div');
+      prereqBox.style.cssText = 'margin-bottom:6px;padding:6px 10px;border-radius:4px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);';
+      var prereqHead = document.createElement('div');
+      prereqHead.style.cssText = 'font-size:10px;font-weight:600;color:#ef4444;margin-bottom:2px;';
+      prereqHead.textContent = 'Prerequisites / Blockers';
+      prereqBox.appendChild(prereqHead);
+      c.prerequisites.forEach(function(p) {{
+        var pEl = document.createElement('div');
+        pEl.style.cssText = 'font-size:11px;color:#ef4444cc;margin-top:1px;';
+        pEl.textContent = p;
+        prereqBox.appendChild(pEl);
+      }});
+      card.appendChild(prereqBox);
+    }}
+
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:8px;margin-top:8px;align-items:center;';
+
+    var approveBtn = document.createElement('button');
+    approveBtn.style.cssText = 'font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid rgba(34,197,94,0.35);background:rgba(34,197,94,0.08);color:#22c55e;cursor:pointer;';
+    approveBtn.textContent = 'Approve & Save';
+    approveBtn.addEventListener('click', function() {{ window.approveDraft(i); }});
+
+    var previewBtn = document.createElement('button');
+    previewBtn.style.cssText = 'font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border-default);background:none;color:var(--text-secondary);cursor:pointer;';
+    previewBtn.textContent = 'Preview JSON';
+    previewBtn.addEventListener('click', function() {{ window.previewDraft(i); }});
+
+    var approveMsg = document.createElement('span');
+    approveMsg.id = 'draft-approve-msg-' + i;
+    approveMsg.style.cssText = 'font-size:11px;';
+
+    btnRow.appendChild(approveBtn);
+    btnRow.appendChild(previewBtn);
+    btnRow.appendChild(approveMsg);
+    card.appendChild(btnRow);
+
+    var pre = document.createElement('pre');
+    pre.id = 'draft-preview-' + i;
+    pre.style.cssText = 'display:none;margin-top:8px;padding:8px;border-radius:4px;background:var(--bg-page);font-size:10px;color:var(--text-secondary);overflow-x:auto;max-height:200px;';
+    card.appendChild(pre);
+
+    return card;
+  }}
+
+  function renderDraftResults(data) {{
+    while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+
+    if (data.warnings && data.warnings.length) {{
+      var warnBox = document.createElement('div');
+      warnBox.style.cssText = 'margin-bottom:10px;padding:8px 12px;border-radius:6px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);';
+      var warnHead = document.createElement('div');
+      warnHead.style.cssText = 'font-size:11px;font-weight:600;color:#f59e0b;margin-bottom:4px;';
+      warnHead.textContent = 'Warnings';
+      warnBox.appendChild(warnHead);
+      data.warnings.forEach(function(w) {{
+        var wEl = document.createElement('div');
+        wEl.style.cssText = 'font-size:12px;color:var(--text-secondary);margin-top:2px;';
+        wEl.textContent = w;
+        warnBox.appendChild(wEl);
+      }});
+      draftResults.appendChild(warnBox);
+    }}
+
+    if (data.intent_summary) {{
+      var intentEl = document.createElement('div');
+      intentEl.style.cssText = 'font-size:11px;color:var(--text-tertiary);margin-bottom:10px;';
+      intentEl.textContent = data.intent_summary;
+      draftResults.appendChild(intentEl);
+    }}
+
+    lastCandidates = data.candidates || [];
+    if (!lastCandidates.length) {{
+      var noResults = document.createElement('p');
+      noResults.style.cssText = 'color:var(--text-secondary);font-size:12px;';
+      noResults.textContent = 'No candidates generated.';
+      draftResults.appendChild(noResults);
+      return;
+    }}
+    lastCandidates.forEach(function(c, i) {{
+      draftResults.appendChild(buildCandidateCard(c, i));
+    }});
+  }}
+
+  draftBtn.addEventListener('click', function() {{
+    var goal = goalInput.value.trim();
+    if (!goal) return;
+    while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+    var loading = document.createElement('p');
+    loading.style.cssText = 'color:var(--text-secondary);font-size:12px;';
+    loading.textContent = 'Generating...';
+    draftResults.appendChild(loading);
+
+    fetch('/' + pid + '/api/scenarios/draft', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{ goal: goal }})
+    }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      if (data.error) {{
+        while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+        var errEl = document.createElement('p');
+        errEl.style.cssText = 'color:#ef4444;font-size:12px;';
+        errEl.textContent = data.error;
+        draftResults.appendChild(errEl);
+        return;
+      }}
+      renderDraftResults(data);
+    }}).catch(function() {{
+      while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+      var errEl = document.createElement('p');
+      errEl.style.cssText = 'color:#ef4444;font-size:12px;';
+      errEl.textContent = 'Request failed';
+      draftResults.appendChild(errEl);
+    }});
+  }});
+}})();
+</script>
 <div id="confirm-modal\" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
   <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
     <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Remove Project</h3>
@@ -1781,6 +2065,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(_get_all_settings())
             return
 
+        # Managed files
+        if remainder == "/api/managed-files":
+            self._send_json(_get_managed_files(proj))
+            return
+
         # Feedbacks status
         if remainder == "/api/feedbacks/status":
             self._send_json(_detect_feedbacks())
@@ -1872,10 +2161,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             # Attach last run status if available
             with _scenario_runs_lock:
-                for m in manifests:
+                for manifest in manifests:
                     for rid, run in _scenario_runs.items():
-                        if run["scenario_id"] == m["id"]:
-                            m["last_run"] = {"run_id": rid, "status": run["status"], "started_at": run.get("started_at")}
+                        if run["scenario_id"] == manifest["id"]:
+                            manifest["last_run"] = {"run_id": rid, "status": run["status"], "started_at": run.get("started_at")}
             self._send_json({"scenarios": manifests})
             return
 
@@ -2109,8 +2398,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 _refresh_projects_cache()
                 conn = get_db()
                 init_db(conn)
+                backlog = Path(os.path.expanduser(new_project["path"])) / "PRODUCT_BACKLOG.md"
+                result = dict(new_project)
+                if backlog.exists():
+                    count = cli.seed_project(conn, new_project)
+                    result["seeded"] = count
+                else:
+                    cli.scaffold_project(conn, new_project)
+                    result["scaffolded"] = True
                 conn.close()
-                self._send_json(new_project, 201)
+                self._send_json(result, 201)
                 return
 
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
@@ -2401,6 +2698,122 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
 
             self._send_json({"run_id": run_id, "status": "running"})
+            return
+
+        # Scenario API: generate draft manifests from a natural-language goal
+        if remainder == "/api/scenarios/draft":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            goal = body.get("goal", "").strip()
+            if not goal:
+                self._send_json({"error": "'goal' is required"}, 400)
+                return
+
+            req = DraftRequest(
+                goal=goal,
+                actor_hints=body.get("actor_hints", []),
+                target_surface=body.get("target_surface", ""),
+                tags=body.get("tags", []),
+            )
+
+            # Build context from the project's existing scenarios + known testids
+            project_path = proj.get("path", "")
+            scenarios_dir = os.path.join(project_path, "tests", "scenarios")
+            try:
+                existing = discover_scenarios(scenarios_dir) if os.path.isdir(scenarios_dir) else []
+            except Exception:
+                existing = []
+
+            ctx = DraftContext(
+                available_testids=list(KNOWN_TESTIDS),
+                existing_scenarios=existing,
+                known_routes=[""],
+            )
+
+            try:
+                result = generate_drafts(req, ctx)
+            except Exception as exc:
+                self._send_json({"error": f"Drafting failed: {exc}"}, 500)
+                return
+
+            # Serialize dataclasses to plain dicts
+            candidates_out = []
+            for c in result.candidates:
+                candidates_out.append({
+                    "title": c.title,
+                    "summary": c.summary,
+                    "manifest": c.manifest,
+                    "assumptions": c.assumptions,
+                    "prerequisites": c.prerequisites,
+                    "confidence": c.confidence,
+                })
+
+            self._send_json({
+                "intent_summary": result.intent_summary,
+                "candidates": candidates_out,
+                "warnings": result.warnings,
+            })
+            return
+
+        # Scenario API: approve and save a draft manifest
+        if remainder == "/api/scenarios/drafts/approve":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            manifest = body.get("manifest")
+            filename = body.get("filename", "").strip()
+
+            if not manifest or not isinstance(manifest, dict):
+                self._send_json({"error": "'manifest' dict is required"}, 400)
+                return
+            if not filename:
+                # Derive filename from manifest id
+                manifest_id = manifest.get("id", "")
+                if not manifest_id:
+                    self._send_json({"error": "'filename' or manifest 'id' is required"}, 400)
+                    return
+                filename = f"{manifest_id}.json"
+
+            # Ensure .json extension
+            if not filename.endswith(".json"):
+                filename = filename + ".json"
+
+            # Security: reject path traversal
+            if "/" in filename or "\\" in filename or ".." in filename:
+                self._send_json({"error": "filename must be a plain filename with no path separators"}, 400)
+                return
+
+            # Validate the manifest
+            from scenarios import validate_manifest, ScenarioValidationError
+            try:
+                validate_manifest(manifest, filepath=filename)
+            except ScenarioValidationError as exc:
+                self._send_json({"error": f"Manifest validation failed: {exc}"}, 422)
+                return
+
+            # Write to tests/scenarios/
+            project_path = proj.get("path", "")
+            scenarios_dir = os.path.join(project_path, "tests", "scenarios")
+            os.makedirs(scenarios_dir, exist_ok=True)
+            dest = os.path.join(scenarios_dir, filename)
+
+            try:
+                import json as _json
+                with open(dest, "w", encoding="utf-8") as f:
+                    _json.dump(manifest, f, indent=2, ensure_ascii=False)
+                    f.write("\n")
+            except OSError as exc:
+                self._send_json({"error": f"Failed to write manifest: {exc}"}, 500)
+                return
+
+            self._send_json({"ok": True, "filename": filename, "path": dest})
             return
 
         # Install feedbacks via git clone

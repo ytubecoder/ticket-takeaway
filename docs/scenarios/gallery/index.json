@@ -1,20 +1,20 @@
 {
   "gallery-board": {
     "file": "gallery-board.png",
-    "published_at": "2026-04-07T22:14:29.253152+00:00",
+    "published_at": "2026-04-08T09:23:40.713173+00:00",
     "slot": "gallery-board",
-    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/ticket-lifecycle-ui-1775600066/screenshots/board-overview.png"
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/ticket-lifecycle-ui-1775640218/screenshots/board-overview.png"
   },
   "gallery-handoff": {
     "file": "gallery-handoff.png",
-    "published_at": "2026-04-07T22:14:29.253152+00:00",
+    "published_at": "2026-04-08T09:23:40.713173+00:00",
     "slot": "gallery-handoff",
-    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/ticket-lifecycle-ui-1775600066/screenshots/agent-picks-up-ticket.png"
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/ticket-lifecycle-ui-1775640218/screenshots/agent-picks-up-ticket.png"
   },
   "showcase-detail-edit": {
     "file": "showcase-detail-edit.png",
-    "published_at": "2026-04-07T22:14:26.851100+00:00",
+    "published_at": "2026-04-08T09:23:38.467327+00:00",
     "slot": "showcase-detail-edit",
-    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/quick-edit-detail-overlay-1775600065/screenshots/overlay-after-edit.png"
+    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/quick-edit-detail-overlay-1775640216/screenshots/overlay-after-edit.png"
   }
 }

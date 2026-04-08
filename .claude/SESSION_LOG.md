@@ -1,5 +1,20 @@
 # Session Log
 
+## 2026-04-08 — README restructure and GitHub update
+
+### Summary
+- Restructured README: install moved up (first thing after branding), "How a Ticket Progresses" before "Stages and States", skills consolidated into single section, new Feedbacks Integration section
+- User updated screenshots and install paths (clone to `~/ticket-takeaway` instead of `~/projects/ticket-takeaway`)
+
+### Lessons Learned
+- **Accepted:** Install instructions first, conceptual overview second — users want to try it before reading the theory
+- **Accepted:** Skills as subsections under one heading, framed as assistive — they support the workflow, not the other way around
+
+### Decisions
+- Removed Paperclip "we intend to" language — speculative compatibility notes don't belong in a README
+- Feedbacks Integration section mirrors what feedbacks repo does for us — brief description + link, not a full duplication of their docs
+- Clone path changed from `~/projects/ticket-takeaway` to `~/ticket-takeaway` (shorter, user preference)
+
 ## 2026-04-05/06/08 — Feedbacks integration: settings, recording, attachments, session watcher
 
 ### Summary

@@ -735,6 +735,76 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
 # Subcommand: seed
 # ---------------------------------------------------------------------------
 
+def seed_project(conn: sqlite3.Connection, project: dict) -> int:
+    """Parse PRODUCT_BACKLOG.md for a single project and import into DB. Returns ticket count."""
+    project_id = project["id"]
+    project_path = os.path.expanduser(project.get("path", ""))
+    backlog_path = os.path.join(project_path, "PRODUCT_BACKLOG.md")
+
+    tickets = parse_backlog(backlog_path)
+    if not tickets:
+        return 0
+
+    # Clear existing data for this project (idempotent)
+    conn.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
+
+    for t in tickets:
+        conn.execute("""
+            INSERT INTO tickets (id, project_id, title, priority, complexity, status,
+                                 section, description, parent, sort_order,
+                                 commit_hash, release_tag)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            t["id"], project_id, t["title"], t["priority"], t["complexity"],
+            t["status"], t["section"], t["description"],
+            t["parent"], t["sort_order"],
+            t.get("commit_hash", ""), t.get("release_tag", ""),
+        ))
+
+        # Acceptance criteria
+        for i, (checked, text) in enumerate(t["acceptance_criteria"]):
+            conn.execute("""
+                INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+            """, (t["id"], project_id, text, int(checked), i))
+
+        # Dependencies
+        for dep_id in t["depends"]:
+            conn.execute("""
+                INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id)
+                VALUES (?, ?, ?)
+            """, (t["id"], project_id, dep_id))
+
+        # Readiness content
+        for flag, content in t.get("readiness_content", {}).items():
+            if content:
+                conn.execute("""
+                    INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+                    VALUES (?, ?, ?, ?, 'seed')
+                """, (t["id"], project_id, flag, content))
+
+    conn.commit()
+    return len(tickets)
+
+
+def scaffold_project(conn: sqlite3.Connection, project: dict):
+    """Create minimal PRODUCT_BACKLOG.md and PRODUCT_SPECIFICATION.md for a new project."""
+    project_path = os.path.expanduser(project.get("path", ""))
+    if not project_path:
+        return
+    project_name = project.get("name", project["id"])
+
+    backlog = Path(project_path) / "PRODUCT_BACKLOG.md"
+    if not backlog.exists():
+        sync_to_markdown(conn, project)
+        print(f"Created {backlog}")
+
+    spec = Path(project_path) / "PRODUCT_SPECIFICATION.md"
+    if not spec.exists():
+        spec.write_text(f"# Product Specification \u2014 {project_name}\n\n", encoding="utf-8")
+        print(f"Created {spec}")
+
+
 def cmd_seed(args):
     """Parse PRODUCT_BACKLOG.md files and insert into DB."""
     projects = load_registry()
@@ -744,55 +814,11 @@ def cmd_seed(args):
     init_db(conn)
 
     for proj in target:
-        project_id = proj["id"]
-        project_path = os.path.expanduser(proj.get("path", ""))
-        backlog_path = os.path.join(project_path, "PRODUCT_BACKLOG.md")
-
-        tickets = parse_backlog(backlog_path)
-        if not tickets:
-            print(f"No tickets found in {backlog_path}")
-            continue
-
-        # Clear existing data for this project (idempotent)
-        conn.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
-
-        for t in tickets:
-            conn.execute("""
-                INSERT INTO tickets (id, project_id, title, priority, complexity, status,
-                                     section, description, parent, sort_order,
-                                     commit_hash, release_tag)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                t["id"], project_id, t["title"], t["priority"], t["complexity"],
-                t["status"], t["section"], t["description"],
-                t["parent"], t["sort_order"],
-                t.get("commit_hash", ""), t.get("release_tag", ""),
-            ))
-
-            # Acceptance criteria
-            for i, (checked, text) in enumerate(t["acceptance_criteria"]):
-                conn.execute("""
-                    INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (t["id"], project_id, text, int(checked), i))
-
-            # Dependencies
-            for dep_id in t["depends"]:
-                conn.execute("""
-                    INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id)
-                    VALUES (?, ?, ?)
-                """, (t["id"], project_id, dep_id))
-
-            # Readiness content
-            for flag, content in t.get("readiness_content", {}).items():
-                if content:
-                    conn.execute("""
-                        INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
-                        VALUES (?, ?, ?, ?, 'seed')
-                    """, (t["id"], project_id, flag, content))
-
-        conn.commit()
-        print(f"Seeded {len(tickets)} tickets for {proj['name']}")
+        count = seed_project(conn, proj)
+        if count:
+            print(f"Seeded {count} tickets for {proj['name']}")
+        else:
+            print(f"No tickets found in {os.path.join(os.path.expanduser(proj.get('path', '')), 'PRODUCT_BACKLOG.md')}")
 
     conn.close()
 
@@ -1153,13 +1179,20 @@ def cmd_register(args):
 
     conn = get_db()
     init_db(conn)
-    conn.close()
 
     print(f"Registered: {pid} → {path}")
 
     backlog = Path(path) / "PRODUCT_BACKLOG.md"
     if backlog.exists():
-        print(f"Found {backlog}. Run 'tickets-cli.py seed --project {pid}' to import existing tickets.")
+        count = seed_project(conn, new_project)
+        if count:
+            print(f"Seeded {count} tickets from existing PRODUCT_BACKLOG.md")
+        else:
+            print(f"Found {backlog} but no tickets parsed.")
+    else:
+        scaffold_project(conn, new_project)
+
+    conn.close()
 
 
 def cmd_unregister(args):

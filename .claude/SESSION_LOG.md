@@ -1,5 +1,25 @@
 # Session Log
 
+## 2026-04-10 — Seek feature planning + consultant review
+
+### Summary
+- Designed the "Seek" feature: project file discovery engine that scans TODOs, markdown tasks, README roadmaps, CHANGELOG unreleased items, and GitHub Issues to create draft tickets
+- Produced high-level plan + deep technical spec (`docs/plans/seek-technical-spec.md`) with scanner architecture, dedup logic, CLI/API/UI integration
+- Incorporated consultant code review identifying 5 issues: CLI dispatch table gap, missing `ingest_markdown()` calls, draft toggle persistence, hardcoded banner copy, split confirm paths
+
+### Lessons Learned
+- **Gotcha:** tickets-cli.py dispatches via `commands[args.command](args)` dict, NOT `args.func` — adding only `set_defaults(func=...)` leaves the command unreachable
+- **Gotcha:** All mutating flows must call `ingest_markdown()` before DB writes to avoid drift — the existing pattern is consistent but easy to miss when adding new endpoints
+- **Gotcha:** `sync_to_markdown()` writes all tickets including drafts — drafts should be excluded (`AND draft = 0`) per product decision
+- **Gotcha:** Draft banner copy is hardcoded to "feedback session" — needs to be dynamic for Seek-sourced drafts
+- **Accepted:** Source tracking via description prefix (`Source: type @ file:line`) avoids schema migration while remaining parseable for dedup
+
+### Decisions
+- Draft tickets do NOT go into PRODUCT_BACKLOG.md — user confirmed "draft tickets don't go into md files"
+- Pre-seek fixes (4 items) must land before the Seek feature itself: markdown exclusion, banner copy, confirm path, toggle persistence
+- No AI calls in v1 Seek — pure file parsing for speed and determinism
+- All discovered items land in Ideas section as drafts — user promotes manually
+
 ## 2026-04-09 — User Journeys feature (full relational, Phases 1-8) + reworkingorder menu rename
 
 ### Summary

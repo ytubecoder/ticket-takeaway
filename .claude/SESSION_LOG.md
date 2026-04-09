@@ -1,5 +1,29 @@
 # Session Log
 
+## 2026-04-09 — User Journeys feature (full relational, Phases 1-8) + reworkingorder menu rename
+
+### Summary
+- Designed and implemented User Journeys as a first-class entity: 5 DB tables (migration 5), `src/journeys.py` module, 17 API endpoints in serve.py, full dashboard UI at `/{pid}/journeys`
+- Journey system compiles to scenario manifests and executes via existing scenario runner — reuses entire Playwright infrastructure
+- Built inference engine that analyzes existing tickets and suggests journeys grouped by lifecycle stage
+- Validated the system end-to-end by creating a "Dashboard Screenshot Tour" journey that captured 4 screenshots via the new journey runner
+- Fixed stale labels in reworkingorder project (Proofs→Artefacts, Writing→Articles rename cleanup)
+
+### Lessons Learned
+- **Gotcha:** Migration version conflict — existing DB had migration 4 (workflow_agents tables from another session) but new code also used version 4. Fix: bumped to migration 5. Always check `SELECT version FROM _migrations` before choosing a version number
+- **Gotcha:** Python local import shadowing — `from scenarios import validate_manifest` at top-level was shadowed by `from scenarios import validate_manifest, ScenarioValidationError` inside `do_POST()`. Python treats the whole function as having a local binding. Fix: moved both imports to top-level
+- **Gotcha:** conftest.py `api_post` reads `e.read()` twice on HTTPError (once in condition, once in json.loads), draining the buffer. Smoke tests used a local `safe_api_post` to work around it
+- **Gotcha:** Unicode surrogate pairs (`\uD83D\uDCF7`) in Python f-strings cause UnicodeEncodeError. Fix: use plain text or HTML entities instead
+- **Gotcha:** Playwright strict mode — `wait_for` with `.card` CSS selector matched 63 elements and failed. Fix: use specific testids or `>> nth=0` suffix for first-match
+- **Accepted:** JSON blob approach rejected in favor of full relational (user chose Approach B over C) — per-step DB records enable SQL queries against step results and run history
+- **Accepted:** Journey `open` action maps `value` field to manifest `path` field — clean translation in `_step_to_manifest_step()`
+
+### Decisions
+- Full relational model (Approach B) over JSON blobs (Approach C) — user wants proper run history and per-step DB records from the start
+- Journeys are independent of tickets — clean separation, ticket linkage only added when journey is "set" (active status)
+- Two entry flows: tickets-first (inference) and journey-first (manual) — both supported from day one
+- `compile_to_manifest()` produces ephemeral dicts, never persisted as files — keeps scenario manifest files for manual scenarios only
+
 ## 2026-04-09 — Project onboarding flow + folder picker + managed files settings
 
 ### Summary

@@ -43,6 +43,7 @@ src/serve.py       — HTTP server routing to actions.py + background threads
 src/generate.py    — dashboard HTML renderer
 src/scenarios.py   — scenario manifest discovery, validation, gallery publishing
 src/scenario_drafting.py — template-based draft generation from natural-language goals
+src/journeys.py    — user journey CRUD, compilation to scenario manifests, inference engine
 ```
 
 **Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `actions.py`.
@@ -108,6 +109,7 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 - `src/constants.py` → `~/.claude/ticket-takeaway/constants.py`
 - `src/db.py` → `~/.claude/ticket-takeaway/db.py`
 - `src/actions.py` → `~/.claude/ticket-takeaway/actions.py`
+- `src/journeys.py` → `~/.claude/ticket-takeaway/journeys.py`
 
 **DB recovery:** If `tickets.db` is lost, run `tickets-cli.py seed` to reconstruct from PRODUCT_BACKLOG.md.
 
@@ -198,6 +200,31 @@ python3 -m pytest tests/ -v                    # Everything
 - `conftest.py` provides: `dashboard_server` (starts serve.py on free port, yields project-scoped URL `http://localhost:{port}/ticket-takeaway`), `browser`/`page` (Playwright with mocked gate-check), `live_page` (no mocks), shared API helpers
 
 **Key testability note:** Business logic lives in `actions.py` (importable). Constants in `constants.py`. DB layer in `db.py`. All importable without side effects.
+
+## User Journeys
+
+First-class entity for defining, validating, and documenting user flows. Journeys compile to scenario manifests and execute via the existing scenario runner.
+
+**Data model:** 5 tables (migration 5): `journeys`, `journey_steps`, `journey_runs`, `journey_step_results`, `journey_tickets`. Full relational — per-step results, run history.
+
+**Module:** `src/journeys.py` — CRUD, compilation, inference, run result storage. Follows `actions.py` pattern (pure DB, no side effects).
+
+**Dashboard UI:** `/{pid}/journeys` page with list view, step editor, results timeline, and ticket linking. Rendered by `_render_journeys_page()` in `serve.py`.
+
+**Two entry flows:**
+1. **Tickets-first:** "Infer from Tickets" button analyzes existing tickets, groups by lifecycle stage, suggests journeys
+2. **Journey-first:** "New Journey" → define steps manually → run for red/green validation
+
+**Compilation:** `compile_to_manifest()` converts journey + steps from DB into a valid scenario manifest dict. Validated via `validate_manifest()`. Never persisted as a file.
+
+**API routes** (all under `/{pid}/api/journeys/`):
+- CRUD: GET/POST/PUT/DELETE for journeys and steps
+- `POST .../validate` — compile + validate without executing
+- `POST .../run` — compile + execute + store results
+- `POST .../link` / `DELETE .../link/{tid}` — ticket linking
+- `POST /api/journeys/infer` — generate suggestions from tickets
+
+**Deployment:** `src/journeys.py` → `~/.claude/ticket-takeaway/journeys.py`
 
 ## Scenario Runner
 

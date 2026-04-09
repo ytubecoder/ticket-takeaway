@@ -1888,38 +1888,6 @@ a {{ color: var(--accent); text-decoration: none; }}
       <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
       <div id="managedFilesList" class="managed-files-list"></div>
     </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Workflow Agents</div>
-      <div class="settings-hint">Custom agents for workflow bounce. Project agents (read-only) shown below.</div>
-      <div id="workflowAgentsList" class="wf-agents-list"></div>
-      <button class="wf-add-btn" id="wfAddAgentBtn">+ Add Agent</button>
-      <div id="wfAgentForm" class="wf-form hidden">
-        <input type="text" id="wfAgentId" placeholder="agent-slug" class="wf-input">
-        <input type="text" id="wfAgentName" placeholder="Display Name" class="wf-input">
-        <input type="text" id="wfAgentCmd" placeholder="CLI command (default: claude)" class="wf-input" value="claude">
-        <input type="text" id="wfAgentArgs" placeholder='CLI args JSON (default: [])' class="wf-input" value="[]">
-        <textarea id="wfAgentPrompt" placeholder="System prompt (optional)" class="wf-textarea" rows="3"></textarea>
-        <div class="wf-form-actions">
-          <button class="wf-save-btn" id="wfAgentSave">Save</button>
-          <button class="wf-cancel-btn" id="wfAgentCancel">Cancel</button>
-        </div>
-      </div>
-    </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Workflows</div>
-      <div class="settings-hint">Reusable agent sequences. First step is the primary (mediator) agent.</div>
-      <div id="workflowsList" class="wf-workflows-list"></div>
-      <button class="wf-add-btn" id="wfAddWorkflowBtn">+ Add Workflow</button>
-      <div id="wfWorkflowForm" class="wf-form hidden">
-        <input type="text" id="wfWorkflowId" placeholder="workflow-slug" class="wf-input">
-        <input type="text" id="wfWorkflowName" placeholder="Display Name" class="wf-input">
-        <input type="text" id="wfWorkflowDesc" placeholder="Description" class="wf-input">
-        <div class="wf-form-actions">
-          <button class="wf-save-btn" id="wfWorkflowSave">Save</button>
-          <button class="wf-cancel-btn" id="wfWorkflowCancel">Cancel</button>
-        </div>
-      </div>
-    </div>
   </div>
 </div>
 

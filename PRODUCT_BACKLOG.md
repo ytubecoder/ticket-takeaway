@@ -162,12 +162,6 @@ Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
 
-### B-36: My first ticket
-Priority: medium | Complexity: M | Status: proposed
-
-### B-40: My first ticket
-Priority: medium | Complexity: M | Status: proposed
-
 ## Ideas
 
 ### I-04: Persist filter and search state in localStorage

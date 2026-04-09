@@ -54,20 +54,8 @@ class ScenarioContext:
     def get_actor_page(self, actor_name: str) -> Page:
         """Return the existing Page for actor_name, or create a new one."""
         if actor_name not in self._actor_contexts:
-            vp = self.manifest.get("viewport", {})
-            ctx = self.browser.new_context(
-                viewport={"width": vp.get("width", 1440), "height": vp.get("height", 1024)}
-            )
+            ctx = self.browser.new_context()
             page = ctx.new_page()
-            # Pre-set theme in localStorage before any navigation
-            theme = self.manifest.get("theme")
-            if theme:
-                page.goto("about:blank")
-                # We need to navigate to the actual origin first to set localStorage
-                page.goto(self.base_url)
-                page.evaluate(f"localStorage.setItem('tt-theme', '{theme}')")
-                page.reload()
-                page.wait_for_load_state("domcontentloaded")
             self._actor_contexts[actor_name] = (ctx, page)
         _, page = self._actor_contexts[actor_name]
         return page

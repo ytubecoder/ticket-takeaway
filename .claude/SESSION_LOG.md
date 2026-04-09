@@ -43,6 +43,7 @@
 - Replaced ALL 6 old pasted GitHub images in README with 4 scenario-generated dark mode shots — fewer but more purposeful, each placed in context near the feature it illustrates
 - Stashed "workflow bounce" WIP separately from scenario runner work — it's preserved in `git stash` but not committed since it was out of scope
 
+
 ## 2026-04-08 — README restructure and GitHub update
 
 ### Summary

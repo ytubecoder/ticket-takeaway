@@ -284,14 +284,6 @@ def validate_manifest(data: dict[str, Any], filepath: str = "") -> dict[str, Any
         # Inject default so callers always see a complete viewport.
         data.setdefault("viewport", DEFAULT_VIEWPORT.copy())
 
-    # --- theme (optional) ---
-    if "theme" in data:
-        theme = data["theme"]
-        if theme not in ("dark", "light"):
-            raise ScenarioValidationError(
-                filepath, "theme", f"'theme' must be 'dark' or 'light', got '{theme}'"
-            )
-
     # --- validate each step ---
     known_actors: set[str] = set(actors_dict.keys())
     for i, step in enumerate(steps):

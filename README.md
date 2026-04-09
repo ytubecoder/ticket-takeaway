@@ -146,7 +146,8 @@ Capture screen recordings with voice narration linked to specific tickets. Requi
 
 Ticket Takeaway integrates with [Feedbacks](https://github.com/ytubecoder/feedbacks) — a screen + voice capture tool for LLM-ready UI feedback. The integration is optional; ticket-takeaway works fully without it.
 
-![Settings drawer showing feedbacks integration and bottom sections](docs/scenarios/gallery/tour-settings.png)
+<img width="1277" height="1215" alt="image" src="https://github.com/user-attachments/assets/3fd25881-6642-460b-9aa3-841f1f541eeb" />
+
 
 When installed, you can:
 

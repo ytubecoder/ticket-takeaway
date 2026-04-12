@@ -471,7 +471,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
         lines.append("")
 
         tickets = conn.execute(
-            "SELECT * FROM tickets WHERE project_id = ? AND section = ? ORDER BY sort_order ASC",
+            "SELECT * FROM tickets WHERE project_id = ? AND section = ? AND draft = 0 ORDER BY sort_order ASC",
             (project_id, section)
         ).fetchall()
 
@@ -1138,6 +1138,37 @@ def cmd_sync(args):
 # Subcommand: watch
 # ---------------------------------------------------------------------------
 
+def cmd_seek(args):
+    """Discover ticket-like items in project files and create draft tickets."""
+    projects = load_registry()
+    target = resolve_project_id(projects, args.project)
+    if len(target) != 1:
+        print("Error: seek requires a single project", file=sys.stderr)
+        sys.exit(1)
+    proj = target[0]
+    project_path = os.path.expanduser(proj.get("path", ""))
+    sources = args.sources.split(",") if args.sources else None
+
+    conn = get_db()
+    init_db(conn)
+    ingest_markdown(conn, proj)
+
+    from seek import run_seek
+    result = run_seek(conn, proj["id"], project_path, sources=sources)
+
+    sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
+    conn.close()
+
+    print(f"Discovered: {result['discovered']} items")
+    print(f"Created: {result['created']} draft ticket(s)")
+    print(f"Skipped: {result['skipped_duplicates']} duplicate(s)")
+    if result['tickets']:
+        print("New drafts:")
+        for tid in result['tickets']:
+            print(f"  {tid}")
+
+
 def cmd_register(args):
     """Register a new project in the registry."""
     import re as _re
@@ -1509,6 +1540,10 @@ def main():
     p_unflag.add_argument("ticket_id", help="Ticket ID")
     p_unflag.add_argument("flag", help="Flag name to clear")
 
+    p_seek = sub.add_parser("seek", help="Discover ticket-like items and create drafts")
+    p_seek.add_argument("project", help="Project ID")
+    p_seek.add_argument("--sources", help="Comma-separated: md_task,readme_todo,code_todo,changelog,github_issue")
+
     p_reg = sub.add_parser("register", help="Register a new project")
     p_reg.add_argument("--id", required=True, help="Project ID (lowercase, hyphens OK)")
     p_reg.add_argument("--name", help="Display name (default: same as ID)")
@@ -1579,6 +1614,7 @@ def main():
         "watch": cmd_watch,
         "flag": cmd_flag,
         "unflag": cmd_unflag,
+        "seek": cmd_seek,
         "register": cmd_register,
         "unregister": cmd_unregister,
         "agent": cmd_agent,

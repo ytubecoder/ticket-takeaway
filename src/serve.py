@@ -628,10 +628,12 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
         init_db(conn)
         cli.ingest_markdown(conn, proj)
 
+        draft = bool(body.get("draft", False))
         ticket_id = _actions_add_ticket(
             conn, project_id, title,
             section=section, priority=priority,
             complexity=complexity, description=description,
+            draft=draft,
         )
 
         conn.commit()
@@ -3553,6 +3555,91 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"scenarios": manifests})
             return
 
+        # Journey API: list journeys
+        if remainder == "/api/journeys":
+            project_id = proj["id"]
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                journeys = list_journeys(conn, project_id)
+                conn.close()
+            self._send_json({"journeys": journeys})
+            return
+
+        # Journey API: get single journey with steps + runs
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            project_id = proj["id"]
+            try:
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    journey = get_journey(conn, project_id, journey_id)
+                    conn.close()
+                self._send_json(journey)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 404)
+            return
+
+        # Journey API: get run details
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/runs/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            journey_id = m.group(1)
+            run_id = m.group(2)
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                run = conn.execute(
+                    "SELECT * FROM journey_runs WHERE id = ? AND journey_id = ? AND project_id = ?",
+                    (run_id, journey_id, proj["id"]),
+                ).fetchone()
+                if not run:
+                    conn.close()
+                    self._send_json({"error": "Run not found"}, 404)
+                    return
+                run_dict = dict(run)
+                step_results = conn.execute(
+                    "SELECT * FROM journey_step_results WHERE run_id = ? ORDER BY sort_order",
+                    (run_id,),
+                ).fetchall()
+                run_dict["step_results"] = [dict(sr) for sr in step_results]
+                conn.close()
+            self._send_json(run_dict)
+            return
+
+        # Journey API: serve run screenshot
+        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/runs/([A-Za-z0-9_-]+)/screenshots/(.+\.png)$", remainder)
+        if m:
+            journey_id, run_id, filename = m.group(1), m.group(2), m.group(3)
+            if "/" in filename or "\\" in filename or ".." in filename:
+                self._send_json({"error": "Invalid filename"}, 400)
+                return
+            project_path = proj.get("path", "")
+            screenshot_path = os.path.join(project_path, ".artifacts", "journeys", journey_id, run_id, filename)
+            if os.path.isfile(screenshot_path):
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                with open(screenshot_path, "rb") as f:
+                    data = f.read()
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self._send_json({"error": "Screenshot not found"}, 404)
+            return
+
+        # Screens API: get cached scan results
+        if remainder == "/api/screens":
+            project_id = proj["id"]
+            with _page_scan_lock:
+                cached = _page_scan_cache.get(project_id)
+            if cached:
+                self._send_json({"screens": cached})
+            else:
+                self._send_json({"screens": [], "hint": "No scan yet. POST /api/screens/scan to discover pages."})
+            return
+
         self._send_json({"error": "Not found"}, 404)
 
     def do_PUT(self):
@@ -4022,6 +4109,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(result, 201)
             else:
                 self._send_json({"error": "Failed to create ticket"}, 400)
+            return
+
+        if remainder == "/api/seek":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            sources = body.get("sources", None)
+            project_path = os.path.expanduser(proj.get("path", ""))
+            from seek import run_seek
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                cli.ingest_markdown(conn, proj)
+                result = run_seek(conn, proj["id"], project_path, sources=sources)
+                cli.sync_to_markdown(conn, proj)
+                conn.close()
+            cli.regenerate_dashboard(proj)
+            self._send_json(result)
             return
 
         # Add attachment to ticket

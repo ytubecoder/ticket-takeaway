@@ -386,6 +386,110 @@ if remainder == "/api/seek":
 })();
 ```
 
+### Empty State CTA (primary discovery point for new users)
+
+When a project has **zero non-draft tickets**, the kanban board shows a centered empty state instead of empty columns:
+
+```html
+<div class="empty-state" id="emptyState" data-testid="empty-state" style="display:none;">
+  <div class="empty-state-icon">&#9744;</div>
+  <h2 class="empty-state-title">No tickets yet</h2>
+  <p class="empty-state-desc">Create your first ticket or scan your project for existing work items.</p>
+  <div class="empty-state-actions">
+    <button class="empty-state-btn primary" id="emptyStateCreate" data-testid="empty-state-create">+ Create First Ticket</button>
+    <button class="empty-state-btn secondary" id="emptyStateSeek" data-testid="empty-state-seek">Seek — scan project files</button>
+  </div>
+</div>
+```
+
+**Placement:** After the `<div class="kanban">` block. The JS checks ticket count on load:
+```javascript
+(function() {
+  var emptyState = document.getElementById('emptyState');
+  var kanban = document.getElementById('kanban');
+  if (!emptyState || !kanban) return;
+  
+  // Count non-draft cards
+  var realCards = kanban.querySelectorAll('.card:not(.is-draft)');
+  if (realCards.length === 0) {
+    emptyState.style.display = 'flex';
+    kanban.style.display = 'none';
+  }
+  
+  // "Create First Ticket" opens the new ticket panel
+  var createBtn = document.getElementById('emptyStateCreate');
+  if (createBtn) {
+    createBtn.addEventListener('click', function() {
+      var newBtn = document.getElementById('newTicketBtn');
+      if (newBtn) newBtn.click();
+      emptyState.style.display = 'none';
+      kanban.style.display = '';
+    });
+  }
+  
+  // "Seek" triggers the same seek flow as the filter bar button
+  var seekCta = document.getElementById('emptyStateSeek');
+  if (seekCta && EDIT_API) {
+    seekCta.addEventListener('click', function() {
+      seekCta.disabled = true;
+      seekCta.textContent = 'Scanning...';
+      fetch(EDIT_API + '/seek', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: '{}'
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(result) {
+        if (result.created > 0) {
+          localStorage.setItem('tt-show-drafts', '1');
+          location.reload();
+        } else {
+          seekCta.disabled = false;
+          seekCta.textContent = 'Seek — scan project files';
+          showAppToast('No ticket-like items found in project files', 'success');
+        }
+      })
+      .catch(function() {
+        seekCta.disabled = false;
+        seekCta.textContent = 'Seek — scan project files';
+        showAppToast('Seek failed', 'error');
+      });
+    });
+  }
+})();
+```
+
+**CSS:**
+```css
+.empty-state {
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  padding: 80px 20px; text-align: center; min-height: 400px;
+}
+.empty-state-icon { font-size: 48px; color: var(--text-tertiary); margin-bottom: 16px; }
+.empty-state-title { font-size: 20px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.empty-state-desc { font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; max-width: 400px; }
+.empty-state-actions { display: flex; gap: 12px; }
+.empty-state-btn {
+  padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500;
+  cursor: pointer; font-family: inherit; border: none;
+}
+.empty-state-btn.primary {
+  background: var(--accent); color: #fff;
+}
+.empty-state-btn.primary:hover { opacity: 0.9; }
+.empty-state-btn.secondary {
+  background: rgba(59,130,246,0.12); color: var(--accent); border: 1px solid rgba(59,130,246,0.3);
+}
+.empty-state-btn.secondary:hover { background: rgba(59,130,246,0.2); }
+.empty-state-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+```
+
+**Behavior:**
+- Disappears after reload when Seek creates drafts (drafts toggle auto-activates)
+- Disappears when user manually creates a ticket via the new ticket panel
+- Only shows when the board is truly empty (0 non-draft tickets)
+- The Seek button in the filter bar remains for re-running later
+
 ---
 
 ## 5. Tests
@@ -420,6 +524,10 @@ test_run_seek_source_in_description       — verify "Source: type @ file:line" 
 test_seek_api_returns_results             — POST /api/seek, verify response shape
 test_seek_api_idempotent                  — POST twice, second returns created=0
 test_seek_api_with_source_filter          — POST with sources=["md_task"], only scans .md files
+test_empty_state_shows_on_empty_board     — register empty project, navigate, verify empty-state visible
+test_empty_state_seek_creates_drafts      — click Seek CTA on empty board, verify drafts appear
+test_empty_state_hidden_with_tickets      — board with tickets does NOT show empty state
+test_drafts_excluded_from_markdown        — create draft, sync, verify PRODUCT_BACKLOG.md has no draft
 ```
 
 ---

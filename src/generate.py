@@ -1583,6 +1583,25 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 11px; color: var(--accent); text-decoration: none;
 }}
 .settings-link:hover {{ text-decoration: underline; }}
+.empty-state {{
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  padding: 80px 20px; text-align: center; min-height: 400px;
+}}
+.empty-state-icon {{ font-size: 48px; color: var(--text-tertiary); margin-bottom: 16px; }}
+.empty-state-title {{ font-size: 20px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }}
+.empty-state-desc {{ font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; max-width: 400px; }}
+.empty-state-actions {{ display: flex; gap: 12px; }}
+.empty-state-btn {{
+  padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500;
+  cursor: pointer; font-family: inherit; border: none;
+}}
+.empty-state-btn.primary {{ background: var(--accent); color: #fff; }}
+.empty-state-btn.primary:hover {{ opacity: 0.9; }}
+.empty-state-btn.secondary {{
+  background: rgba(59,130,246,0.12); color: var(--accent); border: 1px solid rgba(59,130,246,0.3);
+}}
+.empty-state-btn.secondary:hover {{ background: rgba(59,130,246,0.2); }}
+.empty-state-btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
 .managed-files-list {{ display: flex; flex-direction: column; gap: 4px; }}
 .managed-file-row {{
   display: flex; align-items: center; gap: 8px; padding: 6px 8px;
@@ -1820,6 +1839,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   </span>
   <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
+  <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
@@ -1888,6 +1908,16 @@ a {{ color: var(--accent); text-decoration: none; }}
       <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
       <div id="managedFilesList" class="managed-files-list"></div>
     </div>
+  </div>
+</div>
+
+<div class="empty-state" id="emptyState" data-testid="empty-state" style="display:none;">
+  <div class="empty-state-icon">&#9744;</div>
+  <h2 class="empty-state-title">No tickets yet</h2>
+  <p class="empty-state-desc">Create your first ticket or scan your project for existing work items.</p>
+  <div class="empty-state-actions">
+    <button class="empty-state-btn primary" id="emptyStateCreate" data-testid="empty-state-create">+ Create First Ticket</button>
+    <button class="empty-state-btn secondary" id="emptyStateSeek" data-testid="empty-state-seek">Seek &mdash; scan project files</button>
   </div>
 </div>
 
@@ -4319,7 +4349,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 (function() {{
   var draftsBtn = document.getElementById('draftsToggleBtn');
   if (!draftsBtn) return;
-  var showDrafts = false;
+  var showDrafts = localStorage.getItem('tt-show-drafts') === '1';
+  if (showDrafts && draftsBtn) draftsBtn.classList.add('active');
 
   function applyDraftVisibility() {{
     var draftCards = document.querySelectorAll('.card.is-draft');
@@ -4337,9 +4368,86 @@ a {{ color: var(--accent); text-decoration: none; }}
 
   draftsBtn.addEventListener('click', function() {{
     showDrafts = !showDrafts;
+    localStorage.setItem('tt-show-drafts', showDrafts ? '1' : '0');
     draftsBtn.classList.toggle('active', showDrafts);
     applyDraftVisibility();
   }});
+}})();
+</script>
+
+<script>
+/* Seek button handler */
+(function() {{
+  var seekBtn = document.getElementById('seekBtn');
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!seekBtn || !EDIT_API) return;
+
+  function doSeek(btn, origText) {{
+    btn.disabled = true;
+    btn.textContent = 'Seeking\u2026';
+    fetch(EDIT_API + '/seek', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: '{{}}'
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(result) {{
+      btn.disabled = false;
+      btn.textContent = origText;
+      if (result.created > 0) {{
+        showAppToast(result.created + ' draft(s) created', 'success');
+        localStorage.setItem('tt-show-drafts', '1');
+        location.reload();
+      }} else if (result.discovered > 0) {{
+        showAppToast('All ' + result.discovered + ' items already tracked', 'success');
+      }} else {{
+        showAppToast('No ticket-like items found', 'success');
+      }}
+    }})
+    .catch(function() {{
+      btn.disabled = false;
+      btn.textContent = origText;
+      showAppToast('Seek failed', 'error');
+    }});
+  }}
+
+  seekBtn.addEventListener('click', function() {{
+    doSeek(seekBtn, seekBtn.textContent);
+  }});
+  window._doSeek = doSeek;
+}})();
+</script>
+
+<script>
+/* Empty state handler */
+(function() {{
+  var emptyState = document.getElementById('emptyState');
+  var kanban = document.getElementById('kanban');
+  if (!emptyState || !kanban) return;
+
+  var realCards = kanban.querySelectorAll('.card:not(.is-draft)');
+  if (realCards.length === 0) {{
+    emptyState.style.display = 'flex';
+    kanban.style.display = 'none';
+  }}
+
+  var createBtn = document.getElementById('emptyStateCreate');
+  if (createBtn) {{
+    createBtn.addEventListener('click', function() {{
+      emptyState.style.display = 'none';
+      kanban.style.display = '';
+      var newBtn = document.getElementById('newTicketBtn');
+      if (newBtn) newBtn.click();
+    }});
+  }}
+
+  var seekCta = document.getElementById('emptyStateSeek');
+  if (seekCta && window._doSeek) {{
+    seekCta.addEventListener('click', function() {{
+      window._doSeek(seekCta, seekCta.textContent);
+    }});
+  }}
 }})();
 </script>
 
@@ -4381,7 +4489,15 @@ a {{ color: var(--accent); text-decoration: none; }}
 
     var msg = document.createElement('span');
     msg.style.cssText = 'font-size:12px;color:var(--text-secondary);flex:1;';
-    msg.textContent = 'This ticket was auto-generated from a feedback session.';
+    var cardEl = document.querySelector('[data-item-id="' + ticketId + '"]');
+    var desc = (cardEl && cardEl.dataset.desc) || '';
+    if (desc.startsWith('Source: ')) {{
+      var srcType = desc.split(' ')[1];
+      var labels = {{code_todo:'a code comment',md_task:'a markdown task',readme_todo:'a README item',changelog:'a changelog entry',github_issue:'a GitHub issue'}};
+      msg.textContent = 'Auto-generated from ' + (labels[srcType] || 'project files') + '. Confirm to keep or reject to discard.';
+    }} else {{
+      msg.textContent = 'This ticket was auto-generated. Confirm to keep or reject to discard.';
+    }}
 
     var confirmBtn = document.createElement('button');
     confirmBtn.style.cssText = 'font-size:11px;padding:4px 12px;border-radius:5px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-weight:600;font-family:var(--font-sans);';

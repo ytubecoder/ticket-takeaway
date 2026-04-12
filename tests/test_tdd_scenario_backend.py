@@ -166,3 +166,69 @@ def test_connect_cdp_backend_raises_on_unreachable():
 
     with pytest.raises(ConnectionError, match="9999"):
         connect_cdp_backend("http://localhost:9999", timeout_ms=500)
+
+
+def test_scenario_context_creates_playwright_backend():
+    """ScenarioContext should create PlaywrightBackend when backend='playwright'."""
+    from scenario_backend import PlaywrightBackend
+    from scenario_runner import ScenarioContext
+
+    class FakePage:
+        pass
+
+    class FakeBrowserCtx:
+        def new_page(self):
+            return FakePage()
+        def close(self):
+            pass
+
+    class FakeBrowser:
+        def new_context(self):
+            return FakeBrowserCtx()
+
+    ctx = ScenarioContext(
+        base_url="http://localhost:8000",
+        browser=FakeBrowser(),
+        output_dir="/tmp",
+        manifest={"id": "test"},
+        backend_type="playwright",
+    )
+    backend = ctx.get_actor_backend("default")
+    assert isinstance(backend, PlaywrightBackend)
+    # Same actor should return same backend
+    assert ctx.get_actor_backend("default") is backend
+    # Different actor should create a new backend
+    other = ctx.get_actor_backend("other")
+    assert other is not backend
+
+
+def test_scenario_context_close_all_closes_backends():
+    """close_all() should close every actor backend."""
+    from scenario_runner import ScenarioContext
+
+    closed = []
+
+    class FakePage:
+        pass
+
+    class FakeBrowserCtx:
+        def new_page(self):
+            return FakePage()
+        def close(self):
+            closed.append(True)
+
+    class FakeBrowser:
+        def new_context(self):
+            return FakeBrowserCtx()
+
+    ctx = ScenarioContext(
+        base_url="http://localhost:8000",
+        browser=FakeBrowser(),
+        output_dir="/tmp",
+        manifest={"id": "test"},
+        backend_type="playwright",
+    )
+    ctx.get_actor_backend("a")
+    ctx.get_actor_backend("b")
+    ctx.close_all()
+    assert len(closed) == 2

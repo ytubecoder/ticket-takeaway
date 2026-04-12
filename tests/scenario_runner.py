@@ -1,4 +1,4 @@
-"""Manifest-driven scenario runner for Playwright-based UI scenarios."""
+"""Manifest-driven scenario runner with pluggable backends."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from playwright.sync_api import Browser, BrowserContext, Locator, Page
+from scenario_backend import (
+    Backend,
+    CDPBackend,
+    PlaywrightBackend,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -20,6 +24,7 @@ class RunResult:
     scenario_id: str
     status: str  # "passed" | "failed" | "error"
     duration_ms: int
+    backend: str = "playwright"  # "playwright" | "cdp"
     failed_step: dict | None = None
     failed_step_index: int | None = None
     screenshots: list[str] = field(default_factory=list)
@@ -32,42 +37,49 @@ class RunResult:
 
 
 class ScenarioContext:
-    """Holds runtime state for a single scenario run."""
+    """Holds runtime state for a single scenario run.
+
+    The ``browser`` argument is a Playwright Browser instance — either
+    launched locally (backend_type="playwright") or obtained via
+    connect_over_cdp() (backend_type="cdp"). Both produce compatible
+    Page objects; the backend_type determines which Backend class
+    wraps them.
+    """
 
     def __init__(
         self,
         base_url: str,
-        browser: Browser,
+        browser: Any,
         output_dir: str,
         manifest: dict[str, Any],
         seed_id_map: dict[str, str] | None = None,
+        backend_type: str = "playwright",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.browser = browser
         self.output_dir = output_dir
         self.manifest = manifest
-        # title -> ticket-id mapping (e.g. "My Ticket" -> "B-01")
+        self.backend_type = backend_type
         self.seed_id_map: dict[str, str] = seed_id_map or {}
-        # actor name -> (BrowserContext, Page)
-        self._actor_contexts: dict[str, tuple[BrowserContext, Page]] = {}
+        self._actor_backends: dict[str, Backend] = {}
 
-    def get_actor_page(self, actor_name: str) -> Page:
-        """Return the existing Page for actor_name, or create a new one."""
-        if actor_name not in self._actor_contexts:
-            ctx = self.browser.new_context()
-            page = ctx.new_page()
-            self._actor_contexts[actor_name] = (ctx, page)
-        _, page = self._actor_contexts[actor_name]
-        return page
+    def get_actor_backend(self, actor_name: str) -> Backend:
+        """Return the existing Backend for actor_name, or create a new one."""
+        if actor_name not in self._actor_backends:
+            context = self.browser.new_context()
+            page = context.new_page()
+            if self.backend_type == "cdp":
+                backend = CDPBackend(page=page, context=context)
+            else:
+                backend = PlaywrightBackend(page=page, context=context)
+            self._actor_backends[actor_name] = backend
+        return self._actor_backends[actor_name]
 
     def close_all(self) -> None:
-        """Close every actor BrowserContext (and its pages)."""
-        for ctx, _ in self._actor_contexts.values():
-            try:
-                ctx.close()
-            except Exception:
-                pass
-        self._actor_contexts.clear()
+        """Close every actor backend."""
+        for backend in self._actor_backends.values():
+            backend.close()
+        self._actor_backends.clear()
 
 
 # ---------------------------------------------------------------------------

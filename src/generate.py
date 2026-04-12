@@ -55,6 +55,7 @@ SVG_ICONS = {
     "snowflake": '<line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
+    "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
 }
 
 
@@ -628,6 +629,7 @@ def generate_html(project: Project) -> str:
 
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
+    _icon_journeys = _svg_icon("route", 14)
     _icon_close = _svg_icon("x", 14)
     _icon_open = _svg_icon("arrow-up-right", 12)
     _dctrs_icons = ''.join([
@@ -1821,6 +1823,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
+  <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
@@ -5318,7 +5321,8 @@ a {{ color: var(--accent); text-decoration: none; }}
   function loadWorkflowOptions() {{
     fetch(EDIT_API + '/workflow/workflows')
       .then(function(r) {{ return r.json(); }})
-      .then(function(workflows) {{
+      .then(function(data) {{
+        var workflows = data.workflows || data || [];
         // Clear existing options except the placeholder
         while (workflowSelect.options.length > 1) {{
           workflowSelect.removeChild(workflowSelect.options[1]);
@@ -5342,7 +5346,8 @@ a {{ color: var(--accent); text-decoration: none; }}
   function loadWorkflowRuns(ticketId) {{
     fetch(EDIT_API + '/tickets/' + encodeURIComponent(ticketId) + '/workflow/runs')
       .then(function(r) {{ return r.json(); }})
-      .then(function(runs) {{
+      .then(function(data) {{
+        var runs = data.runs || data || [];
         if (!Array.isArray(runs)) return;
         // Clear stale poll timers
         Object.keys(pollTimers).forEach(function(k) {{
@@ -5714,6 +5719,19 @@ a {{ color: var(--accent); text-decoration: none; }}
     </div>
   </div>
 </div>
+<script>
+(function() {{
+  var projMeta = document.querySelector('meta[name="current-project"]');
+  var journeysBtn = document.getElementById('journeysBtn');
+  if (projMeta && journeysBtn) {{
+    window.__goJourneys = function() {{
+      window.location.href = '/' + projMeta.content + '/journeys';
+    }};
+  }} else if (journeysBtn) {{
+    journeysBtn.style.display = 'none';
+  }}
+}})();
+</script>
 </body>
 </html>"""
 

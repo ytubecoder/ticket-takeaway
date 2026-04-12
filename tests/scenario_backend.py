@@ -195,3 +195,62 @@ class PlaywrightBackend:
             self.context.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# CDPBackend
+# ---------------------------------------------------------------------------
+
+
+class CDPBackend(PlaywrightBackend):
+    """Backend that drives a browser via CDP connection.
+
+    Behaviourally identical to PlaywrightBackend — the difference is in
+    how the Page/BrowserContext are obtained (connect_over_cdp instead of
+    launch). All scenario logic works identically.
+
+    This subclass exists to make the distinction explicit in RunResult
+    and to allow future divergence (e.g. CDP-specific error messages).
+    """
+
+    # No behavioural override needed — inherits everything from PlaywrightBackend.
+    pass
+
+
+def connect_cdp_backend(
+    endpoint_url: str = "http://localhost:9222",
+    timeout_ms: int = 5000,
+) -> tuple[Any, Any]:
+    """Connect to an already-running browser via CDP.
+
+    Returns a (browser, playwright) tuple. The caller owns both and must
+    call browser.close() + playwright.stop() on teardown.
+
+    Raises ConnectionError with a clear message if no browser is listening
+    on the given endpoint.
+    """
+    from playwright.sync_api import sync_playwright
+    import urllib.error
+    import urllib.request
+
+    # Preflight: verify the CDP endpoint is reachable before calling playwright,
+    # which gives a less friendly error on connection failure.
+    try:
+        with urllib.request.urlopen(
+            f"{endpoint_url}/json/version", timeout=timeout_ms / 1000
+        ) as resp:
+            resp.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ConnectionError(
+            f"Could not reach CDP endpoint at {endpoint_url}. "
+            f"Start Chrome with --remote-debugging-port={endpoint_url.rsplit(':', 1)[-1]} "
+            f"and try again. Original error: {exc}"
+        )
+
+    pw = sync_playwright().start()
+    try:
+        browser = pw.chromium.connect_over_cdp(endpoint_url)
+    except Exception:
+        pw.stop()
+        raise
+    return browser, pw

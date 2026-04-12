@@ -142,3 +142,27 @@ def test_playwright_backend_satisfies_protocol():
 
     backend = PlaywrightBackend(page=FakePage(), context=FakeCtx())
     assert isinstance(backend, Backend)
+
+
+def test_cdp_backend_satisfies_protocol():
+    """CDPBackend must satisfy the Backend protocol."""
+    from scenario_backend import Backend, CDPBackend
+
+    class FakePage:
+        def goto(self, url): pass
+        def reload(self): pass
+        def screenshot(self, path, full_page=False): pass
+
+    class FakeCtx:
+        def close(self): pass
+
+    backend = CDPBackend(page=FakePage(), context=FakeCtx())
+    assert isinstance(backend, Backend)
+
+
+def test_connect_cdp_backend_raises_on_unreachable():
+    """connect_cdp_backend should raise a clear error if no browser is listening."""
+    from scenario_backend import connect_cdp_backend
+
+    with pytest.raises(ConnectionError, match="9999"):
+        connect_cdp_backend("http://localhost:9999", timeout_ms=500)

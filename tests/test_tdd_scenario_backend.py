@@ -123,3 +123,22 @@ def test_resolve_target_title_missing_raises():
 
     with pytest.raises(ValueError, match="not found in seed_id_map"):
         resolve_target(None, {"title": "Nope"}, {})
+
+
+def test_playwright_backend_satisfies_protocol():
+    """PlaywrightBackend must satisfy the Backend protocol."""
+    from scenario_backend import Backend, PlaywrightBackend
+
+    # Create a minimal fake page/context to instantiate
+    class FakePage:
+        def goto(self, url): pass
+        def reload(self): pass
+        def screenshot(self, path, full_page=False): pass
+        def wait_for_function(self, *a, **kw): pass
+        def wait_for_timeout(self, ms): pass
+
+    class FakeCtx:
+        def close(self): pass
+
+    backend = PlaywrightBackend(page=FakePage(), context=FakeCtx())
+    assert isinstance(backend, Backend)

@@ -80,3 +80,118 @@ def resolve_target(page: Any, target: dict, seed_id_map: dict) -> Any:
         return page.get_by_role(target["role"], name=target.get("name", ""))
 
     raise ValueError(f"Unrecognised target descriptor: {target!r}")
+
+
+# ---------------------------------------------------------------------------
+# PlaywrightBackend
+# ---------------------------------------------------------------------------
+
+# Settlement JS: wait for no DOM mutations for 300ms
+_SETTLED_JS = """
+() => {
+    return new Promise((resolve) => {
+        let timer = null;
+        const observer = new MutationObserver(() => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                observer.disconnect();
+                resolve(true);
+            }, 300);
+        });
+        observer.observe(document.body, {
+            childList: true, subtree: true,
+            attributes: true, characterData: true
+        });
+        timer = setTimeout(() => {
+            observer.disconnect();
+            resolve(true);
+        }, 300);
+    });
+}
+"""
+
+_LOADING_GONE_JS = (
+    "document.querySelectorAll('.loading, [aria-busy=\"true\"]').length === 0"
+)
+
+
+class PlaywrightBackend:
+    """Backend that drives a Playwright Page directly.
+
+    Construction: pass an already-created Page and its BrowserContext.
+    The caller (ScenarioContext.get_actor_backend) is responsible for
+    creating the context and page.
+    """
+
+    def __init__(self, page: Any, context: Any) -> None:
+        self.page = page
+        self.context = context
+
+    def navigate(self, url: str) -> None:
+        self.page.goto(url)
+        self.page.wait_for_load_state("domcontentloaded")
+
+    def reload(self) -> None:
+        self.page.reload()
+        self.page.wait_for_load_state("domcontentloaded")
+
+    def click(self, target: dict, seed_id_map: dict) -> None:
+        resolve_target(self.page, target, seed_id_map).click()
+
+    def dblclick(self, target: dict, seed_id_map: dict) -> None:
+        resolve_target(self.page, target, seed_id_map).dblclick()
+
+    def fill(self, target: dict, value: str, seed_id_map: dict) -> None:
+        resolve_target(self.page, target, seed_id_map).fill(value)
+
+    def select(self, target: dict, value: str, seed_id_map: dict) -> None:
+        resolve_target(self.page, target, seed_id_map).select_option(value)
+
+    def press(self, target: dict, key: str, seed_id_map: dict) -> None:
+        resolve_target(self.page, target, seed_id_map).press(key)
+
+    def wait_for_visible(
+        self, target: dict, timeout: int, seed_id_map: dict
+    ) -> None:
+        resolve_target(self.page, target, seed_id_map).wait_for(
+            state="visible", timeout=timeout
+        )
+
+    def wait_for_hidden(
+        self, target: dict, timeout: int, seed_id_map: dict
+    ) -> None:
+        resolve_target(self.page, target, seed_id_map).wait_for(
+            state="hidden", timeout=timeout
+        )
+
+    def wait_for_text(self, text: str, timeout: int) -> None:
+        self.page.get_by_text(text, exact=False).wait_for(
+            state="visible", timeout=timeout
+        )
+
+    def screenshot(self, path: str, full_page: bool = False) -> str:
+        self.page.screenshot(path=path, full_page=full_page)
+        return path
+
+    def wait_for_settled(self, timeout: int = 5000) -> None:
+        try:
+            self.page.wait_for_function(_SETTLED_JS, timeout=timeout)
+        except Exception:
+            self.page.wait_for_timeout(500)
+        try:
+            self.page.wait_for_function(_LOADING_GONE_JS, timeout=2000)
+        except Exception:
+            pass
+
+    def evaluate(self, js: str) -> Any:
+        return self.page.evaluate(js)
+
+    def get_text(self, target: dict, seed_id_map: dict) -> str:
+        loc = resolve_target(self.page, target, seed_id_map)
+        return loc.text_content() or ""
+
+    def close(self) -> None:
+        try:
+            self.context.close()
+        except Exception:
+            pass

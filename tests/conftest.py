@@ -81,6 +81,25 @@ def pytest_addoption(parser):
             "alongside the captured screenshots (for gallery publishing)."
         ),
     )
+    parser.addoption(
+        "--backend",
+        action="store",
+        default="playwright",
+        choices=["playwright", "cdp"],
+        help=(
+            "Which backend to run scenarios against. "
+            "'playwright' launches a new browser (default). "
+            "'cdp' connects to an already-running browser on "
+            "http://localhost:9222 (start Chrome with "
+            "--remote-debugging-port=9222)."
+        ),
+    )
+    parser.addoption(
+        "--cdp-endpoint",
+        action="store",
+        default="http://localhost:9222",
+        help="CDP endpoint URL when --backend=cdp.",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -131,13 +150,29 @@ def dashboard_server():
 
 
 @pytest.fixture(scope="session")
-def browser():
-    """Session-scoped Playwright Chromium browser."""
-    pw = sync_playwright().start()
-    b = pw.chromium.launch(headless=True)
-    yield b
-    b.close()
-    pw.stop()
+def browser(request):
+    """Session-scoped browser — either launched locally or CDP-connected.
+
+    Controlled by --backend (default: playwright). When --backend=cdp,
+    connects to an already-running browser at --cdp-endpoint.
+    """
+    backend_type = request.config.getoption("--backend", default="playwright")
+
+    if backend_type == "cdp":
+        from scenario_backend import connect_cdp_backend
+        endpoint = request.config.getoption(
+            "--cdp-endpoint", default="http://localhost:9222"
+        )
+        b, pw = connect_cdp_backend(endpoint)
+        yield b
+        b.close()
+        pw.stop()
+    else:
+        pw = sync_playwright().start()
+        b = pw.chromium.launch(headless=True)
+        yield b
+        b.close()
+        pw.stop()
 
 
 @pytest.fixture()

@@ -28,3 +28,55 @@ class Backend(Protocol):
     def evaluate(self, js: str) -> Any: ...
     def get_text(self, target: dict, seed_id_map: dict) -> str: ...
     def close(self) -> None: ...
+
+
+def resolve_target(page: Any, target: dict, seed_id_map: dict) -> Any:
+    """Return a Playwright Locator (or equivalent) for a target descriptor.
+
+    Both PlaywrightBackend and CDPBackend use this since both wrap
+    Playwright page objects. seed_id_map maps ticket titles (and
+    "ticket-N" positional refs) to ticket IDs.
+
+    Supported keys: testid, title, seed_ref, css, text, role.
+    """
+    if "testid" in target:
+        return page.get_by_test_id(target["testid"])
+
+    if "title" in target:
+        title = target["title"]
+        ticket_id = seed_id_map.get(title)
+        if ticket_id is None:
+            raise ValueError(
+                f"Title {title!r} not found in seed_id_map. "
+                f"Available: {list(seed_id_map.keys())}"
+            )
+        if target.get("open"):
+            return page.get_by_test_id(f"card-open-btn-{ticket_id}")
+        return page.get_by_test_id(f"ticket-card-{ticket_id}")
+
+    if "seed_ref" in target:
+        ref = target["seed_ref"]
+        try:
+            index = int(ref.split("-")[-1])
+        except (ValueError, IndexError):
+            raise ValueError(
+                f"Invalid seed_ref format: {ref!r}. Expected 'ticket-N'."
+            )
+        ids = list(seed_id_map.values())
+        if index >= len(ids):
+            raise ValueError(
+                f"seed_ref index {index} out of range "
+                f"(have {len(ids)} seed tickets)"
+            )
+        return page.get_by_test_id(f"ticket-card-{ids[index]}")
+
+    if "css" in target:
+        return page.locator(target["css"])
+
+    if "text" in target:
+        return page.get_by_text(target["text"], exact=False)
+
+    if "role" in target:
+        return page.get_by_role(target["role"], name=target.get("name", ""))
+
+    raise ValueError(f"Unrecognised target descriptor: {target!r}")

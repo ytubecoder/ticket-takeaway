@@ -15,3 +15,111 @@ def test_backend_protocol_defines_required_methods():
     ]
     for name in required:
         assert hasattr(Backend, name), f"Backend missing method: {name}"
+
+
+def test_resolve_target_css():
+    """CSS targets should route to page.locator()."""
+    from scenario_backend import resolve_target
+
+    class FakePage:
+        def locator(self, selector):
+            return ("locator", selector)
+
+    page = FakePage()
+    result = resolve_target(page, {"css": ".my-class"}, {})
+    assert result == ("locator", ".my-class")
+
+
+def test_resolve_target_testid():
+    """testid targets should route to get_by_test_id()."""
+    from scenario_backend import resolve_target
+
+    class FakePage:
+        def get_by_test_id(self, tid):
+            return ("testid", tid)
+
+    result = resolve_target(FakePage(), {"testid": "submit"}, {})
+    assert result == ("testid", "submit")
+
+
+def test_resolve_target_title_via_seed_map():
+    """title targets should look up ticket id in seed_id_map."""
+    from scenario_backend import resolve_target
+
+    class FakePage:
+        def get_by_test_id(self, tid):
+            return ("testid", tid)
+
+    seed_map = {"My Ticket": "B-42"}
+    result = resolve_target(FakePage(), {"title": "My Ticket"}, seed_map)
+    assert result == ("testid", "ticket-card-B-42")
+
+
+def test_resolve_target_title_with_open_flag():
+    """title + open:true should resolve to the card open button."""
+    from scenario_backend import resolve_target
+
+    class FakePage:
+        def get_by_test_id(self, tid):
+            return ("testid", tid)
+
+    seed_map = {"My Ticket": "B-42"}
+    result = resolve_target(
+        FakePage(), {"title": "My Ticket", "open": True}, seed_map
+    )
+    assert result == ("testid", "card-open-btn-B-42")
+
+
+def test_resolve_target_seed_ref():
+    """seed_ref ticket-0 should index into seed map values."""
+    from scenario_backend import resolve_target
+
+    class FakePage:
+        def get_by_test_id(self, tid):
+            return ("testid", tid)
+
+    seed_map = {"First": "B-01", "Second": "B-02"}
+    result = resolve_target(FakePage(), {"seed_ref": "ticket-1"}, seed_map)
+    assert result == ("testid", "ticket-card-B-02")
+
+
+def test_resolve_target_text():
+    """text targets should use get_by_text()."""
+    from scenario_backend import resolve_target
+
+    class FakePage:
+        def get_by_text(self, text, exact):
+            return ("text", text, exact)
+
+    result = resolve_target(FakePage(), {"text": "Save"}, {})
+    assert result == ("text", "Save", False)
+
+
+def test_resolve_target_role():
+    """role targets should use get_by_role()."""
+    from scenario_backend import resolve_target
+
+    class FakePage:
+        def get_by_role(self, role, name):
+            return ("role", role, name)
+
+    result = resolve_target(
+        FakePage(), {"role": "button", "name": "Cancel"}, {}
+    )
+    assert result == ("role", "button", "Cancel")
+
+
+def test_resolve_target_unknown_raises():
+    """Unknown target descriptors should raise ValueError."""
+    from scenario_backend import resolve_target
+
+    with pytest.raises(ValueError, match="Unrecognised target"):
+        resolve_target(None, {"weird": "thing"}, {})
+
+
+def test_resolve_target_title_missing_raises():
+    """Missing title in seed map should raise ValueError."""
+    from scenario_backend import resolve_target
+
+    with pytest.raises(ValueError, match="not found in seed_id_map"):
+        resolve_target(None, {"title": "Nope"}, {})

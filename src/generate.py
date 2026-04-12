@@ -55,6 +55,7 @@ SVG_ICONS = {
     "snowflake": '<line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
+    "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
 }
 
 
@@ -628,6 +629,7 @@ def generate_html(project: Project) -> str:
 
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
+    _icon_journeys = _svg_icon("route", 14)
     _icon_close = _svg_icon("x", 14)
     _icon_open = _svg_icon("arrow-up-right", 12)
     _dctrs_icons = ''.join([
@@ -1766,12 +1768,20 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 9px; font-weight: 600; text-transform: uppercase; padding: 1px 6px;
   border-radius: 3px; letter-spacing: 0.5px;
 }}
-.wf-run-status.running {{ background: rgba(59,130,246,0.15); color: #3b82f6; }}
+.wf-run-status.running {{ background: rgba(59,130,246,0.15); color: #3b82f6; animation: wfPulse 1.5s ease-in-out infinite; }}
 .wf-run-status.paused {{ background: rgba(234,179,8,0.15); color: #eab308; }}
 .wf-run-status.completed {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
 .wf-run-status.failed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
 .wf-run-status.cancelled {{ background: rgba(107,114,128,0.15); color: #6b7280; }}
 .wf-run-status.pending {{ background: rgba(107,114,128,0.1); color: #9ca3af; }}
+@keyframes wfPulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} }}
+
+/* Active workflow indicator on kanban cards */
+.card-wf-indicator {{
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 8px; color: #3b82f6; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.3px; animation: wfPulse 1.5s ease-in-out infinite;
+}}
 .workflow-conversation {{ display: none; }}
 .workflow-run-block.expanded .workflow-conversation {{ display: block; }}
 .workflow-turn {{ padding: 8px 10px; border-top: 1px solid var(--border); }}
@@ -1841,6 +1851,7 @@ a {{ color: var(--accent); text-decoration: none; }}
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
+  <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
@@ -5434,7 +5445,8 @@ a {{ color: var(--accent); text-decoration: none; }}
   function loadWorkflowOptions() {{
     fetch(EDIT_API + '/workflow/workflows')
       .then(function(r) {{ return r.json(); }})
-      .then(function(workflows) {{
+      .then(function(data) {{
+        var workflows = data.workflows || data || [];
         // Clear existing options except the placeholder
         while (workflowSelect.options.length > 1) {{
           workflowSelect.removeChild(workflowSelect.options[1]);
@@ -5458,7 +5470,8 @@ a {{ color: var(--accent); text-decoration: none; }}
   function loadWorkflowRuns(ticketId) {{
     fetch(EDIT_API + '/tickets/' + encodeURIComponent(ticketId) + '/workflow/runs')
       .then(function(r) {{ return r.json(); }})
-      .then(function(runs) {{
+      .then(function(data) {{
+        var runs = data.runs || data || [];
         if (!Array.isArray(runs)) return;
         // Clear stale poll timers
         Object.keys(pollTimers).forEach(function(k) {{
@@ -5590,8 +5603,25 @@ a {{ color: var(--accent); text-decoration: none; }}
     }});
   }}
 
+  function setCardWfIndicator(ticketId, active) {{
+    var card = document.querySelector('.card[data-item-id="' + ticketId + '"]');
+    if (!card) return;
+    var existing = card.querySelector('.card-wf-indicator');
+    if (active && !existing) {{
+      var ind = document.createElement('span');
+      ind.className = 'card-wf-indicator';
+      ind.textContent = '\u25B6 workflow running';
+      var titleEl = card.querySelector('.card-title') || card.querySelector('.item-title');
+      if (titleEl) titleEl.parentNode.insertBefore(ind, titleEl.nextSibling);
+      else card.appendChild(ind);
+    }} else if (!active && existing) {{
+      existing.parentNode.removeChild(existing);
+    }}
+  }}
+
   function startPolling(runId) {{
     if (pollTimers[runId]) return;
+    if (currentTicketId) setCardWfIndicator(currentTicketId, true);
     pollTimers[runId] = setInterval(function() {{
       fetch(EDIT_API + '/workflow/runs/' + encodeURIComponent(runId))
         .then(function(r) {{ return r.json(); }})
@@ -5603,6 +5633,9 @@ a {{ color: var(--accent); text-decoration: none; }}
           if (run.status !== 'running' && run.status !== 'paused') {{
             clearInterval(pollTimers[runId]);
             delete pollTimers[runId];
+            if (currentTicketId && Object.keys(pollTimers).length === 0) {{
+              setCardWfIndicator(currentTicketId, false);
+            }}
           }}
         }})
         .catch(function() {{
@@ -5631,7 +5664,22 @@ a {{ color: var(--accent); text-decoration: none; }}
   if (workflowRunBtn) {{
     workflowRunBtn.addEventListener('click', function() {{
       if (!currentTicketId || !workflowSelect.value) return;
+      var wfName = workflowSelect.options[workflowSelect.selectedIndex].textContent;
       workflowRunBtn.disabled = true;
+
+      // Instant placeholder — show a running block immediately
+      var placeholder = renderRunBlock({{
+        id: '_pending',
+        status: 'running',
+        workflow_id: workflowSelect.value,
+        workflow_name: wfName,
+        current_step: 0,
+        total_steps: 0,
+        conversation: []
+      }});
+      placeholder.classList.add('expanded');
+      workflowRunsList.insertBefore(placeholder, workflowRunsList.firstChild);
+
       fetch(EDIT_API + '/tickets/' + encodeURIComponent(currentTicketId) + '/workflow/run', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
@@ -5641,13 +5689,28 @@ a {{ color: var(--accent); text-decoration: none; }}
         .then(function(data) {{
           workflowRunBtn.disabled = false;
           if (data.run_id) {{
-            loadWorkflowRuns(currentTicketId);
+            // Replace placeholder with real run, start polling
+            if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+            var realBlock = renderRunBlock({{
+              id: data.run_id,
+              status: 'running',
+              workflow_id: workflowSelect.value,
+              workflow_name: wfName,
+              current_step: 0,
+              total_steps: 0,
+              conversation: []
+            }});
+            realBlock.classList.add('expanded');
+            workflowRunsList.insertBefore(realBlock, workflowRunsList.firstChild);
+            startPolling(data.run_id);
           }} else {{
+            if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
             showAppToast(data.error || 'Failed to start workflow', 'error');
           }}
         }})
         .catch(function() {{
           workflowRunBtn.disabled = false;
+          if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
           showAppToast('Failed to start workflow', 'error');
         }});
     }});
@@ -5830,6 +5893,19 @@ a {{ color: var(--accent); text-decoration: none; }}
     </div>
   </div>
 </div>
+<script>
+(function() {{
+  var projMeta = document.querySelector('meta[name="current-project"]');
+  var journeysBtn = document.getElementById('journeysBtn');
+  if (projMeta && journeysBtn) {{
+    window.__goJourneys = function() {{
+      window.location.href = '/' + projMeta.content + '/journeys';
+    }};
+  }} else if (journeysBtn) {{
+    journeysBtn.style.display = 'none';
+  }}
+}})();
+</script>
 </body>
 </html>"""
 

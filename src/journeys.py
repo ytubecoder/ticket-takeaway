@@ -455,11 +455,14 @@ def unlink_ticket(
 
 def _manifest_step_to_db_fields(step: dict[str, Any]) -> dict[str, Any]:
     """Convert a scenario manifest step dict to journey_steps DB fields."""
+    value = step.get("value", "")
+    if step["action"] == "open" and "path" in step:
+        value = step["path"]
     return {
         "actor": step.get("actor", "user"),
         "action": step["action"],
         "target": step.get("target"),
-        "value": step.get("value", ""),
+        "value": value,
         "key": step.get("key", ""),
         "capture": step.get("capture"),
         "assertion": step.get("assert"),
@@ -574,3 +577,182 @@ def infer_journeys(
         })
 
     return suggestions
+
+
+# ---------------------------------------------------------------------------
+# Path Builder: screen-level path → element-level steps
+# ---------------------------------------------------------------------------
+
+_SCREEN_ROUTES: dict[str, str] = {
+    "Board": "",
+    "Settings": "/settings",
+    "Journeys": "/journeys",
+    "Project Picker": "/",
+    "Detail Overlay": "",
+}
+
+
+def _make_step(
+    actor: str,
+    action: str,
+    *,
+    label: str = "",
+    value: str = "",
+    target: dict | None = None,
+    key: str = "",
+    capture: dict | None = None,
+    assertion: dict | None = None,
+) -> dict[str, Any]:
+    """Build a step dict with all keys expected by add_step()."""
+    return {
+        "actor": actor,
+        "action": action,
+        "label": label,
+        "value": value,
+        "target": target,
+        "key": key,
+        "capture": capture,
+        "assertion": assertion,
+    }
+
+
+def build_steps_from_path(
+    path: list[dict],
+    actor: str = "user",
+) -> list[dict]:
+    """Convert a screen-level path into element-level step dicts.
+
+    Each path entry: {"screen": "Board", "interaction": {...} or None}
+    Interaction dict: {"type": "button"|"text-input"|"screenshot", "testid": "...",
+                        "name": "...", "fill_value": "...", "navigates_to": "..."}
+    """
+    steps: list[dict] = []
+    current_screen: str | None = None
+
+    for entry in path:
+        screen = entry["screen"]
+        interaction = entry.get("interaction")
+
+        if screen != current_screen and interaction is None:
+            route = _SCREEN_ROUTES.get(screen, "")
+            steps.append(_make_step(actor, "open", label=f"Go to {screen}", value=route))
+            steps.append(_make_step(
+                actor, "capture",
+                label=f"Screenshot: {screen}",
+                capture={"name": screen.lower().replace(" ", "-")},
+            ))
+            current_screen = screen
+            continue
+
+        if interaction is None:
+            continue
+
+        itype = interaction.get("type", "button")
+        testid = interaction.get("testid", "")
+        name = interaction.get("name", "")
+
+        if itype == "screenshot":
+            steps.append(_make_step(
+                actor, "capture",
+                label=f"Screenshot: {name or current_screen}",
+                capture={"name": (name or current_screen or "capture").lower().replace(" ", "-")},
+            ))
+        elif itype in ("text-input", "textarea"):
+            target = {"testid": testid} if testid else None
+            steps.append(_make_step(
+                actor, "fill",
+                label=f"Fill: {name}",
+                value=interaction.get("fill_value", ""),
+                target=target,
+            ))
+        elif itype == "select":
+            target = {"testid": testid} if testid else None
+            steps.append(_make_step(
+                actor, "select",
+                label=f"Select: {name}",
+                value=interaction.get("fill_value", ""),
+                target=target,
+            ))
+        else:
+            target = {"testid": testid} if testid else None
+            steps.append(_make_step(
+                actor, "click",
+                label=f"Click: {name}",
+                target=target,
+            ))
+
+        navigates_to = interaction.get("navigates_to")
+        if navigates_to:
+            current_screen = navigates_to
+            steps.append(_make_step(
+                actor, "capture",
+                label=f"Screenshot: {navigates_to}",
+                capture={"name": navigates_to.lower().replace(" ", "-")},
+            ))
+
+    return steps
+
+
+# ---------------------------------------------------------------------------
+# Export / Import: JSON file ↔ DB
+# ---------------------------------------------------------------------------
+
+def export_to_json(
+    conn: sqlite3.Connection,
+    project_id: str,
+    journey_id: str,
+    output_dir: str,
+) -> str:
+    """Compile journey to manifest and write to output_dir/{id}.json."""
+    from pathlib import Path
+    manifest = compile_to_manifest(conn, project_id, journey_id)
+    validate_manifest(manifest)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    dest = Path(output_dir) / f"{journey_id}.json"
+    dest.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+    conn.execute(
+        "UPDATE journeys SET source_file = ? WHERE id = ? AND project_id = ?",
+        (str(dest), journey_id, project_id),
+    )
+    return str(dest)
+
+
+def import_from_manifest(
+    conn: sqlite3.Connection,
+    project_id: str,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Import a validated scenario manifest into the journeys DB."""
+    manifest_id = manifest["id"]
+    journey_id = manifest_id.removeprefix("journey-")
+    existing = conn.execute(
+        "SELECT 1 FROM journeys WHERE id = ? AND project_id = ?",
+        (journey_id, project_id),
+    ).fetchone()
+    if existing:
+        return get_journey(conn, project_id, journey_id)
+    add_journey(conn, project_id, manifest.get("title", journey_id),
+                description="Imported from scenario JSON", journey_id=journey_id)
+    update_fields = {}
+    if "actors" in manifest:
+        update_fields["actors_json"] = json.dumps(manifest["actors"])
+    if "seed" in manifest:
+        update_fields["seed_json"] = json.dumps(manifest["seed"])
+    if "viewport" in manifest:
+        update_fields["viewport_json"] = json.dumps(manifest["viewport"])
+    if "theme" in manifest:
+        update_fields["theme"] = manifest["theme"]
+    if update_fields:
+        update_journey(conn, project_id, journey_id, **update_fields)
+    for step_data in manifest.get("steps", []):
+        fields = _manifest_step_to_db_fields(step_data)
+        add_step(conn, journey_id, project_id, **fields)
+    return get_journey(conn, project_id, journey_id)
+
+
+def screenshot_dir_for_run(project_path: str, journey_id: str, run_id: str) -> str:
+    """Return the directory path for storing run screenshots."""
+    from pathlib import Path
+    d = Path(project_path) / ".artifacts" / "journeys" / journey_id / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)

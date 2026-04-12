@@ -44,11 +44,14 @@ src/generate.py    — dashboard HTML renderer
 src/scenarios.py   — scenario manifest discovery, validation, gallery publishing
 src/scenario_drafting.py — template-based draft generation from natural-language goals
 src/journeys.py    — user journey CRUD, compilation to scenario manifests, inference engine
+src/seek.py        — project file discovery engine (scanners, dedup, draft ingestion)
 ```
 
 **Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `actions.py`.
 
-**Markdown sync:** DB → markdown is one-directional on every write. External markdown edits (by LLM agents) are detected by a hash-based watcher thread (5s poll) and diff-imported into DB.
+**Markdown sync:** DB → markdown is one-directional on every write. Draft tickets (`draft = 1`) are excluded from markdown output. External markdown edits (by LLM agents) are detected by a hash-based watcher thread (5s poll) and diff-imported into DB.
+
+**Seek (project discovery):** `tickets-cli.py seek <project>` or `POST /api/seek` scans project files for ticket-like content (markdown tasks, README TODOs, code TODO/FIXME/HACK comments, CHANGELOG unreleased, GitHub Issues via `gh` CLI). Creates draft tickets in Ideas section. Deduplicates against existing tickets and previous drafts using title normalization + source-key matching. Empty boards show a CTA with Seek button as primary discovery point.
 
 **Business rules:** Post-change hooks in `actions.py` fire after moves/status changes. Auto-promote parent when all children done. Scheduled events table + 30s poller for delayed rules (e.g., auto-accept after 5min).
 

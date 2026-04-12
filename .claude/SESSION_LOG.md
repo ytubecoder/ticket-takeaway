@@ -1,5 +1,24 @@
 # Session Log
 
+## 2026-04-13 — Seek feature implementation + empty state CTA
+
+### Summary
+- Implemented full Seek feature: `src/seek.py` with 5 scanners (md tasks, README TODOs, code TODOs, CHANGELOG unreleased, GitHub Issues), dedup engine, and draft ticket ingestion
+- Added empty state CTA for empty boards — two buttons: "Create First Ticket" and "Seek — scan project files"
+- Applied 4 pre-seek fixes: draft exclusion from markdown, drafts toggle persistence, dynamic banner copy, draft param passthrough in create API
+- 249 tests passing (18 TDD seek + 4 E2E seek + existing suite)
+
+### Lessons Learned
+- **Gotcha:** Working on wrong branch with mixed uncommitted changes from other sessions — must create feature branch BEFORE starting work, not after. Had to stash, create branch, restore only seek files
+- **Gotcha:** `_create_ticket()` in serve.py didn't pass `draft` from request body to `add_ticket()` — E2E test for "drafts excluded from markdown" caught this; needed to add `draft=bool(body.get("draft", False))` passthrough
+- **Accepted:** Single agent for all wiring (fixes + CLI + API + UI) was more effective than parallel agents on this codebase — the three modified files (generate.py, serve.py, tickets-cli.py) have enough interdependencies that parallel agents caused conflicts and required re-runs
+- **Accepted:** Backing up new files to /tmp before git operations (stash/checkout) prevented data loss when cleaning the working tree
+
+### Decisions
+- Empty state CTA (Option A) chosen over auto-run (Option C) — clean and discoverable without being pushy
+- Seek button kept in filter bar alongside the CTA — CTA is for first-time discovery, button is for re-running later
+- Feature branch `seek-feature` created from main, merged fast-forward, branch deleted after merge
+
 ## 2026-04-10 — Seek feature planning + consultant review
 
 ### Summary

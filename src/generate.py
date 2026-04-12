@@ -1749,12 +1749,20 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 9px; font-weight: 600; text-transform: uppercase; padding: 1px 6px;
   border-radius: 3px; letter-spacing: 0.5px;
 }}
-.wf-run-status.running {{ background: rgba(59,130,246,0.15); color: #3b82f6; }}
+.wf-run-status.running {{ background: rgba(59,130,246,0.15); color: #3b82f6; animation: wfPulse 1.5s ease-in-out infinite; }}
 .wf-run-status.paused {{ background: rgba(234,179,8,0.15); color: #eab308; }}
 .wf-run-status.completed {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
 .wf-run-status.failed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
 .wf-run-status.cancelled {{ background: rgba(107,114,128,0.15); color: #6b7280; }}
 .wf-run-status.pending {{ background: rgba(107,114,128,0.1); color: #9ca3af; }}
+@keyframes wfPulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} }}
+
+/* Active workflow indicator on kanban cards */
+.card-wf-indicator {{
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 8px; color: #3b82f6; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.3px; animation: wfPulse 1.5s ease-in-out infinite;
+}}
 .workflow-conversation {{ display: none; }}
 .workflow-run-block.expanded .workflow-conversation {{ display: block; }}
 .workflow-turn {{ padding: 8px 10px; border-top: 1px solid var(--border); }}
@@ -5479,8 +5487,25 @@ a {{ color: var(--accent); text-decoration: none; }}
     }});
   }}
 
+  function setCardWfIndicator(ticketId, active) {{
+    var card = document.querySelector('.card[data-item-id="' + ticketId + '"]');
+    if (!card) return;
+    var existing = card.querySelector('.card-wf-indicator');
+    if (active && !existing) {{
+      var ind = document.createElement('span');
+      ind.className = 'card-wf-indicator';
+      ind.textContent = '\u25B6 workflow running';
+      var titleEl = card.querySelector('.card-title') || card.querySelector('.item-title');
+      if (titleEl) titleEl.parentNode.insertBefore(ind, titleEl.nextSibling);
+      else card.appendChild(ind);
+    }} else if (!active && existing) {{
+      existing.parentNode.removeChild(existing);
+    }}
+  }}
+
   function startPolling(runId) {{
     if (pollTimers[runId]) return;
+    if (currentTicketId) setCardWfIndicator(currentTicketId, true);
     pollTimers[runId] = setInterval(function() {{
       fetch(EDIT_API + '/workflow/runs/' + encodeURIComponent(runId))
         .then(function(r) {{ return r.json(); }})
@@ -5492,6 +5517,9 @@ a {{ color: var(--accent); text-decoration: none; }}
           if (run.status !== 'running' && run.status !== 'paused') {{
             clearInterval(pollTimers[runId]);
             delete pollTimers[runId];
+            if (currentTicketId && Object.keys(pollTimers).length === 0) {{
+              setCardWfIndicator(currentTicketId, false);
+            }}
           }}
         }})
         .catch(function() {{
@@ -5520,7 +5548,22 @@ a {{ color: var(--accent); text-decoration: none; }}
   if (workflowRunBtn) {{
     workflowRunBtn.addEventListener('click', function() {{
       if (!currentTicketId || !workflowSelect.value) return;
+      var wfName = workflowSelect.options[workflowSelect.selectedIndex].textContent;
       workflowRunBtn.disabled = true;
+
+      // Instant placeholder — show a running block immediately
+      var placeholder = renderRunBlock({{
+        id: '_pending',
+        status: 'running',
+        workflow_id: workflowSelect.value,
+        workflow_name: wfName,
+        current_step: 0,
+        total_steps: 0,
+        conversation: []
+      }});
+      placeholder.classList.add('expanded');
+      workflowRunsList.insertBefore(placeholder, workflowRunsList.firstChild);
+
       fetch(EDIT_API + '/tickets/' + encodeURIComponent(currentTicketId) + '/workflow/run', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
@@ -5530,13 +5573,28 @@ a {{ color: var(--accent); text-decoration: none; }}
         .then(function(data) {{
           workflowRunBtn.disabled = false;
           if (data.run_id) {{
-            loadWorkflowRuns(currentTicketId);
+            // Replace placeholder with real run, start polling
+            if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+            var realBlock = renderRunBlock({{
+              id: data.run_id,
+              status: 'running',
+              workflow_id: workflowSelect.value,
+              workflow_name: wfName,
+              current_step: 0,
+              total_steps: 0,
+              conversation: []
+            }});
+            realBlock.classList.add('expanded');
+            workflowRunsList.insertBefore(realBlock, workflowRunsList.firstChild);
+            startPolling(data.run_id);
           }} else {{
+            if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
             showAppToast(data.error || 'Failed to start workflow', 'error');
           }}
         }})
         .catch(function() {{
           workflowRunBtn.disabled = false;
+          if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
           showAppToast('Failed to start workflow', 'error');
         }});
     }});

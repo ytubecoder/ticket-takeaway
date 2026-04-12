@@ -72,6 +72,12 @@ from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN
 
 import html as _html
 
+
+def _auto_export_journey(*args, **kwargs):
+    """Stub — full implementation on journeys branch."""
+    pass
+
+
 # Registry cache — populated at startup, refreshed on /api/projects mutations
 _PROJECTS_CACHE: dict[str, dict] = {}
 _PROJECTS_CACHE_LOCK = threading.Lock()
@@ -137,6 +143,10 @@ _db_lock = threading.RLock()  # Reentrant — write functions call _get_ticket_j
 # Scenario run tracking
 _scenario_runs: dict[str, dict] = {}  # run_id -> {status, scenario_id, process, output_dir, started_at}
 _scenario_runs_lock = threading.Lock()
+
+# Workflow bounce tracking
+_workflow_runs: dict[str, dict] = {}
+_workflow_runs_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------

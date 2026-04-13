@@ -1935,84 +1935,64 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .toast.success {{ background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3); color: var(--green); }}
 .toast.error {{ background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); color: var(--red); }}
 
-/* View tabs */
-.view-tabs {{ display: flex; gap: 2px; background: var(--bg-hover); border-radius: 6px; padding: 2px; }}
-.view-tab {{ font-size: 11px; padding: 4px 12px; border: none; border-radius: 4px; background: transparent; color: var(--text-tertiary); cursor: pointer; font-weight: 500; }}
-.view-tab.active {{ background: var(--bg-card); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }}
-.view-tab:hover:not(.active) {{ color: var(--text-secondary); }}
-
-/* Flow view */
-.flow-view {{ min-height: 120px; }}
-.flow-container {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 8px 0; }}
-/* Capture nodes — large thumbnail boxes */
-.flow-step {{ display: flex; flex-direction: column; align-items: center; width: 160px; }}
-.flow-step-box {{
-  width: 160px; height: 110px; border: 1px solid var(--border-default); border-radius: 6px;
-  background: var(--bg-card); overflow: hidden; cursor: pointer; position: relative;
+/* Timeline — unified vertical view */
+.tl-container {{ position: relative; padding: 0; }}
+.tl-container::before {{
+  content: ''; position: absolute; left: 50%; top: 0; bottom: 0;
+  width: 2px; background: var(--border-default); transform: translateX(-50%);
+}}
+.tl-row {{ display: flex; align-items: flex-start; position: relative; min-height: 40px; margin-bottom: 4px; }}
+.tl-left {{ width: calc(50% - 20px); display: flex; justify-content: flex-end; padding-right: 16px; }}
+.tl-dot-col {{ width: 40px; display: flex; justify-content: center; flex-shrink: 0; padding-top: 6px; position: relative; z-index: 1; }}
+.tl-right {{ width: calc(50% - 20px); padding-left: 16px; }}
+.tl-dot {{ width: 10px; height: 10px; border-radius: 50%; background: var(--border-default); border: 2px solid var(--bg-page, var(--bg-surface)); }}
+.tl-dot.passed {{ background: var(--green); }}
+.tl-dot.failed {{ background: var(--red); }}
+.tl-dot.skipped {{ background: var(--yellow); }}
+.tl-dot.capture {{ width: 14px; height: 14px; background: var(--accent); }}
+.tl-thumb {{
+  width: 200px; height: 120px; border: 1px solid var(--border-default); border-radius: 6px;
+  overflow: hidden; cursor: pointer; position: relative;
   transition: border-color 0.15s, box-shadow 0.15s;
 }}
-.flow-step-box:hover {{ border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }}
-.flow-step-box img {{ width: 100%; height: 100%; object-fit: cover; }}
-.flow-step-box.empty {{
-  display: flex; align-items: center; justify-content: center;
-  color: var(--text-tertiary); font-size: 10px; cursor: default;
-}}
-.flow-step-box.empty:hover {{ border-color: var(--border-default); box-shadow: none; }}
-.flow-step-box.failed {{ border-color: var(--red); border-width: 2px; }}
-.flow-step-box.failed::after {{
+.tl-thumb:hover {{ border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }}
+.tl-thumb img {{ width: 100%; height: 100%; object-fit: cover; }}
+.tl-thumb.failed {{ border-color: var(--red); border-width: 2px; }}
+.tl-thumb.failed::after {{
   content: "Step failed"; position: absolute; inset: 0;
   background: rgba(0,0,0,0.72); display: flex; align-items: center;
   justify-content: center; color: var(--red); font-size: 11px; font-weight: 600;
 }}
-.flow-step-label {{
-  margin-top: 4px; font-size: 10px; color: var(--text-secondary); text-align: center;
-  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}}
-.flow-step-status {{
-  position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
-}}
-.flow-step-status.passed {{ background: var(--green); }}
-.flow-step-status.failed {{ background: var(--red); }}
-.flow-step-status.skipped {{ background: var(--yellow); }}
-
-/* Action chips — compact circles for non-capture steps */
-.flow-action-chip {{
-  width: 28px; height: 28px; border-radius: 50%;
-  background: var(--bg-card); border: 1px solid var(--border-subtle, var(--border-default));
+.tl-thumb-empty {{
+  width: 200px; height: 50px; border: 1px dashed var(--border-default); border-radius: 6px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--text-tertiary); position: relative; flex-shrink: 0;
-  font-size: 10px;
+  color: var(--text-tertiary); font-size: 10px;
 }}
-.flow-action-chip.passed {{ color: var(--green); border-color: rgba(34,197,94,0.3); }}
-.flow-action-chip.failed {{
-  background: rgba(239,68,68,0.12); border-color: var(--red); color: var(--red);
+.tl-detail {{
+  background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px;
+  padding: 8px 12px; font-size: 11px; max-width: 280px;
 }}
-.flow-action-chip.skipped {{ color: var(--yellow); border-color: rgba(234,179,8,0.3); }}
-.flow-action-tooltip {{
-  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
-  background: var(--bg-surface); border: 1px solid var(--border-default);
-  border-radius: 4px; padding: 3px 8px; font-size: 10px; color: var(--text-secondary);
-  white-space: nowrap; pointer-events: none; opacity: 0;
-  transition: opacity 0.1s; z-index: 10;
+.tl-detail.failed {{ border-color: var(--red); background: rgba(239,68,68,0.05); }}
+.tl-detail.skipped {{ opacity: 0.5; }}
+.tl-detail-label {{ font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }}
+.tl-detail-action {{ font-family: "SF Mono", Monaco, monospace; font-size: 10px; color: var(--text-tertiary); }}
+.tl-detail-target {{ font-size: 10px; color: var(--text-tertiary); margin-top: 2px; word-break: break-all; }}
+.tl-detail-error {{ font-size: 10px; color: var(--red); margin-top: 4px; font-family: "SF Mono", Monaco, monospace; }}
+.tl-detail-actions {{ display: flex; gap: 4px; margin-top: 6px; }}
+.tl-detail-actions button {{
+  font-size: 9px; padding: 2px 6px; border: 1px solid var(--border-default); border-radius: 3px;
+  background: none; color: var(--text-tertiary); cursor: pointer;
 }}
-.flow-action-chip:hover .flow-action-tooltip {{ opacity: 1; }}
-.flow-action-error {{
-  position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%);
-  background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
-  border-radius: 4px; padding: 2px 6px; font-size: 9px;
-  color: var(--red); white-space: nowrap; max-width: 140px;
-  overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+.tl-detail-actions button:hover {{ color: var(--text-primary); background: var(--bg-hover); }}
+.tl-row.action-only {{ min-height: 28px; }}
+.tl-row.action-only .tl-detail {{ padding: 4px 10px; }}
+.tl-add-step {{
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px 14px; border: 1px dashed var(--border-default); border-radius: 6px;
+  background: none; color: var(--text-tertiary); cursor: pointer; font-size: 11px;
+  margin-top: 4px; width: 120px; margin-left: calc(50% - 60px); position: relative; z-index: 1;
 }}
-
-/* Connector lines between nodes */
-.flow-connector {{
-  width: 16px; height: 1px; background: var(--border-subtle, var(--border-default));
-  flex-shrink: 0; align-self: center;
-}}
-.flow-connector.failed {{ background: var(--red); height: 0; border-top: 1px dashed var(--red); }}
-
-/* Container alignment */
-.flow-container {{ align-items: center; }}
+.tl-add-step:hover {{ color: var(--accent); border-color: var(--accent); }}
 
 /* Lightbox */
 .flow-lightbox {{
@@ -2059,23 +2039,8 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       <label>Description</label>
       <input id="detail-description" data-testid="detail-description" placeholder="What does this journey validate?">
     </div>
-    <div style="display:flex;align-items:center;gap:12px;margin:20px 0 8px;">
-      <div class="view-tabs" id="view-tabs">
-        <button class="view-tab active" data-view="flow" onclick="switchView('flow')">Flow</button>
-        <button class="view-tab" data-view="steps" onclick="switchView('steps')">Steps</button>
-      </div>
-      <div style="flex:1;"></div>
-      <button class="btn btn-ghost btn-sm" onclick="addStep()" data-testid="add-step-btn">+ Add Step</button>
-    </div>
-    <div id="flow-view" class="flow-view">
-      <div id="flow-container" class="flow-container"></div>
-    </div>
-    <div id="steps-view" class="steps-view" style="display:none;">
-      <table class="steps-table" data-testid="steps-table">
-        <thead><tr><th style="width:30px">#</th><th style="width:12px"></th><th>Label</th><th>Action</th><th>Target</th><th style="width:24px"></th><th style="width:80px"></th></tr></thead>
-        <tbody id="steps-body" data-testid="steps-body"></tbody>
-      </table>
-    </div>
+    <h3 style="font-size:13px;font-weight:600;margin:20px 0 8px;">Steps</h3>
+    <div id="timeline-container" class="tl-container" data-testid="timeline-container"></div>
     <div id="flow-lightbox" class="flow-lightbox" style="display:none;" onclick="closeLightbox()">
       <img id="flow-lightbox-img" class="flow-lightbox-img" />
     </div>
@@ -2130,127 +2095,120 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   }}
 
   /* ── View tab switching ──────────────────────────────── */
-  window.switchView = function(view) {{
-    var flowView = document.getElementById('flow-view');
-    var stepsView = document.getElementById('steps-view');
-    var tabs = document.querySelectorAll('.view-tab');
-    tabs.forEach(function(t) {{ t.classList.toggle('active', t.dataset.view === view); }});
-    if (view === 'flow') {{
-      flowView.style.display = '';
-      stepsView.style.display = 'none';
-      renderFlowView();
-    }} else {{
-      flowView.style.display = 'none';
-      stepsView.style.display = '';
-    }}
-  }};
+  /* ── Timeline renderer (unified view) ──────────────── */
+  function extractTarget(step) {{
+    try {{
+      var t = typeof step.target_json === 'string' ? JSON.parse(step.target_json) : (step.target_json || {{}});
+      return t.testid || t.css || t.text || t.title || '';
+    }} catch(e) {{ return ''; }}
+  }}
 
-  var ACTION_SYMBOLS = {{
-    'open': '\u21d7', 'reload': '\u21bb', 'click': '\u25cf', 'double_click': '\u25cf\u25cf',
-    'fill': '\u270e', 'select': '\u25be', 'press': '\u2328', 'wait_for': '\u23f3',
-    'assert_visible': '\u25c9', 'assert_text': 'T', 'capture': '\u25a3'
-  }};
-
-  function renderFlowView() {{
-    var container = document.getElementById('flow-container');
+  function renderTimeline() {{
+    var container = document.getElementById('timeline-container');
     if (!container) return;
     while (container.firstChild) container.removeChild(container.firstChild);
 
     if (!currentSteps || currentSteps.length === 0) {{
       var empty = document.createElement('div');
-      empty.style.cssText = 'font-size:12px;color:var(--text-tertiary);padding:16px 0;';
-      empty.textContent = 'No steps defined yet. Switch to Steps to add the first step.';
+      empty.style.cssText = 'font-size:12px;color:var(--text-tertiary);padding:16px 0;text-align:center;';
+      empty.textContent = 'No steps yet.';
       container.appendChild(empty);
-      return;
     }}
 
     var runResults = lastRunResults || [];
-    var prevFailed = false;
 
     currentSteps.forEach(function(step, idx) {{
-      // Connector between nodes
-      if (idx > 0) {{
-        var conn = document.createElement('div');
-        conn.className = 'flow-connector' + (prevFailed ? ' failed' : '');
-        container.appendChild(conn);
-      }}
-
       var sr = runResults.find(function(r) {{ return r.sort_order === idx; }}) ||
                runResults.find(function(r) {{ return r.step_id === step.id; }});
       var status = sr ? sr.status : '';
-      prevFailed = (status === 'failed');
       var isCapture = step.action === 'capture';
 
+      var row = document.createElement('div');
+      row.className = 'tl-row' + (isCapture ? '' : ' action-only');
+
+      // ── Left side: screenshot thumbnail (capture steps only) ──
+      var left = document.createElement('div');
+      left.className = 'tl-left';
       if (isCapture) {{
-        // ── Capture node: large thumbnail box ──
-        var stepDiv = document.createElement('div');
-        stepDiv.className = 'flow-step';
-
-        var box = document.createElement('div');
-        box.className = 'flow-step-box' + (status === 'failed' ? ' failed' : '');
-
         if (sr && sr.screenshot_path) {{
+          var thumb = document.createElement('div');
+          thumb.className = 'tl-thumb' + (status === 'failed' ? ' failed' : '');
           var img = document.createElement('img');
           img.src = API_PREFIX + sr.screenshot_path;
-          img.alt = step.label || ('Step ' + (idx + 1));
+          img.alt = step.label || 'Screenshot';
           img.loading = 'lazy';
-          box.appendChild(img);
-          var dot = document.createElement('div');
-          dot.className = 'flow-step-status ' + status;
-          box.appendChild(dot);
-          box.addEventListener('click', function() {{
-            openLightbox(API_PREFIX + sr.screenshot_path);
-          }});
+          thumb.appendChild(img);
+          thumb.addEventListener('click', function() {{ openLightbox(API_PREFIX + sr.screenshot_path); }});
+          left.appendChild(thumb);
         }} else {{
-          box.classList.add('empty');
-          var ph = document.createElement('span');
-          ph.textContent = status === 'failed' ? '' : (status ? status : '\u25a3');
-          box.appendChild(ph);
-          if (status) {{
-            var dot2 = document.createElement('div');
-            dot2.className = 'flow-step-status ' + status;
-            box.appendChild(dot2);
-          }}
+          var ph = document.createElement('div');
+          ph.className = 'tl-thumb-empty';
+          ph.textContent = status === 'failed' ? '\u2717 failed' : '\u25a3 no capture yet';
+          left.appendChild(ph);
         }}
-
-        stepDiv.appendChild(box);
-        var lbl = document.createElement('div');
-        lbl.className = 'flow-step-label';
-        lbl.textContent = step.label || 'Capture';
-        stepDiv.appendChild(lbl);
-        container.appendChild(stepDiv);
-
-      }} else {{
-        // ── Action chip: compact circle ──
-        var chip = document.createElement('div');
-        chip.className = 'flow-action-chip' + (status ? ' ' + status : '');
-        chip.textContent = ACTION_SYMBOLS[step.action] || '\u2022';
-
-        // Tooltip on hover
-        var tip = document.createElement('div');
-        tip.className = 'flow-action-tooltip';
-        tip.textContent = step.label || step.action || 'action';
-        chip.appendChild(tip);
-
-        // Error snippet for failed action
-        if (status === 'failed' && sr && sr.error_message) {{
-          var errSnip = document.createElement('div');
-          errSnip.className = 'flow-action-error';
-          errSnip.textContent = sr.error_message.substring(0, 60);
-          chip.appendChild(errSnip);
-        }}
-
-        container.appendChild(chip);
       }}
+      row.appendChild(left);
+
+      // ── Center: dot on spine ──
+      var dotCol = document.createElement('div');
+      dotCol.className = 'tl-dot-col';
+      var dot = document.createElement('div');
+      dot.className = 'tl-dot' + (status ? ' ' + status : '') + (isCapture ? ' capture' : '');
+      dotCol.appendChild(dot);
+      row.appendChild(dotCol);
+
+      // ── Right side: step detail card ──
+      var right = document.createElement('div');
+      right.className = 'tl-right';
+      var detail = document.createElement('div');
+      detail.className = 'tl-detail' + (status === 'failed' ? ' failed' : '') + (status === 'skipped' ? ' skipped' : '');
+
+      var lbl = document.createElement('div');
+      lbl.className = 'tl-detail-label';
+      lbl.textContent = (idx + 1) + '. ' + (step.label || step.action || 'Step');
+      detail.appendChild(lbl);
+
+      var act = document.createElement('div');
+      act.className = 'tl-detail-action';
+      act.textContent = step.action || '';
+      var target = extractTarget(step);
+      if (target) act.textContent += '  \u2192  ' + target;
+      if (step.value) act.textContent += '  =  ' + step.value;
+      detail.appendChild(act);
+
+      if (status === 'failed' && sr && sr.error_message) {{
+        var err = document.createElement('div');
+        err.className = 'tl-detail-error';
+        err.textContent = sr.error_message.substring(0, 120);
+        detail.appendChild(err);
+      }}
+
+      var actions = document.createElement('div');
+      actions.className = 'tl-detail-actions';
+      var editBtn = document.createElement('button');
+      editBtn.textContent = '\u270e';
+      editBtn.title = 'Edit step';
+      editBtn.addEventListener('click', function() {{ toggleExpand(step.id); }});
+      actions.appendChild(editBtn);
+      var delBtn = document.createElement('button');
+      delBtn.textContent = '\u00d7';
+      delBtn.title = 'Delete step';
+      delBtn.addEventListener('click', function() {{ deleteStep(step.id); }});
+      actions.appendChild(delBtn);
+      detail.appendChild(actions);
+
+      right.appendChild(detail);
+      row.appendChild(right);
+
+      container.appendChild(row);
     }});
 
-    // Info bar if no run yet
-    if (runResults.length === 0 && currentSteps.length > 0) {{
-      var info = document.createElement('div');
-      info.style.cssText = 'font-size:10px;color:var(--text-tertiary);margin-top:8px;';
-      info.textContent = 'Run this journey to see results here.';
-      container.appendChild(info);
-    }}
+    // ── Add Step button at the end of the timeline ──
+    var addRow = document.createElement('button');
+    addRow.className = 'tl-add-step';
+    addRow.textContent = '+ Add Step';
+    addRow.onclick = function() {{ addStep(); }};
+    container.appendChild(addRow);
   }}
 
   /* ── Lightbox ────────────────────────────────────────── */
@@ -2359,10 +2317,10 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       var badge = document.getElementById('detail-badge');
       badge.textContent = j.status;
       badge.className = 'badge badge-' + j.status;
-      renderSteps();
+      renderTimeline();
       renderLinkedTickets();
       loadRunResults(j);
-      renderFlowView();
+      renderTimeline();
       document.getElementById('list-view').style.display = 'none';
       var dv = document.getElementById('detail-view');
       dv.style.display = 'block';
@@ -2392,7 +2350,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   /* ── Steps ───────────────────────────────────────────── */
   var ACTIONS = ['open','reload','click','double_click','fill','select','press','wait_for','assert_visible','assert_text','capture'];
 
-  function renderSteps() {{
+  function renderTimeline() {{
     var tbody = document.getElementById('steps-body');
     tbody.textContent = '';
     currentSteps.forEach(function(step, idx) {{
@@ -2478,7 +2436,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     var body = {{}}; body[field] = value;
     apiPut('/journeys/' + currentJourney.id + '/steps/' + stepId, body).then(function(updated) {{
       var idx = currentSteps.findIndex(function(s) {{ return s.id === stepId; }});
-      if (idx >= 0) {{ currentSteps[idx] = updated; renderSteps(); }}
+      if (idx >= 0) {{ currentSteps[idx] = updated; renderTimeline(); }}
     }});
   }}
 
@@ -2490,14 +2448,14 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     if (value) target[key] = value; else delete target[key];
     apiPut('/journeys/' + currentJourney.id + '/steps/' + stepId, {{target: target}});
     currentSteps[idx].target_json = JSON.stringify(target);
-    renderSteps();
+    renderTimeline();
   }}
 
   window.addStep = function() {{
     apiPost('/journeys/' + currentJourney.id + '/steps', {{action:'click',label:'New step'}}).then(function(r) {{
       if (r.status === 201) {{
         currentSteps.push(r.data);
-        renderSteps();
+        renderTimeline();
         var ex = document.getElementById('expand-' + r.data.id);
         if (ex) ex.classList.add('active');
       }}
@@ -2507,7 +2465,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   function removeStep(stepId) {{
     apiDel('/journeys/' + currentJourney.id + '/steps/' + stepId).then(function() {{
       currentSteps = currentSteps.filter(function(s) {{ return s.id !== stepId; }});
-      renderSteps();
+      renderTimeline();
     }});
   }}
 
@@ -2539,8 +2497,8 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     apiGet('/journeys/' + journey.id + '/runs/' + latest.id).then(function(data) {{
       var run = data.run, stepResults = data.step_results || [];
       lastRunResults = stepResults;
-      renderSteps();
-      renderFlowView();
+      renderTimeline();
+      renderTimeline();
       var statusEl = document.getElementById('run-status-label');
       statusEl.textContent = run.status === 'passed' ? '\\u2713 Passed' : run.status === 'failed' ? '\\u2717 Failed' : run.status;
       statusEl.className = 'run-status ' + run.status;

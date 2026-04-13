@@ -20,7 +20,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 from constants import (SECTION_ORDER, SECTION_SLUGS, SLUG_TO_SECTION,
-                       DEFAULT_STATUS_BY_SECTION, CARD_CLASS_BY_SLUG, STATUSES)
+                       DEFAULT_STATUS_BY_SECTION, CARD_CLASS_BY_SLUG, STATUSES, FEEDBACKS_REPO_URL)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -55,6 +55,7 @@ SVG_ICONS = {
     "snowflake": '<line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
+    "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
 }
 
 
@@ -628,6 +629,7 @@ def generate_html(project: Project) -> str:
 
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
+    _icon_journeys = _svg_icon("route", 14)
     _icon_close = _svg_icon("x", 14)
     _icon_open = _svg_icon("arrow-up-right", 12)
     _dctrs_icons = ''.join([
@@ -1355,7 +1357,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 .edit-enabled .readiness-dot:hover {{ opacity: 1; border-color: var(--accent); }}
 .readiness-dot svg {{ width: 12px; height: 12px; flex-shrink: 0; }}
 .action-btn svg {{ width: 12px; height: 12px; vertical-align: -2px; margin-right: 2px; }}
-.settings-toggle svg, .detail-close svg {{ width: 14px; height: 14px; pointer-events: none; }}
+.settings-toggle svg, .detail-close svg, .settings-drawer-close svg {{ width: 14px; height: 14px; pointer-events: none; }}
 .card-open-btn svg {{ width: 14px; height: 14px; }}
 
 /* Detail overlay */
@@ -1509,6 +1511,24 @@ a {{ color: var(--accent); text-decoration: none; }}
   display: inline-flex; align-items: center; justify-content: center;
 }}
 .settings-toggle:hover {{ color: var(--text-primary); background: var(--bg-hover); }}
+.settings-drawer {{
+  position: fixed; top: 0; right: 0; height: 100vh; width: 320px; z-index: 1100;
+  background: var(--bg-surface); border-left: 1px solid var(--border-default);
+  box-shadow: -8px 0 32px rgba(0,0,0,0.4); display: flex; flex-direction: column;
+  transform: translateX(0); transition: transform 0.25s ease;
+}}
+.settings-drawer.hidden {{ transform: translateX(100%); pointer-events: none; }}
+.settings-drawer-header {{
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border-subtle);
+}}
+.settings-drawer-header h2 {{ margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary); }}
+.settings-drawer-close {{
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 20px; line-height: 1; padding: 0 4px;
+}}
+.settings-drawer-close:hover {{ color: var(--text-primary); }}
+.settings-drawer-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
 .theme-toggle {{ display: inline-flex; gap: 2px; background: var(--bg-page); border: 1px solid var(--border-default); border-radius: 6px; padding: 2px; }}
 .theme-opt {{ font-size: 14px; padding: 3px 10px; border: none; border-radius: 4px; background: none; color: var(--text-tertiary); cursor: pointer; transition: all 0.15s; font-family: var(--font-sans); }}
 .theme-opt:hover {{ color: var(--text-secondary); }}
@@ -1565,6 +1585,25 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 11px; color: var(--accent); text-decoration: none;
 }}
 .settings-link:hover {{ text-decoration: underline; }}
+.empty-state {{
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  padding: 80px 20px; text-align: center; min-height: 400px;
+}}
+.empty-state-icon {{ font-size: 48px; color: var(--text-tertiary); margin-bottom: 16px; }}
+.empty-state-title {{ font-size: 20px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }}
+.empty-state-desc {{ font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; max-width: 400px; }}
+.empty-state-actions {{ display: flex; gap: 12px; }}
+.empty-state-btn {{
+  padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500;
+  cursor: pointer; font-family: inherit; border: none;
+}}
+.empty-state-btn.primary {{ background: var(--accent); color: #fff; }}
+.empty-state-btn.primary:hover {{ opacity: 0.9; }}
+.empty-state-btn.secondary {{
+  background: rgba(59,130,246,0.12); color: var(--accent); border: 1px solid rgba(59,130,246,0.3);
+}}
+.empty-state-btn.secondary:hover {{ background: rgba(59,130,246,0.2); }}
+.empty-state-btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
 .managed-files-list {{ display: flex; flex-direction: column; gap: 4px; }}
 .managed-file-row {{
   display: flex; align-items: center; gap: 8px; padding: 6px 8px;
@@ -1736,6 +1775,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 .wf-run-status.cancelled {{ background: rgba(107,114,128,0.15); color: #6b7280; }}
 .wf-run-status.pending {{ background: rgba(107,114,128,0.1); color: #9ca3af; }}
 @keyframes wfPulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} }}
+
+/* Active workflow indicator on kanban cards */
 .card-wf-indicator {{
   display: inline-flex; align-items: center; gap: 3px;
   font-size: 8px; color: #3b82f6; font-weight: 600; text-transform: uppercase;
@@ -1754,77 +1795,80 @@ a {{ color: var(--accent); text-decoration: none; }}
   background: rgba(234,179,8,0.08); border-left: 3px solid rgba(234,179,8,0.4);
 }}
 
-/* Full-page settings */
-.settings-page {{ display: none; padding: 24px 20px; max-width: 900px; margin: 0 auto; }}
+/* ── Full-page settings ── */
+.settings-page {{
+  display: none; position: fixed; inset: 0; z-index: 600;
+  background: var(--bg-primary); overflow-y: auto; padding: 32px 48px;
+}}
 body.settings-open .settings-page {{ display: block; }}
 body.settings-open .kanban,
-body.settings-open .bottom-section {{ display: none; }}
-body.settings-open .filter-btn,
-body.settings-open .filter-group,
-body.settings-open .filter-divider,
-body.settings-open .search-input,
-body.settings-open .new-ticket-btn,
-body.settings-open .settings-toggle,
-body.settings-open .new-ticket-panel {{ display: none !important; }}
-.settings-back-btn {{ display: none; font-size: 12px; color: var(--text-secondary); background: none; border: none; cursor: pointer; padding: 4px 8px; }}
-.settings-back-btn:hover {{ color: var(--text-primary); }}
-body.settings-open .settings-back-btn {{ display: inline-flex; align-items: center; gap: 4px; }}
-
-.settings-page-section {{ margin-bottom: 28px; }}
-.settings-page-section-title {{ font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }}
-.settings-page-hint {{ font-size: 11px; color: var(--text-tertiary); margin-bottom: 8px; }}
+body.settings-open .filter-bar,
+body.settings-open .bottom-section,
+body.settings-open #settings-drawer,
+body.settings-open .settings-toggle {{ display: none !important; }}
+body.settings-open .settings-back-btn {{ display: inline-flex; }}
+.settings-back-btn {{
+  display: none; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer; font-family: inherit;
+  align-items: center; gap: 4px; margin-right: 8px;
+}}
+.settings-back-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
+.settings-page h2 {{
+  font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 24px;
+}}
+.settings-page .sp-section {{
+  margin-bottom: 32px; border: 1px solid var(--border-default);
+  border-radius: 10px; padding: 20px; background: var(--bg-card);
+}}
+.settings-page .sp-section h3 {{
+  font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 12px;
+}}
 
 /* Agent editor */
-.sp-agent-list {{ display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }}
-.sp-agent-row {{ display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; font-size: 11px; }}
-.sp-agent-row.readonly {{ opacity: 0.5; }}
-.sp-agent-name {{ font-weight: 600; min-width: 120px; color: var(--text-primary); }}
-.sp-agent-cmd {{ font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }}
-.sp-agent-badge {{ font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; padding: 1px 5px; border-radius: 3px; background: var(--bg-hover); color: var(--text-tertiary); }}
-.sp-agent-prompt-preview {{ flex: 1; font-size: 10px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }}
-.sp-agent-actions {{ display: flex; gap: 4px; margin-left: auto; }}
-.sp-agent-actions button {{ font-size: 10px; padding: 3px 8px; border: 1px solid var(--border-default); border-radius: 4px; background: none; color: var(--text-secondary); cursor: pointer; }}
-.sp-agent-actions button:hover {{ background: var(--bg-hover); color: var(--text-primary); }}
-.sp-agent-actions button.danger:hover {{ color: #ef4444; border-color: #ef4444; }}
-
-.sp-form {{ display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; margin-bottom: 8px; }}
-.sp-form.hidden {{ display: none; }}
-.sp-form label {{ font-size: 10px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.3px; }}
-.sp-form input, .sp-form textarea {{ font-size: 12px; padding: 6px 10px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-surface); color: var(--text-primary); font-family: var(--font-sans); }}
-.sp-form textarea {{ font-family: var(--font-mono); resize: vertical; }}
-.sp-form-row {{ display: flex; gap: 8px; }}
-.sp-form-row > * {{ flex: 1; }}
-.sp-form-actions {{ display: flex; gap: 8px; margin-top: 4px; }}
-.sp-form-actions button {{ font-size: 11px; padding: 5px 14px; border-radius: 4px; cursor: pointer; border: 1px solid var(--border-default); }}
-.sp-form-actions .sp-save {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
-.sp-form-actions .sp-cancel {{ background: none; color: var(--text-secondary); }}
-.sp-add-btn {{ display: block; width: 100%; padding: 6px; border: 1px dashed var(--border-default); border-radius: 6px; background: none; color: var(--text-tertiary); cursor: pointer; font-size: 11px; text-align: center; }}
-.sp-add-btn:hover {{ color: var(--accent); border-color: var(--accent); }}
-.sp-slug {{ font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }}
+.sp-agent-item {{
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border-default); border-radius: 6px; margin-bottom: 6px;
+  background: var(--bg-primary);
+}}
+.sp-agent-item .sp-agent-name {{ font-weight: 600; font-size: 12px; flex: 1; }}
+.sp-agent-item .sp-agent-model {{ font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }}
+.sp-agent-form label {{ display: block; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 3px; margin-top: 10px; }}
+.sp-agent-form input, .sp-agent-form textarea, .sp-agent-form select {{
+  width: 100%; padding: 6px 8px; font-size: 12px; font-family: inherit;
+  border: 1px solid var(--border-default); border-radius: 6px;
+  background: var(--bg-primary); color: var(--text-primary);
+}}
+.sp-agent-form textarea {{ min-height: 60px; resize: vertical; font-family: var(--font-mono); font-size: 11px; }}
+.sp-agent-form .sp-btn-row {{ display: flex; gap: 6px; margin-top: 12px; }}
+.sp-agent-form .sp-btn {{
+  font-size: 11px; padding: 5px 14px; border-radius: 6px; border: 1px solid var(--border-default);
+  background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-family: inherit;
+}}
+.sp-agent-form .sp-btn.primary {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
 
 /* Workflow editor */
-.sp-wf-list {{ display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }}
-.sp-wf-row {{ display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; font-size: 11px; }}
-.sp-wf-name {{ font-weight: 600; color: var(--text-primary); }}
-.sp-wf-meta {{ font-size: 10px; color: var(--text-tertiary); }}
-.sp-wf-actions {{ display: flex; gap: 4px; margin-left: auto; }}
-.sp-wf-actions button {{ font-size: 10px; padding: 3px 8px; border: 1px solid var(--border-default); border-radius: 4px; background: none; color: var(--text-secondary); cursor: pointer; }}
-.sp-wf-actions button:hover {{ background: var(--bg-hover); color: var(--text-primary); }}
-.sp-wf-actions button.danger:hover {{ color: #ef4444; border-color: #ef4444; }}
-
-/* Step builder */
-.sp-step-list {{ display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }}
-.sp-step-row {{ display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 6px; }}
-.sp-step-header {{ display: flex; align-items: center; gap: 8px; }}
-.sp-step-num {{ font-size: 10px; font-weight: 700; color: var(--text-tertiary); min-width: 50px; }}
-.sp-step-primary {{ font-size: 8px; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }}
-.sp-step-agent-select {{ font-size: 11px; padding: 3px 6px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-card); color: var(--text-primary); flex: 1; }}
-.sp-step-agent-select option {{ background: var(--bg-surface); color: var(--text-primary); }}
-.sp-step-controls {{ display: flex; gap: 4px; margin-left: auto; }}
-.sp-step-controls button {{ font-size: 10px; padding: 2px 6px; border: 1px solid var(--border-default); border-radius: 3px; background: none; color: var(--text-tertiary); cursor: pointer; }}
-.sp-step-controls button:hover {{ color: var(--text-primary); background: var(--bg-hover); }}
-.sp-step-instructions {{ font-size: 11px; padding: 5px 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-card); color: var(--text-primary); font-family: var(--font-mono); resize: vertical; min-height: 32px; }}
-.sp-step-instructions:focus {{ min-height: 60px; }}
+.sp-wf-item {{
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border-default); border-radius: 6px; margin-bottom: 6px;
+  background: var(--bg-primary); cursor: pointer;
+}}
+.sp-wf-item:hover {{ border-color: var(--text-tertiary); }}
+.sp-wf-item .sp-wf-name {{ font-weight: 600; font-size: 12px; flex: 1; }}
+.sp-wf-item .sp-wf-steps {{ font-size: 10px; color: var(--text-tertiary); }}
+.sp-step-item {{
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  border: 1px solid var(--border-default); border-radius: 5px; margin-bottom: 4px;
+  background: var(--bg-primary); font-size: 11px;
+}}
+.sp-step-item .sp-step-order {{ font-weight: 700; font-size: 10px; color: var(--text-tertiary); min-width: 16px; text-align: center; }}
+.sp-step-item .sp-step-agent {{ font-weight: 600; color: var(--accent); }}
+.sp-step-item .sp-step-prompt {{ flex: 1; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.sp-step-item .sp-step-del {{
+  font-size: 10px; cursor: pointer; color: var(--text-tertiary);
+  border: none; background: none; padding: 2px 4px;
+}}
+.sp-step-item .sp-step-del:hover {{ color: #ef4444; }}
 </style>
 </head>
 <body>
@@ -1881,7 +1925,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
   </span>
   <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
+  <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
+  <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
@@ -1895,6 +1941,70 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
       </select>
       <button id="newTicketSubmit" data-testid="new-ticket-submit" class="new-ticket-submit">Create</button>
     </div>
+  </div>
+</div>
+
+<!-- Settings drawer -->
+<div id="settings-drawer" class="settings-drawer hidden">
+  <div class="settings-drawer-header">
+    <h2>Settings</h2>
+    <button class="settings-drawer-close" id="settingsDrawerClose">{_icon_close}</button>
+  </div>
+  <div class="settings-drawer-body">
+    <div class="settings-section">
+      <div class="settings-section-title">Appearance</div>
+      <div class="settings-row">
+        <label>Theme</label>
+        <div class="theme-toggle" id="themeToggle">
+          <button class="theme-opt" data-theme="light" title="Light" aria-label="Light theme">&#9788;</button>
+          <button class="theme-opt" data-theme="system" title="System" aria-label="System theme">&#9684;</button>
+          <button class="theme-opt active" data-theme="dark" title="Dark" aria-label="Dark theme">&#9790;</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Feedbacks Integration</div>
+      <div class="settings-row">
+        <label>Enable</label>
+        <label class="settings-toggle-switch">
+          <input type="checkbox" id="settingsFeedbacksEnabled">
+          <span class="settings-toggle-slider"></span>
+        </label>
+        <span class="settings-status-label" id="feedbacksStatusLabel"></span>
+        <span class="settings-status-dot" id="feedbacksStatusDot" title="Feedbacks status"></span>
+      </div>
+      <div class="settings-row">
+        <label>Path</label>
+        <input type="text" id="settingsFeedbacksPath" placeholder="~/projects/feedbacks">
+      </div>
+      <div class="settings-row">
+        <label>Auto-start recording</label>
+        <label class="settings-toggle-switch">
+          <input type="checkbox" id="settingsFeedbacksAutostart">
+          <span class="settings-toggle-slider"></span>
+        </label>
+      </div>
+      <div class="settings-hint" id="settingsAutostartHint">Skip the Start button when opening the recorder — capture begins immediately.</div>
+      <div class="settings-row">
+        <a class="settings-link" href="{FEEDBACKS_REPO_URL}" target="_blank" rel="noopener">GitHub</a>
+        <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Managed Files</div>
+      <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
+      <div id="managedFilesList" class="managed-files-list"></div>
+    </div>
+  </div>
+</div>
+
+<div class="empty-state" id="emptyState" data-testid="empty-state" style="display:none;">
+  <div class="empty-state-icon">&#9744;</div>
+  <h2 class="empty-state-title">No tickets yet</h2>
+  <p class="empty-state-desc">Create your first ticket or scan your project for existing work items.</p>
+  <div class="empty-state-actions">
+    <button class="empty-state-btn primary" id="emptyStateCreate" data-testid="empty-state-create">+ Create First Ticket</button>
+    <button class="empty-state-btn secondary" id="emptyStateSeek" data-testid="empty-state-seek">Seek &mdash; scan project files</button>
   </div>
 </div>
 
@@ -1951,94 +2061,60 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 
 </div>
 
-<div id="settings-page" class="settings-page">
-  <div class="settings-page-section">
-    <div class="settings-page-section-title">Appearance</div>
-    <div class="settings-row">
-      <label>Theme</label>
-      <div class="theme-toggle" id="themeToggle">
-        <button class="theme-opt" data-theme="light" title="Light" aria-label="Light theme">&#9788;</button>
-        <button class="theme-opt" data-theme="system" title="System" aria-label="System theme">&#9684;</button>
-        <button class="theme-opt active" data-theme="dark" title="Dark" aria-label="Dark theme">&#9790;</button>
+<!-- Full-page settings -->
+<div class="settings-page" id="settings-page">
+  <h2>Settings</h2>
+
+  <div class="sp-section">
+    <h3>Appearance</h3>
+    <div id="spThemeToggle"></div>
+  </div>
+
+  <div class="sp-section">
+    <h3>Feedbacks Integration</h3>
+    <p style="font-size:12px;color:var(--text-tertiary);">Managed via the settings drawer.</p>
+  </div>
+
+  <div class="sp-section">
+    <h3>Managed Files</h3>
+    <div id="spManagedFiles" style="font-size:12px;color:var(--text-tertiary);">Loading...</div>
+  </div>
+
+  <div class="sp-section">
+    <h3>Agents</h3>
+    <div id="spAgentList"></div>
+    <button class="sp-btn" id="spAgentAddBtn" style="margin-top:8px;font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">+ Add Agent</button>
+    <div id="spAgentForm" class="sp-agent-form" style="display:none;margin-top:12px;border:1px solid var(--border-default);border-radius:8px;padding:14px;background:var(--bg-primary);">
+      <input type="hidden" id="spAgentId" />
+      <label for="spAgentNameInput">Name</label>
+      <input type="text" id="spAgentNameInput" placeholder="e.g. reviewer" />
+      <label for="spAgentModelInput">Model</label>
+      <input type="text" id="spAgentModelInput" placeholder="e.g. claude-sonnet-4-20250514" />
+      <label for="spAgentRoleInput">Role / System Prompt</label>
+      <textarea id="spAgentRoleInput" placeholder="What this agent does..."></textarea>
+      <label for="spAgentTempInput">Temperature</label>
+      <input type="number" id="spAgentTempInput" min="0" max="2" step="0.1" value="0.3" style="width:80px;" />
+      <div class="sp-btn-row">
+        <button class="sp-btn primary" id="spAgentSaveBtn">Save</button>
+        <button class="sp-btn" id="spAgentCancelBtn">Cancel</button>
       </div>
     </div>
   </div>
 
-  <div class="settings-page-section">
-    <div class="settings-page-section-title">Feedbacks Integration</div>
-    <div class="settings-row">
-      <label>Enable</label>
-      <label class="settings-toggle-switch">
-        <input type="checkbox" id="settingsFeedbacksEnabled">
-        <span class="settings-toggle-slider"></span>
-      </label>
-      <span class="settings-status-label" id="feedbacksStatusLabel"></span>
-      <span class="settings-status-dot" id="feedbacksStatusDot"></span>
-    </div>
-    <div class="settings-row">
-      <label>Path</label>
-      <input type="text" id="settingsFeedbacksPath" placeholder="~/projects/feedbacks">
-    </div>
-    <div class="settings-row">
-      <label>Auto-start recording</label>
-      <label class="settings-toggle-switch">
-        <input type="checkbox" id="settingsFeedbacksAutostart">
-        <span class="settings-toggle-slider"></span>
-      </label>
-    </div>
-    <div class="settings-hint" id="settingsAutostartHint">Skip the Start button when opening the recorder.</div>
-    <div class="settings-row">
-      <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
-    </div>
-  </div>
-
-  <div class="settings-page-section">
-    <div class="settings-page-section-title">Managed Files</div>
-    <div class="settings-page-hint">Files and directories managed by Ticket Takeaway in this project.</div>
-    <div id="managedFilesList" class="managed-files-list"></div>
-  </div>
-
-  <div class="settings-page-section">
-    <div class="settings-page-section-title">Agents</div>
-    <div class="settings-page-hint">Define agents for workflow automation. Each agent has a CLI command and system prompt.</div>
-    <div id="spAgentList" class="sp-agent-list"></div>
-    <button class="sp-add-btn" id="spAddAgentBtn">+ Add Agent</button>
-    <div id="spAgentForm" class="sp-form hidden">
-      <div class="sp-form-row">
-        <div><label>Name</label><input type="text" id="spAgentName" placeholder="My Agent"></div>
-        <div><label>Slug</label><input type="text" id="spAgentSlug" placeholder="auto-generated" readonly class="sp-slug"></div>
-      </div>
-      <div class="sp-form-row">
-        <div><label>Command</label><input type="text" id="spAgentCommand" value="claude" placeholder="claude"></div>
-        <div><label>CLI Args (JSON array)</label><textarea id="spAgentArgs" rows="1" placeholder='["--model", "opus"]'>[]</textarea></div>
-      </div>
-      <label>System Prompt</label>
-      <textarea id="spAgentSystemPrompt" rows="5" placeholder="You are a software architect..."></textarea>
-      <div class="sp-form-actions">
-        <button class="sp-save" id="spAgentSave">Save Agent</button>
-        <button class="sp-cancel" id="spAgentCancel">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="settings-page-section">
-    <div class="settings-page-section-title">Workflows</div>
-    <div class="settings-page-hint">Define step-by-step agent sequences. The first step's agent is the primary mediator.</div>
-    <div id="spWfList" class="sp-wf-list"></div>
-    <button class="sp-add-btn" id="spAddWfBtn">+ Add Workflow</button>
-    <div id="spWfForm" class="sp-form hidden">
-      <div class="sp-form-row">
-        <div><label>Name</label><input type="text" id="spWfName" placeholder="Design Review"></div>
-        <div><label>Slug</label><input type="text" id="spWfSlug" placeholder="auto-generated" readonly class="sp-slug"></div>
-      </div>
-      <label>Description</label>
-      <input type="text" id="spWfDesc" placeholder="Optional description">
-      <label>Steps</label>
-      <div id="spStepList" class="sp-step-list"></div>
-      <button class="sp-add-btn" id="spAddStepBtn" type="button">+ Add Step</button>
-      <div class="sp-form-actions">
-        <button class="sp-save" id="spWfSave">Save Workflow</button>
-        <button class="sp-cancel" id="spWfCancel">Cancel</button>
+  <div class="sp-section">
+    <h3>Workflows</h3>
+    <div id="spWfList"></div>
+    <button class="sp-btn" id="spWfAddBtn" style="margin-top:8px;font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">+ Add Workflow</button>
+    <div id="spWfForm" style="display:none;margin-top:12px;border:1px solid var(--border-default);border-radius:8px;padding:14px;background:var(--bg-primary);">
+      <input type="hidden" id="spWfId" />
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:3px;">Name</label>
+      <input type="text" id="spWfNameInput" placeholder="e.g. review-and-merge" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);" />
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:3px;margin-top:10px;">Steps</label>
+      <div id="spStepList"></div>
+      <button class="sp-btn" id="spStepAddBtn" style="margin-top:6px;font-size:10px;padding:4px 10px;">+ Add Step</button>
+      <div class="sp-btn-row" style="display:flex;gap:6px;margin-top:12px;">
+        <button class="sp-btn primary" id="spWfSaveBtn">Save Workflow</button>
+        <button class="sp-btn" id="spWfCancelBtn">Cancel</button>
       </div>
     </div>
   </div>
@@ -4419,7 +4495,8 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 (function() {{
   var draftsBtn = document.getElementById('draftsToggleBtn');
   if (!draftsBtn) return;
-  var showDrafts = false;
+  var showDrafts = localStorage.getItem('tt-show-drafts') === '1';
+  if (showDrafts && draftsBtn) draftsBtn.classList.add('active');
 
   function applyDraftVisibility() {{
     var draftCards = document.querySelectorAll('.card.is-draft');
@@ -4437,9 +4514,86 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 
   draftsBtn.addEventListener('click', function() {{
     showDrafts = !showDrafts;
+    localStorage.setItem('tt-show-drafts', showDrafts ? '1' : '0');
     draftsBtn.classList.toggle('active', showDrafts);
     applyDraftVisibility();
   }});
+}})();
+</script>
+
+<script>
+/* Seek button handler */
+(function() {{
+  var seekBtn = document.getElementById('seekBtn');
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!seekBtn || !EDIT_API) return;
+
+  function doSeek(btn, origText) {{
+    btn.disabled = true;
+    btn.textContent = 'Seeking\u2026';
+    fetch(EDIT_API + '/seek', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: '{{}}'
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(result) {{
+      btn.disabled = false;
+      btn.textContent = origText;
+      if (result.created > 0) {{
+        showAppToast(result.created + ' draft(s) created', 'success');
+        localStorage.setItem('tt-show-drafts', '1');
+        location.reload();
+      }} else if (result.discovered > 0) {{
+        showAppToast('All ' + result.discovered + ' items already tracked', 'success');
+      }} else {{
+        showAppToast('No ticket-like items found', 'success');
+      }}
+    }})
+    .catch(function() {{
+      btn.disabled = false;
+      btn.textContent = origText;
+      showAppToast('Seek failed', 'error');
+    }});
+  }}
+
+  seekBtn.addEventListener('click', function() {{
+    doSeek(seekBtn, seekBtn.textContent);
+  }});
+  window._doSeek = doSeek;
+}})();
+</script>
+
+<script>
+/* Empty state handler */
+(function() {{
+  var emptyState = document.getElementById('emptyState');
+  var kanban = document.getElementById('kanban');
+  if (!emptyState || !kanban) return;
+
+  var realCards = kanban.querySelectorAll('.card:not(.is-draft)');
+  if (realCards.length === 0) {{
+    emptyState.style.display = 'flex';
+    kanban.style.display = 'none';
+  }}
+
+  var createBtn = document.getElementById('emptyStateCreate');
+  if (createBtn) {{
+    createBtn.addEventListener('click', function() {{
+      emptyState.style.display = 'none';
+      kanban.style.display = '';
+      var newBtn = document.getElementById('newTicketBtn');
+      if (newBtn) newBtn.click();
+    }});
+  }}
+
+  var seekCta = document.getElementById('emptyStateSeek');
+  if (seekCta && window._doSeek) {{
+    seekCta.addEventListener('click', function() {{
+      window._doSeek(seekCta, seekCta.textContent);
+    }});
+  }}
 }})();
 </script>
 
@@ -4481,7 +4635,15 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 
     var msg = document.createElement('span');
     msg.style.cssText = 'font-size:12px;color:var(--text-secondary);flex:1;';
-    msg.textContent = 'This ticket was auto-generated from a feedback session.';
+    var cardEl = document.querySelector('[data-item-id="' + ticketId + '"]');
+    var desc = (cardEl && cardEl.dataset.desc) || '';
+    if (desc.startsWith('Source: ')) {{
+      var srcType = desc.split(' ')[1];
+      var labels = {{code_todo:'a code comment',md_task:'a markdown task',readme_todo:'a README item',changelog:'a changelog entry',github_issue:'a GitHub issue'}};
+      msg.textContent = 'Auto-generated from ' + (labels[srcType] || 'project files') + '. Confirm to keep or reject to discard.';
+    }} else {{
+      msg.textContent = 'This ticket was auto-generated. Confirm to keep or reject to discard.';
+    }}
 
     var confirmBtn = document.createElement('button');
     confirmBtn.style.cssText = 'font-size:11px;padding:4px 12px;border-radius:5px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-weight:600;font-family:var(--font-sans);';
@@ -4550,7 +4712,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 
 <script>
 /* =========================================================
-   Task 10: Settings panel (full-page)
+   Task 10: Settings panel
    ========================================================= */
 (function() {{
   var editApiMeta = document.querySelector('meta[name="edit-api"]');
@@ -4579,10 +4741,27 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 
   if (!EDIT_API) return;
 
-  var toggleBtn = document.getElementById('settingsToggleBtn');
+  /* Full-page settings toggle */
   var settingsPage = document.getElementById('settings-page');
   var backBtn = document.getElementById('settingsBackBtn');
-  if (!toggleBtn || !settingsPage) return;
+
+  function openSettingsPage() {{
+    document.body.classList.add('settings-open');
+    if (typeof _spLoadAgents === 'function') _spLoadAgents();
+    if (typeof _spLoadWorkflows === 'function') _spLoadWorkflows();
+  }}
+  function closeSettingsPage() {{
+    document.body.classList.remove('settings-open');
+  }}
+  window.openSettingsPage = openSettingsPage;
+  window.closeSettingsPage = closeSettingsPage;
+
+  if (backBtn) backBtn.addEventListener('click', closeSettingsPage);
+
+  var toggleBtn = document.getElementById('settingsToggleBtn');
+  var drawer = document.getElementById('settings-drawer');
+  var closeBtn = document.getElementById('settingsDrawerClose');
+  if (!toggleBtn || !drawer) return;
 
   var enabledChk = document.getElementById('settingsFeedbacksEnabled');
   var pathInput = document.getElementById('settingsFeedbacksPath');
@@ -4592,27 +4771,43 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
   var statusLabel = document.getElementById('feedbacksStatusLabel');
   var installBtn = document.getElementById('settingsFeedbacksInstall');
 
-  function openSettingsPage() {{
-    document.body.classList.add('settings-open');
+  function openDrawer() {{
+    drawer.classList.remove('hidden');
     loadSettings().then(function() {{ checkFeedbacksStatus(); }});
     loadManagedFiles();
-    if (window._spLoadAgents) window._spLoadAgents();
-    if (window._spLoadWorkflows) window._spLoadWorkflows();
   }}
 
-  function closeSettingsPage() {{
-    document.body.classList.remove('settings-open');
+  function closeDrawer() {{
+    drawer.classList.add('hidden');
   }}
 
   toggleBtn.addEventListener('click', function() {{
-    if (document.body.classList.contains('settings-open')) {{
-      closeSettingsPage();
+    if (settingsPage) {{
+      if (document.body.classList.contains('settings-open')) {{
+        closeSettingsPage();
+      }} else {{
+        openSettingsPage();
+        openDrawer();
+      }}
+      return;
+    }}
+    if (drawer.classList.contains('hidden')) {{
+      openDrawer();
     }} else {{
-      openSettingsPage();
+      closeDrawer();
     }}
   }});
 
-  if (backBtn) backBtn.addEventListener('click', closeSettingsPage);
+  if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+
+  // Close when clicking outside
+  document.addEventListener('click', function(e) {{
+    if (!drawer.classList.contains('hidden') &&
+        !drawer.contains(e.target) &&
+        e.target !== toggleBtn) {{
+      closeDrawer();
+    }}
+  }});
 
   function loadSettings() {{
     return fetch(EDIT_API + '/settings')
@@ -4798,180 +4993,426 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 
 <script>
 /* =========================================================
-   Task 10.5: Agent Editor
+   Task 10.5: Workflow Agents & Workflows settings
    ========================================================= */
 (function() {{
-  var EDIT_API = (document.querySelector('meta[name="edit-api"]') || {{}}).content;
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
   if (!EDIT_API) return;
 
-  var agentList = document.getElementById('spAgentList');
-  var addBtn = document.getElementById('spAddAgentBtn');
-  var form = document.getElementById('spAgentForm');
-  var nameInput = document.getElementById('spAgentName');
-  var slugInput = document.getElementById('spAgentSlug');
-  var cmdInput = document.getElementById('spAgentCommand');
-  var argsInput = document.getElementById('spAgentArgs');
-  var promptInput = document.getElementById('spAgentSystemPrompt');
-  var saveBtn = document.getElementById('spAgentSave');
-  var cancelBtn = document.getElementById('spAgentCancel');
-  var editingId = null;
+  var agentsList = document.getElementById('workflowAgentsList');
+  var addAgentBtn = document.getElementById('wfAddAgentBtn');
+  var agentForm = document.getElementById('wfAgentForm');
+  var agentIdInput = document.getElementById('wfAgentId');
+  var agentNameInput = document.getElementById('wfAgentName');
+  var agentCmdInput = document.getElementById('wfAgentCmd');
+  var agentArgsInput = document.getElementById('wfAgentArgs');
+  var agentPromptInput = document.getElementById('wfAgentPrompt');
+  var agentSaveBtn = document.getElementById('wfAgentSave');
+  var agentCancelBtn = document.getElementById('wfAgentCancel');
 
-  // Auto-derive slug from name
-  nameInput.addEventListener('input', function() {{
-    if (!editingId) {{
-      slugInput.value = nameInput.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    }}
-  }});
+  var workflowsList = document.getElementById('workflowsList');
+  var addWorkflowBtn = document.getElementById('wfAddWorkflowBtn');
+  var workflowForm = document.getElementById('wfWorkflowForm');
+  var workflowIdInput = document.getElementById('wfWorkflowId');
+  var workflowNameInput = document.getElementById('wfWorkflowName');
+  var workflowDescInput = document.getElementById('wfWorkflowDesc');
+  var workflowSaveBtn = document.getElementById('wfWorkflowSave');
+  var workflowCancelBtn = document.getElementById('wfWorkflowCancel');
+
+  var editingAgentId = null;
+  var editingWorkflowId = null;
 
   function loadAgents() {{
-    return fetch(EDIT_API + '/workflow/agents')
+    fetch(EDIT_API + '/workflow/agents')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var agents = data.agents || [];
-        while (agentList.firstChild) agentList.removeChild(agentList.firstChild);
+        var agents = data.agents || data || [];
+        while (agentsList.firstChild) agentsList.removeChild(agentsList.firstChild);
         agents.forEach(function(a) {{
           var row = document.createElement('div');
-          row.className = 'sp-agent-row' + (a.source === 'project' ? ' readonly' : '');
+          row.className = 'wf-agent-row' + (a.source === 'project' ? ' readonly' : '');
 
-          var name = document.createElement('span');
-          name.className = 'sp-agent-name';
-          name.textContent = a.name;
-          row.appendChild(name);
+          var nameSpan = document.createElement('span');
+          nameSpan.className = 'wf-row-name';
+          nameSpan.textContent = a.name || a.id;
+          row.appendChild(nameSpan);
 
-          var cmd = document.createElement('span');
-          cmd.className = 'sp-agent-cmd';
-          cmd.textContent = a.command || 'claude';
-          row.appendChild(cmd);
+          var cmdSpan = document.createElement('span');
+          cmdSpan.className = 'wf-row-cmd';
+          cmdSpan.textContent = a.command || 'claude';
+          row.appendChild(cmdSpan);
 
-          if (a.source === 'project') {{
-            var badge = document.createElement('span');
-            badge.className = 'sp-agent-badge';
-            badge.textContent = 'Project';
-            row.appendChild(badge);
-          }}
-
-          var preview = document.createElement('span');
-          preview.className = 'sp-agent-prompt-preview';
-          preview.textContent = (a.system_prompt || '').substring(0, 60);
-          row.appendChild(preview);
+          var sourceSpan = document.createElement('span');
+          sourceSpan.className = 'wf-row-source';
+          sourceSpan.textContent = a.source || 'user';
+          row.appendChild(sourceSpan);
 
           if (a.source !== 'project') {{
             var actions = document.createElement('div');
-            actions.className = 'sp-agent-actions';
+            actions.className = 'wf-row-actions';
+
             var editBtn = document.createElement('button');
             editBtn.textContent = 'Edit';
-            editBtn.addEventListener('click', function() {{ openAgentEdit(a); }});
+            editBtn.addEventListener('click', function() {{ editAgent(a); }});
             actions.appendChild(editBtn);
+
             var delBtn = document.createElement('button');
+            delBtn.textContent = 'Del';
             delBtn.className = 'danger';
-            delBtn.textContent = 'Delete';
-            delBtn.addEventListener('click', function() {{ deleteAgent(a); }});
+            delBtn.addEventListener('click', function() {{ deleteAgent(a.id); }});
             actions.appendChild(delBtn);
+
             row.appendChild(actions);
           }}
 
-          agentList.appendChild(row);
+          agentsList.appendChild(row);
         }});
-      }});
+      }})
+      .catch(function() {{}});
   }}
 
-  function openAgentEdit(a) {{
-    editingId = a.id;
-    nameInput.value = a.name;
-    slugInput.value = a.id;
-    slugInput.disabled = true;
-    cmdInput.value = a.command || 'claude';
-    argsInput.value = a.args || '[]';
-    promptInput.value = a.system_prompt || '';
-    form.classList.remove('hidden');
+  function editAgent(a) {{
+    editingAgentId = a.id;
+    agentIdInput.value = a.id;
+    agentIdInput.disabled = true;
+    agentNameInput.value = a.name || '';
+    agentCmdInput.value = a.cmd || 'claude';
+    agentArgsInput.value = JSON.stringify(a.args || []);
+    agentPromptInput.value = a.prompt || '';
+    agentForm.classList.remove('hidden');
   }}
 
-  function deleteAgent(a) {{
-    // Check if agent is used by any workflow
+  function deleteAgent(id) {{
+    fetch(EDIT_API + '/workflow/agents/' + encodeURIComponent(id), {{ method: 'DELETE' }})
+      .then(function() {{ loadAgents(); }})
+      .catch(function() {{}});
+  }}
+
+  if (addAgentBtn) {{
+    addAgentBtn.addEventListener('click', function() {{
+      editingAgentId = null;
+      agentIdInput.value = '';
+      agentIdInput.disabled = false;
+      agentNameInput.value = '';
+      agentCmdInput.value = 'claude';
+      agentArgsInput.value = '[]';
+      agentPromptInput.value = '';
+      agentForm.classList.remove('hidden');
+    }});
+  }}
+
+  if (agentCancelBtn) {{
+    agentCancelBtn.addEventListener('click', function() {{
+      agentForm.classList.add('hidden');
+      editingAgentId = null;
+    }});
+  }}
+
+  if (agentSaveBtn) {{
+    agentSaveBtn.addEventListener('click', function() {{
+      var payload = {{
+        id: agentIdInput.value.trim(),
+        name: agentNameInput.value.trim(),
+        command: agentCmdInput.value.trim() || 'claude',
+        args: agentArgsInput.value.trim() || '[]',
+        system_prompt: agentPromptInput.value
+      }};
+      var method = editingAgentId ? 'PUT' : 'POST';
+      var url = editingAgentId
+        ? EDIT_API + '/workflow/agents/' + encodeURIComponent(editingAgentId)
+        : EDIT_API + '/workflow/agents';
+      fetch(url, {{
+        method: method,
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload)
+      }})
+        .then(function(r) {{
+          if (r.ok) {{
+            agentForm.classList.add('hidden');
+            editingAgentId = null;
+            loadAgents();
+          }} else {{
+            r.json().then(function(d) {{ showAppToast(d.error || 'Failed to save', 'error'); }});
+          }}
+        }})
+        .catch(function() {{ showAppToast('Failed to save agent', 'error'); }});
+    }});
+  }}
+
+  function loadWorkflows() {{
     fetch(EDIT_API + '/workflow/workflows')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var wfs = data.workflows || [];
-        var used = [];
-        wfs.forEach(function(wf) {{
-          var steps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
-          steps.forEach(function(s) {{
-            if (s.agent_id === a.id) used.push(wf.name);
-          }});
+        var workflows = data.workflows || data || [];
+        while (workflowsList.firstChild) workflowsList.removeChild(workflowsList.firstChild);
+        workflows.forEach(function(wf) {{
+          var row = document.createElement('div');
+          row.className = 'wf-workflow-row';
+
+          var nameSpan = document.createElement('span');
+          nameSpan.className = 'wf-row-name';
+          nameSpan.textContent = wf.name || wf.id;
+          row.appendChild(nameSpan);
+
+          var parsedSteps = [];
+          try {{ parsedSteps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []); }} catch(e) {{}}
+
+          var stepsSpan = document.createElement('span');
+          stepsSpan.className = 'wf-row-steps';
+          stepsSpan.textContent = parsedSteps.length + ' steps';
+          row.appendChild(stepsSpan);
+
+          if (parsedSteps.length > 0) {{
+            var stepList = document.createElement('div');
+            stepList.className = 'wf-step-list';
+            parsedSteps.forEach(function(step, idx) {{
+              var stepRow = document.createElement('div');
+              stepRow.className = 'wf-step-row';
+
+              var idxSpan = document.createElement('span');
+              idxSpan.className = 'wf-step-idx';
+              idxSpan.textContent = (idx + 1) + '.';
+              stepRow.appendChild(idxSpan);
+
+              var agentSpan = document.createElement('span');
+              agentSpan.textContent = step.agent || step.agent_id || '?';
+              stepRow.appendChild(agentSpan);
+
+              if (idx === 0) {{
+                var primarySpan = document.createElement('span');
+                primarySpan.className = 'wf-step-primary';
+                primarySpan.textContent = 'primary';
+                stepRow.appendChild(primarySpan);
+              }}
+
+              stepList.appendChild(stepRow);
+            }});
+            row.appendChild(stepList);
+          }}
+
+          var actions = document.createElement('div');
+          actions.className = 'wf-row-actions';
+
+          var editBtn = document.createElement('button');
+          editBtn.textContent = 'Edit';
+          editBtn.addEventListener('click', function() {{ editWorkflow(wf); }});
+          actions.appendChild(editBtn);
+
+          var delBtn = document.createElement('button');
+          delBtn.textContent = 'Del';
+          delBtn.className = 'danger';
+          delBtn.addEventListener('click', function() {{ deleteWorkflow(wf.id); }});
+          actions.appendChild(delBtn);
+
+          row.appendChild(actions);
+          workflowsList.appendChild(row);
         }});
-        var msg = 'Delete agent "' + a.name + '"?';
-        if (used.length > 0) {{
-          msg += '\n\nWarning: Used by workflows: ' + used.join(', ');
-        }}
-        if (confirm(msg)) {{
-          fetch(EDIT_API + '/workflow/agents/' + encodeURIComponent(a.id), {{ method: 'DELETE' }})
-            .then(function() {{ loadAgents(); }});
-        }}
-      }});
+      }})
+      .catch(function() {{}});
   }}
 
-  addBtn.addEventListener('click', function() {{
+  function editWorkflow(wf) {{
+    editingWorkflowId = wf.id;
+    workflowIdInput.value = wf.id;
+    workflowIdInput.disabled = true;
+    workflowNameInput.value = wf.name || '';
+    workflowDescInput.value = wf.description || '';
+    workflowForm.classList.remove('hidden');
+  }}
+
+  function deleteWorkflow(id) {{
+    fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(id), {{ method: 'DELETE' }})
+      .then(function() {{ loadWorkflows(); }})
+      .catch(function() {{}});
+  }}
+
+  if (addWorkflowBtn) {{
+    addWorkflowBtn.addEventListener('click', function() {{
+      editingWorkflowId = null;
+      workflowIdInput.value = '';
+      workflowIdInput.disabled = false;
+      workflowNameInput.value = '';
+      workflowDescInput.value = '';
+      workflowForm.classList.remove('hidden');
+    }});
+  }}
+
+  if (workflowCancelBtn) {{
+    workflowCancelBtn.addEventListener('click', function() {{
+      workflowForm.classList.add('hidden');
+      editingWorkflowId = null;
+    }});
+  }}
+
+  if (workflowSaveBtn) {{
+    workflowSaveBtn.addEventListener('click', function() {{
+      var payload = {{
+        id: workflowIdInput.value.trim(),
+        name: workflowNameInput.value.trim(),
+        description: workflowDescInput.value.trim()
+      }};
+      var method = editingWorkflowId ? 'PUT' : 'POST';
+      var url = editingWorkflowId
+        ? EDIT_API + '/workflow/workflows/' + encodeURIComponent(editingWorkflowId)
+        : EDIT_API + '/workflow/workflows';
+      fetch(url, {{
+        method: method,
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload)
+      }})
+        .then(function(r) {{
+          if (r.ok) {{
+            workflowForm.classList.add('hidden');
+            editingWorkflowId = null;
+            loadWorkflows();
+          }} else {{
+            r.json().then(function(d) {{ showAppToast(d.error || 'Failed to save', 'error'); }});
+          }}
+        }})
+        .catch(function() {{ showAppToast('Failed to save workflow', 'error'); }});
+    }});
+  }}
+
+  window._wfLoadAgents = loadAgents;
+  window._wfLoadWorkflows = loadWorkflows;
+
+  // Load on settings open
+  var settingsBtn = document.getElementById('settingsToggleBtn');
+  if (settingsBtn) {{
+    settingsBtn.addEventListener('click', function() {{
+      setTimeout(function() {{
+        loadAgents();
+        loadWorkflows();
+      }}, 100);
+    }});
+  }}
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Full-page settings: Agent CRUD (spAgentList)
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var listEl = document.getElementById('spAgentList');
+  var formEl = document.getElementById('spAgentForm');
+  var addBtn = document.getElementById('spAgentAddBtn');
+  var saveBtn = document.getElementById('spAgentSaveBtn');
+  var cancelBtn = document.getElementById('spAgentCancelBtn');
+  var idInput = document.getElementById('spAgentId');
+  var nameInput = document.getElementById('spAgentNameInput');
+  var modelInput = document.getElementById('spAgentModelInput');
+  var roleInput = document.getElementById('spAgentRoleInput');
+  var tempInput = document.getElementById('spAgentTempInput');
+  if (!listEl) return;
+
+  var editingId = null;
+
+  function loadAgents() {{
+    fetch(EDIT_API + '/workflow/agents')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var agents = data.agents || data || [];
+        while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+        if (agents.length === 0) {{
+          var empty = document.createElement('div');
+          empty.style.cssText = 'font-size:12px;color:var(--text-tertiary);padding:8px 0;';
+          empty.textContent = 'No agents defined yet.';
+          listEl.appendChild(empty);
+          return;
+        }}
+        agents.forEach(function(a) {{
+          var row = document.createElement('div');
+          row.className = 'sp-agent-item';
+
+          var name = document.createElement('span');
+          name.className = 'sp-agent-name';
+          name.textContent = a.name || a.id;
+          row.appendChild(name);
+
+          var model = document.createElement('span');
+          model.className = 'sp-agent-model';
+          model.textContent = a.model || a.command || '';
+          row.appendChild(model);
+
+          var editBtn = document.createElement('button');
+          editBtn.className = 'sp-btn';
+          editBtn.textContent = 'Edit';
+          editBtn.style.cssText = 'font-size:10px;padding:3px 8px;';
+          editBtn.addEventListener('click', function() {{
+            editingId = a.id;
+            if (idInput) idInput.value = a.id;
+            if (nameInput) nameInput.value = a.name || '';
+            if (modelInput) modelInput.value = a.model || a.command || '';
+            if (roleInput) roleInput.value = a.system_prompt || a.prompt || '';
+            if (tempInput) tempInput.value = a.temperature || 0.3;
+            if (formEl) formEl.style.display = '';
+          }});
+          row.appendChild(editBtn);
+
+          var delBtn = document.createElement('button');
+          delBtn.className = 'sp-btn';
+          delBtn.textContent = 'Del';
+          delBtn.style.cssText = 'font-size:10px;padding:3px 8px;color:#ef4444;';
+          delBtn.addEventListener('click', function() {{
+            fetch(EDIT_API + '/workflow/agents/' + encodeURIComponent(a.id), {{ method: 'DELETE' }})
+              .then(function() {{ loadAgents(); }});
+          }});
+          row.appendChild(delBtn);
+
+          listEl.appendChild(row);
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  if (addBtn) addBtn.addEventListener('click', function() {{
     editingId = null;
-    nameInput.value = '';
-    slugInput.value = '';
-    slugInput.disabled = false;
-    cmdInput.value = 'claude';
-    argsInput.value = '[]';
-    promptInput.value = '';
-    form.classList.remove('hidden');
+    if (idInput) idInput.value = '';
+    if (nameInput) nameInput.value = '';
+    if (modelInput) modelInput.value = '';
+    if (roleInput) roleInput.value = '';
+    if (tempInput) tempInput.value = '0.3';
+    if (formEl) formEl.style.display = '';
   }});
 
-  cancelBtn.addEventListener('click', function() {{
-    form.classList.add('hidden');
+  if (cancelBtn) cancelBtn.addEventListener('click', function() {{
+    if (formEl) formEl.style.display = 'none';
     editingId = null;
   }});
 
-  saveBtn.addEventListener('click', function() {{
-    var name = nameInput.value.trim();
-    var slug = slugInput.value.trim();
-    if (!name) {{ showAppToast('Name is required', 'error'); return; }}
-    if (!slug) {{ showAppToast('Slug is required', 'error'); return; }}
-
-    // Validate args
-    var argsVal = argsInput.value.trim() || '[]';
-    try {{
-      var parsed = JSON.parse(argsVal);
-      if (!Array.isArray(parsed)) {{ showAppToast('CLI Args must be a JSON array', 'error'); return; }}
-    }} catch(e) {{
-      showAppToast('CLI Args must be valid JSON: ' + e.message, 'error');
-      return;
-    }}
-
+  if (saveBtn) saveBtn.addEventListener('click', function() {{
     var payload = {{
-      id: slug,
-      name: name,
-      command: cmdInput.value.trim() || 'claude',
-      args: argsVal,
-      system_prompt: promptInput.value
+      id: (idInput ? idInput.value.trim() : '') || (nameInput ? nameInput.value.trim().toLowerCase().replace(/\\s+/g, '-') : ''),
+      name: nameInput ? nameInput.value.trim() : '',
+      command: modelInput ? modelInput.value.trim() : 'claude',
+      system_prompt: roleInput ? roleInput.value : '',
+      temperature: tempInput ? parseFloat(tempInput.value) : 0.3
     }};
-
     var method = editingId ? 'PUT' : 'POST';
     var url = editingId
       ? EDIT_API + '/workflow/agents/' + encodeURIComponent(editingId)
       : EDIT_API + '/workflow/agents';
-
     fetch(url, {{
       method: method,
       headers: {{ 'Content-Type': 'application/json' }},
       body: JSON.stringify(payload)
-    }}).then(function(r) {{
-      if (r.ok) {{
-        form.classList.add('hidden');
-        editingId = null;
-        loadAgents();
-        showAppToast('Agent saved', 'success');
-      }} else {{
-        r.json().then(function(d) {{
-          if (r.status === 409) showAppToast('Agent "' + slug + '" already exists', 'error');
-          else showAppToast(d.error || 'Failed to save', 'error');
-        }});
-      }}
-    }}).catch(function() {{ showAppToast('Failed to save agent', 'error'); }});
+    }})
+      .then(function(r) {{
+        if (r.ok) {{
+          if (formEl) formEl.style.display = 'none';
+          editingId = null;
+          loadAgents();
+        }} else {{
+          r.json().then(function(d) {{ showAppToast(d.error || 'Failed to save', 'error'); }});
+        }}
+      }})
+      .catch(function() {{ showAppToast('Failed to save agent', 'error'); }});
   }});
 
   window._spLoadAgents = loadAgents;
@@ -4980,238 +5421,164 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
 
 <script>
 /* =========================================================
-   Task 10.6: Workflow Step Builder
+   Full-page settings: Workflow step builder (spWfList)
    ========================================================= */
 (function() {{
-  var EDIT_API = (document.querySelector('meta[name="edit-api"]') || {{}}).content;
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
   if (!EDIT_API) return;
 
-  var wfList = document.getElementById('spWfList');
-  var addBtn = document.getElementById('spAddWfBtn');
-  var form = document.getElementById('spWfForm');
-  var nameInput = document.getElementById('spWfName');
-  var slugInput = document.getElementById('spWfSlug');
-  var descInput = document.getElementById('spWfDesc');
+  var listEl = document.getElementById('spWfList');
+  var formEl = document.getElementById('spWfForm');
+  var addBtn = document.getElementById('spWfAddBtn');
+  var saveBtn = document.getElementById('spWfSaveBtn');
+  var cancelBtn = document.getElementById('spWfCancelBtn');
+  var idInput = document.getElementById('spWfId');
+  var nameInput = document.getElementById('spWfNameInput');
   var stepList = document.getElementById('spStepList');
-  var addStepBtn = document.getElementById('spAddStepBtn');
-  var saveBtn = document.getElementById('spWfSave');
-  var cancelBtn = document.getElementById('spWfCancel');
+  var stepAddBtn = document.getElementById('spStepAddBtn');
+  if (!listEl) return;
+
   var editingId = null;
-  var steps = []; // in-memory steps array
-  var cachedAgents = []; // custom agents for dropdowns
-
-  nameInput.addEventListener('input', function() {{
-    if (!editingId) {{
-      slugInput.value = nameInput.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    }}
-  }});
-
-  function loadAgentsForDropdown() {{
-    return fetch(EDIT_API + '/workflow/agents')
-      .then(function(r) {{ return r.json(); }})
-      .then(function(data) {{
-        cachedAgents = (data.agents || []).filter(function(a) {{ return a.source !== 'project'; }});
-      }});
-  }}
-
-  function loadWorkflows() {{
-    return fetch(EDIT_API + '/workflow/workflows')
-      .then(function(r) {{ return r.json(); }})
-      .then(function(data) {{
-        var wfs = data.workflows || [];
-        while (wfList.firstChild) wfList.removeChild(wfList.firstChild);
-        wfs.forEach(function(wf) {{
-          var parsedSteps = [];
-          try {{ parsedSteps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []); }} catch(e) {{}}
-
-          var row = document.createElement('div');
-          row.className = 'sp-wf-row';
-
-          var name = document.createElement('span');
-          name.className = 'sp-wf-name';
-          name.textContent = wf.name;
-          row.appendChild(name);
-
-          var meta = document.createElement('span');
-          meta.className = 'sp-wf-meta';
-          meta.textContent = parsedSteps.length + ' step' + (parsedSteps.length !== 1 ? 's' : '') + (wf.description ? ' \u2014 ' + wf.description.substring(0, 40) : '');
-          row.appendChild(meta);
-
-          var actions = document.createElement('div');
-          actions.className = 'sp-wf-actions';
-          var editBtn = document.createElement('button');
-          editBtn.textContent = 'Edit';
-          editBtn.addEventListener('click', function() {{ openWfEdit(wf, parsedSteps); }});
-          actions.appendChild(editBtn);
-          var delBtn = document.createElement('button');
-          delBtn.className = 'danger';
-          delBtn.textContent = 'Delete';
-          delBtn.addEventListener('click', function() {{
-            if (confirm('Delete workflow "' + wf.name + '"?')) {{
-              fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(wf.id), {{ method: 'DELETE' }})
-                .then(function() {{ loadWorkflows(); }});
-            }}
-          }});
-          actions.appendChild(delBtn);
-          row.appendChild(actions);
-
-          wfList.appendChild(row);
-        }});
-      }});
-  }}
-
-  function openWfEdit(wf, parsedSteps) {{
-    editingId = wf.id;
-    nameInput.value = wf.name;
-    slugInput.value = wf.id;
-    slugInput.disabled = true;
-    descInput.value = wf.description || '';
-    steps = parsedSteps.map(function(s) {{ return {{ agent_id: s.agent_id || '', prompt_modifier: s.prompt_modifier || '', label: s.label || '' }}; }});
-    loadAgentsForDropdown().then(function() {{ renderSteps(); }});
-    form.classList.remove('hidden');
-    addBtn.style.display = 'none';
-    wfList.style.display = 'none';
-  }}
+  var currentSteps = [];
 
   function renderSteps() {{
     while (stepList.firstChild) stepList.removeChild(stepList.firstChild);
-    steps.forEach(function(step, idx) {{
+    currentSteps.forEach(function(step, idx) {{
       var row = document.createElement('div');
-      row.className = 'sp-step-row';
+      row.className = 'sp-step-item';
 
-      var header = document.createElement('div');
-      header.className = 'sp-step-header';
+      var order = document.createElement('span');
+      order.className = 'sp-step-order';
+      order.textContent = (idx + 1);
+      row.appendChild(order);
 
-      var num = document.createElement('span');
-      num.className = 'sp-step-num';
-      num.textContent = 'Step ' + (idx + 1);
-      if (idx === 0) {{
-        var pri = document.createElement('span');
-        pri.className = 'sp-step-primary';
-        pri.textContent = ' (Primary)';
-        num.appendChild(pri);
-      }}
-      header.appendChild(num);
+      var agent = document.createElement('span');
+      agent.className = 'sp-step-agent';
+      agent.textContent = step.agent_id || step.agent || '?';
+      row.appendChild(agent);
 
-      var sel = document.createElement('select');
-      sel.className = 'sp-step-agent-select';
-      var emptyOpt = document.createElement('option');
-      emptyOpt.value = '';
-      emptyOpt.textContent = 'Select agent...';
-      sel.appendChild(emptyOpt);
-      cachedAgents.forEach(function(a) {{
-        var opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.name;
-        if (a.id === step.agent_id) opt.selected = true;
-        sel.appendChild(opt);
+      var prompt = document.createElement('span');
+      prompt.className = 'sp-step-prompt';
+      prompt.textContent = step.prompt || '';
+      row.appendChild(prompt);
+
+      var del = document.createElement('button');
+      del.className = 'sp-step-del';
+      del.textContent = '\u00d7';
+      del.addEventListener('click', function() {{
+        currentSteps.splice(idx, 1);
+        renderSteps();
       }});
-      sel.addEventListener('change', function() {{ steps[idx].agent_id = sel.value; steps[idx].label = sel.options[sel.selectedIndex].textContent; }});
-      header.appendChild(sel);
-
-      var controls = document.createElement('div');
-      controls.className = 'sp-step-controls';
-      if (idx > 0) {{
-        var upBtn = document.createElement('button');
-        upBtn.textContent = '\u2191';
-        upBtn.title = 'Move up';
-        upBtn.addEventListener('click', function() {{ var tmp = steps[idx]; steps[idx] = steps[idx-1]; steps[idx-1] = tmp; renderSteps(); }});
-        controls.appendChild(upBtn);
-      }}
-      if (idx < steps.length - 1) {{
-        var downBtn = document.createElement('button');
-        downBtn.textContent = '\u2193';
-        downBtn.title = 'Move down';
-        downBtn.addEventListener('click', function() {{ var tmp = steps[idx]; steps[idx] = steps[idx+1]; steps[idx+1] = tmp; renderSteps(); }});
-        controls.appendChild(downBtn);
-      }}
-      var removeBtn = document.createElement('button');
-      removeBtn.textContent = '\u00d7';
-      removeBtn.title = 'Remove step';
-      removeBtn.addEventListener('click', function() {{ steps.splice(idx, 1); renderSteps(); }});
-      controls.appendChild(removeBtn);
-      header.appendChild(controls);
-
-      row.appendChild(header);
-
-      var textarea = document.createElement('textarea');
-      textarea.className = 'sp-step-instructions';
-      textarea.placeholder = 'Step instructions (optional)';
-      textarea.rows = 2;
-      textarea.value = step.prompt_modifier || '';
-      textarea.addEventListener('input', function() {{ steps[idx].prompt_modifier = textarea.value; }});
-      row.appendChild(textarea);
+      row.appendChild(del);
 
       stepList.appendChild(row);
     }});
   }}
 
-  addStepBtn.addEventListener('click', function() {{
-    steps.push({{ agent_id: '', prompt_modifier: '', label: '' }});
+  function loadWorkflows() {{
+    fetch(EDIT_API + '/workflow/workflows')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var workflows = data.workflows || data || [];
+        while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+        if (workflows.length === 0) {{
+          var empty = document.createElement('div');
+          empty.style.cssText = 'font-size:12px;color:var(--text-tertiary);padding:8px 0;';
+          empty.textContent = 'No workflows defined yet.';
+          listEl.appendChild(empty);
+          return;
+        }}
+        workflows.forEach(function(wf) {{
+          var row = document.createElement('div');
+          row.className = 'sp-wf-item';
+
+          var name = document.createElement('span');
+          name.className = 'sp-wf-name';
+          name.textContent = wf.name || wf.id;
+          row.appendChild(name);
+
+          var parsedSteps = [];
+          try {{ parsedSteps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []); }} catch(e) {{}}
+
+          var steps = document.createElement('span');
+          steps.className = 'sp-wf-steps';
+          steps.textContent = parsedSteps.length + ' steps';
+          row.appendChild(steps);
+
+          row.addEventListener('click', function() {{
+            editingId = wf.id;
+            if (idInput) idInput.value = wf.id;
+            if (nameInput) nameInput.value = wf.name || '';
+            currentSteps = parsedSteps.slice();
+            renderSteps();
+            if (formEl) formEl.style.display = '';
+          }});
+
+          var delBtn = document.createElement('button');
+          delBtn.className = 'sp-btn';
+          delBtn.textContent = 'Del';
+          delBtn.style.cssText = 'font-size:10px;padding:3px 8px;color:#ef4444;';
+          delBtn.addEventListener('click', function(e) {{
+            e.stopPropagation();
+            fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(wf.id), {{ method: 'DELETE' }})
+              .then(function() {{ loadWorkflows(); }});
+          }});
+          row.appendChild(delBtn);
+
+          listEl.appendChild(row);
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  if (addBtn) addBtn.addEventListener('click', function() {{
+    editingId = null;
+    if (idInput) idInput.value = '';
+    if (nameInput) nameInput.value = '';
+    currentSteps = [];
+    renderSteps();
+    if (formEl) formEl.style.display = '';
+  }});
+
+  if (cancelBtn) cancelBtn.addEventListener('click', function() {{
+    if (formEl) formEl.style.display = 'none';
+    editingId = null;
+  }});
+
+  if (stepAddBtn) stepAddBtn.addEventListener('click', function() {{
+    var agentId = window.prompt('Agent ID:');
+    if (!agentId) return;
+    var promptText = window.prompt('Prompt for this step:');
+    currentSteps.push({{ agent_id: agentId, prompt: promptText || '' }});
     renderSteps();
   }});
 
-  addBtn.addEventListener('click', function() {{
-    editingId = null;
-    nameInput.value = '';
-    slugInput.value = '';
-    slugInput.disabled = false;
-    descInput.value = '';
-    steps = [{{ agent_id: '', prompt_modifier: '', label: '' }}];
-    loadAgentsForDropdown().then(function() {{ renderSteps(); }});
-    form.classList.remove('hidden');
-    addBtn.style.display = 'none';
-    wfList.style.display = 'none';
-  }});
-
-  cancelBtn.addEventListener('click', function() {{
-    form.classList.add('hidden');
-    addBtn.style.display = '';
-    wfList.style.display = '';
-    editingId = null;
-  }});
-
-  saveBtn.addEventListener('click', function() {{
-    var name = nameInput.value.trim();
-    var slug = slugInput.value.trim();
-    if (!name) {{ showAppToast('Name is required', 'error'); return; }}
-    if (!slug) {{ showAppToast('Slug is required', 'error'); return; }}
-    if (steps.length === 0) {{ showAppToast('Add at least one step', 'error'); return; }}
-    for (var i = 0; i < steps.length; i++) {{
-      if (!steps[i].agent_id) {{ showAppToast('Step ' + (i+1) + ' needs an agent', 'error'); return; }}
-    }}
-
+  if (saveBtn) saveBtn.addEventListener('click', function() {{
     var payload = {{
-      id: slug,
-      name: name,
-      description: descInput.value.trim(),
-      steps: steps
+      id: (idInput ? idInput.value.trim() : '') || (nameInput ? nameInput.value.trim().toLowerCase().replace(/\\s+/g, '-') : ''),
+      name: nameInput ? nameInput.value.trim() : '',
+      steps: JSON.stringify(currentSteps)
     }};
-
     var method = editingId ? 'PUT' : 'POST';
     var url = editingId
       ? EDIT_API + '/workflow/workflows/' + encodeURIComponent(editingId)
       : EDIT_API + '/workflow/workflows';
-
     fetch(url, {{
       method: method,
       headers: {{ 'Content-Type': 'application/json' }},
       body: JSON.stringify(payload)
-    }}).then(function(r) {{
-      if (r.ok) {{
-        form.classList.add('hidden');
-        addBtn.style.display = '';
-        wfList.style.display = '';
-        editingId = null;
-        loadWorkflows();
-        showAppToast('Workflow saved', 'success');
-      }} else {{
-        r.json().then(function(d) {{
-          if (r.status === 409) showAppToast('Workflow "' + slug + '" already exists', 'error');
-          else showAppToast(d.error || 'Failed to save', 'error');
-        }});
-      }}
-    }}).catch(function() {{ showAppToast('Failed to save workflow', 'error'); }});
+    }})
+      .then(function(r) {{
+        if (r.ok) {{
+          if (formEl) formEl.style.display = 'none';
+          editingId = null;
+          loadWorkflows();
+        }} else {{
+          r.json().then(function(d) {{ showAppToast(d.error || 'Failed to save', 'error'); }});
+        }}
+      }})
+      .catch(function() {{ showAppToast('Failed to save workflow', 'error'); }});
   }});
 
   window._spLoadWorkflows = loadWorkflows;
@@ -5692,8 +6059,25 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
     }});
   }}
 
+  function setCardWfIndicator(ticketId, active) {{
+    var card = document.querySelector('.card[data-item-id="' + ticketId + '"]');
+    if (!card) return;
+    var existing = card.querySelector('.card-wf-indicator');
+    if (active && !existing) {{
+      var ind = document.createElement('span');
+      ind.className = 'card-wf-indicator';
+      ind.textContent = '\u25B6 workflow running';
+      var titleEl = card.querySelector('.card-title') || card.querySelector('.item-title');
+      if (titleEl) titleEl.parentNode.insertBefore(ind, titleEl.nextSibling);
+      else card.appendChild(ind);
+    }} else if (!active && existing) {{
+      existing.parentNode.removeChild(existing);
+    }}
+  }}
+
   function startPolling(runId) {{
     if (pollTimers[runId]) return;
+    if (currentTicketId) setCardWfIndicator(currentTicketId, true);
     pollTimers[runId] = setInterval(function() {{
       fetch(EDIT_API + '/workflow/runs/' + encodeURIComponent(runId))
         .then(function(r) {{ return r.json(); }})
@@ -5733,29 +6117,13 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
       .catch(function() {{ showAppToast('Failed to resume run', 'error'); }});
   }}
 
-  function setCardWfIndicator(ticketId, active) {{
-    var card = document.querySelector('.card[data-item-id="' + ticketId + '"]');
-    if (!card) return;
-    var existing = card.querySelector('.card-wf-indicator');
-    if (active && !existing) {{
-      var ind = document.createElement('span');
-      ind.className = 'card-wf-indicator';
-      ind.textContent = '\u25B6 workflow running';
-      var titleEl = card.querySelector('.card-title') || card.querySelector('.item-title');
-      if (titleEl) titleEl.parentNode.insertBefore(ind, titleEl.nextSibling);
-      else card.appendChild(ind);
-    }} else if (!active && existing) {{
-      existing.parentNode.removeChild(existing);
-    }}
-  }}
-
   if (workflowRunBtn) {{
     workflowRunBtn.addEventListener('click', function() {{
       if (!currentTicketId || !workflowSelect.value) return;
       var wfName = workflowSelect.options[workflowSelect.selectedIndex].textContent;
       workflowRunBtn.disabled = true;
 
-      // Instant placeholder
+      // Instant placeholder — show a running block immediately
       var placeholder = renderRunBlock({{
         id: '_pending',
         status: 'running',
@@ -5767,7 +6135,6 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
       }});
       placeholder.classList.add('expanded');
       workflowRunsList.insertBefore(placeholder, workflowRunsList.firstChild);
-      setCardWfIndicator(currentTicketId, true);
 
       fetch(EDIT_API + '/tickets/' + encodeURIComponent(currentTicketId) + '/workflow/run', {{
         method: 'POST',
@@ -5778,6 +6145,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
         .then(function(data) {{
           workflowRunBtn.disabled = false;
           if (data.run_id) {{
+            // Replace placeholder with real run, start polling
             if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
             var realBlock = renderRunBlock({{
               id: data.run_id,
@@ -5793,14 +6161,12 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
             startPolling(data.run_id);
           }} else {{
             if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
-            setCardWfIndicator(currentTicketId, false);
             showAppToast(data.error || 'Failed to start workflow', 'error');
           }}
         }})
         .catch(function() {{
           workflowRunBtn.disabled = false;
           if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
-          setCardWfIndicator(currentTicketId, false);
           showAppToast('Failed to start workflow', 'error');
         }});
     }});
@@ -5983,6 +6349,19 @@ body.settings-open .settings-back-btn {{ display: inline-flex; align-items: cent
     </div>
   </div>
 </div>
+<script>
+(function() {{
+  var projMeta = document.querySelector('meta[name="current-project"]');
+  var journeysBtn = document.getElementById('journeysBtn');
+  if (projMeta && journeysBtn) {{
+    window.__goJourneys = function() {{
+      window.location.href = '/' + projMeta.content + '/journeys';
+    }};
+  }} else if (journeysBtn) {{
+    journeysBtn.style.display = 'none';
+  }}
+}})();
+</script>
 </body>
 </html>"""
 

@@ -127,6 +127,9 @@ POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /
 Priority: medium | Complexity: M | Status: for-review
 Spec for feedbacks team: compact recorder widget (?mode=recorder), callback on session complete, auto-close popup. See docs/superpowers/specs/2026-04-05-feedbacks-recorder-widget.md
 
+### B-42: Dual-backend scenario runner (Playwright + CDP)
+Priority: medium | Complexity: M | Status: for-review
+
 ## Backlog
 
 ### B-23: Editable AI suggestions before accepting
@@ -161,6 +164,17 @@ Collapsed cards show only title, ID, status badge, and metadata — no descripti
 Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
+
+### B-36: My first ticket
+Priority: medium | Complexity: M | Status: proposed
+
+### B-40: My first ticket
+Priority: medium | Complexity: M | Status: proposed
+======= >>>>>>> scenario-runner
+
+### B-41: Quick edit test ticket
+Priority: medium | Complexity: M | Status: proposed
+Original description text
 
 ## Ideas
 
@@ -222,6 +236,12 @@ Priority: medium | Complexity: M | Status: proposed
 Priority: medium | Complexity: M | Status: proposed
 
 ### I-19: make a 'bounce' sequence feature i.e. architecture codex > claude > codex > claude = filter decisions
+Priority: medium | Complexity: M | Status: proposed
+
+### I-27: e2e-draft-test-1776005127
+Priority: medium | Complexity: M | Status: proposed
+
+### I-28: e2e-draft-test-1776006567
 Priority: medium | Complexity: M | Status: proposed
 
 ## Bugs

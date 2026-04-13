@@ -203,14 +203,23 @@ class PlaywrightBackend:
 
 
 class CDPBackend(PlaywrightBackend):
-    """Backend that drives a browser via CDP connection.
+    """Backend that drives a browser connected over CDP.
 
-    Behaviourally identical to PlaywrightBackend — the difference is in
-    how the Page/BrowserContext are obtained (connect_over_cdp instead of
-    launch). All scenario logic works identically.
+    Behaviourally identical to PlaywrightBackend. The difference is only
+    in how the underlying Playwright Browser is obtained — via
+    connect_over_cdp() instead of launch(). All scenario logic works
+    identically.
 
-    This subclass exists to make the distinction explicit in RunResult
-    and to allow future divergence (e.g. CDP-specific error messages).
+    **Isolation note:** CDPBackend creates a fresh BrowserContext per
+    actor (via ScenarioContext.get_actor_backend) even when connected to
+    an already-running Chrome. This is intentional — scenarios get clean
+    cookies/storage and cannot contaminate the user's existing tabs.
+    If you need to drive an existing tab, construct a CDPBackend directly
+    with that Page and BrowserContext instead of going through
+    ScenarioContext.
+
+    The subclass exists to make the backend distinction visible in
+    RunResult.backend and to allow future CDP-specific divergence.
     """
 
     # No behavioural override needed — inherits everything from PlaywrightBackend.

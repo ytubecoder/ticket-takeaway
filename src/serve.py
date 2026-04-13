@@ -60,14 +60,6 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
 from db import get_db, init_db
 from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
 from scenarios import discover_scenarios
-from journeys import (
-    add_journey, update_journey, delete_journey, list_journeys, get_journey,
-    add_step, update_step, delete_step, reorder_steps,
-    compile_to_manifest, store_run_results,
-    link_ticket, unlink_ticket, infer_journeys,
-    export_to_json, import_from_manifest,
-)
-from page_scraper import scan_all_screens, scans_to_json
 from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN_TESTIDS
 
 import html as _html
@@ -143,10 +135,6 @@ _db_lock = threading.RLock()  # Reentrant — write functions call _get_ticket_j
 # Scenario run tracking
 _scenario_runs: dict[str, dict] = {}  # run_id -> {status, scenario_id, process, output_dir, started_at}
 _scenario_runs_lock = threading.Lock()
-
-# Workflow bounce tracking
-_workflow_runs: dict[str, dict] = {}
-_workflow_runs_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -646,12 +634,10 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
         init_db(conn)
         cli.ingest_markdown(conn, proj)
 
-        draft = bool(body.get("draft", False))
         ticket_id = _actions_add_ticket(
             conn, project_id, title,
             section=section, priority=priority,
             complexity=complexity, description=description,
-            draft=draft,
         )
 
         conn.commit()
@@ -713,6 +699,56 @@ def _accept_ticket(proj: dict, ticket_id: str) -> bool:
 
 
 VALID_READINESS_FLAGS = {"tests", "reviewed", "smoke"}
+
+
+# ---------------------------------------------------------------------------
+# Workflow Bounce — normalize helpers
+# ---------------------------------------------------------------------------
+
+def _normalize_json_array(value, field_name: str) -> str:
+    """Normalize a JSON array value to canonical JSON string. Accepts list or JSON string."""
+    if isinstance(value, list):
+        return json.dumps(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            raise ValueError(f"{field_name} must be a valid JSON array")
+        if not isinstance(parsed, list):
+            raise ValueError(f"{field_name} must be a JSON array, not {type(parsed).__name__}")
+        return json.dumps(parsed)
+    raise ValueError(f"{field_name} must be a JSON array or JSON string")
+
+
+def _normalize_workflow_steps(steps_value, validate_agents: bool = True) -> str:
+    """Normalize and validate workflow steps. Returns canonical JSON string."""
+    if isinstance(steps_value, str):
+        try:
+            steps = json.loads(steps_value)
+        except json.JSONDecodeError:
+            raise ValueError("steps must be a valid JSON array")
+    elif isinstance(steps_value, list):
+        steps = steps_value
+    else:
+        raise ValueError("steps must be a JSON array or JSON string")
+
+    if not isinstance(steps, list):
+        raise ValueError("steps must be a JSON array")
+
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise ValueError(f"Step {i+1} must be an object")
+        agent_id = step.get("agent_id", "")
+        if not agent_id:
+            raise ValueError(f"Step {i+1} is missing agent_id")
+        if agent_id.startswith("_project_"):
+            raise ValueError(f"Step {i+1}: project agent '{agent_id}' cannot be used in workflows (import it first)")
+        if validate_agents:
+            agent = _get_workflow_agent(agent_id)
+            if not agent:
+                raise ValueError(f"Step {i+1}: agent '{agent_id}' not found")
+
+    return json.dumps(steps)
 
 
 # ---------------------------------------------------------------------------
@@ -1027,7 +1063,7 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                 time.sleep(1)
 
             agent_id = step.get("agent_id", "")
-            prompt_modifier = step.get("prompt", "")
+            prompt_modifier = step.get("prompt_modifier", step.get("prompt", ""))
 
             # Load agent config
             agent = _get_workflow_agent(agent_id)
@@ -3615,91 +3651,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"scenarios": manifests})
             return
 
-        # Journey API: list journeys
-        if remainder == "/api/journeys":
-            project_id = proj["id"]
-            with _db_lock:
-                conn = get_db()
-                init_db(conn)
-                journeys = list_journeys(conn, project_id)
-                conn.close()
-            self._send_json({"journeys": journeys})
-            return
-
-        # Journey API: get single journey with steps + runs
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)$", remainder)
-        if m:
-            journey_id = m.group(1)
-            project_id = proj["id"]
-            try:
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    journey = get_journey(conn, project_id, journey_id)
-                    conn.close()
-                self._send_json(journey)
-            except ValueError as e:
-                self._send_json({"error": str(e)}, 404)
-            return
-
-        # Journey API: get run details
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/runs/([A-Za-z0-9_-]+)$", remainder)
-        if m:
-            journey_id = m.group(1)
-            run_id = m.group(2)
-            with _db_lock:
-                conn = get_db()
-                init_db(conn)
-                run = conn.execute(
-                    "SELECT * FROM journey_runs WHERE id = ? AND journey_id = ? AND project_id = ?",
-                    (run_id, journey_id, proj["id"]),
-                ).fetchone()
-                if not run:
-                    conn.close()
-                    self._send_json({"error": "Run not found"}, 404)
-                    return
-                run_dict = dict(run)
-                step_results = conn.execute(
-                    "SELECT * FROM journey_step_results WHERE run_id = ? ORDER BY sort_order",
-                    (run_id,),
-                ).fetchall()
-                run_dict["step_results"] = [dict(sr) for sr in step_results]
-                conn.close()
-            self._send_json(run_dict)
-            return
-
-        # Journey API: serve run screenshot
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/runs/([A-Za-z0-9_-]+)/screenshots/(.+\.png)$", remainder)
-        if m:
-            journey_id, run_id, filename = m.group(1), m.group(2), m.group(3)
-            if "/" in filename or "\\" in filename or ".." in filename:
-                self._send_json({"error": "Invalid filename"}, 400)
-                return
-            project_path = proj.get("path", "")
-            screenshot_path = os.path.join(project_path, ".artifacts", "journeys", journey_id, run_id, filename)
-            if os.path.isfile(screenshot_path):
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                with open(screenshot_path, "rb") as f:
-                    data = f.read()
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-            else:
-                self._send_json({"error": "Screenshot not found"}, 404)
-            return
-
-        # Screens API: get cached scan results
-        if remainder == "/api/screens":
-            project_id = proj["id"]
-            with _page_scan_lock:
-                cached = _page_scan_cache.get(project_id)
-            if cached:
-                self._send_json({"screens": cached})
-            else:
-                self._send_json({"screens": [], "hint": "No scan yet. POST /api/screens/scan to discover pages."})
-            return
-
         self._send_json({"error": "Not found"}, 404)
 
     def do_PUT(self):
@@ -3840,6 +3791,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (json.JSONDecodeError, ValueError):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
+            if "args" in body:
+                try:
+                    body["args"] = _normalize_json_array(body["args"], "args")
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
             updated = _update_workflow_agent(agent_id, body)
             if updated:
                 self._send_json(updated)
@@ -3856,9 +3813,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (json.JSONDecodeError, ValueError):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
-            # Auto-serialize steps list to JSON
-            if "steps" in body and isinstance(body["steps"], list):
-                body["steps"] = json.dumps(body["steps"])
+            if "steps" in body:
+                try:
+                    body["steps"] = _normalize_workflow_steps(body["steps"])
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
             updated = _update_workflow(workflow_id, body)
             if updated:
                 self._send_json(updated)
@@ -4171,25 +4131,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Failed to create ticket"}, 400)
             return
 
-        if remainder == "/api/seek":
-            try:
-                body = self._read_body()
-            except (json.JSONDecodeError, ValueError):
-                body = {}
-            sources = body.get("sources", None)
-            project_path = os.path.expanduser(proj.get("path", ""))
-            from seek import run_seek
-            with _db_lock:
-                conn = get_db()
-                init_db(conn)
-                cli.ingest_markdown(conn, proj)
-                result = run_seek(conn, proj["id"], project_path, sources=sources)
-                cli.sync_to_markdown(conn, proj)
-                conn.close()
-            cli.regenerate_dashboard(proj)
-            self._send_json(result)
-            return
-
         # Add attachment to ticket
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/attachments$", remainder)
         if m:
@@ -4283,193 +4224,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "message": "feedbacks start.sh launched"})
             except Exception as e:
                 self._send_json({"error": f"Failed to start feedbacks: {e}"}, 500)
-            return
-
-        # Screens API: scan pages for interactive elements
-        if remainder == "/api/screens/scan":
-            project_id = proj["id"]
-            base_url = f"http://localhost:{SERVER_PORT}/{project_id}"
-            try:
-                from playwright.sync_api import sync_playwright
-                with sync_playwright() as pw:
-                    browser = pw.chromium.launch(headless=True)
-                    scans = scan_all_screens(base_url, browser)
-                    browser.close()
-                result = scans_to_json(scans)
-                with _page_scan_lock:
-                    _page_scan_cache[project_id] = result
-                self._send_json({"screens": result})
-            except Exception as exc:
-                self._send_json({"error": str(exc)}, 500)
-            return
-
-        # Journey API: create journey
-        if remainder == "/api/journeys":
-            try:
-                body = self._read_body()
-            except (json.JSONDecodeError, ValueError):
-                self._send_json({"error": "Invalid JSON"}, 400)
-                return
-            title = body.get("title", "").strip()
-            if not title:
-                self._send_json({"error": "title is required"}, 400)
-                return
-            try:
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    journey = add_journey(conn, proj["id"], title,
-                                          description=body.get("description", ""),
-                                          persona=body.get("persona", ""))
-                    conn.commit()
-                    conn.close()
-                self._send_json(journey, 201)
-            except ValueError as e:
-                self._send_json({"error": str(e)}, 400)
-            return
-
-        # Journey API: add step
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/steps$", remainder)
-        if m:
-            journey_id = m.group(1)
-            try:
-                body = self._read_body()
-            except (json.JSONDecodeError, ValueError):
-                self._send_json({"error": "Invalid JSON"}, 400)
-                return
-            try:
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    step = add_step(conn, journey_id, proj["id"],
-                                    action=body.get("action", "click"),
-                                    label=body.get("label", ""),
-                                    actor=body.get("actor", "user"),
-                                    target=body.get("target"),
-                                    value=body.get("value", ""),
-                                    key=body.get("key", ""),
-                                    capture=body.get("capture"),
-                                    assertion=body.get("assertion"))
-                    conn.commit()
-                    conn.close()
-                _auto_export_journey(proj["id"], journey_id, proj.get("path", ""))
-                self._send_json(step, 201)
-            except ValueError as e:
-                self._send_json({"error": str(e)}, 400)
-            return
-
-        # Journey API: validate
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/validate$", remainder)
-        if m:
-            journey_id = m.group(1)
-            try:
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    manifest = compile_to_manifest(conn, proj["id"], journey_id)
-                    conn.close()
-                from scenarios import validate_manifest, ScenarioValidationError
-                validate_manifest(manifest)
-                self._send_json({"ok": True, "manifest": manifest})
-            except (ValueError, ScenarioValidationError) as e:
-                self._send_json({"error": str(e)}, 422)
-            return
-
-        # Journey API: run journey
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/run$", remainder)
-        if m:
-            journey_id = m.group(1)
-            try:
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    manifest = compile_to_manifest(conn, proj["id"], journey_id)
-                    conn.close()
-            except ValueError as e:
-                self._send_json({"error": str(e)}, 400)
-                return
-            scenario_id = manifest["id"]
-            run_id = f"{scenario_id}-{int(time.time())}"
-            project_path = proj.get("path", "")
-            scenarios_dir = os.path.join(project_path, "tests", "scenarios")
-            os.makedirs(scenarios_dir, exist_ok=True)
-            with open(os.path.join(scenarios_dir, f"{journey_id}.json"), "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2, ensure_ascii=False)
-                f.write("\n")
-            cmd = [sys.executable, "-m", "pytest", "tests/test_scenarios.py", "-v", f"--scenario-id={scenario_id}"]
-            env = {**os.environ, "TT_SCENARIO_BASE_URL": f"http://localhost:{SERVER_PORT}/{proj['id']}"}
-            proc = subprocess.Popen(cmd, cwd=project_path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            with _scenario_runs_lock:
-                _scenario_runs[run_id] = {"scenario_id": scenario_id, "status": "running", "process": proc,
-                    "output_dir": os.path.join(project_path, ".artifacts", "scenarios"),
-                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-            self._send_json({"run_id": run_id, "status": "running"})
-            return
-
-        # Journey API: infer from tickets
-        if remainder == "/api/journeys/infer":
-            try:
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    suggestions = infer_journeys(conn, proj["id"])
-                    conn.close()
-                self._send_json({"suggestions": suggestions})
-            except Exception as e:
-                self._send_json({"error": str(e)}, 500)
-            return
-
-        # Journey API: link ticket
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/link$", remainder)
-        if m:
-            journey_id = m.group(1)
-            try:
-                body = self._read_body()
-            except (json.JSONDecodeError, ValueError):
-                self._send_json({"error": "Invalid JSON"}, 400)
-                return
-            ticket_id = body.get("ticket_id", "").strip()
-            if not ticket_id:
-                self._send_json({"error": "ticket_id is required"}, 400)
-                return
-            with _db_lock:
-                conn = get_db()
-                init_db(conn)
-                link_ticket(conn, journey_id, proj["id"], ticket_id)
-                conn.commit()
-                conn.close()
-            self._send_json({"ok": True})
-            return
-
-        # Journey API: build from path
-        m = re.match(r"^/api/journeys/([A-Za-z0-9_-]+)/build-path$", remainder)
-        if m:
-            journey_id = m.group(1)
-            try:
-                body = self._read_body()
-            except (json.JSONDecodeError, ValueError):
-                self._send_json({"error": "Invalid JSON"}, 400)
-                return
-            path_entries = body.get("path", [])
-            actor = body.get("actor", "user")
-            if not path_entries:
-                self._send_json({"error": "path is required"}, 400)
-                return
-            try:
-                from journeys import build_steps_from_path
-                step_dicts = build_steps_from_path(path_entries, actor)
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    conn.execute("DELETE FROM journey_steps WHERE journey_id = ? AND project_id = ?", (journey_id, proj["id"]))
-                    for sd in step_dicts:
-                        add_step(conn, journey_id, proj["id"], **sd)
-                    conn.commit()
-                    conn.close()
-                _auto_export_journey(proj["id"], journey_id, proj.get("path", ""))
-                self._send_json({"ok": True, "steps_created": len(step_dicts)})
-            except ValueError as e:
-                self._send_json({"error": str(e)}, 400)
             return
 
         # Scenario API: start a run
@@ -4685,11 +4439,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             name = body.get("name", agent_id)
             command = body.get("command", "claude")
-            args = body.get("args", "[]")
-            if isinstance(args, list):
-                args = json.dumps(args)
+            args_raw = body.get("args", "[]")
+            try:
+                args_raw = _normalize_json_array(args_raw, "args")
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
             system_prompt = body.get("system_prompt", "")
-            agent = _create_workflow_agent(agent_id, name, command, args, system_prompt)
+            agent = _create_workflow_agent(agent_id, name, command, args=args_raw, system_prompt=system_prompt)
             if agent:
                 self._send_json(agent, 201)
             else:
@@ -4709,10 +4466,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             name = body.get("name", workflow_id)
             description = body.get("description", "")
-            steps = body.get("steps", [])
-            if isinstance(steps, list):
-                steps = json.dumps(steps)
-            wf = _create_workflow(workflow_id, name, description, steps)
+            steps_raw = body.get("steps", "[]")
+            try:
+                steps_raw = _normalize_workflow_steps(steps_raw)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+            wf = _create_workflow(workflow_id, name, description, steps=steps_raw)
             if wf:
                 self._send_json(wf, 201)
             else:

@@ -422,7 +422,7 @@ def store_run_results(
 def _backfill_screenshots(
     conn: sqlite3.Connection, run_id: str, artifact_dir: str, journey_id: str
 ) -> None:
-    """Scan artifact dir for .png files and assign to step results by sort order."""
+    """Scan artifact dir for .png files and assign to capture step results."""
     import os
     if not os.path.isdir(artifact_dir):
         return
@@ -431,19 +431,24 @@ def _backfill_screenshots(
     )
     if not pngs:
         return
-    # Build API-servable paths
-    steps = conn.execute(
-        "SELECT id, sort_order FROM journey_step_results WHERE run_id = ? ORDER BY sort_order",
+
+    # Get step results with their journey step action type
+    step_results = conn.execute(
+        "SELECT jsr.id, jsr.sort_order, js.action "
+        "FROM journey_step_results jsr "
+        "LEFT JOIN journey_steps js ON jsr.step_id = js.id "
+        "WHERE jsr.run_id = ? ORDER BY jsr.sort_order",
         (run_id,),
     ).fetchall()
-    # Map screenshots to capture steps (screenshots are named sequentially)
+
+    # Match screenshots to capture steps only
+    capture_results = [sr for sr in step_results if sr["action"] == "capture"]
     for i, png in enumerate(pngs):
-        # Screenshot URL served by API
         screenshot_url = f"/api/journeys/{journey_id}/runs/{run_id}/screenshots/{png}"
-        if i < len(steps):
+        if i < len(capture_results):
             conn.execute(
                 "UPDATE journey_step_results SET screenshot_path = ? WHERE id = ?",
-                (screenshot_url, steps[i]["id"]),
+                (screenshot_url, capture_results[i]["id"]),
             )
     conn.commit()
 

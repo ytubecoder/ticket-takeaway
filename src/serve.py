@@ -2061,6 +2061,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 <script>
 (function() {{
   var API = '{api_base}';
+  var API_PREFIX = API.replace(/\/api$/, '');
   var currentJourney = null;
   var currentSteps = [];
   var lastRunResults = null;
@@ -2138,7 +2139,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 
       if (sr && sr.screenshot_path) {{
         var img = document.createElement('img');
-        img.src = sr.screenshot_path;
+        img.src = API_PREFIX + sr.screenshot_path;
         img.alt = step.label || ('Step ' + (idx + 1));
         img.loading = 'lazy';
         box.appendChild(img);
@@ -2148,7 +2149,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
         box.appendChild(statusDot);
 
         box.addEventListener('click', function() {{
-          openLightbox(sr.screenshot_path);
+          openLightbox(API_PREFIX + sr.screenshot_path);
         }});
       }} else {{
         box.classList.add('empty');
@@ -2506,7 +2507,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       var errDiv = document.createElement('div'); errDiv.className = 'error-msg'; errDiv.textContent = sr.error_message;
       detail.appendChild(errDiv);
     }} else if (sr.screenshot_path) {{
-      var img = document.createElement('img'); img.src = sr.screenshot_path; img.alt = 'Screenshot';
+      var img = document.createElement('img'); img.src = API_PREFIX + sr.screenshot_path; img.alt = 'Screenshot';
       detail.appendChild(img);
     }} else {{
       var noData = document.createElement('span'); noData.style.color = 'var(--text-tertiary)'; noData.textContent = 'No details for this step';

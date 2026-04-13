@@ -1,5 +1,29 @@
 # Session Log
 
+## 2026-04-08→13 — Workflow Bounce (I-19): full implementation across multiple sessions
+
+### Summary
+- Built complete multi-agent workflow bounce system: DB schema (migration 4), API endpoints (12 routes), execution engine with disagreement detection, CLI subcommands, full-page settings UI with agent editor and workflow step builder
+- Replaced 320px settings drawer with full-page settings view (toggles kanban visibility via `body.settings-open` class)
+- Added instant run feedback (pulsing placeholder block + kanban card "workflow running" indicator)
+- Fixed multiple integration bugs across sessions: dropdown API unwrapping, missing GET routes, `_workflow_runs_lock` declarations, `prompt_modifier` field mismatch, conversation `agent_name` rendering
+
+### Lessons Learned
+- **Gotcha:** Linter/other sessions repeatedly stripped `_workflow_runs_lock` declarations and workflow constants from source files between sessions — module-level state variables need to be committed immediately, not left in working tree
+- **Gotcha:** Copying worktree agent output directly over main's files clobbers features added by other branches (scenario runner, journeys, seek). Must restore main's version first, then layer additions on top — never wholesale replace files
+- **Gotcha:** API responses wrapped in `{"agents": [...]}` but JS code expected plain arrays — this bug recurred 4+ times because each agent/session rewrote the JS from scratch without checking the API contract. The pattern: always unwrap with `data.workflows || data || []`
+- **Gotcha:** Claude CLI with hooks/plugins takes 2-5 minutes per invocation, not seconds — `WORKFLOW_AGENT_TIMEOUT` needed to be 300s, and UI needed instant visual feedback (pulsing placeholder) since the user sees nothing for minutes otherwise
+- **Rejected:** Splitting generate.py across parallel agents — the file has interleaved CSS/HTML/JS so any two agents touching it create merge conflicts. Use one agent for generate.py, another for serve.py
+- **Accepted:** `body.settings-open` CSS class approach for full-page settings — cleaner than swapping filter bar innerHTML (which breaks cached DOM references). Permanent hidden back button toggled by CSS.
+- **Accepted:** Backend validation helpers (`_normalize_json_array`, `_normalize_workflow_steps`) at route level, not storage level — HTTP 400 semantics belong in routes, storage assumes canonical JSON strings
+- **Gotcha:** `--command` CLI flag conflicts with argparse's top-level `dest="command"` for subcommand dispatch — renamed to `--cmd`
+
+### Decisions
+- Custom agents in DB (not discovered from project config) — simpler, no sync overhead. Discovered agents shown read-only, import as fast-follow
+- Settings as full page (not drawer) — drawer too small for agent/workflow editors
+- "Step instructions" label (not "Pre-prompt") — matches actual behavior since text is appended after ticket context
+- Disagreement detection via primary agent evaluation prompt — lightweight extra CLI call rather than pattern matching
+
 ## 2026-04-13 — Seek feature implementation + empty state CTA
 
 ### Summary

@@ -45,7 +45,17 @@ src/scenarios.py   — scenario manifest discovery, validation, gallery publishi
 src/scenario_drafting.py — template-based draft generation from natural-language goals
 src/journeys.py    — user journey CRUD, compilation to scenario manifests, inference engine
 src/seek.py        — project file discovery engine (scanners, dedup, draft ingestion)
+src/page_scraper.py — screen discovery for journey path builder
 ```
+
+**Workflow Bounce** (I-19): Multi-agent prompt routing system. Users define agents (name + CLI command + system prompt) and workflows (ordered steps, each with an agent + optional step instructions). Applying a workflow to a ticket bounces its content through the agent sequence. Primary agent (step 1) mediates disagreements.
+
+- **DB tables:** `workflow_agents`, `workflows`, `workflow_runs` (migration 4)
+- **API:** `/api/workflow/agents`, `/api/workflow/workflows` (CRUD), `/api/tickets/{id}/workflow/run` (execution), `/api/workflow/runs/{id}` (status/polling)
+- **CLI:** `tickets-cli.py agent list/add/update/remove`, `workflow list/add/add-step/remove-step/remove`
+- **UI:** Full-page settings (gear icon → replaces kanban), agent editor with JSON args validation, workflow step builder with reorder. Ticket detail has workflow dropdown + Run button with instant placeholder and polling.
+- **Execution:** Background thread per run, `subprocess.run(["claude", "-p", ...])` per step, `--no-session-persistence` flag, 300s timeout. Disagreement detection via primary agent evaluation after each step.
+- **Validation:** `_normalize_json_array` and `_normalize_workflow_steps` reject invalid args, `_project_*` agent IDs, and missing agents.
 
 **Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `actions.py`.
 

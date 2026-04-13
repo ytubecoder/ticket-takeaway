@@ -412,7 +412,40 @@ def store_run_results(
             (run_id, step_id, i, step_status, error_msg),
         )
 
+    # Backfill screenshot paths from artifact directory
+    if artifact_dir:
+        _backfill_screenshots(conn, run_id, artifact_dir, journey_id)
+
     return run_id
+
+
+def _backfill_screenshots(
+    conn: sqlite3.Connection, run_id: str, artifact_dir: str, journey_id: str
+) -> None:
+    """Scan artifact dir for .png files and assign to step results by sort order."""
+    import os
+    if not os.path.isdir(artifact_dir):
+        return
+    pngs = sorted(
+        f for f in os.listdir(artifact_dir) if f.endswith(".png")
+    )
+    if not pngs:
+        return
+    # Build API-servable paths
+    steps = conn.execute(
+        "SELECT id, sort_order FROM journey_step_results WHERE run_id = ? ORDER BY sort_order",
+        (run_id,),
+    ).fetchall()
+    # Map screenshots to capture steps (screenshots are named sequentially)
+    for i, png in enumerate(pngs):
+        # Screenshot URL served by API
+        screenshot_url = f"/api/journeys/{journey_id}/runs/{run_id}/screenshots/{png}"
+        if i < len(steps):
+            conn.execute(
+                "UPDATE journey_step_results SET screenshot_path = ? WHERE id = ?",
+                (screenshot_url, steps[i]["id"]),
+            )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------

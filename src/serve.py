@@ -3894,8 +3894,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if "/" in filename or "\\" in filename or ".." in filename:
                 self._send_json({"error": "Invalid filename"}, 400)
                 return
-            project_path = proj.get("path", "")
-            screenshot_path = os.path.join(project_path, ".artifacts", "journeys", journey_id, run_id, filename)
+            # Look up artifact_dir from DB (run_id and dir basename may differ)
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                row = conn.execute("SELECT artifact_dir FROM journey_runs WHERE id = ?", (run_id,)).fetchone()
+                conn.close()
+            if row and row["artifact_dir"]:
+                screenshot_path = os.path.join(row["artifact_dir"], filename)
+            else:
+                project_path = proj.get("path", "")
+                screenshot_path = os.path.join(project_path, ".artifacts", "journeys", journey_id, run_id, filename)
             if os.path.isfile(screenshot_path):
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")

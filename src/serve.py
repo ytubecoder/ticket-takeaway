@@ -2103,6 +2103,14 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     }} catch(e) {{ return ''; }}
   }}
 
+  var DOT_TIPS = {{ passed: 'Step passed', failed: 'Step failed', skipped: 'Step skipped', capture: 'Screenshot capture' }};
+  var ACTION_LABELS = {{
+    open: 'Navigate to page', reload: 'Reload page', click: 'Click element',
+    double_click: 'Double-click element', fill: 'Fill in field', select: 'Select option',
+    press: 'Press key', wait_for: 'Wait for element', assert_visible: 'Assert element visible',
+    assert_text: 'Assert text content', capture: 'Capture screenshot'
+  }};
+
   function renderTimeline() {{
     var container = document.getElementById('timeline-container');
     if (!container) return;
@@ -2117,14 +2125,50 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 
     var runResults = lastRunResults || [];
 
+    // Track current URL for grouping
+    var currentUrl = '/' + (currentJourney ? currentJourney.id : '');
+    var lastUrl = null;
+
     currentSteps.forEach(function(step, idx) {{
       var sr = runResults.find(function(r) {{ return r.sort_order === idx; }}) ||
                runResults.find(function(r) {{ return r.step_id === step.id; }});
       var status = sr ? sr.status : '';
       var isCapture = step.action === 'capture';
 
+      // Track URL — open steps change the current URL
+      if (step.action === 'open') {{
+        currentUrl = step.value || extractTarget(step) || '/';
+      }}
+
+      // URL group header when URL changes
+      if (currentUrl !== lastUrl) {{
+        lastUrl = currentUrl;
+        var urlRow = document.createElement('div');
+        urlRow.className = 'tl-row';
+        urlRow.style.cssText = 'min-height:24px;margin-bottom:0;';
+        var urlLeft = document.createElement('div');
+        urlLeft.className = 'tl-left';
+        urlRow.appendChild(urlLeft);
+        var urlDotCol = document.createElement('div');
+        urlDotCol.className = 'tl-dot-col';
+        urlDotCol.style.paddingTop = '2px';
+        var urlDot = document.createElement('div');
+        urlDot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:var(--accent);';
+        urlDotCol.appendChild(urlDot);
+        urlRow.appendChild(urlDotCol);
+        var urlRight = document.createElement('div');
+        urlRight.className = 'tl-right';
+        var urlLabel = document.createElement('div');
+        urlLabel.style.cssText = 'font-size:10px;font-family:"SF Mono",Monaco,monospace;color:var(--accent);padding:2px 0;display:flex;align-items:center;gap:6px;';
+        urlLabel.textContent = currentUrl;
+        urlRight.appendChild(urlLabel);
+        urlRow.appendChild(urlRight);
+        container.appendChild(urlRow);
+      }}
+
       var row = document.createElement('div');
       row.className = 'tl-row' + (isCapture ? '' : ' action-only');
+      row.id = 'tl-row-' + (step.id || idx);
 
       // ── Left side: screenshot thumbnail (capture steps only) ──
       var left = document.createElement('div');
@@ -2149,11 +2193,12 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       }}
       row.appendChild(left);
 
-      // ── Center: dot on spine ──
+      // ── Center: dot on spine with tooltip ──
       var dotCol = document.createElement('div');
       dotCol.className = 'tl-dot-col';
       var dot = document.createElement('div');
       dot.className = 'tl-dot' + (status ? ' ' + status : '') + (isCapture ? ' capture' : '');
+      dot.title = (isCapture ? DOT_TIPS.capture : (DOT_TIPS[status] || 'Not run yet'));
       dotCol.appendChild(dot);
       row.appendChild(dotCol);
 
@@ -2162,19 +2207,23 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       right.className = 'tl-right';
       var detail = document.createElement('div');
       detail.className = 'tl-detail' + (status === 'failed' ? ' failed' : '') + (status === 'skipped' ? ' skipped' : '');
+      detail.id = 'tl-detail-' + (step.id || idx);
 
       var lbl = document.createElement('div');
       lbl.className = 'tl-detail-label';
       lbl.textContent = (idx + 1) + '. ' + (step.label || step.action || 'Step');
       detail.appendChild(lbl);
 
-      var act = document.createElement('div');
-      act.className = 'tl-detail-action';
-      act.textContent = step.action || '';
+      // Human-readable description
+      var desc = document.createElement('div');
+      desc.style.cssText = 'font-size:10px;color:var(--text-secondary);margin-bottom:2px;';
+      var descText = ACTION_LABELS[step.action] || step.action || '';
       var target = extractTarget(step);
-      if (target) act.textContent += '  \u2192  ' + target;
-      if (step.value) act.textContent += '  =  ' + step.value;
-      detail.appendChild(act);
+      if (target) descText += ': ' + target;
+      if (step.value && step.action !== 'open') descText += ' = "' + step.value + '"';
+      if (step.key) descText += ' [' + step.key + ']';
+      desc.textContent = descText;
+      detail.appendChild(desc);
 
       if (status === 'failed' && sr && sr.error_message) {{
         var err = document.createElement('div');
@@ -2183,12 +2232,53 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
         detail.appendChild(err);
       }}
 
+      // ── Inline edit form (hidden by default) ──
+      var editForm = document.createElement('div');
+      editForm.id = 'tl-edit-' + (step.id || idx);
+      editForm.style.cssText = 'display:none;margin-top:6px;';
+      var fields = [
+        ['Label', 'label', step.label || ''],
+        ['Action', 'action', step.action || ''],
+        ['Value', 'value', step.value || ''],
+        ['Key', 'key', step.key || ''],
+        ['Target (testid)', '_target_testid', (function() {{ try {{ return JSON.parse(step.target_json || '{{}}').testid || ''; }} catch(e) {{ return ''; }} }})()],
+        ['Target (css)', '_target_css', (function() {{ try {{ return JSON.parse(step.target_json || '{{}}').css || ''; }} catch(e) {{ return ''; }} }})()]
+      ];
+      fields.forEach(function(f) {{
+        var fRow = document.createElement('div');
+        fRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:3px;';
+        var fLabel = document.createElement('span');
+        fLabel.style.cssText = 'font-size:9px;color:var(--text-tertiary);min-width:60px;';
+        fLabel.textContent = f[0];
+        fRow.appendChild(fLabel);
+        var fInput = document.createElement('input');
+        fInput.style.cssText = 'flex:1;font-size:10px;padding:2px 6px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary);font-family:inherit;';
+        fInput.value = f[2];
+        fInput.dataset.field = f[1];
+        fInput.dataset.stepId = step.id;
+        fInput.addEventListener('blur', function() {{
+          var field = fInput.dataset.field;
+          var val = fInput.value;
+          if (field.startsWith('_target_')) {{
+            updateTarget(parseInt(fInput.dataset.stepId), field.replace('_target_', ''), val);
+          }} else {{
+            updateField(parseInt(fInput.dataset.stepId), field, val);
+          }}
+        }});
+        fRow.appendChild(fInput);
+        editForm.appendChild(fRow);
+      }});
+      detail.appendChild(editForm);
+
       var actions = document.createElement('div');
       actions.className = 'tl-detail-actions';
       var editBtn = document.createElement('button');
       editBtn.textContent = '\u270e';
       editBtn.title = 'Edit step';
-      editBtn.addEventListener('click', function() {{ toggleExpand(step.id); }});
+      editBtn.addEventListener('click', function() {{
+        var ef = document.getElementById('tl-edit-' + (step.id || idx));
+        if (ef) ef.style.display = ef.style.display === 'none' ? '' : 'none';
+      }});
       actions.appendChild(editBtn);
       var delBtn = document.createElement('button');
       delBtn.textContent = '\u00d7';
@@ -2350,8 +2440,9 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   /* ── Steps ───────────────────────────────────────────── */
   var ACTIONS = ['open','reload','click','double_click','fill','select','press','wait_for','assert_visible','assert_text','capture'];
 
-  function renderTimeline() {{
+  function _renderStepsTable() {{
     var tbody = document.getElementById('steps-body');
+    if (!tbody) return;
     tbody.textContent = '';
     currentSteps.forEach(function(step, idx) {{
       var tr = document.createElement('tr');
@@ -2498,7 +2589,6 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       var run = data.run, stepResults = data.step_results || [];
       lastRunResults = stepResults;
       renderTimeline();
-      renderTimeline();
       var statusEl = document.getElementById('run-status-label');
       statusEl.textContent = run.status === 'passed' ? '\\u2713 Passed' : run.status === 'failed' ? '\\u2717 Failed' : run.status;
       statusEl.className = 'run-status ' + run.status;
@@ -2518,11 +2608,11 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       resultsDiv.style.display = 'block';
     }});
 
-    if (runs.length > 1) {{
+    if (runs.length >= 1) {{
       historyDiv.style.display = 'block';
       var histList = document.getElementById('run-history-list');
       histList.textContent = '';
-      runs.slice(1, 10).forEach(function(run) {{
+      runs.forEach(function(run) {{
         var row = document.createElement('div');
         row.className = 'run-row';
         var d = document.createElement('span'); d.className = 'status-dot ' + run.status; row.appendChild(d);

@@ -1934,6 +1934,55 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .toast {{ position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; border-radius: 6px; font-size: 12px; z-index: 1000; transition: opacity 0.3s; }}
 .toast.success {{ background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3); color: var(--green); }}
 .toast.error {{ background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); color: var(--red); }}
+
+/* View tabs */
+.view-tabs {{ display: flex; gap: 2px; background: var(--bg-hover); border-radius: 6px; padding: 2px; }}
+.view-tab {{ font-size: 11px; padding: 4px 12px; border: none; border-radius: 4px; background: transparent; color: var(--text-tertiary); cursor: pointer; font-weight: 500; }}
+.view-tab.active {{ background: var(--bg-card); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }}
+.view-tab:hover:not(.active) {{ color: var(--text-secondary); }}
+
+/* Flow view */
+.flow-view {{ min-height: 120px; }}
+.flow-container {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 8px 0; }}
+.flow-step {{ display: flex; flex-direction: column; align-items: center; width: 160px; }}
+.flow-step-box {{
+  width: 160px; height: 100px; border: 1px solid var(--border-default); border-radius: 6px;
+  background: var(--bg-card); overflow: hidden; cursor: pointer; position: relative;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}}
+.flow-step-box:hover {{ border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }}
+.flow-step-box img {{ width: 100%; height: 100%; object-fit: cover; }}
+.flow-step-box.empty {{
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-tertiary); font-size: 10px; cursor: default;
+}}
+.flow-step-box.empty:hover {{ border-color: var(--border-default); box-shadow: none; }}
+.flow-step-label {{
+  margin-top: 4px; font-size: 10px; color: var(--text-secondary); text-align: center;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}}
+.flow-step-status {{
+  position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
+}}
+.flow-step-status.passed {{ background: var(--green); }}
+.flow-step-status.failed {{ background: var(--red); }}
+.flow-step-status.skipped {{ background: var(--yellow); }}
+.flow-arrow {{
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-tertiary); font-size: 16px; padding-top: 30px;
+}}
+
+/* Lightbox */
+.flow-lightbox {{
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.85); z-index: 2000;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}}
+.flow-lightbox-img {{
+  max-width: 90vw; max-height: 90vh; border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+}}
 </style>
 </head>
 <body>
@@ -1968,14 +2017,26 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       <label>Description</label>
       <input id="detail-description" data-testid="detail-description" placeholder="What does this journey validate?">
     </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 8px;">
-      <h3 style="font-size:13px;font-weight:600;">Steps</h3>
+    <div style="display:flex;align-items:center;gap:12px;margin:20px 0 8px;">
+      <div class="view-tabs" id="view-tabs">
+        <button class="view-tab active" data-view="flow" onclick="switchView('flow')">Flow</button>
+        <button class="view-tab" data-view="steps" onclick="switchView('steps')">Steps</button>
+      </div>
+      <div style="flex:1;"></div>
       <button class="btn btn-ghost btn-sm" onclick="addStep()" data-testid="add-step-btn">+ Add Step</button>
     </div>
-    <table class="steps-table" data-testid="steps-table">
-      <thead><tr><th style="width:30px">#</th><th style="width:12px"></th><th>Label</th><th>Action</th><th>Target</th><th style="width:24px"></th><th style="width:80px"></th></tr></thead>
-      <tbody id="steps-body" data-testid="steps-body"></tbody>
-    </table>
+    <div id="flow-view" class="flow-view">
+      <div id="flow-container" class="flow-container"></div>
+    </div>
+    <div id="steps-view" class="steps-view" style="display:none;">
+      <table class="steps-table" data-testid="steps-table">
+        <thead><tr><th style="width:30px">#</th><th style="width:12px"></th><th>Label</th><th>Action</th><th>Target</th><th style="width:24px"></th><th style="width:80px"></th></tr></thead>
+        <tbody id="steps-body" data-testid="steps-body"></tbody>
+      </table>
+    </div>
+    <div id="flow-lightbox" class="flow-lightbox" style="display:none;" onclick="closeLightbox()">
+      <img id="flow-lightbox-img" class="flow-lightbox-img" />
+    </div>
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-default);">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
         <h3 style="font-size:13px;font-weight:600;">Linked Tickets</h3>
@@ -2015,12 +2076,120 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   function esc(s) {{ var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }}
   function timeAgo(ts) {{
     if (!ts) return 'never';
-    var d = new Date(ts + 'Z'), diff = (Date.now() - d.getTime()) / 1000;
+    var s = String(ts);
+    if (s.indexOf('Z') === -1 && s.indexOf('+') === -1 && s.indexOf('T') > 0) s += 'Z';
+    var d = new Date(s), diff = (Date.now() - d.getTime()) / 1000;
+    if (isNaN(diff)) return 'unknown';
     if (diff < 60) return 'just now';
     if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
     if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
     return Math.floor(diff / 86400) + 'd ago';
   }}
+
+  /* ── View tab switching ──────────────────────────────── */
+  window.switchView = function(view) {{
+    var flowView = document.getElementById('flow-view');
+    var stepsView = document.getElementById('steps-view');
+    var tabs = document.querySelectorAll('.view-tab');
+    tabs.forEach(function(t) {{ t.classList.toggle('active', t.dataset.view === view); }});
+    if (view === 'flow') {{
+      flowView.style.display = '';
+      stepsView.style.display = 'none';
+      renderFlowView();
+    }} else {{
+      flowView.style.display = 'none';
+      stepsView.style.display = '';
+    }}
+  }};
+
+  function renderFlowView() {{
+    var container = document.getElementById('flow-container');
+    if (!container) return;
+    while (container.firstChild) container.removeChild(container.firstChild);
+
+    if (!currentSteps || currentSteps.length === 0) {{
+      var empty = document.createElement('div');
+      empty.style.cssText = 'font-size:12px;color:var(--text-tertiary);padding:16px 0;';
+      empty.textContent = 'No steps defined yet. Add steps to see the flow.';
+      container.appendChild(empty);
+      return;
+    }}
+
+    // Match steps to latest run results (if available)
+    var runResults = lastRunResults || [];
+
+    currentSteps.forEach(function(step, idx) {{
+      if (idx > 0) {{
+        var arrow = document.createElement('div');
+        arrow.className = 'flow-arrow';
+        arrow.textContent = '\u2192';
+        container.appendChild(arrow);
+      }}
+
+      var stepDiv = document.createElement('div');
+      stepDiv.className = 'flow-step';
+
+      var box = document.createElement('div');
+      box.className = 'flow-step-box';
+
+      // Find matching step result
+      var sr = runResults.find(function(r) {{ return r.sort_order === idx; }}) ||
+               runResults.find(function(r) {{ return r.step_id === step.id; }});
+
+      if (sr && sr.screenshot_path) {{
+        var img = document.createElement('img');
+        img.src = sr.screenshot_path;
+        img.alt = step.label || ('Step ' + (idx + 1));
+        img.loading = 'lazy';
+        box.appendChild(img);
+
+        var statusDot = document.createElement('div');
+        statusDot.className = 'flow-step-status ' + (sr.status || '');
+        box.appendChild(statusDot);
+
+        box.addEventListener('click', function() {{
+          openLightbox(sr.screenshot_path);
+        }});
+      }} else {{
+        box.classList.add('empty');
+        var placeholder = document.createElement('span');
+        if (sr) {{
+          placeholder.textContent = sr.status === 'failed' ? '\u2717 failed' : (sr.status || 'no capture');
+          var statusDot2 = document.createElement('div');
+          statusDot2.className = 'flow-step-status ' + (sr.status || '');
+          box.appendChild(statusDot2);
+        }} else {{
+          placeholder.textContent = 'no screenshot';
+        }}
+        box.appendChild(placeholder);
+      }}
+
+      stepDiv.appendChild(box);
+
+      var label = document.createElement('div');
+      label.className = 'flow-step-label';
+      label.textContent = step.label || step.action || ('Step ' + (idx + 1));
+      stepDiv.appendChild(label);
+
+      container.appendChild(stepDiv);
+    }});
+  }}
+
+  /* ── Lightbox ────────────────────────────────────────── */
+  function openLightbox(src) {{
+    var lb = document.getElementById('flow-lightbox');
+    var img = document.getElementById('flow-lightbox-img');
+    if (!lb || !img) return;
+    img.src = src;
+    lb.style.display = 'flex';
+  }}
+  window.closeLightbox = function() {{
+    var lb = document.getElementById('flow-lightbox');
+    if (lb) lb.style.display = 'none';
+  }};
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') window.closeLightbox();
+  }});
 
   /* ── API ─────────────────────────────────────────────── */
   function apiGet(path) {{ return fetch(API + path).then(function(r) {{ return r.json(); }}); }}
@@ -2115,6 +2284,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       renderSteps();
       renderLinkedTickets();
       loadRunResults(j);
+      renderFlowView();
       document.getElementById('list-view').style.display = 'none';
       var dv = document.getElementById('detail-view');
       dv.style.display = 'block';
@@ -2292,6 +2462,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       var run = data.run, stepResults = data.step_results || [];
       lastRunResults = stepResults;
       renderSteps();
+      renderFlowView();
       var statusEl = document.getElementById('run-status-label');
       statusEl.textContent = run.status === 'passed' ? '\\u2713 Passed' : run.status === 'failed' ? '\\u2717 Failed' : run.status;
       statusEl.className = 'run-status ' + run.status;

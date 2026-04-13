@@ -2443,6 +2443,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     }}
 
     setInterval(function() {{
+      if (document.body.classList.contains('settings-open')) return;
       fetch(url).then(function(r) {{ return r.text(); }}).then(function(html) {{
         var tsMatch = html.match(/<meta name="gen-ts" content="(\\d+)">/);
         if (!tsMatch || tsMatch[1] === currentTs) return;
@@ -5442,35 +5443,84 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
   var editingId = null;
   var currentSteps = [];
 
+  var _cachedAgents = [];
+  function _fetchAgentsForSteps() {{
+    return fetch(EDIT_API + '/workflow/agents')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        _cachedAgents = (data.agents || data || []).filter(function(a) {{ return a.source !== 'project'; }});
+      }})
+      .catch(function() {{}});
+  }}
+
   function renderSteps() {{
     while (stepList.firstChild) stepList.removeChild(stepList.firstChild);
     currentSteps.forEach(function(step, idx) {{
       var row = document.createElement('div');
-      row.className = 'sp-step-item';
+      row.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:6px;margin-bottom:4px;';
 
-      var order = document.createElement('span');
-      order.className = 'sp-step-order';
-      order.textContent = (idx + 1);
-      row.appendChild(order);
+      var header = document.createElement('div');
+      header.style.cssText = 'display:flex;align-items:center;gap:8px;';
 
-      var agent = document.createElement('span');
-      agent.className = 'sp-step-agent';
-      agent.textContent = step.agent_id || step.agent || '?';
-      row.appendChild(agent);
+      var num = document.createElement('span');
+      num.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-tertiary);min-width:50px;';
+      num.textContent = 'Step ' + (idx + 1) + (idx === 0 ? ' (Primary)' : '');
+      header.appendChild(num);
 
-      var prompt = document.createElement('span');
-      prompt.className = 'sp-step-prompt';
-      prompt.textContent = step.prompt || '';
-      row.appendChild(prompt);
-
-      var del = document.createElement('button');
-      del.className = 'sp-step-del';
-      del.textContent = '\u00d7';
-      del.addEventListener('click', function() {{
-        currentSteps.splice(idx, 1);
-        renderSteps();
+      var sel = document.createElement('select');
+      sel.style.cssText = 'font-size:11px;padding:3px 6px;border:1px solid var(--border-default);border-radius:4px;background:var(--bg-card);color:var(--text-primary);flex:1;';
+      var emptyOpt = document.createElement('option');
+      emptyOpt.value = '';
+      emptyOpt.textContent = 'Select agent...';
+      sel.appendChild(emptyOpt);
+      _cachedAgents.forEach(function(a) {{
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.name;
+        if (a.id === step.agent_id) opt.selected = true;
+        sel.appendChild(opt);
       }});
-      row.appendChild(del);
+      sel.addEventListener('change', function() {{
+        currentSteps[idx].agent_id = sel.value;
+        currentSteps[idx].label = sel.value ? sel.options[sel.selectedIndex].textContent : '';
+      }});
+      header.appendChild(sel);
+
+      var controls = document.createElement('div');
+      controls.style.cssText = 'display:flex;gap:3px;';
+      if (idx > 0) {{
+        var upBtn = document.createElement('button');
+        upBtn.textContent = '\u2191';
+        upBtn.title = 'Move up';
+        upBtn.style.cssText = 'font-size:10px;padding:1px 5px;border:1px solid var(--border-default);border-radius:3px;background:none;color:var(--text-tertiary);cursor:pointer;';
+        upBtn.addEventListener('click', function(e) {{ e.stopPropagation(); var tmp = currentSteps[idx]; currentSteps[idx] = currentSteps[idx-1]; currentSteps[idx-1] = tmp; renderSteps(); }});
+        controls.appendChild(upBtn);
+      }}
+      if (idx < currentSteps.length - 1) {{
+        var downBtn = document.createElement('button');
+        downBtn.textContent = '\u2193';
+        downBtn.title = 'Move down';
+        downBtn.style.cssText = 'font-size:10px;padding:1px 5px;border:1px solid var(--border-default);border-radius:3px;background:none;color:var(--text-tertiary);cursor:pointer;';
+        downBtn.addEventListener('click', function(e) {{ e.stopPropagation(); var tmp = currentSteps[idx]; currentSteps[idx] = currentSteps[idx+1]; currentSteps[idx+1] = tmp; renderSteps(); }});
+        controls.appendChild(downBtn);
+      }}
+      var delBtn = document.createElement('button');
+      delBtn.textContent = '\u00d7';
+      delBtn.title = 'Remove step';
+      delBtn.style.cssText = 'font-size:10px;padding:1px 5px;border:1px solid var(--border-default);border-radius:3px;background:none;color:var(--text-tertiary);cursor:pointer;';
+      delBtn.addEventListener('click', function(e) {{ e.stopPropagation(); currentSteps.splice(idx, 1); renderSteps(); }});
+      controls.appendChild(delBtn);
+      header.appendChild(controls);
+
+      row.appendChild(header);
+
+      var textarea = document.createElement('textarea');
+      textarea.style.cssText = 'font-size:11px;padding:5px 8px;border:1px solid var(--border-default);border-radius:4px;background:var(--bg-card);color:var(--text-primary);font-family:var(--font-mono);resize:vertical;min-height:28px;';
+      textarea.placeholder = 'Step instructions (optional)';
+      textarea.rows = 2;
+      textarea.value = step.prompt_modifier || step.prompt || '';
+      textarea.addEventListener('input', function() {{ currentSteps[idx].prompt_modifier = textarea.value; }});
+      row.appendChild(textarea);
 
       stepList.appendChild(row);
     }});
@@ -5511,7 +5561,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
             if (idInput) idInput.value = wf.id;
             if (nameInput) nameInput.value = wf.name || '';
             currentSteps = parsedSteps.slice();
-            renderSteps();
+            _fetchAgentsForSteps().then(function() {{ renderSteps(); }});
             if (formEl) formEl.style.display = '';
           }});
 
@@ -5536,8 +5586,8 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     editingId = null;
     if (idInput) idInput.value = '';
     if (nameInput) nameInput.value = '';
-    currentSteps = [];
-    renderSteps();
+    currentSteps = [{{ agent_id: '', prompt_modifier: '' }}];
+    _fetchAgentsForSteps().then(function() {{ renderSteps(); }});
     if (formEl) formEl.style.display = '';
   }});
 
@@ -5546,11 +5596,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     editingId = null;
   }});
 
-  if (stepAddBtn) stepAddBtn.addEventListener('click', function() {{
-    var agentId = window.prompt('Agent ID:');
-    if (!agentId) return;
-    var promptText = window.prompt('Prompt for this step:');
-    currentSteps.push({{ agent_id: agentId, prompt: promptText || '' }});
+  if (stepAddBtn) stepAddBtn.addEventListener('click', function(e) {{
+    e.stopPropagation();
+    currentSteps.push({{ agent_id: '', prompt_modifier: '' }});
     renderSteps();
   }});
 

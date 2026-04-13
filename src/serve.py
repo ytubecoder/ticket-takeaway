@@ -2237,23 +2237,25 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       editForm.id = 'tl-edit-' + (step.id || idx);
       editForm.style.cssText = 'display:none;margin-top:6px;';
       var fields = [
-        ['Label', 'label', step.label || ''],
-        ['Action', 'action', step.action || ''],
-        ['Value', 'value', step.value || ''],
-        ['Key', 'key', step.key || ''],
-        ['Target (testid)', '_target_testid', (function() {{ try {{ return JSON.parse(step.target_json || '{{}}').testid || ''; }} catch(e) {{ return ''; }} }})()],
-        ['Target (css)', '_target_css', (function() {{ try {{ return JSON.parse(step.target_json || '{{}}').css || ''; }} catch(e) {{ return ''; }} }})()]
+        ['Label', 'label', step.label || '', 'Human-readable name, e.g. "Click login button"'],
+        ['Action', 'action', step.action || '', 'open, click, fill, press, wait_for, capture, assert_visible, assert_text'],
+        ['Value', 'value', step.value || '', 'URL for open, text for fill, key name for press'],
+        ['Key', 'key', step.key || '', 'Keyboard key, e.g. Escape, Enter, Tab'],
+        ['Target (testid)', '_target_testid', (function() {{ try {{ return JSON.parse(step.target_json || '{{}}').testid || ''; }} catch(e) {{ return ''; }} }})(), 'data-testid attribute, e.g. login-btn'],
+        ['Target (css)', '_target_css', (function() {{ try {{ return JSON.parse(step.target_json || '{{}}').css || ''; }} catch(e) {{ return ''; }} }})(), 'CSS selector, e.g. .submit-btn >> nth=0']
       ];
       fields.forEach(function(f) {{
         var fRow = document.createElement('div');
         fRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:3px;';
         var fLabel = document.createElement('span');
-        fLabel.style.cssText = 'font-size:9px;color:var(--text-tertiary);min-width:60px;';
+        fLabel.style.cssText = 'font-size:9px;color:var(--text-tertiary);min-width:70px;';
         fLabel.textContent = f[0];
         fRow.appendChild(fLabel);
         var fInput = document.createElement('input');
         fInput.style.cssText = 'flex:1;font-size:10px;padding:2px 6px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary);font-family:inherit;';
         fInput.value = f[2];
+        fInput.placeholder = f[3] || '';
+        fInput.title = f[3] || '';
         fInput.dataset.field = f[1];
         fInput.dataset.stepId = step.id;
         fInput.addEventListener('blur', function() {{
@@ -2527,7 +2529,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     var body = {{}}; body[field] = value;
     apiPut('/journeys/' + currentJourney.id + '/steps/' + stepId, body).then(function(updated) {{
       var idx = currentSteps.findIndex(function(s) {{ return s.id === stepId; }});
-      if (idx >= 0) {{ currentSteps[idx] = updated; renderTimeline(); }}
+      if (idx >= 0) currentSteps[idx] = updated;
     }});
   }}
 
@@ -2539,7 +2541,6 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     if (value) target[key] = value; else delete target[key];
     apiPut('/journeys/' + currentJourney.id + '/steps/' + stepId, {{target: target}});
     currentSteps[idx].target_json = JSON.stringify(target);
-    renderTimeline();
   }}
 
   window.addStep = function() {{

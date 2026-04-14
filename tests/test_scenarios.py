@@ -115,12 +115,15 @@ def test_scenario(manifest, dashboard_server, browser, tmp_path, request):
     screenshots_dir = os.path.join(artifact_dir, "screenshots")
     os.makedirs(screenshots_dir, exist_ok=True)
 
+    backend_type = request.config.getoption("--backend", default="playwright")
+
     ctx = ScenarioContext(
         base_url=dashboard_server,
         browser=browser,
         output_dir=screenshots_dir,
         manifest=manifest,
         seed_id_map=seed_id_map,
+        backend_type=backend_type,
     )
 
     try:
@@ -134,6 +137,7 @@ def test_scenario(manifest, dashboard_server, browser, tmp_path, request):
     summary = {
         "scenario_id": result.scenario_id,
         "status": result.status,
+        "backend": result.backend,
         "duration_ms": result.duration_ms,
         "screenshots": result.screenshots,
         "failed_step_index": result.failed_step_index,

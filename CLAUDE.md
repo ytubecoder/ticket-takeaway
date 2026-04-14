@@ -259,11 +259,17 @@ python3 -m pytest tests/test_scenarios.py -v --publish
 
 # Run a specific scenario and publish
 python3 -m pytest tests/test_scenarios.py -v --scenario-id full-tour-showcase --publish
+
+# Run against an already-running Chrome (CDP mode)
+# First start Chrome with: google-chrome --remote-debugging-port=9222
+python3 -m pytest tests/test_scenarios.py -v --backend=cdp
+python3 -m pytest tests/test_scenarios.py -v --backend=cdp --cdp-endpoint=http://localhost:9333
 ```
 
 **Architecture:**
 - `tests/scenarios/*.json` — checked-in scenario manifests (schema: id, title, tags, actors, seed, steps, optional theme/viewport)
-- `tests/scenario_runner.py` — Playwright execution engine (11 actions: open, reload, click, double_click, fill, select, press, wait_for, assert_visible, assert_text, capture)
+- `tests/scenario_backend.py` — Backend protocol + PlaywrightBackend (launched) + CDPBackend (connect_over_cdp). Target resolution lives here.
+- `tests/scenario_runner.py` — Execution engine: dispatches action steps through the Backend interface (12 actions: open, reload, click, double_click, fill, select, press, wait_for, assert_visible, assert_text, capture)
 - `tests/scenario_seed.py` — deterministic ticket seeding via API + cleanup
 - `tests/test_scenarios.py` — pytest parametrized entrypoint with `--scenario-id` and `--publish` options
 - `src/scenarios.py` — manifest discovery, validation, gallery publishing

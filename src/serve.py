@@ -1621,6 +1621,215 @@ def _run_enrich(proj: dict, ticket_id: str, field: str, content: str, action: st
     }
 
 
+def _truncate_evidence(text: str, limit: int = 4000) -> str:
+    """Trim evidence blocks so learning prompts stay bounded."""
+    if not text:
+        return ""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n...[truncated]"
+
+
+def _collect_learning_evidence(proj: dict, ticket: dict) -> str:
+    """Collect local, source-linked evidence for learning extraction."""
+    project_path = Path(os.path.expanduser(proj.get("path", ".") or "."))
+    blocks: list[str] = []
+
+    feature_dir = project_path / "docs" / "features" / ticket["id"]
+    for name in ("PLAN.md", "NOTES.md", "BUGS.md", "TESTS.md", "REVIEW.md"):
+        path = feature_dir / name
+        if not path.is_file():
+            continue
+        try:
+            blocks.append(f"### docs/features/{ticket['id']}/{name}\n{_truncate_evidence(path.read_text(encoding='utf-8', errors='replace'), 3000)}")
+        except OSError:
+            continue
+
+    git_commands = [
+        ("git status --short", ["git", "status", "--short"]),
+        ("git diff --stat", ["git", "diff", "--stat"]),
+        ("git diff --name-only", ["git", "diff", "--name-only"]),
+    ]
+    for label, cmd in git_commands:
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        output = (result.stdout or "").strip()
+        if output:
+            blocks.append(f"### {label}\n{_truncate_evidence(output, 2000)}")
+
+    return "\n\n".join(blocks) if blocks else "(no extra local evidence found)"
+
+
+def _build_learnings_prompt(ticket: dict, current_content: str, evidence: str) -> str:
+    """Build a prompt that extracts candidate learning items for a ticket."""
+    criteria_lines = []
+    for c in ticket.get("acceptance_criteria", []):
+        mark = "[x]" if c["checked"] else "[ ]"
+        criteria_lines.append(f"- {mark} {c['text']}")
+    criteria_text = "\n".join(criteria_lines) if criteria_lines else "(none)"
+
+    flags = ticket.get("readiness_flags", {})
+    tests = flags.get("tests", "") if isinstance(flags, dict) else ""
+    smoke = flags.get("smoke", "") if isinstance(flags, dict) else ""
+    existing_learnings = current_content or (flags.get("reviewed", "") if isinstance(flags, dict) else "")
+
+    return f"""You are extracting candidate learnings from a Ticket Takeaway ticket.
+
+The human will review each item on the ticket. Suggest only useful, source-grounded learnings.
+Do not include generic progress updates, restatements of acceptance criteria, or vague advice.
+Prefer compact items that could help this ticket, this project, or the user's future work.
+
+TICKET: {ticket['id']} — {ticket['title']}
+Section: {ticket['section']} | Status: {ticket['status']} | Priority: {ticket['priority']} | Complexity: {ticket['complexity']}
+
+DESCRIPTION:
+{ticket.get('description') or '(empty)'}
+
+ACCEPTANCE CRITERIA:
+{criteria_text}
+
+TEST NOTES:
+{tests or '(empty)'}
+
+SMOKE NOTES:
+{smoke or '(empty)'}
+
+CURRENT LEARNINGS:
+{existing_learnings or '(empty)'}
+
+LOCAL EVIDENCE:
+{_truncate_evidence(evidence, 10000)}
+
+Return ONLY valid JSON with this schema:
+{{
+  "summary": "brief note about what evidence produced these candidates",
+  "items": [
+    {{
+      "text": "one actionable learning item",
+      "scope": "ticket" | "project" | "global" | "skill",
+      "type": "decision" | "procedure" | "bug" | "test" | "ux" | "architecture" | "preference" | "constraint",
+      "source": "ticket" | "diff" | "notes" | "tests" | "review" | "feedback",
+      "confidence": "low" | "medium" | "high"
+    }}
+  ]
+}}
+
+Rules:
+- Return at most 8 items.
+- Keep each text under 220 characters.
+- Use "ticket" scope for current-ticket-only discoveries.
+- Use "project" scope for repo conventions, architecture, recurring bugs, or file-specific gotchas.
+- Use "global" scope only for the human's reusable practice across projects.
+- Use "skill" scope only when the learning describes a repeatable workflow that should become a command/skill.
+- Do not duplicate CURRENT LEARNINGS.
+- If there is nothing worth saving, return an empty items array."""
+
+
+def _clean_learning_text(text: str) -> str:
+    """Normalize a learning item text without stripping meaningful content."""
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()
+    text = re.sub(r"^-\s*\[[ xX]?\]\s*", "", text)
+    text = re.sub(r"^[-*]\s+", "", text)
+    text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+    text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+    text = re.sub(r"^\d+\.\s+", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalize_learning_items(data: dict, existing_content: str = "") -> list[dict]:
+    """Validate and normalize generated learning candidate items."""
+    allowed_scopes = {"ticket", "project", "global", "skill"}
+    allowed_types = {"decision", "procedure", "bug", "test", "ux", "architecture", "preference", "constraint"}
+    allowed_sources = {"ticket", "diff", "notes", "tests", "review", "feedback"}
+    allowed_confidence = {"low", "medium", "high"}
+
+    existing_norm = {
+        _clean_learning_text(line).lower()
+        for line in (existing_content or "").splitlines()
+        if _clean_learning_text(line)
+    }
+
+    raw_items = data.get("items", []) if isinstance(data, dict) else []
+    if not isinstance(raw_items, list):
+        return []
+
+    items: list[dict] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        if isinstance(raw, str):
+            raw = {"text": raw}
+        if not isinstance(raw, dict):
+            continue
+        text = _clean_learning_text(raw.get("text", ""))
+        key = text.lower()
+        if not text or key in seen or key in existing_norm:
+            continue
+        seen.add(key)
+        scope = raw.get("scope", "ticket")
+        typ = raw.get("type", "decision")
+        source = raw.get("source", "ticket")
+        confidence = raw.get("confidence", "medium")
+        items.append({
+            "text": text,
+            "scope": scope if scope in allowed_scopes else "ticket",
+            "type": typ if typ in allowed_types else "decision",
+            "source": source if source in allowed_sources else "ticket",
+            "confidence": confidence if confidence in allowed_confidence else "medium",
+        })
+        if len(items) >= 8:
+            break
+    return items
+
+
+def _run_learning_generation(proj: dict, ticket_id: str, current_content: str = "") -> dict:
+    """Run Claude CLI to generate candidate learning items for a ticket."""
+    project_id = proj["id"]
+    ticket = _get_ticket_json(project_id, ticket_id)
+    if not ticket:
+        return {"error": "Ticket not found"}
+
+    existing = current_content or ticket.get("readiness_flags", {}).get("reviewed", "")
+    evidence = _collect_learning_evidence(proj, ticket)
+    prompt = _build_learnings_prompt(ticket, existing, evidence)
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--output-format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            cwd=os.path.expanduser(proj.get("path", "."))
+        )
+        outer = json.loads(result.stdout)
+        text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
+        data = json.loads(text) if isinstance(text, str) else text
+    except subprocess.TimeoutExpired:
+        return {"error": "Learning generation timed out — try again."}
+    except OSError as e:
+        return {"error": f"Learning generation could not start: {e}"}
+    except (json.JSONDecodeError, KeyError) as e:
+        return {"error": f"Failed to parse learning response: {e}"}
+
+    summary = _clean_ai_text(data.get("summary", "")) if isinstance(data, dict) else ""
+    items = _normalize_learning_items(data, existing)
+    return {
+        "ticket_id": ticket_id,
+        "summary": summary,
+        "items": items,
+    }
+
+
 def _toggle_readiness(proj: dict, ticket_id: str, flag: str) -> bool:
     """Toggle a readiness flag. If set, clear it; if unset, set it."""
     project_id = proj["id"]
@@ -3979,6 +4188,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             result = _run_enrich(proj, ticket_id, field, content, action)
             if "error" in result and "hunks" not in result:
+                self._send_json(result, 400)
+            else:
+                self._send_json(result)
+            return
+
+        # AI-powered learning candidate generation
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/learnings/generate$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            current_content = body.get("content", "")
+            result = _run_learning_generation(proj, ticket_id, current_content)
+            if "error" in result:
                 self._send_json(result, 400)
             else:
                 self._send_json(result)

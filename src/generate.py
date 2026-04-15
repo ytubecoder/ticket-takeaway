@@ -1210,6 +1210,37 @@ a {{ color: var(--accent); text-decoration: none; }}
 .diff-discard:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
 .diff-status {{ font-size: 11px; color: var(--text-tertiary); flex: 1; }}
 
+/* Learning candidate list */
+.learning-panel .diff-header span {{ color: var(--text-primary); }}
+.learning-summary {{
+  padding: 8px 12px; font-size: 12px; color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-default); background: rgba(59,130,246,0.04);
+}}
+.learning-items {{ padding: 8px 0; max-height: 360px; overflow-y: auto; }}
+.learning-item {{
+  padding: 8px 12px; display: flex; gap: 10px; align-items: flex-start;
+  border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.15s, opacity 0.15s;
+}}
+.learning-item:last-child {{ border-bottom: none; }}
+.learning-item.accepted {{ background: rgba(34,197,94,0.06); }}
+.learning-item.rejected {{ background: rgba(239,68,68,0.04); opacity: 0.62; }}
+.learning-item-main {{ flex: 1; min-width: 0; }}
+.learning-item-text {{
+  min-height: 28px; padding: 6px 8px; border-radius: 4px;
+  border: 1px solid transparent; background: rgba(255,255,255,0.03);
+  color: var(--text-primary); font-size: 12px; line-height: 1.45; white-space: pre-wrap;
+}}
+.learning-item-text[contenteditable="true"] {{ cursor: text; outline: none; }}
+.learning-item-text[contenteditable="true"]:focus {{
+  border-color: var(--accent); background: rgba(59,130,246,0.08);
+}}
+.learning-meta {{ display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }}
+.learning-chip {{
+  font-size: 10px; padding: 1px 6px; border-radius: 6px;
+  color: var(--text-tertiary); border: 1px solid var(--border-subtle);
+}}
+.learning-actions {{ display: flex; gap: 4px; flex-shrink: 0; padding-top: 2px; }}
+
 /* (Properties moved to meta-strip chips) */
 
 /* Assessment results area */
@@ -3430,9 +3461,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       <div class="detail-section" data-section="reviewed" id="section-reviewed">
         <div class="detail-section-header">
           <h3><span class="section-flag" data-cat="R">L</span> Learnings / Sync</h3>
-          <button class="section-assess-btn" data-cat="R">Assess</button>
+          <button class="section-assess-btn learnings-generate-btn" data-cat="R" data-action="generate-learnings">Generate</button>
         </div>
-        <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
+        <div class="detail-assess-loading hidden" data-cat-loading="R">Generating learnings...</div>
         <div class="detail-assessment hidden" data-cat-result="R"></div>
         <textarea class="detail-editor" data-field="reviewed" placeholder="Learnings, sync notes, and decisions captured along the way..."></textarea>
       </div>
@@ -3535,7 +3566,11 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       var sec = CAT_RMAP[cat];
       if (!sec) return;
       var hasContent = sec === 'description' ? !!(data.description) : sec === 'criteria' ? (data.acceptance_criteria || []).length > 0 : !!(fl[sec]);
-      btn.textContent = hasContent ? 'Re-assess' : 'Assess';
+      if (btn.dataset.action === 'generate-learnings') {{
+        btn.textContent = hasContent ? 'Generate More' : 'Generate';
+      }} else {{
+        btn.textContent = hasContent ? 'Re-assess' : 'Assess';
+      }}
     }});
   }}
 
@@ -4008,11 +4043,281 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       panel.classList.add('hidden');
     }});
 
-    container.insertBefore(panel, container.firstChild);
-  }}
+	    container.insertBefore(panel, container.firstChild);
+	  }}
 
-  function runCategoryAssess(cat, action, onDone, forceRefresh) {{
-    var catCacheKey = currentTicketId + ':cat:' + cat;
+	  function normalizeLearningLine(text) {{
+	    return (text || '')
+	      .replace(/^\\s*[-*]\\s+/, '')
+	      .replace(/^\\s*\\[[^\\]]+\\]\\s*/, '')
+	      .replace(/^\\s*\\[[^\\]]+\\]\\s*/, '')
+	      .replace(/\\s+/g, ' ')
+	      .trim()
+	      .toLowerCase();
+	  }}
+
+	  function formatLearningItem(item) {{
+	    var scope = item.scope || 'ticket';
+	    var typ = item.type || '';
+	    var meta = typ ? '[' + scope + '/' + typ + ']' : '[' + scope + ']';
+	    return '- ' + meta + ' ' + (item.text || '').trim();
+	  }}
+
+	  function saveReadinessContent(field, val) {{
+	    return fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{
+	      method:'PUT',
+	      headers:{{'Content-Type':'application/json'}},
+	      body:JSON.stringify({{content:val}})
+	    }}).then(function(r){{ return r.json(); }}).then(function(u){{
+	      if(u) currentData = u;
+	      refreshDCTRS(currentData);
+	      return u;
+	    }});
+	  }}
+
+	  function renderLearningCandidates(container, data) {{
+	    var existing = container.querySelector('.learning-panel');
+	    if (existing) existing.parentNode.removeChild(existing);
+	    var oldNotice = container.querySelector('.learning-empty-notice');
+	    if (oldNotice) oldNotice.parentNode.removeChild(oldNotice);
+
+	    var items = data.items || [];
+	    if (!items.length) {{
+	      var noItems = document.createElement('div');
+	      noItems.className = 'detail-assessment ok learning-empty-notice';
+	      noItems.style.marginBottom = '12px';
+	      var header = document.createElement('div');
+	      header.className = 'assessment-header';
+	      var badge = document.createElement('span');
+	      badge.className = 'assessment-status ok';
+	      badge.textContent = 'no candidates';
+	      var dismiss = document.createElement('button');
+	      dismiss.className = 'assessment-dismiss';
+	      dismiss.textContent = '\\u00d7';
+	      dismiss.addEventListener('click', function() {{ noItems.remove(); }});
+	      header.appendChild(badge);
+	      header.appendChild(dismiss);
+	      var summary = document.createElement('div');
+	      summary.className = 'assessment-summary';
+	      summary.textContent = data.summary || 'No useful learnings were found from the current ticket evidence.';
+	      noItems.appendChild(header);
+	      noItems.appendChild(summary);
+	      container.insertBefore(noItems, container.firstChild);
+	      return;
+	    }}
+
+	    var panel = document.createElement('div');
+	    panel.className = 'diff-panel learning-panel';
+
+	    var header = document.createElement('div');
+	    header.className = 'diff-header';
+	    var titleSpan = document.createElement('span');
+	    titleSpan.textContent = 'Candidate Learnings (' + items.length + ')';
+	    var acceptAll = document.createElement('button');
+	    acceptAll.className = 'diff-accept-all';
+	    acceptAll.textContent = 'Accept All';
+	    var rejectAll = document.createElement('button');
+	    rejectAll.className = 'diff-reject-all';
+	    rejectAll.textContent = 'Reject All';
+	    header.appendChild(titleSpan);
+	    header.appendChild(acceptAll);
+	    header.appendChild(rejectAll);
+	    panel.appendChild(header);
+
+	    if (data.summary) {{
+	      var summaryEl = document.createElement('div');
+	      summaryEl.className = 'learning-summary';
+	      summaryEl.textContent = data.summary;
+	      panel.appendChild(summaryEl);
+	    }}
+
+	    var states = items.map(function() {{ return 'pending'; }});
+	    var list = document.createElement('div');
+	    list.className = 'learning-items';
+	    var itemEls = items.map(function(item, i) {{
+	      var row = document.createElement('div');
+	      row.className = 'learning-item';
+	      row.dataset.index = i;
+
+	      var main = document.createElement('div');
+	      main.className = 'learning-item-main';
+	      var text = document.createElement('div');
+	      text.className = 'learning-item-text';
+	      text.contentEditable = 'true';
+	      text.spellcheck = true;
+	      text.textContent = item.text || '';
+	      text.addEventListener('input', function() {{ item.text = text.textContent.trim(); }});
+	      text.addEventListener('keydown', function(e) {{
+	        if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); text.blur(); }}
+	      }});
+	      main.appendChild(text);
+
+	      var meta = document.createElement('div');
+	      meta.className = 'learning-meta';
+	      ['scope', 'type', 'source', 'confidence'].forEach(function(key) {{
+	        if (!item[key]) return;
+	        var chip = document.createElement('span');
+	        chip.className = 'learning-chip';
+	        chip.textContent = key + ': ' + item[key];
+	        meta.appendChild(chip);
+	      }});
+	      main.appendChild(meta);
+
+	      var actions = document.createElement('div');
+	      actions.className = 'learning-actions';
+	      var acceptBtn = document.createElement('button');
+	      acceptBtn.className = 'diff-accept';
+	      acceptBtn.title = 'Accept learning';
+	      acceptBtn.textContent = '\\u2713';
+	      var rejectBtn = document.createElement('button');
+	      rejectBtn.className = 'diff-reject';
+	      rejectBtn.title = 'Reject learning';
+	      rejectBtn.textContent = '\\u00d7';
+	      actions.appendChild(acceptBtn);
+	      actions.appendChild(rejectBtn);
+
+	      row.appendChild(main);
+	      row.appendChild(actions);
+	      list.appendChild(row);
+
+	      ;(function(idx, rowEl) {{
+	        function setState(newState) {{
+	          if (states[idx] === newState) {{
+	            states[idx] = 'pending';
+	            rowEl.classList.remove('accepted', 'rejected');
+	          }} else {{
+	            states[idx] = newState;
+	            rowEl.classList.remove('accepted', 'rejected');
+	            if (newState !== 'pending') rowEl.classList.add(newState);
+	          }}
+	          updateStatus();
+	        }}
+	        acceptBtn.addEventListener('click', function() {{ setState('accepted'); }});
+	        rejectBtn.addEventListener('click', function() {{ setState('rejected'); }});
+	      }})(i, row);
+
+	      return row;
+	    }});
+	    panel.appendChild(list);
+
+	    var footer = document.createElement('div');
+	    footer.className = 'diff-footer';
+	    var statusEl = document.createElement('span');
+	    statusEl.className = 'diff-status';
+	    var discardBtn = document.createElement('button');
+	    discardBtn.className = 'diff-discard';
+	    discardBtn.textContent = 'Discard';
+	    var applyBtn = document.createElement('button');
+	    applyBtn.className = 'diff-apply';
+	    applyBtn.textContent = 'Apply Selected';
+	    applyBtn.disabled = true;
+	    footer.appendChild(statusEl);
+	    footer.appendChild(discardBtn);
+	    footer.appendChild(applyBtn);
+	    panel.appendChild(footer);
+
+	    function updateStatus() {{
+	      var accepted = states.filter(function(s) {{ return s === 'accepted'; }}).length;
+	      var rejected = states.filter(function(s) {{ return s === 'rejected'; }}).length;
+	      statusEl.textContent = accepted + ' accepted, ' + rejected + ' rejected, ' + (items.length - accepted - rejected) + ' pending';
+	      applyBtn.disabled = accepted === 0;
+	    }}
+	    updateStatus();
+
+	    acceptAll.addEventListener('click', function() {{
+	      for (var k = 0; k < states.length; k++) states[k] = 'accepted';
+	      itemEls.forEach(function(el) {{ el.classList.remove('rejected'); el.classList.add('accepted'); }});
+	      updateStatus();
+	    }});
+	    rejectAll.addEventListener('click', function() {{
+	      for (var k = 0; k < states.length; k++) states[k] = 'rejected';
+	      itemEls.forEach(function(el) {{ el.classList.remove('accepted'); el.classList.add('rejected'); }});
+	      updateStatus();
+	    }});
+
+	    discardBtn.addEventListener('click', function() {{ panel.remove(); }});
+
+	    applyBtn.addEventListener('click', function() {{
+	      var acceptedItems = [];
+	      states.forEach(function(state, idx) {{
+	        if (state === 'accepted' && items[idx] && items[idx].text && items[idx].text.trim()) {{
+	          acceptedItems.push(items[idx]);
+	        }}
+	      }});
+	      if (!acceptedItems.length) return;
+	      var editor = overlay.querySelector('[data-field="reviewed"]');
+	      if (!editor) return;
+	      var existing = editor.value.trim();
+	      var existingKeys = {{}};
+	      existing.split('\\n').forEach(function(line) {{
+	        var key = normalizeLearningLine(line);
+	        if (key) existingKeys[key] = true;
+	      }});
+	      var additions = [];
+	      acceptedItems.forEach(function(item) {{
+	        var key = normalizeLearningLine(item.text);
+	        if (!key || existingKeys[key]) return;
+	        existingKeys[key] = true;
+	        additions.push(formatLearningItem(item));
+	      }});
+	      if (!additions.length) {{
+	        toast('No new learnings to add');
+	        return;
+	      }}
+	      var merged = existing ? existing + '\\n' + additions.join('\\n') : additions.join('\\n');
+	      editor.value = merged;
+	      editor._origValue = merged;
+	      applyBtn.disabled = true;
+	      applyBtn.textContent = 'Saving...';
+	      saveReadinessContent('reviewed', merged).then(function() {{
+	        toast(additions.length + ' learning' + (additions.length === 1 ? '' : 's') + ' saved');
+	        panel.remove();
+	      }}).catch(function() {{
+	        applyBtn.disabled = false;
+	        applyBtn.textContent = 'Apply Selected';
+	        toast('Failed to save learnings');
+	      }});
+	    }});
+
+	    container.insertBefore(panel, container.firstChild);
+	  }}
+
+	  function runLearningGeneration(btn, onDone) {{
+	    var loading = overlay.querySelector('[data-cat-loading="R"]');
+	    var resultEl = overlay.querySelector('[data-cat-result="R"]');
+	    if (loading) {{ loading.classList.remove('hidden'); loading.textContent = 'Generating learnings...'; }}
+	    if (resultEl) resultEl.classList.add('hidden');
+	    var current = _getFieldContent('R');
+	    fetch(EDIT_API + '/tickets/' + currentTicketId + '/learnings/generate', {{
+	      method: 'POST',
+	      headers: {{ 'Content-Type': 'application/json' }},
+	      body: JSON.stringify({{ content: current }})
+	    }})
+	    .then(function(r) {{ return r.json().then(function(data) {{ return {{ ok: r.ok, data: data }}; }}); }})
+	    .then(function(res) {{
+	      if (loading) loading.classList.add('hidden');
+	      if (onDone) onDone();
+	      if (!res.ok || res.data.error) {{
+	        toast('Learning generation error: ' + (res.data.error || 'request failed'));
+	        return;
+	      }}
+	      var section = overlay.querySelector('[data-section="reviewed"]');
+	      if (section) {{
+	        renderLearningCandidates(section, res.data);
+	        section.classList.add('assess-complete');
+	        setTimeout(function() {{ section.classList.remove('assess-complete'); }}, 1500);
+	        section.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+	      }}
+	    }})
+	    .catch(function() {{
+	      if (loading) loading.classList.add('hidden');
+	      if (onDone) onDone();
+	      toast('Learning generation request failed');
+	    }});
+	  }}
+
+	  function runCategoryAssess(cat, action, onDone, forceRefresh) {{
+	    var catCacheKey = currentTicketId + ':cat:' + cat;
     var loading = overlay.querySelector('[data-cat-loading="'+cat+'"]');
     var resultEl = overlay.querySelector('[data-cat-result="'+cat+'"]');
 
@@ -4370,33 +4675,38 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       if (!cat) return;
       var sec = CAT_RMAP[cat];
       var fl = currentData.readiness_flags || {{}};
-      var hasContent = sec === 'description' ? !!(currentData.description) : sec === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[sec]);
-      var action = hasContent ? 'review' : 'create';
-      // Shift+click copies prompt to clipboard as fallback
-      if (e.shiftKey) {{
-        var t = currentData;
-        var prompts = {{
+	      var hasContent = sec === 'description' ? !!(currentData.description) : sec === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[sec]);
+	      var action = hasContent ? 'review' : 'create';
+	      var isLearningGenerate = btn.dataset.action === 'generate-learnings';
+	      // Shift+click copies prompt to clipboard as fallback
+	      if (e.shiftKey) {{
+	        var t = currentData;
+	        var prompts = {{
           D: {{ create: 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.',
                 review: 'Review the description for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)') }},
           C: {{ create: 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'),
                 review: 'Review acceptance criteria for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)') }},
           T: {{ create: 'Write test definitions for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
                 review: 'Review test definitions for ' + t.id + ': "' + t.title + '".' }},
-          R: {{ create: 'Perform a review for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)'),
-                review: 'Review the review notes for ' + t.id + ': "' + t.title + '".' }},
-          S: {{ create: 'Create a smoke test plan for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
-                review: 'Review smoke test results for ' + t.id + ': "' + t.title + '".' }}
-        }};
+	          R: {{ create: 'Generate candidate learnings for ' + t.id + ': "' + t.title + '". Return concise items the human can accept, edit, or reject.\\n\\nDescription:\\n' + (t.description || '(empty)'),
+	                review: 'Generate more candidate learnings for ' + t.id + ': "' + t.title + '". Avoid duplicating existing learnings.\\n\\nCurrent learnings:\\n' + (_getFieldContent('R') || '(empty)') }},
+	          S: {{ create: 'Create a smoke test plan for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
+	                review: 'Review smoke test results for ' + t.id + ': "' + t.title + '".' }}
+	        }};
         var p = prompts[cat] && prompts[cat][action];
-        if (p) navigator.clipboard.writeText(p).then(function(){{ toast('Prompt copied'); }});
-        return;
-      }}
-      btn.textContent = 'Assessing...'; btn.classList.add('loading');
-      var _origLabel = hasContent ? 'Re-assess' : 'Assess';
-      var _restore = function() {{ btn.textContent = _origLabel; btn.classList.remove('loading'); }};
-      runCategoryAssess(cat, action, _restore, true);  // force refresh — user explicitly clicked
-    }});
-  }});
+	        if (p) navigator.clipboard.writeText(p).then(function(){{ toast('Prompt copied'); }});
+	        return;
+	      }}
+	      btn.textContent = isLearningGenerate ? 'Generating...' : 'Assessing...'; btn.classList.add('loading');
+	      var _origLabel = isLearningGenerate ? (hasContent ? 'Generate More' : 'Generate') : (hasContent ? 'Re-assess' : 'Assess');
+	      var _restore = function() {{ btn.textContent = _origLabel; btn.classList.remove('loading'); }};
+	      if (isLearningGenerate) {{
+	        runLearningGeneration(btn, _restore);
+	      }} else {{
+	        runCategoryAssess(cat, action, _restore, true);  // force refresh — user explicitly clicked
+	      }}
+	    }});
+	  }});
 
   // Ctrl+S saves the focused textarea
   overlay.addEventListener('keydown', function(e) {{

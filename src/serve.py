@@ -2028,8 +2028,13 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
         <div id="detail-journey-id" style="font-size:10px;font-family:'SF Mono',Monaco,monospace;color:var(--text-tertiary);margin-top:1px;"></div>
       </div>
       <span id="detail-badge" class="badge badge-draft" data-testid="detail-badge">draft</span>
-      <div style="margin-left:auto;display:flex;gap:6px;">
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
         <button class="btn btn-ghost btn-sm" onclick="validateJourney()" data-testid="validate-btn">Validate</button>
+        <select id="backend-select" data-testid="backend-select" title="Browser backend — Playwright launches its own browser, CDP connects to Chrome on port 9222"
+                style="font-size:11px;padding:4px 6px;border:1px solid var(--border-default);background:var(--bg-elevated);color:var(--text-primary);border-radius:4px;cursor:pointer;">
+          <option value="playwright">PW</option>
+          <option value="cdp">CDP</option>
+        </select>
         <button class="btn btn-success btn-sm" onclick="runJourney()" data-testid="run-btn">&#9654; Run</button>
         <button class="btn btn-danger btn-sm" onclick="deleteJourney()" data-testid="delete-btn">Delete</button>
       </div>
@@ -2579,8 +2584,10 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     }});
   }};
   window.runJourney = function() {{
-    toast('Starting run...');
-    apiPost('/journeys/' + currentJourney.id + '/run', {{}}).then(function(r) {{
+    var backendSel = document.getElementById('backend-select');
+    var backend = backendSel ? backendSel.value : 'playwright';
+    toast('Starting run (' + backend + ')...');
+    apiPost('/journeys/' + currentJourney.id + '/run', {{backend: backend}}).then(function(r) {{
       if (r.data.error) {{ toast(r.data.error, 'error'); return; }}
       toast('Run started: ' + r.data.run_id);
       setTimeout(function() {{ openJourney(currentJourney.id); }}, 2000);
@@ -4281,6 +4288,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             journey_id = m.group(1)
             try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            backend = body.get("backend") if isinstance(body, dict) else None
+            if backend not in ("playwright", "cdp"):
+                backend = None
+            try:
                 with _db_lock:
                     conn = get_db()
                     init_db(conn)
@@ -4298,6 +4312,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
                 f.write("\n")
             cmd = [sys.executable, "-m", "pytest", "tests/test_scenarios.py", "-v", f"--scenario-id={scenario_id}"]
+            if backend:
+                cmd.append(f"--backend={backend}")
             env = {**os.environ, "TT_SCENARIO_BASE_URL": f"http://localhost:{SERVER_PORT}/{proj['id']}"}
             proc = subprocess.Popen(cmd, cwd=project_path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             with _scenario_runs_lock:
@@ -4382,6 +4398,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             scenario_id = body.get("scenario_id")
             publish = body.get("publish", False)
+            backend = body.get("backend")
+            if backend not in ("playwright", "cdp"):
+                backend = None
             if not scenario_id:
                 self._send_json({"error": "scenario_id required"}, 400)
                 return
@@ -4396,6 +4415,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ]
             if publish:
                 cmd.append("--publish")
+            if backend:
+                cmd.append(f"--backend={backend}")
 
             env = {**os.environ, "TT_SCENARIO_BASE_URL": f"http://localhost:{SERVER_PORT}/{proj['id']}"}
 

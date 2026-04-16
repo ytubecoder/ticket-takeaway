@@ -1,0 +1,31 @@
+{
+  "id": "journey-smoke-test",
+  "title": "Smoke test — verify runner loads a manifest",
+  "tags": [
+    "journey",
+    "auto-compiled"
+  ],
+  "actors": {
+    "user": {
+      "label": "Test User"
+    }
+  },
+  "seed": {},
+  "viewport": {
+    "width": 1440,
+    "height": 1024
+  },
+  "steps": [
+    {
+      "actor": "user",
+      "action": "open"
+    },
+    {
+      "actor": "user",
+      "action": "assert_visible",
+      "target": {
+        "testid": "board-root"
+      }
+    }
+  ]
+}

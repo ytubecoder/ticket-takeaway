@@ -1,0 +1,94 @@
+{
+  "id": "journey-dashboard-screenshot-tour",
+  "title": "Dashboard Screenshot Tour",
+  "tags": [
+    "journey",
+    "auto-compiled"
+  ],
+  "actors": {
+    "user": {
+      "label": "User"
+    }
+  },
+  "seed": {},
+  "viewport": {
+    "width": 1440,
+    "height": 1024
+  },
+  "steps": [
+    {
+      "actor": "user",
+      "action": "open"
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "board-root"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "01-board-overview",
+        "full_page": true
+      }
+    },
+    {
+      "actor": "user",
+      "action": "click",
+      "target": {
+        "css": "[data-section=\"wip\"] .card-open-btn >> nth=0"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "detail-overlay"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "02-detail-overlay"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "press",
+      "target": {
+        "css": "body"
+      },
+      "key": "Escape"
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "03-board-after-close"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "open",
+      "path": "/journeys"
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "journey-list"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "04-journeys-page"
+      }
+    }
+  ]
+}

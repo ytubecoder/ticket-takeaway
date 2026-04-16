@@ -1,0 +1,24 @@
+{
+  "id": "journey-validate-test",
+  "title": "Validate Test",
+  "tags": [
+    "journey",
+    "auto-compiled"
+  ],
+  "actors": {
+    "user": {
+      "label": "User"
+    }
+  },
+  "seed": {},
+  "viewport": {
+    "width": 1440,
+    "height": 1024
+  },
+  "steps": [
+    {
+      "actor": "user",
+      "action": "open"
+    }
+  ]
+}

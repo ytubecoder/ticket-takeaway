@@ -1,5 +1,44 @@
 # Session Log
 
+## 2026-04-16 — Settings/bounce split + workflow execution reliability
+
+### Summary
+- Split settings into two surfaces: right-hand drawer (gear icon) for app settings, full-page "Workflows & Agents" view (zap icon) for bounce config. Deleted legacy `/settings` server route (`_render_project_settings`). Ported Project metadata, Scenarios, Draft Generator, Danger Zone into the drawer.
+- Fixed workflow bounce execution: progress entries before subprocess, returncode+stderr checking, `--no-session-persistence`, stuck run recovery on startup, dead-thread detection on poll, agreement check error logging.
+- Added kanban card indicators: pulsing text while workflow running (3s active-runs poll), static accent dot when complete (unread, cleared on overlay open).
+
+### Lessons Learned
+- **Accepted:** User redirected plan mid-stream — originally proposed merging everything into full-page view, user corrected to drawer for settings + separate full-page for bounce. Better separation of "config" vs "pipeline management."
+- **Gotcha:** `serve.py` reads from pre-generated `docs/sdlc-dashboard.html`, not from `generate.py` at request time. Must run `generate.py` to see changes. Tripped up verification initially (new elements missing from served HTML).
+- **Gotcha:** `subprocess.run()` returncode was never checked — if `claude` CLI exits non-zero, stdout is empty but no error raised. Silent empty conversation turns.
+- **Gotcha:** Daemon threads die on server restart but DB records stay `status="running"` forever. UI polls indefinitely seeing "running" with no progress. Fixed with startup recovery + dead-thread detection.
+- **Gotcha:** `setCardWfIndicator` was scoped to the workflow bounce IIFE — not accessible from other script blocks. Added the active-runs polling and unread tracking inside the same IIFE to share scope.
+
+### Decisions
+- Drawer gets all "settings" (Appearance, Feedbacks, Managed Files, Project metadata, Scenarios, Draft Generator, Danger Zone). Full-page view gets only Agents + Workflows. User explicitly chose this split.
+- Zap icon for bounce nav button (user chose from options).
+- Unread tracking is client-side/session-scoped (no DB changes). Will be replaced by global notification system later.
+- `.sp-*` CSS class names kept as-is (only page wrapper renamed to `.bounce-page`/`bounce-open`).
+- Progress entries ("Running agent X…") are removed and replaced by actual response — prevents clutter in completed conversation.
+
+## 2026-04-16 — Drag-drop fix, ticket cleanup, tagging rules
+
+### Summary
+- Fixed drag-and-drop triggering card click/expand on release (window._justDragged flag)
+- Cleaned up 15 junk/test tickets (moved to Won't Do), grouped technical sub-tickets under parents (B-10, B-32)
+- Tagged journey tickets (I-29, I-30) with "journeys" tag
+- Established memory rules: tag tickets thematically, tickets must describe user-facing value (technical fixes as sub-tickets)
+
+### Lessons Learned
+- **Gotcha:** Drag-end fires a click event on the card — `dragend` doesn't prevent subsequent `click`. Fixed with `window._justDragged` flag set on dragstart, cleared 50ms after dragend, checked in click handlers
+- **Gotcha:** `var` in one IIFE isn't accessible from another — `_justDragged` needed to be on `window` since drag handlers and click handlers are in different script blocks
+- **Gotcha:** Migration 6 (ticket_tags) was recorded in `_migrations` but table wasn't created — `executescript` with FK constraint silently failed. Had to create table manually without FK.
+
+### Decisions
+- Junk tickets moved to Won't Do (not deleted) — preserves history
+- Technical tickets grouped under parent tickets that describe user-facing value
+- All new tickets must be tagged with thematic tags aligned to existing tag vocabulary
+
 ## 2026-04-11→16 — Dual-backend scenario runner (B-42) + feedbacks screenshots
 
 ### Summary

@@ -75,7 +75,7 @@ src/page_scraper.py — screen discovery for journey path builder
 2. Loads tickets from SQLite (falls back to parsing PRODUCT_BACKLOG.md if no DB)
 3. Collects git/code stats via shell commands
 4. Renders a self-contained HTML file with inline CSS/JS (light/dark/system theming)
-5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved. **Polling is skipped when `body.settings-open` is set** to prevent form/editor destruction.
+5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved. **Polling is skipped when `body.bounce-open` is set** to prevent form/editor destruction.
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
 Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.

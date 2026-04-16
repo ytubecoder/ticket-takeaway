@@ -267,6 +267,7 @@ def add_ticket(
     parent: Optional[str] = None,
     draft: bool = False,
     source_attachment_id: Optional[int] = None,
+    tags: Optional[list[str]] = None,
 ) -> str:
     """Add a new ticket.  Auto-generates the ID from *section* prefix.
 
@@ -283,6 +284,16 @@ def add_ticket(
         (ticket_id, project_id, title, priority, complexity, status,
          section, description, parent, sort_order, int(draft), source_attachment_id),
     )
+
+    if tags:
+        for tag in tags:
+            tag = tag.strip().lower()
+            if tag:
+                conn.execute(
+                    "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) "
+                    "VALUES (?, ?, ?)",
+                    (ticket_id, project_id, tag),
+                )
 
     return ticket_id
 
@@ -305,6 +316,8 @@ def update_ticket(
     remove_criteria: Optional[int] = None,
     add_depends: Optional[list[str]] = None,
     remove_depends: Optional[list[str]] = None,
+    add_tags: Optional[list[str]] = None,
+    remove_tags: Optional[list[str]] = None,
 ) -> str:
     """Partial update of a ticket.  Only fields that are not None/sentinel are changed.
 
@@ -380,6 +393,27 @@ def update_ticket(
                 "WHERE ticket_id = ? AND project_id = ? AND depends_on_id = ?",
                 (tid, project_id, dep),
             )
+
+    # ---- tag operations ----
+    if add_tags:
+        for tag in add_tags:
+            tag = tag.strip().lower()
+            if tag:
+                conn.execute(
+                    "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) "
+                    "VALUES (?, ?, ?)",
+                    (tid, project_id, tag),
+                )
+
+    if remove_tags:
+        for tag in remove_tags:
+            tag = tag.strip().lower()
+            if tag:
+                conn.execute(
+                    "DELETE FROM ticket_tags "
+                    "WHERE ticket_id = ? AND project_id = ? AND tag = ?",
+                    (tid, project_id, tag),
+                )
 
     # Post-change hooks (status only — section unchanged by update)
     new_status = updates.get("status", old_status)

@@ -24,4 +24,5 @@ docs/features/
 .vscode/
 .idea/
 src/__pycache__/
+tests/__pycache__/
 .worktrees/

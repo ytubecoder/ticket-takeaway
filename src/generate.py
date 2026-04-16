@@ -56,6 +56,7 @@ SVG_ICONS = {
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
     "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+    "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
 }
 
 
@@ -630,6 +631,7 @@ def generate_html(project: Project) -> str:
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
     _icon_journeys = _svg_icon("route", 14)
+    _icon_bounce = _svg_icon("zap", 14)
     _icon_close = _svg_icon("x", 14)
     _icon_open = _svg_icon("arrow-up-right", 12)
     _dctrs_icons = ''.join([
@@ -1656,6 +1658,103 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 9px; padding: 1px 5px; border-radius: 3px;
   background: var(--bg-badge); color: var(--text-tertiary);
 }}
+/* Drawer: Project / Scenarios / Draft / Danger */
+.project-form {{ display: flex; flex-direction: column; gap: 4px; }}
+.project-form label {{
+  font-size: 10px; font-weight: 600; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px;
+}}
+.project-form label .pf-ro {{ color: var(--text-tertiary); text-transform: none; font-weight: 400; }}
+.project-form input[type="text"], .project-form textarea {{
+  font-size: 11px; padding: 5px 8px; border-radius: 5px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: var(--font-mono); outline: none; width: 100%;
+}}
+.project-form input[type="text"]:focus, .project-form textarea:focus {{ border-color: var(--accent); }}
+.project-form input[readonly] {{ opacity: 0.6; cursor: not-allowed; }}
+.project-form textarea {{ resize: vertical; font-family: inherit; }}
+.project-form .pf-row {{ display: flex; align-items: center; gap: 10px; margin-top: 8px; }}
+.project-form .pf-save {{
+  margin-top: 10px; font-size: 11px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid var(--accent); background: rgba(59,130,246,0.12);
+  color: var(--accent); cursor: pointer; font-weight: 600; font-family: inherit;
+  align-self: flex-start;
+}}
+.project-form .pf-save:hover {{ background: rgba(59,130,246,0.22); }}
+.project-form .pf-msg {{ font-size: 10px; margin-left: 8px; }}
+.project-form .pf-msg.ok {{ color: #22c55e; }}
+.project-form .pf-msg.err {{ color: #ef4444; }}
+.scenarios-list {{ display: flex; flex-direction: column; gap: 4px; }}
+.scenario-row {{
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-card);
+  font-size: 11px;
+}}
+.scenario-row .sr-title {{ font-weight: 600; color: var(--text-primary); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.scenario-row .sr-status {{ font-size: 10px; min-width: 40px; text-align: right; }}
+.scenario-row .sr-status.passed {{ color: #22c55e; }}
+.scenario-row .sr-status.failed {{ color: #ef4444; }}
+.scenario-row .sr-btn {{
+  font-size: 9px; padding: 3px 7px; border-radius: 4px;
+  border: 1px solid var(--border-default); background: none; color: var(--text-secondary);
+  cursor: pointer; font-family: inherit;
+}}
+.scenario-row .sr-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
+.scenario-row .sr-btn.publish {{ color: var(--accent); border-color: rgba(59,130,246,0.4); }}
+.scenario-shots {{ display: flex; gap: 3px; margin-top: 4px; flex-wrap: wrap; }}
+.scenario-shots img {{
+  width: 48px; height: 32px; object-fit: cover; border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+}}
+.draft-goal {{
+  width: 100%; font-size: 11px; padding: 6px 8px; border-radius: 5px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: inherit; resize: vertical; outline: none;
+  margin-top: 6px;
+}}
+.draft-goal:focus {{ border-color: var(--accent); }}
+.draft-btn {{
+  margin-top: 6px; font-size: 11px; padding: 6px 12px; border-radius: 6px;
+  border: 1px solid var(--accent); background: rgba(59,130,246,0.12);
+  color: var(--accent); cursor: pointer; font-weight: 600; font-family: inherit;
+}}
+.draft-btn:hover {{ background: rgba(59,130,246,0.22); }}
+.draft-results {{ margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }}
+.draft-candidate {{
+  padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 6px;
+  background: var(--bg-card);
+}}
+.draft-candidate .dc-title-row {{ display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }}
+.draft-candidate .dc-title {{ font-size: 12px; font-weight: 600; color: var(--text-primary); flex: 1; }}
+.draft-candidate .dc-conf {{
+  font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 8px; text-transform: uppercase;
+}}
+.draft-candidate .dc-conf.high {{ background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }}
+.draft-candidate .dc-conf.medium {{ background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }}
+.draft-candidate .dc-conf.low {{ background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }}
+.draft-candidate .dc-summary {{ font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; }}
+.draft-candidate .dc-btn-row {{ display: flex; gap: 6px; align-items: center; margin-top: 6px; }}
+.draft-candidate .dc-btn {{
+  font-size: 10px; padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border-default); background: none; color: var(--text-secondary);
+  font-family: inherit;
+}}
+.draft-candidate .dc-btn.approve {{ color: #22c55e; border-color: rgba(34,197,94,0.4); }}
+.draft-candidate .dc-btn:hover {{ border-color: var(--text-tertiary); }}
+.draft-candidate .dc-msg {{ font-size: 10px; }}
+.draft-candidate .dc-msg.ok {{ color: #22c55e; }}
+.draft-candidate .dc-msg.err {{ color: #ef4444; }}
+.draft-candidate pre.dc-preview {{
+  display: none; margin-top: 6px; padding: 6px; border-radius: 4px;
+  background: var(--bg-page); font-size: 9px; color: var(--text-secondary);
+  overflow-x: auto; max-height: 180px;
+}}
+.danger-btn {{
+  font-size: 11px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid rgba(239,68,68,0.35); background: rgba(239,68,68,0.1);
+  color: #ef4444; cursor: pointer; font-weight: 600; font-family: inherit;
+}}
+.danger-btn:hover {{ background: rgba(239,68,68,0.2); }}
 
 /* Attachments section in detail overlay */
 .attachments-list {{
@@ -1826,33 +1925,32 @@ a {{ color: var(--accent); text-decoration: none; }}
   background: rgba(234,179,8,0.08); border-left: 3px solid rgba(234,179,8,0.4);
 }}
 
-/* ── Full-page settings ── */
-.settings-page {{
+/* ── Full-page Workflows & Agents ("bounce") view ── */
+.bounce-page {{
   display: none; position: fixed; inset: 0; z-index: 600;
   background: var(--bg-primary); overflow-y: auto; padding: 32px 48px;
 }}
-body.settings-open .settings-page {{ display: block; }}
-body.settings-open .kanban,
-body.settings-open .filter-bar,
-body.settings-open .bottom-section,
-body.settings-open #settings-drawer,
-body.settings-open .settings-toggle {{ display: none !important; }}
-body.settings-open .settings-back-btn {{ display: inline-flex; }}
-.settings-back-btn {{
+body.bounce-open .bounce-page {{ display: block; }}
+body.bounce-open .kanban,
+body.bounce-open .filter-bar,
+body.bounce-open .bottom-section,
+body.bounce-open #settings-drawer {{ display: none !important; }}
+body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
+.bounce-back-btn {{
   display: none; font-size: 12px; padding: 4px 10px; border-radius: 6px;
   border: 1px solid var(--border-default); background: var(--bg-card);
   color: var(--text-secondary); cursor: pointer; font-family: inherit;
   align-items: center; gap: 4px; margin-right: 8px;
 }}
-.settings-back-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
-.settings-page h2 {{
+.bounce-back-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
+.bounce-page h2 {{
   font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 24px;
 }}
-.settings-page .sp-section {{
+.bounce-page .sp-section {{
   margin-bottom: 32px; border: 1px solid var(--border-default);
   border-radius: 10px; padding: 20px; background: var(--bg-card);
 }}
-.settings-page .sp-section h3 {{
+.bounce-page .sp-section h3 {{
   font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 12px;
 }}
 
@@ -1936,7 +2034,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 </div>
 
 <div class="filter-bar" id="filterBar">
-  <button class="settings-back-btn" id="settingsBackBtn">&larr; Back to Board</button>
+  <button class="bounce-back-btn" id="bounceBackBtn">&larr; Back to Board</button>
   <button class="filter-btn active" data-filter="all" data-group="all">All <span class="count">{count_total}</span></button>
   <span class="filter-divider"></span>
   <span class="filter-group" data-group-name="status">
@@ -1959,6 +2057,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
   <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
+  <button class="settings-toggle" id="bounceToggleBtn" data-testid="bounce-toggle" title="Workflows &amp; Agents">{_icon_bounce}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
@@ -2026,6 +2125,46 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
       <div id="managedFilesList" class="managed-files-list"></div>
     </div>
+    <div class="settings-section" id="projectSection">
+      <div class="settings-section-title">Project</div>
+      <form id="projectForm" class="project-form">
+        <label>Name</label>
+        <input type="text" id="projectNameInput" />
+        <label>Path</label>
+        <input type="text" id="projectPathInput" />
+        <label>Description</label>
+        <textarea id="projectDescInput" rows="2"></textarea>
+        <label>ID <span class="pf-ro">(read-only)</span></label>
+        <input type="text" id="projectIdInput" readonly />
+        <div class="pf-row">
+          <label>Active</label>
+          <label class="settings-toggle-switch">
+            <input type="checkbox" id="projectActiveInput">
+            <span class="settings-toggle-slider"></span>
+          </label>
+        </div>
+        <button type="submit" class="pf-save">Save Project</button>
+        <span class="pf-msg" id="projectSaveMsg"></span>
+      </form>
+    </div>
+    <div class="settings-section" id="scenariosSection">
+      <div class="settings-section-title">Scenarios</div>
+      <div id="scenariosList" class="scenarios-list">
+        <div class="settings-hint">Loading scenarios&hellip;</div>
+      </div>
+    </div>
+    <div class="settings-section" id="draftSection">
+      <div class="settings-section-title">Generate Draft Scenario</div>
+      <div class="settings-hint">Describe what the scenario should demonstrate.</div>
+      <textarea id="draftGoalInput" rows="2" class="draft-goal" placeholder="e.g. user creates a ticket and moves it to WIP"></textarea>
+      <button id="draftGenerateBtn" class="draft-btn">Generate Drafts</button>
+      <div id="draftResults" class="draft-results"></div>
+    </div>
+    <div class="settings-section" id="dangerSection">
+      <div class="settings-section-title" style="color:#ef4444;">Danger Zone</div>
+      <button id="removeProjectBtn" class="danger-btn">Remove Project</button>
+      <div class="settings-hint">Removes from registry only. Files and tickets are not deleted.</div>
+    </div>
   </div>
 </div>
 
@@ -2092,24 +2231,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
 </div>
 
-<!-- Full-page settings -->
-<div class="settings-page" id="settings-page">
-  <h2>Settings</h2>
-
-  <div class="sp-section">
-    <h3>Appearance</h3>
-    <div id="spThemeToggle"></div>
-  </div>
-
-  <div class="sp-section">
-    <h3>Feedbacks Integration</h3>
-    <p style="font-size:12px;color:var(--text-tertiary);">Managed via the settings drawer.</p>
-  </div>
-
-  <div class="sp-section">
-    <h3>Managed Files</h3>
-    <div id="spManagedFiles" style="font-size:12px;color:var(--text-tertiary);">Loading...</div>
-  </div>
+<!-- Full-page Workflows & Agents view -->
+<div class="bounce-page" id="bounce-page">
+  <h2>Workflows &amp; Agents</h2>
 
   <div class="sp-section">
     <h3>Agents</h3>
@@ -2474,7 +2598,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     }}
 
     setInterval(function() {{
-      if (document.body.classList.contains('settings-open')) return;
+      if (document.body.classList.contains('bounce-open')) return;
       fetch(url).then(function(r) {{ return r.text(); }}).then(function(html) {{
         var tsMatch = html.match(/<meta name="gen-ts" content="(\\d+)">/);
         if (!tsMatch || tsMatch[1] === currentTs) return;
@@ -3872,9 +3996,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     return lines;
   }}
 
-  function renderDiffUI(container, data, cat) {{
-    var existing = container.querySelector('.diff-panel');
-    if (existing) existing.parentNode.removeChild(existing);
+	  function renderDiffUI(container, data, cat) {{
+	    var existing = container.querySelector('.diff-panel');
+	    if (existing) existing.parentNode.removeChild(existing);
 
     var hunks = data.hunks || [];
     var original = data.original || '';
@@ -5052,22 +5176,28 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
   if (!EDIT_API) return;
 
-  /* Full-page settings toggle */
-  var settingsPage = document.getElementById('settings-page');
-  var backBtn = document.getElementById('settingsBackBtn');
+  /* Full-page Workflows & Agents ("bounce") view toggle */
+  var bouncePage = document.getElementById('bounce-page');
+  var bounceBtn = document.getElementById('bounceToggleBtn');
+  var bounceBackBtn = document.getElementById('bounceBackBtn');
 
-  function openSettingsPage() {{
-    document.body.classList.add('settings-open');
+  function openBouncePage() {{
+    if (drawer && !drawer.classList.contains('hidden')) closeDrawer();
+    document.body.classList.add('bounce-open');
     if (typeof _spLoadAgents === 'function') _spLoadAgents();
     if (typeof _spLoadWorkflows === 'function') _spLoadWorkflows();
   }}
-  function closeSettingsPage() {{
-    document.body.classList.remove('settings-open');
+  function closeBouncePage() {{
+    document.body.classList.remove('bounce-open');
   }}
-  window.openSettingsPage = openSettingsPage;
-  window.closeSettingsPage = closeSettingsPage;
+  window.openBouncePage = openBouncePage;
+  window.closeBouncePage = closeBouncePage;
 
-  if (backBtn) backBtn.addEventListener('click', closeSettingsPage);
+  if (bounceBackBtn) bounceBackBtn.addEventListener('click', closeBouncePage);
+  if (bounceBtn) bounceBtn.addEventListener('click', function() {{
+    if (document.body.classList.contains('bounce-open')) closeBouncePage();
+    else openBouncePage();
+  }});
 
   var toggleBtn = document.getElementById('settingsToggleBtn');
   var drawer = document.getElementById('settings-drawer');
@@ -5086,6 +5216,8 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     drawer.classList.remove('hidden');
     loadSettings().then(function() {{ checkFeedbacksStatus(); }});
     loadManagedFiles();
+    if (typeof loadProject === 'function') loadProject();
+    if (typeof loadScenarios === 'function') loadScenarios();
   }}
 
   function closeDrawer() {{
@@ -5093,15 +5225,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
   }}
 
   toggleBtn.addEventListener('click', function() {{
-    if (settingsPage) {{
-      if (document.body.classList.contains('settings-open')) {{
-        closeSettingsPage();
-      }} else {{
-        openSettingsPage();
-        openDrawer();
-      }}
-      return;
-    }}
+    if (document.body.classList.contains('bounce-open')) closeBouncePage();
     if (drawer.classList.contains('hidden')) {{
       openDrawer();
     }} else {{
@@ -5228,6 +5352,338 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         hint.textContent = 'Could not load managed files.';
         container.appendChild(hint);
       }});
+  }}
+
+  /* ── Drawer: Project metadata ───────────────────── */
+  var currentPidMeta = document.querySelector('meta[name="current-project"]');
+  var currentPid = currentPidMeta ? currentPidMeta.content : null;
+  var projectSection = document.getElementById('projectSection');
+  var projectForm = document.getElementById('projectForm');
+  var projectNameInput = document.getElementById('projectNameInput');
+  var projectPathInput = document.getElementById('projectPathInput');
+  var projectDescInput = document.getElementById('projectDescInput');
+  var projectIdInput = document.getElementById('projectIdInput');
+  var projectActiveInput = document.getElementById('projectActiveInput');
+  var projectSaveMsg = document.getElementById('projectSaveMsg');
+
+  function loadProject() {{
+    if (!projectForm || !currentPid) {{ if (projectSection) projectSection.style.display = 'none'; return; }}
+    fetch('/api/projects')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var list = (data && data.projects) || data || [];
+        var proj = null;
+        for (var i = 0; i < list.length; i++) {{
+          if (list[i].id === currentPid) {{ proj = list[i]; break; }}
+        }}
+        if (!proj) return;
+        if (projectNameInput) projectNameInput.value = proj.name || '';
+        if (projectPathInput) projectPathInput.value = proj.path || '';
+        if (projectDescInput) projectDescInput.value = proj.description || '';
+        if (projectIdInput) projectIdInput.value = proj.id || '';
+        if (projectActiveInput) projectActiveInput.checked = proj.active !== false;
+      }})
+      .catch(function() {{}});
+  }}
+
+  if (projectForm) {{
+    projectForm.addEventListener('submit', function(e) {{
+      e.preventDefault();
+      if (!currentPid) return;
+      projectSaveMsg.textContent = '';
+      projectSaveMsg.className = 'pf-msg';
+      fetch('/api/projects/' + currentPid, {{
+        method: 'PUT',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          name: projectNameInput.value,
+          path: projectPathInput.value,
+          description: projectDescInput.value,
+          active: projectActiveInput.checked
+        }})
+      }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+      .then(function(res) {{
+        if (res.ok) {{ projectSaveMsg.textContent = 'Saved'; projectSaveMsg.className = 'pf-msg ok'; }}
+        else {{ projectSaveMsg.textContent = (res.data && res.data.error) || 'Failed'; projectSaveMsg.className = 'pf-msg err'; }}
+      }}).catch(function() {{
+        projectSaveMsg.textContent = 'Network error'; projectSaveMsg.className = 'pf-msg err';
+      }});
+    }});
+  }}
+
+  /* ── Drawer: Remove Project (Danger Zone) ───────── */
+  var removeBtn = document.getElementById('removeProjectBtn');
+  if (removeBtn) {{
+    removeBtn.addEventListener('click', function() {{
+      if (!currentPid || typeof window.showConfirmModal !== 'function') return;
+      window.showConfirmModal(
+        'Remove Project',
+        'Remove this project from the registry? Tickets and files will not be deleted.',
+        'Remove',
+        function() {{
+          fetch('/api/projects/' + currentPid, {{ method: 'DELETE' }})
+            .then(function(r) {{ return r.json(); }})
+            .then(function(data) {{
+              if (data && data.ok) window.location.href = '/';
+              else if (typeof window.showAppToast === 'function') {{
+                window.showAppToast((data && data.error) || 'Failed to remove', 'error');
+              }}
+            }});
+        }}
+      );
+    }});
+  }}
+
+  /* ── Drawer: Scenarios ──────────────────────────── */
+  function scenarioApi(path) {{ return '/' + currentPid + '/api/scenarios' + path; }}
+
+  function loadScenarios() {{
+    var list = document.getElementById('scenariosList');
+    if (!list || !currentPid) return;
+    fetch(scenarioApi(''))
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        while (list.firstChild) list.removeChild(list.firstChild);
+        var scenarios = (data && data.scenarios) || [];
+        if (!scenarios.length) {{
+          var hint = document.createElement('div');
+          hint.className = 'settings-hint';
+          hint.textContent = 'No scenario manifests found.';
+          list.appendChild(hint);
+          return;
+        }}
+        scenarios.forEach(function(s) {{ list.appendChild(buildScenarioRow(s)); }});
+      }})
+      .catch(function() {{
+        while (list.firstChild) list.removeChild(list.firstChild);
+        var err = document.createElement('div');
+        err.className = 'settings-hint';
+        err.textContent = 'Failed to load scenarios.';
+        list.appendChild(err);
+      }});
+  }}
+
+  function buildScenarioRow(s) {{
+    var wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '4px';
+
+    var row = document.createElement('div');
+    row.className = 'scenario-row';
+
+    var title = document.createElement('span');
+    title.className = 'sr-title';
+    title.textContent = s.title || s.id;
+    row.appendChild(title);
+
+    var status = document.createElement('span');
+    status.className = 'sr-status';
+    if (s.last_run && s.last_run.status) {{
+      status.classList.add(s.last_run.status);
+      status.textContent = s.last_run.status;
+    }}
+    row.appendChild(status);
+
+    var runBtn = document.createElement('button');
+    runBtn.type = 'button';
+    runBtn.className = 'sr-btn';
+    runBtn.textContent = 'Run';
+    runBtn.addEventListener('click', function() {{ runScenario(s.id, false, resultEl); }});
+    row.appendChild(runBtn);
+
+    var pubBtn = document.createElement('button');
+    pubBtn.type = 'button';
+    pubBtn.className = 'sr-btn publish';
+    pubBtn.textContent = 'Publish';
+    pubBtn.addEventListener('click', function() {{ runScenario(s.id, true, resultEl); }});
+    row.appendChild(pubBtn);
+
+    wrap.appendChild(row);
+
+    var resultEl = document.createElement('div');
+    resultEl.className = 'scenario-result';
+    resultEl.style.fontSize = '10px';
+    resultEl.style.color = 'var(--text-tertiary)';
+    resultEl.style.paddingLeft = '8px';
+    wrap.appendChild(resultEl);
+
+    return wrap;
+  }}
+
+  function runScenario(scenarioId, publish, resultEl) {{
+    if (!currentPid) return;
+    resultEl.textContent = 'Starting…';
+    fetch(scenarioApi('/run'), {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ scenario_id: scenarioId, publish: publish }})
+    }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      if (data.error) {{ resultEl.textContent = data.error; resultEl.style.color = '#ef4444'; return; }}
+      pollRun(data.run_id, resultEl);
+    }}).catch(function() {{ resultEl.textContent = 'Request failed'; resultEl.style.color = '#ef4444'; }});
+  }}
+
+  function pollRun(runId, resultEl) {{
+    var tick = setInterval(function() {{
+      fetch(scenarioApi('/runs/' + runId)).then(function(r) {{ return r.json(); }}).then(function(data) {{
+        if (data.status === 'running') {{ resultEl.textContent = 'Running…'; return; }}
+        clearInterval(tick);
+        while (resultEl.firstChild) resultEl.removeChild(resultEl.firstChild);
+        var label = document.createElement('span');
+        label.textContent = data.status || 'unknown';
+        label.style.color = data.status === 'passed' ? '#22c55e' : '#ef4444';
+        label.style.fontWeight = '600';
+        resultEl.appendChild(label);
+        if (data.summary && data.summary.screenshots && data.summary.screenshots.length) {{
+          var shots = document.createElement('div');
+          shots.className = 'scenario-shots';
+          data.summary.screenshots.forEach(function(p) {{
+            var fname = p.split('/').pop();
+            var img = document.createElement('img');
+            img.src = scenarioApi('/runs/' + runId + '/artifacts/' + fname);
+            img.title = fname;
+            shots.appendChild(img);
+          }});
+          resultEl.appendChild(shots);
+        }}
+      }}).catch(function() {{ clearInterval(tick); }});
+    }}, 2000);
+  }}
+
+  /* ── Drawer: Draft Scenario Generator ──────────── */
+  var draftGoalInput = document.getElementById('draftGoalInput');
+  var draftGenerateBtn = document.getElementById('draftGenerateBtn');
+  var draftResults = document.getElementById('draftResults');
+  var lastDraftCandidates = [];
+
+  function renderDraftCandidates(data) {{
+    while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+    if (data.warnings && data.warnings.length) {{
+      data.warnings.forEach(function(w) {{
+        var wEl = document.createElement('div');
+        wEl.className = 'settings-hint';
+        wEl.style.color = '#f59e0b';
+        wEl.textContent = 'Warning: ' + w;
+        draftResults.appendChild(wEl);
+      }});
+    }}
+    lastDraftCandidates = data.candidates || [];
+    if (!lastDraftCandidates.length) {{
+      var none = document.createElement('div');
+      none.className = 'settings-hint';
+      none.textContent = 'No candidates generated.';
+      draftResults.appendChild(none);
+      return;
+    }}
+    lastDraftCandidates.forEach(function(c, i) {{ draftResults.appendChild(buildDraftCard(c, i)); }});
+  }}
+
+  function buildDraftCard(c, i) {{
+    var card = document.createElement('div');
+    card.className = 'draft-candidate';
+
+    var titleRow = document.createElement('div');
+    titleRow.className = 'dc-title-row';
+    var title = document.createElement('span');
+    title.className = 'dc-title';
+    title.textContent = c.title || '(untitled)';
+    titleRow.appendChild(title);
+    var conf = document.createElement('span');
+    conf.className = 'dc-conf ' + (c.confidence || 'low');
+    conf.textContent = c.confidence || 'low';
+    titleRow.appendChild(conf);
+    card.appendChild(titleRow);
+
+    if (c.summary) {{
+      var summary = document.createElement('div');
+      summary.className = 'dc-summary';
+      summary.textContent = c.summary;
+      card.appendChild(summary);
+    }}
+
+    var btnRow = document.createElement('div');
+    btnRow.className = 'dc-btn-row';
+
+    var approveBtn = document.createElement('button');
+    approveBtn.type = 'button';
+    approveBtn.className = 'dc-btn approve';
+    approveBtn.textContent = 'Approve & Save';
+    var msg = document.createElement('span');
+    msg.className = 'dc-msg';
+    approveBtn.addEventListener('click', function() {{ approveDraft(i, msg); }});
+    btnRow.appendChild(approveBtn);
+
+    var previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'dc-btn';
+    previewBtn.textContent = 'Preview JSON';
+    var pre = document.createElement('pre');
+    pre.className = 'dc-preview';
+    previewBtn.addEventListener('click', function() {{
+      if (pre.style.display === 'none' || !pre.style.display) {{
+        pre.textContent = JSON.stringify(c.manifest || {{}}, null, 2);
+        pre.style.display = 'block';
+      }} else {{
+        pre.style.display = 'none';
+      }}
+    }});
+    btnRow.appendChild(previewBtn);
+    btnRow.appendChild(msg);
+    card.appendChild(btnRow);
+    card.appendChild(pre);
+    return card;
+  }}
+
+  function approveDraft(i, msgEl) {{
+    var c = lastDraftCandidates[i];
+    if (!c || !currentPid) return;
+    msgEl.className = 'dc-msg'; msgEl.textContent = 'Saving…';
+    fetch(scenarioApi('/drafts/approve'), {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ manifest: c.manifest, filename: (c.manifest && c.manifest.id ? c.manifest.id : 'draft') + '.json' }})
+    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+    .then(function(res) {{
+      if (res.ok) {{ msgEl.className = 'dc-msg ok'; msgEl.textContent = 'Saved as ' + (res.data.filename || '?'); loadScenarios(); }}
+      else {{ msgEl.className = 'dc-msg err'; msgEl.textContent = (res.data && res.data.error) || 'Failed'; }}
+    }}).catch(function() {{ msgEl.className = 'dc-msg err'; msgEl.textContent = 'Network error'; }});
+  }}
+
+  if (draftGenerateBtn) {{
+    draftGenerateBtn.addEventListener('click', function() {{
+      if (!currentPid) return;
+      var goal = (draftGoalInput.value || '').trim();
+      if (!goal) return;
+      while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+      var loading = document.createElement('div');
+      loading.className = 'settings-hint';
+      loading.textContent = 'Generating…';
+      draftResults.appendChild(loading);
+      fetch(scenarioApi('/draft'), {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ goal: goal }})
+      }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+        if (data.error) {{
+          while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+          var err = document.createElement('div');
+          err.className = 'settings-hint';
+          err.style.color = '#ef4444';
+          err.textContent = data.error;
+          draftResults.appendChild(err);
+          return;
+        }}
+        renderDraftCandidates(data);
+      }}).catch(function() {{
+        while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+        var err = document.createElement('div');
+        err.className = 'settings-hint';
+        err.style.color = '#ef4444';
+        err.textContent = 'Request failed';
+        draftResults.appendChild(err);
+      }});
+    }});
   }}
 
   if (enabledChk) {{

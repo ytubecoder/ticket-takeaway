@@ -1,5 +1,51 @@
 # Session Log
 
+## 2026-04-11→16 — Dual-backend scenario runner (B-42) + feedbacks screenshots
+
+### Summary
+- Built Backend protocol abstraction for scenario runner — `PlaywrightBackend` (launches browser) and `CDPBackend` (connects to existing Chrome via `connect_over_cdp()`). 10-task plan via subagent-driven development.
+- Added `--backend=playwright|cdp` and `--cdp-endpoint` CLI flags to pytest. PW/CDP toggle on journey Run button in UI.
+- Created standalone Playwright screenshot script for feedbacks project (`~/projects/feedbacks/docs/screenshots/capture.py`).
+- Ticket B-42 accepted to Done.
+
+### Lessons Learned
+- **Accepted:** CDPBackend as thin subclass of PlaywrightBackend (`pass` body) — both get a Playwright `Page`, just acquired differently. No logic duplication.
+- **Accepted:** Subagent-driven development with haiku for mechanical tasks, sonnet for integration — fast, good quality.
+- **Gotcha:** Chrome flags `--use-fake-ui-for-media-stream` auto-accept screen share dialogs — essential for automating feedbacks screenshots.
+- **Gotcha:** Running server process doesn't pick up code changes — must restart after merging.
+- **Gotcha:** `/api/scenarios/runs/{id}` iterates `.artifacts/scenarios/` and grabs first `summary.json`, not the one matching run_id. Pre-existing bug — stale summaries in API.
+
+### Decisions
+- CDPBackend creates fresh BrowserContext per actor (not reusing existing tabs) — intentional for test isolation
+- Backend selection is per-run (dropdown, not persisted globally)
+- Same manifests/journeys work with both backends — no duplication needed
+
+## 2026-04-12→16 — Journey timeline view, workflow step builder fix, full-page settings
+
+### Summary
+- Built unified timeline view for journeys: vertical spine with screenshots left, step details right, URL grouping, inline edit, lightbox
+- Fixed workflow "Add Step" disappearing bug (root cause: dashboard live-update polling + window.prompt)
+- Added per-journey URLs (`/journeys/{id}`), journey ID display, full run history
+- Consultant-reviewed workflow bounce phase 2 plan (3 rounds of feedback incorporated)
+- Full-page bounce/agents settings view with project form and scenarios section
+
+### Lessons Learned
+- **Gotcha:** Dashboard 2s live-update polling rebuilds DOM via `patchCards()` — any open form/editor gets destroyed. Fix: skip polling when `body.settings-open` is set. This same pattern applies to any future inline editor on the dashboard page.
+- **Gotcha:** `window.prompt()` blocks the UI thread and causes event timing issues when the form re-renders — replaced with inline DOM controls (dropdowns + textareas) for step builder
+- **Gotcha:** `renderTimeline()` called from `updateField`/`updateTarget` on blur destroys the edit form the user is currently in — removed re-render on save, just update local data silently
+- **Gotcha:** Screenshot `run_id` and artifact directory basename differ (generated at different `time.time()` calls) — screenshot serving must use `artifact_dir` from DB, not construct path from `run_id`
+- **Gotcha:** Screenshot backfill must map to capture steps specifically (by action type), not sequentially to all steps — 4 screenshots across 11 steps were being assigned to steps 0-3 instead of steps 2,5,7,10
+- **Gotcha:** API returns `{"workflows": [...]}` but JS code wrote `workflows.forEach` — this response unwrapping bug recurred again in new code written by agents [Promoted to CLAUDE.md]
+- **Accepted:** Unified timeline (screenshots + details in one view) better than separate Flow/Steps tabs — user confirmed this is the right layout
+- **Accepted:** Two-tier rendering (large thumbnail boxes for captures, compact cards for actions) gives good visual hierarchy without wasting space on non-visual steps
+
+### Decisions
+- Merged Flow + Steps into single unified timeline view rather than keeping as separate tabs
+- Journey IDs (slugs) shown alongside titles — users can reference journeys by ID in URLs
+- Per-journey URLs via pushState + popstate — shareable, bookmarkable, browser back works
+- "+ Add Step" placed at bottom of timeline as final node, not in header
+- Edit form fields save on blur silently (no re-render) to prevent form collapse
+
 ## 2026-04-08→13 — Workflow Bounce (I-19): full implementation across multiple sessions
 
 ### Summary

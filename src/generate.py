@@ -1961,6 +1961,11 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 8px; color: #3b82f6; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.3px; animation: wfPulse 1.5s ease-in-out infinite;
 }}
+.card-wf-unread {{
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); margin-left: 4px; vertical-align: middle;
+  flex-shrink: 0;
+}}
 .workflow-conversation {{ display: none; }}
 .workflow-run-block.expanded .workflow-conversation {{ display: block; }}
 .workflow-turn {{ padding: 8px 10px; border-top: 1px solid var(--border); }}
@@ -7158,11 +7163,75 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
   window.openDetailOverlay = function(tid, section) {{
     if (_origOpenForWorkflow) _origOpenForWorkflow(tid, section);
     currentTicketId = tid;
+    // Clear unread indicator when user opens ticket
+    if (window.__wfUnread) window.__wfUnread.delete(tid);
+    setCardUnreadDot(tid, false);
     setTimeout(function() {{
       loadWorkflowOptions();
       loadWorkflowRuns(tid);
     }}, 200);
   }};
+
+  // ── Kanban workflow indicators (visible without opening ticket) ──
+  function setCardUnreadDot(ticketId, show) {{
+    var card = document.querySelector('.card[data-item-id="' + ticketId + '"]');
+    if (!card) return;
+    var existing = card.querySelector('.card-wf-unread');
+    if (show && !existing) {{
+      var dot = document.createElement('span');
+      dot.className = 'card-wf-unread';
+      dot.title = 'Workflow result (unread)';
+      var titleEl = card.querySelector('.card-title') || card.querySelector('.item-title');
+      if (titleEl) titleEl.parentNode.insertBefore(dot, titleEl.nextSibling);
+      else card.appendChild(dot);
+    }} else if (!show && existing) {{
+      existing.parentNode.removeChild(existing);
+    }}
+  }}
+
+  window.__wfUnread = window.__wfUnread || new Set();
+  var __wfPrevActive = new Set();
+
+  setInterval(function() {{
+    if (document.body.classList.contains('bounce-open')) return;
+    fetch(EDIT_API + '/workflow/runs/active')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var runs = (data && data.runs) || [];
+        var nowActive = new Set();
+        runs.forEach(function(r) {{ nowActive.add(r.ticket_id); }});
+
+        // Detect completed: was active last poll, no longer active → unread
+        __wfPrevActive.forEach(function(tid) {{
+          if (!nowActive.has(tid)) {{
+            window.__wfUnread.add(tid);
+            setCardWfIndicator(tid, false);
+            setCardUnreadDot(tid, true);
+          }}
+        }});
+
+        // Set running indicators
+        nowActive.forEach(function(tid) {{
+          setCardWfIndicator(tid, true);
+          setCardUnreadDot(tid, false); // running takes precedence
+        }});
+
+        // Remove running indicators for no-longer-active (already handled above but be safe)
+        __wfPrevActive.forEach(function(tid) {{
+          if (!nowActive.has(tid) && !window.__wfUnread.has(tid)) {{
+            setCardWfIndicator(tid, false);
+          }}
+        }});
+
+        // Re-apply unread dots (cards may have been re-rendered by dashboard refresh)
+        window.__wfUnread.forEach(function(tid) {{
+          if (!nowActive.has(tid)) setCardUnreadDot(tid, true);
+        }});
+
+        __wfPrevActive = nowActive;
+      }})
+      .catch(function() {{}});
+  }}, 3000);
 
   // Clear poll timers when overlay closes
   if (overlay) {{

@@ -1005,6 +1005,22 @@ def _update_workflow_run(run_id: str, **kwargs) -> dict | None:
     return _get_workflow_run(run_id)
 
 
+def _recover_stuck_workflow_runs() -> None:
+    """Mark any runs stuck in 'running' as 'failed' — their threads died with the previous server."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        stuck = conn.execute("SELECT COUNT(*) FROM workflow_runs WHERE status = 'running'").fetchone()[0]
+        if stuck:
+            conn.execute(
+                "UPDATE workflow_runs SET status = 'failed', completed_at = ? WHERE status = 'running'",
+                (datetime.utcnow().isoformat(),),
+            )
+            conn.commit()
+            print(f"  Recovered {stuck} stuck workflow run(s) → failed")
+        conn.close()
+
+
 def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow: dict, proj: dict) -> None:
     """Background thread that executes a workflow bounce.
 
@@ -1115,8 +1131,16 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             except (json.JSONDecodeError, TypeError):
                 agent_args = []
 
-            cmd = [agent.get("command", "claude")] + agent_args + ["-p", prompt, "--output-format", "json"]
+            cmd = [agent.get("command", "claude")] + agent_args + [
+                "-p", prompt, "--output-format", "json", "--no-session-persistence",
+            ]
 
+            # Progress entry so the UI shows which agent is running immediately
+            agent_label = agent.get("name", agent_id)
+            conversation.append({
+                "role": "system", "step": step_idx,
+                "content": f"Running agent '{agent_label}'…",
+            })
             _update_workflow_run(run_id, current_step=step_idx, conversation=conversation, status="running")
             with _workflow_runs_lock:
                 if run_id in _workflow_runs:
@@ -1131,6 +1155,23 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     timeout=WORKFLOW_AGENT_TIMEOUT,
                     cwd=os.path.expanduser(proj.get("path", ".")),
                 )
+
+                # Remove the "Running agent..." placeholder
+                conversation = [t for t in conversation
+                                if not (t.get("role") == "system"
+                                        and t.get("step") == step_idx
+                                        and "Running agent" in t.get("content", ""))]
+
+                # Check for non-zero exit code
+                if result.returncode != 0:
+                    err = (result.stderr or result.stdout or "").strip()[:2000] or f"Exit code {result.returncode}"
+                    conversation.append({
+                        "role": "system", "step": step_idx,
+                        "content": f"Agent '{agent_label}' failed:\n{err}",
+                    })
+                    _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                    continue
+
                 # Parse response — same pattern as gate-check
                 response_text = result.stdout.strip()
                 try:
@@ -1146,22 +1187,32 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
 
                 conversation.append({
                     "role": "agent",
-                    "agent": agent.get("name", agent_id),
+                    "agent": agent_label,
                     "agent_id": agent_id,
                     "step": step_idx,
                     "content": response_content,
                 })
             except subprocess.TimeoutExpired:
+                # Remove the "Running agent..." placeholder
+                conversation = [t for t in conversation
+                                if not (t.get("role") == "system"
+                                        and t.get("step") == step_idx
+                                        and "Running agent" in t.get("content", ""))]
                 conversation.append({
                     "role": "system",
                     "step": step_idx,
-                    "content": f"Agent '{agent.get('name', agent_id)}' timed out after {WORKFLOW_AGENT_TIMEOUT}s",
+                    "content": f"Agent '{agent_label}' timed out after {WORKFLOW_AGENT_TIMEOUT}s",
                 })
             except Exception as e:
+                # Remove the "Running agent..." placeholder
+                conversation = [t for t in conversation
+                                if not (t.get("role") == "system"
+                                        and t.get("step") == step_idx
+                                        and "Running agent" in t.get("content", ""))]
                 conversation.append({
                     "role": "system",
                     "step": step_idx,
-                    "content": f"Agent '{agent.get('name', agent_id)}' error: {e}",
+                    "content": f"Agent '{agent_label}' error: {e}",
                 })
 
             _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
@@ -1221,8 +1272,12 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                             with _workflow_runs_lock:
                                 if run_id in _workflow_runs:
                                     _workflow_runs[run_id]["status"] = "paused"
-                    except (subprocess.TimeoutExpired, Exception):
-                        pass  # agreement check failed, continue anyway
+                    except (subprocess.TimeoutExpired, Exception) as e:
+                        conversation.append({
+                            "role": "system", "step": step_idx,
+                            "content": f"Agreement check error: {e}",
+                        })
+                        _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
 
         # Completed — create attachment
         summary_parts = []
@@ -3636,6 +3691,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"workflows": _list_workflows()})
             return
 
+        # Active workflow runs across all tickets (for kanban indicators)
+        if remainder == "/api/workflow/runs/active":
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                rows = conn.execute(
+                    "SELECT id, ticket_id, status FROM workflow_runs WHERE project_id = ? AND status IN ('running', 'paused')",
+                    (proj["id"],),
+                ).fetchall()
+                conn.close()
+            self._send_json({"runs": [dict(r) for r in rows]})
+            return
+
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/workflow/runs$", remainder)
         if m:
             runs = _list_workflow_runs(proj["id"], m.group(1))
@@ -3651,16 +3719,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_.-]+)$", remainder)
         if m:
-            run = _get_workflow_run(m.group(1))
+            run_id = m.group(1)
+            run = _get_workflow_run(run_id)
             if not run:
                 self._send_json({"error": "Run not found"}, 404)
                 return
             with _workflow_runs_lock:
-                mem = _workflow_runs.get(m.group(1))
+                mem = _workflow_runs.get(run_id)
             if mem:
                 run["status"] = mem.get("status", run["status"])
                 if "current_step" in mem:
                     run["current_step"] = mem["current_step"]
+            # Detect dead thread: DB says running but no thread in memory
+            if run.get("status") == "running" and not mem:
+                _update_workflow_run(run_id, status="failed",
+                                    completed_at=datetime.utcnow().isoformat())
+                run["status"] = "failed"
             self._send_json(run)
             return
 
@@ -5389,6 +5463,9 @@ def main():
 
     project_names = [p.get("name", p["id"]) for p in _PROJECTS_CACHE.values()]
     print(f"Serving {len(project_names)} project(s): {', '.join(project_names)}")
+
+    # Recover workflow runs stuck in "running" from a previous server session
+    _recover_stuck_workflow_runs()
 
     # Start background threads
     _start_external_edit_watcher()

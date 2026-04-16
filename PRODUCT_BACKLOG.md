@@ -127,9 +127,6 @@ POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /
 Priority: medium | Complexity: M | Status: for-review
 Spec for feedbacks team: compact recorder widget (?mode=recorder), callback on session complete, auto-close popup. See docs/superpowers/specs/2026-04-05-feedbacks-recorder-widget.md
 
-### B-42: Dual-backend scenario runner (Playwright + CDP)
-Priority: medium | Complexity: M | Status: for-review
-
 ## Backlog
 
 ### B-23: Editable AI suggestions before accepting
@@ -243,6 +240,14 @@ Priority: medium | Complexity: M | Status: proposed
 
 ### I-28: e2e-draft-test-1776006567
 Priority: medium | Complexity: M | Status: proposed
+
+### I-29: Journey: Run from here — partial execution from a specific step
+Priority: medium | Complexity: M | Status: proposed
+Allow users to click a step in the journey timeline and run from that point forward. Requires backend support for partial manifest execution (skip steps before the selected index). UI: play button on each step or URL group header.
+
+### I-30: Journey: Add ticket per URL/screen with URL stored on creation
+Priority: medium | Complexity: M | Status: proposed
+Add a button on each URL group header in the journey timeline to create a ticket linked to that screen URL. The ticket should store the URL so it's associated with the page/screen where the issue was found.
 
 ## Bugs
 
@@ -471,6 +476,10 @@ Priority: high | Complexity: M | Status: done
 Parent: B-17
 Commit: baf1818
 Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fetch in startGateCheck and runCategoryAssess. Cache hit shows results instantly. Invalidate on populate() when ticket data changes.
+
+### B-42: Dual-backend scenario runner (Playwright + CDP)
+Priority: medium | Complexity: M | Status: done
+Commit: 015ee52
 
 ## Won't Do
 

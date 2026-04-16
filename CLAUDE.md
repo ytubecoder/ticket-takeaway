@@ -56,6 +56,7 @@ src/page_scraper.py — screen discovery for journey path builder
 - **UI:** Full-page settings (gear icon → replaces kanban), agent editor with JSON args validation, workflow step builder with reorder. Ticket detail has workflow dropdown + Run button with instant placeholder and polling.
 - **Execution:** Background thread per run, `subprocess.run(["claude", "-p", ...])` per step, `--no-session-persistence` flag, 300s timeout. Disagreement detection via primary agent evaluation after each step.
 - **Validation:** `_normalize_json_array` and `_normalize_workflow_steps` reject invalid args, `_project_*` agent IDs, and missing agents.
+- **API response format:** All workflow/journey list APIs return wrapped objects: `{"agents": [...]}`, `{"workflows": [...]}`, `{"runs": [...]}`. JS must always unwrap with `data.agents || data || []` — never iterate the response directly. This has caused bugs 5+ times.
 
 **Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `actions.py`.
 
@@ -72,7 +73,7 @@ src/page_scraper.py — screen discovery for journey path builder
 2. Loads tickets from SQLite (falls back to parsing PRODUCT_BACKLOG.md if no DB)
 3. Collects git/code stats via shell commands
 4. Renders a self-contained HTML file with inline CSS/JS (light/dark/system theming)
-5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
+5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved. **Polling is skipped when `body.settings-open` is set** to prevent form/editor destruction.
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
 Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
@@ -226,7 +227,18 @@ First-class entity for defining, validating, and documenting user flows. Journey
 
 **Module:** `src/journeys.py` — CRUD, compilation, inference, run result storage. Follows `actions.py` pattern (pure DB, no side effects).
 
-**Dashboard UI:** `/{pid}/journeys` page with list view, step editor, results timeline, and ticket linking. Rendered by `_render_journeys_page()` in `serve.py`.
+**Dashboard UI:** `/{pid}/journeys` page with list view + unified timeline detail. Each journey has its own URL: `/{pid}/journeys/{journey-id}` (direct-linkable, pushState navigation). Rendered by `_render_journeys_page()` in `serve.py`.
+
+**Timeline view** (unified — replaces separate Flow/Steps tabs):
+- Vertical spine with status dots, screenshots on left, step details on right
+- Steps grouped by URL — header row shows page URL when navigation changes
+- Capture steps show thumbnails (click to lightbox), action steps show compact detail cards
+- Human-readable descriptions on each card (e.g. "Click element: [data-testid=...]")
+- Inline edit on pencil click — fields for label, action, value, key, target with help text placeholders
+- "+ Add Step" button at bottom of timeline
+- Failed steps: red border, error text; skipped steps: faded opacity
+- Screenshots served from `.artifacts/journeys/{id}/{run-id}/` via API, backfilled to capture steps on run completion
+- Journey IDs shown as monospace subtitles in list cards and detail header
 
 **Two entry flows:**
 1. **Tickets-first:** "Infer from Tickets" button analyzes existing tickets, groups by lifecycle stage, suggests journeys
@@ -282,6 +294,8 @@ python3 -m pytest tests/test_scenarios.py -v --backend=cdp --cdp-endpoint=http:/
 **Theme support:** Manifests can specify `"theme": "dark"` or `"theme": "light"` to force a theme via localStorage before captures.
 
 **Settings page integration:** `GET /api/scenarios` lists manifests, `POST /api/scenarios/run` launches via subprocess, `GET /api/scenarios/runs/{id}` polls status. Draft endpoint: `POST /api/scenarios/draft` generates candidate manifests from a goal string.
+
+**Backend toggle:** Journey detail view has a PW/CDP dropdown next to the Run button. Sends `{backend: "playwright"|"cdp"}` in the POST body. Server appends `--backend={value}` to the pytest subprocess. Same manifests work with both backends — no duplication needed. `summary.json` records which backend was used.
 
 ## Generated Files
 

@@ -2,14 +2,6 @@
 
 ## WIP
 
-### I-10: test test ticket
-Priority: medium | Complexity: M | Status: for-review
-test pet
-- [ ] integration-test criterion 1775120298
-- [ ] markdown-criteria-test 1775120298
-- [ ] integration-test criterion 1775127571
-- [ ] markdown-criteria-test 1775127571
-
 ### B-17: Ticket Screen AI and Layout Cleanup
 Priority: high | Complexity: XL | Status: in-progress
 Fix the ticket detail/gate screen UX: instant open, cached AI, formatted fields, keyboard shortcuts, editable AI suggestions. 6 child tickets covering 8 requirements.
@@ -101,26 +93,33 @@ Refactor ticket system from generated-HTML-with-scattered-logic to clean app arc
 
 ### B-24: Draft ticket concept — boolean property, grayed rendering, confirm/reject
 Priority: high | Complexity: M | Status: for-review
+Parent: B-32
 
 ### B-25: Attachments data model — generic table, feedbacks sessions as first type
 Priority: high | Complexity: M | Status: for-review
+Parent: B-32
 Generic ticket_attachments table in SQLite. Feedbacks sessions as first attachment_type. Metadata JSON blob for type-specific data (hero_image, duration, counts). Migration in db.py alongside draft column. Depends: B-24.
 
 ### B-27: Settings panel — gear icon, drawer, feedbacks toggle/path/status
 Priority: medium | Complexity: M | Status: for-review
+Parent: B-32
 
 ### B-28: Feedbacks detection — probe server, check filesystem, cache status 30s
 Priority: medium | Complexity: M | Status: for-review
+Parent: B-32
 
 ### B-30: Feedbacks status indicator — green/gray dot, click-to-start server
 Priority: medium | Complexity: M | Status: for-review
+Parent: B-32
 
 ### B-26: Attachments UI — compact rows in ticket detail, player.html link, badge on cards
 Priority: high | Complexity: M | Status: for-review
+Parent: B-32
 Compact rows in ticket detail overlay below DCSTL. Hero thumbnail, AI summary, metadata line. Click opens player.html in new tab. + Link button for picker. Attachment count badge on kanban cards. Depends: B-25, B-28.
 
 ### B-29: Record flow — popup capture, callback endpoint, auto-attach to ticket
 Priority: high | Complexity: M | Status: for-review
+Parent: B-32
 POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /api/feedbacks/callback receives session-complete. Auto-creates attachment. Depends: B-26, B-28, B-30, B-32 (feedbacks side).
 
 ### B-32: Feedbacks integration brief — spec for feedbacks team (compact mode, callback, autostart)
@@ -161,17 +160,6 @@ Collapsed cards show only title, ID, status badge, and metadata — no descripti
 Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
-
-### B-36: My first ticket
-Priority: medium | Complexity: M | Status: proposed
-
-### B-40: My first ticket
-Priority: medium | Complexity: M | Status: proposed
-======= >>>>>>> scenario-runner
-
-### B-41: Quick edit test ticket
-Priority: medium | Complexity: M | Status: proposed
-Original description text
 
 ## Ideas
 
@@ -222,23 +210,10 @@ Auto-create docs/features/{ID}/ directory when a feature moves to WIP. Include P
 Priority: low | Complexity: S | Status: proposed
 Auto-detect projects that have PRODUCT_BACKLOG.md instead of requiring manual registry.json setup. Fall back to registry.json if auto-discovery finds nothing.
 
-### I-09: test ticket with nothing on it
-Priority: medium | Complexity: M | Status: proposed
-This is just a test but the feature should be to add a text file called hello.txt
-
 ### I-16: MCP server for LLM tool integration
 Priority: medium | Complexity: M | Status: proposed
 
-### I-17: CLI draft test
-Priority: medium | Complexity: M | Status: proposed
-
 ### I-19: make a 'bounce' sequence feature i.e. architecture codex > claude > codex > claude = filter decisions
-Priority: medium | Complexity: M | Status: proposed
-
-### I-27: e2e-draft-test-1776005127
-Priority: medium | Complexity: M | Status: proposed
-
-### I-28: e2e-draft-test-1776006567
 Priority: medium | Complexity: M | Status: proposed
 
 ### I-29: Journey: Run from here — partial execution from a specific step
@@ -248,6 +223,14 @@ Allow users to click a step in the journey timeline and run from that point forw
 ### I-30: Journey: Add ticket per URL/screen with URL stored on creation
 Priority: medium | Complexity: M | Status: proposed
 Add a button on each URL group header in the journey timeline to create a ticket linked to that screen URL. The ticket should store the URL so it's associated with the page/screen where the issue was found.
+
+### I-10: test test ticket
+Priority: medium | Complexity: M | Status: proposed
+test pet
+- [ ] integration-test criterion 1775120298
+- [ ] markdown-criteria-test 1775120298
+- [ ] integration-test criterion 1775127571
+- [ ] markdown-criteria-test 1775127571
 
 ## Bugs
 
@@ -482,4 +465,28 @@ Priority: medium | Complexity: M | Status: done
 Commit: 015ee52
 
 ## Won't Do
+
+### I-09: test ticket with nothing on it
+Priority: medium | Complexity: M | Status: wontdo
+This is just a test but the feature should be to add a text file called hello.txt
+
+### I-17: CLI draft test
+Priority: medium | Complexity: M | Status: wontdo
+
+### I-27: e2e-draft-test-1776005127
+Priority: medium | Complexity: M | Status: wontdo
+
+### I-28: e2e-draft-test-1776006567
+Priority: medium | Complexity: M | Status: wontdo
+
+### B-36: My first ticket
+Priority: medium | Complexity: M | Status: wontdo
+
+### B-40: My first ticket
+Priority: medium | Complexity: M | Status: wontdo
+======= >>>>>>> scenario-runner
+
+### B-41: Quick edit test ticket
+Priority: medium | Complexity: M | Status: wontdo
+Original description text
 

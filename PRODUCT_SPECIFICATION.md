@@ -126,6 +126,11 @@ Released: 2026-04-08 | Commit: 8a111ec
 Priority: medium | Complexity: M | Status: released
 Released: 2026-04-08 | Commit: bbd6ebf
 
+
+### B-42: Dual-backend scenario runner (Playwright + CDP)
+Priority: medium | Complexity: M | Status: released
+Released: 2026-04-16 | Commit: 015ee52
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

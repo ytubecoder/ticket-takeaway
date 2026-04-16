@@ -2494,13 +2494,14 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     el._bound = true;
     el.addEventListener('click', function(e) {{
       e.stopPropagation(); // prevent bubbling to bottom-section-header
-      if (e.detail === 1) {{
+      if (e.detail === 1 && !window._justDragged) {{
         var self = this;
         this._clickTimer = setTimeout(function() {{ self.classList.toggle('expanded'); }}, 200);
       }}
     }});
     el.addEventListener('dblclick', function(e) {{
       e.stopPropagation();
+      if (window._justDragged) return;
       clearTimeout(this._clickTimer);
       var id = this.dataset.itemId;
       var title = this.dataset.title;
@@ -2740,10 +2741,11 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
         el._bound = true;
         el.addEventListener('click', function(e) {{
           e.stopPropagation();
-          if (e.detail === 1) {{ var self = this; this._clickTimer = setTimeout(function() {{ self.classList.toggle('expanded'); }}, 200); }}
+          if (e.detail === 1 && !window._justDragged) {{ var self = this; this._clickTimer = setTimeout(function() {{ self.classList.toggle('expanded'); }}, 200); }}
         }});
         el.addEventListener('dblclick', function(e) {{
           e.stopPropagation(); clearTimeout(this._clickTimer);
+          if (window._justDragged) return;
           var id = this.dataset.itemId, title = this.dataset.title, col = this.dataset.section, text;
           if (col === 'ideas') text = '/spec ' + id;
           else if (col === 'backlog') text = 'I want to spec out ' + id + ': ' + title + ' — write the description and acceptance criteria';
@@ -3369,19 +3371,25 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
 
       // --- Drag-to-move ---
       var dragId = null;
+      window.window._justDragged = false;
       document.addEventListener('dragstart', function(e) {{
         var card = e.target.closest('.card');
         if (!card || !card.dataset.itemId) return;
         dragId = card.dataset.itemId;
+        window._justDragged = true;
         card.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', dragId);
       }});
       document.addEventListener('dragend', function(e) {{
         var card = e.target.closest('.card');
-        if (card) card.classList.remove('dragging');
+        if (card) {{
+          card.classList.remove('dragging');
+          clearTimeout(card._clickTimer);
+        }}
         document.querySelectorAll('.drag-over').forEach(function(el) {{ el.classList.remove('drag-over'); }});
         dragId = null;
+        setTimeout(function() {{ window._justDragged = false; }}, 50);
       }});
       document.querySelectorAll('.column, .bottom-section').forEach(function(zone) {{
         zone.addEventListener('dragover', function(e) {{

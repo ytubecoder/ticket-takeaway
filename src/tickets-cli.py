@@ -4,8 +4,8 @@
 Usage:
     tickets-cli.py seed [--project ID]
     tickets-cli.py list [--project ID] [--section S] [--status S]
-    tickets-cli.py add <project> "title" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D]
-    tickets-cli.py update <project> <id> [--title T] [--priority P] [--complexity C] [--status S] [--description D] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID]
+    tickets-cli.py add <project> "title" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D] [--tag T]
+    tickets-cli.py update <project> <id> [--title T] [--priority P] [--complexity C] [--status S] [--description D] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID] [--add-tag T] [--remove-tag T]
     tickets-cli.py move <project> <id> <section>
     tickets-cli.py accept <project> <id>
     tickets-cli.py sync [--project ID]
@@ -151,6 +151,7 @@ def parse_backlog(filepath: str) -> list[dict]:
                 "description": "",
                 "parent": None,
                 "depends": [],
+                "tags": [],
                 "acceptance_criteria": [],
                 "sort_order": sort_order,
                 "commit_hash": "",
@@ -183,6 +184,13 @@ def parse_backlog(filepath: str) -> list[dict]:
             val = line_stripped.split(":", 1)[1].strip()
             if val:
                 current_ticket["depends"] = [d.strip() for d in val.split(",") if d.strip()]
+            continue
+
+        # Tags
+        if current_ticket and line_stripped.startswith("Tags:"):
+            val = line_stripped.split(":", 1)[1].strip()
+            if val:
+                current_ticket["tags"] = [t.strip().lower() for t in val.split(",") if t.strip()]
             continue
 
         # Commit hash
@@ -379,6 +387,18 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                     (tid, project_id, dep_id)
                 )
 
+            # Replace tags
+            if "tags" in t:
+                conn.execute(
+                    "DELETE FROM ticket_tags WHERE ticket_id=? AND project_id=?",
+                    (tid, project_id)
+                )
+                for tag in t["tags"]:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?,?,?)",
+                        (tid, project_id, tag)
+                    )
+
             # Upsert readiness content from markdown
             for flag, content in t.get("readiness_content", {}).items():
                 if content:
@@ -415,6 +435,13 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                 conn.execute(
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
                     (tid, project_id, dep_id)
+                )
+
+            # Insert tags for new tickets
+            for tag in t.get("tags", []):
+                conn.execute(
+                    "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?,?,?)",
+                    (tid, project_id, tag)
                 )
 
             # Insert readiness content for new tickets
@@ -494,6 +521,15 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             if deps:
                 dep_ids = ", ".join(d["depends_on_id"] for d in deps)
                 lines.append(f"Depends: {dep_ids}")
+
+            # Tags
+            tags = conn.execute(
+                "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
+                (t["id"], project_id)
+            ).fetchall()
+            if tags:
+                tag_names = ", ".join(tg["tag"] for tg in tags)
+                lines.append(f"Tags: {tag_names}")
 
             # Commit hash and release tag
             if t["commit_hash"]:
@@ -775,6 +811,13 @@ def seed_project(conn: sqlite3.Connection, project: dict) -> int:
                 VALUES (?, ?, ?)
             """, (t["id"], project_id, dep_id))
 
+        # Tags
+        for tag in t.get("tags", []):
+            conn.execute("""
+                INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag)
+                VALUES (?, ?, ?)
+            """, (t["id"], project_id, tag))
+
         # Readiness content
         for flag, content in t.get("readiness_content", {}).items():
             if content:
@@ -906,6 +949,7 @@ def cmd_add(args):
         description=args.description or "",
         parent=args.parent,
         draft=args.draft,
+        tags=args.tag,
     )
     conn.commit()
 
@@ -962,6 +1006,10 @@ def cmd_update(args):
         kwargs["add_depends"] = args.add_depends
     if args.remove_depends:
         kwargs["remove_depends"] = args.remove_depends
+    if args.add_tag:
+        kwargs["add_tags"] = args.add_tag
+    if args.remove_tag:
+        kwargs["remove_tags"] = args.remove_tag
 
     try:
         tid = update_ticket(conn, project_id, args.id, **kwargs)
@@ -1488,6 +1536,7 @@ def main():
     p_add.add_argument("--complexity", help="Complexity (S/M/L/XL)")
     p_add.add_argument("--parent", help="Parent ticket ID")
     p_add.add_argument("--description", help="Description text")
+    p_add.add_argument("--tag", action="append", help="Add tag (repeatable)")
     p_add.add_argument("--draft", action="store_true", help="Create as draft ticket")
 
     # update
@@ -1507,6 +1556,8 @@ def main():
     p_upd.add_argument("--remove-criteria", type=int, help="Remove Nth criterion (1-indexed)")
     p_upd.add_argument("--add-depends", action="append", help="Add dependency (repeatable)")
     p_upd.add_argument("--remove-depends", action="append", help="Remove dependency (repeatable)")
+    p_upd.add_argument("--add-tag", action="append", help="Add tag (repeatable)")
+    p_upd.add_argument("--remove-tag", action="append", help="Remove tag (repeatable)")
     p_upd.add_argument("--confirm", action="store_true", help="Confirm a draft ticket (set draft=false)")
 
     # move

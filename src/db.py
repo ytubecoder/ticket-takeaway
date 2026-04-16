@@ -303,3 +303,22 @@ def init_db(conn: sqlite3.Connection):
         """)
         conn.execute("INSERT INTO _migrations (version) VALUES (5)")
         conn.commit()
+
+    # Migration 6: ticket tags
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 6").fetchone():
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS ticket_tags (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id   TEXT NOT NULL,
+                project_id  TEXT NOT NULL,
+                tag         TEXT NOT NULL,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (ticket_id, project_id) REFERENCES tickets(id, project_id) ON DELETE CASCADE,
+                UNIQUE(ticket_id, project_id, tag)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tags_ticket ON ticket_tags(ticket_id, project_id);
+            CREATE INDEX IF NOT EXISTS idx_tags_project ON ticket_tags(project_id, tag);
+        """)
+        conn.execute("INSERT INTO _migrations (version) VALUES (6)")
+        conn.commit()

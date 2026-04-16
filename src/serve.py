@@ -647,11 +647,14 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
         cli.ingest_markdown(conn, proj)
 
         draft = bool(body.get("draft", False))
+        tags_raw = body.get("tags", [])
+        tags = [t.strip().lower() for t in tags_raw if isinstance(t, str) and t.strip()] if isinstance(tags_raw, list) else []
         ticket_id = _actions_add_ticket(
             conn, project_id, title,
             section=section, priority=priority,
             complexity=complexity, description=description,
             draft=draft,
+            tags=tags or None,
         )
 
         conn.commit()
@@ -1958,6 +1961,16 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
     except Exception:
         attachment_count = 0
 
+    # Tags
+    try:
+        tag_rows = conn.execute(
+            "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
+            (row["id"], project_id),
+        ).fetchall()
+        tags = [t["tag"] for t in tag_rows]
+    except Exception:
+        tags = []
+
     conn.close()
 
     # Build criteria text for clipboard prompts
@@ -1981,6 +1994,7 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "depends": [d["depends_on_id"] for d in deps],
         "readiness_flags": readiness_flags,
         "attachment_count": attachment_count,
+        "tags": tags,
     }
 
 
@@ -3566,6 +3580,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Ticket not found"}, 404)
             return
 
+        # All tags in this project (with counts)
+        if remainder == "/api/tags":
+            project_id = proj["id"]
+            conn = get_db()
+            init_db(conn)
+            rows = conn.execute(
+                "SELECT tag, COUNT(*) AS cnt FROM ticket_tags WHERE project_id = ? GROUP BY tag ORDER BY tag",
+                (project_id,)
+            ).fetchall()
+            conn.close()
+            self._send_json({"tags": [{"tag": r["tag"], "count": r["cnt"]} for r in rows]})
+            return
+
         # Settings
         if remainder == "/api/settings":
             self._send_json(_get_all_settings())
@@ -4075,6 +4102,58 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"error": "Failed to update depends"}, 400)
             return
+
+        # Handle tag operations
+        if "add_tag" in body or "remove_tag" in body:
+            add_tag = body.get("add_tag")
+            remove_tag = body.get("remove_tag")
+            add_tags = [add_tag] if isinstance(add_tag, str) and add_tag.strip() else None
+            remove_tags = [remove_tag] if isinstance(remove_tag, str) and remove_tag.strip() else None
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                cli.ingest_markdown(conn, proj)
+                try:
+                    _actions_update_ticket(conn, project_id, ticket_id, add_tags=add_tags, remove_tags=remove_tags)
+                    conn.commit()
+                    cli.sync_to_markdown(conn, proj)
+                    cli.regenerate_dashboard(proj)
+                except (ValueError, IndexError):
+                    pass
+                conn.close()
+            t = _get_ticket_json(project_id, ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
+        # Handle set_tags (replace all tags)
+        if "set_tags" in body:
+            new_tags = body["set_tags"]
+            if isinstance(new_tags, list):
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    cli.ingest_markdown(conn, proj)
+                    row = conn.execute(
+                        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                        (ticket_id, project_id)
+                    ).fetchone()
+                    if row:
+                        tid = row["id"]
+                        conn.execute("DELETE FROM ticket_tags WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
+                        for tag in new_tags:
+                            tag = tag.strip().lower() if isinstance(tag, str) else ""
+                            if tag:
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?, ?, ?)",
+                                    (tid, project_id, tag)
+                                )
+                        conn.commit()
+                        cli.sync_to_markdown(conn, proj)
+                        cli.regenerate_dashboard(proj)
+                    conn.close()
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+                return
 
         # Update individual fields
         for field, value in body.items():

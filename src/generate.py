@@ -92,6 +92,7 @@ class Ticket:
     readiness_content: dict = field(default_factory=dict)  # {flag: content_text}
     draft: bool = False
     attachment_count: int = 0
+    tags: list = field(default_factory=list)
 
     @property
     def slug(self) -> str:
@@ -317,6 +318,16 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         except Exception:
             attachment_count = 0
 
+        # Tags
+        try:
+            tag_rows = conn.execute(
+                "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
+                (r["id"], project_id)
+            ).fetchall()
+            tags = [t["tag"] for t in tag_rows]
+        except Exception:
+            tags = []
+
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -336,6 +347,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             readiness_content=readiness_content,
             draft=is_draft,
             attachment_count=attachment_count,
+            tags=tags,
         ))
 
     conn.close()
@@ -607,6 +619,12 @@ def generate_html(project: Project) -> str:
     count_size_m = sum(1 for t in all_visible if t.complexity == "M")
     count_size_l = sum(1 for t in all_visible if t.complexity == "L")
 
+    # Collect all unique tags with counts (for filter bar)
+    tag_counts: dict[str, int] = {}
+    for t in all_visible:
+        for tag in getattr(t, 'tags', []):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
     # Progress: done items / (done + remaining)
     total_all = count_total + count_wontdo + count_icebox
     progress_pct = round((count_done / total_all * 100)) if total_all > 0 else 0
@@ -639,6 +657,23 @@ def generate_html(project: Project) -> str:
         f'<button class="readiness-dot" data-flag="tests" title="Tests" aria-label="Tests">{_svg_icon("flask-conical", 12)}</button>',
         f'<button class="readiness-dot" data-flag="reviewed" title="Learnings" aria-label="Learnings">{_svg_icon("eye", 12)}</button>',
     ])
+
+    # Build tag filter buttons (only shown if tags exist)
+    _tag_filter_html = ""
+    if tag_counts:
+        tag_btns = []
+        for tag_name in sorted(tag_counts.keys()):
+            cnt = tag_counts[tag_name]
+            tag_btns.append(
+                f'<button class="filter-btn tag-filter-btn" data-filter="{escape(tag_name)}" data-group="tags">'
+                f'{escape(tag_name)} <span class="count">{cnt}</span></button>'
+            )
+        _tag_filter_html = (
+            '  <span class="filter-divider"></span>\n'
+            '  <span class="filter-group" data-group-name="tags" id="tagFilterGroup">\n'
+            '    ' + '\n    '.join(tag_btns) + '\n'
+            '  </span>\n'
+        )
 
     html = f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -865,6 +900,10 @@ a {{ color: var(--accent); text-decoration: none; }}
 .card-title {{ font-size: 12px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }}
 
 .card-meta {{ display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }}
+.card-tags {{ display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; padding: 0 2px; }}
+.tag-pill {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 500; background: rgba(139,92,246,0.15); color: #a78bfa; white-space: nowrap; }}
+[data-theme="light"] .tag-pill {{ background: rgba(139,92,246,0.1); color: #7c3aed; }}
+.tag-filter-btn {{ font-size: 11px !important; }}
 .card-id {{ font-size: 10px; color: var(--accent); opacity: 0.6; font-family: var(--font-mono); font-weight: 600; flex-shrink: 0; }}
 
 .status-badge {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 600; text-transform: uppercase; }}
@@ -1435,6 +1474,16 @@ a {{ color: var(--accent); text-decoration: none; }}
 .meta-chip--parent .chip-label {{ color: var(--text-tertiary); }}
 .meta-chip--parent .chip-value {{ color: var(--accent); font-family: var(--font-mono); }}
 .meta-chip--parent input {{ width: 60px; font-size: 11px; background: var(--bg-card); border: 1px solid var(--accent); color: var(--text-primary); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); outline: none; }}
+.detail-tags-strip {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 20px; border-bottom: 1px solid var(--border-subtle); }}
+.detail-tags-label {{ font-size: 11px; color: var(--text-tertiary); font-weight: 600; font-family: var(--font-sans); }}
+.detail-tags-list {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }}
+.detail-tag {{ display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; background: rgba(139,92,246,0.15); color: #a78bfa; cursor: default; white-space: nowrap; font-family: var(--font-sans); }}
+[data-theme="light"] .detail-tag {{ background: rgba(139,92,246,0.1); color: #7c3aed; }}
+.detail-tag .tag-remove {{ cursor: pointer; opacity: 0.5; margin-left: 2px; font-size: 13px; line-height: 1; }}
+.detail-tag .tag-remove:hover {{ opacity: 1; }}
+.detail-tag-input {{ font-size: 11px; padding: 2px 6px; border-radius: 10px; border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-secondary); width: 80px; outline: none; font-family: var(--font-sans); }}
+.detail-tag-input:focus {{ border-color: var(--accent); width: 120px; }}
+.detail-tag-input::placeholder {{ color: var(--text-tertiary); }}
 /* Status dropdown for meta chip */
 .meta-status-dropdown {{ position: absolute; z-index: 1010; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); min-width: 140px; }}
 .meta-status-opt {{ display: block; width: 100%; text-align: left; font-size: 12px; padding: 6px 10px; border: none; background: none; color: var(--text-secondary); cursor: pointer; border-radius: 4px; font-family: var(--font-sans); }}
@@ -1954,7 +2003,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     <button class="filter-btn" data-filter="M" data-group="size">M <span class="count">{count_size_m}</span></button>
     <button class="filter-btn" data-filter="L" data-group="size">L <span class="count">{count_size_l}</span></button>
   </span>
-  <span class="filter-divider"></span>
+{_tag_filter_html}  <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
@@ -1964,6 +2013,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
     <div class="new-ticket-quick">
       <input type="text" id="newTicketTitle" data-testid="new-ticket-title" placeholder="What needs to be done?" class="new-ticket-input" />
+      <input type="text" id="newTicketTags" placeholder="Tags (comma-separated)" class="new-ticket-input" style="width:140px;font-size:11px;" />
       <select id="newTicketSection" data-testid="new-ticket-section" class="new-ticket-select">
         <option value="ideas">Idea</option>
         <option value="backlog">Backlog</option>
@@ -2252,6 +2302,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
           if (g === 'status') {{ match = vals.indexOf(card.dataset.status) !== -1; }}
           else if (g === 'type') {{ match = card.dataset.isBug === 'true'; }}
           else if (g === 'size') {{ match = vals.indexOf(card.dataset.complexity) !== -1; }}
+          else if (g === 'tags') {{ var ct = (card.dataset.tags || '').split(' '); match = vals.some(function(v){{ return ct.indexOf(v) !== -1; }}); }}
           if (!match) show = false;
         }});
         card.style.display = show ? '' : 'none';
@@ -2471,6 +2522,54 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       if (oldPct && newPct && oldPct.textContent !== newPct.textContent) oldPct.textContent = newPct.textContent;
       var oldDate = document.querySelector('.header-date'), newDate = newDoc.querySelector('.header-date');
       if (oldDate && newDate && oldDate.textContent !== newDate.textContent) oldDate.textContent = newDate.textContent;
+      // Patch tag filter group (tags can appear/disappear)
+      var oldTagGroup = document.getElementById('tagFilterGroup');
+      var newTagGroup = newDoc.getElementById('tagFilterGroup');
+      if (oldTagGroup && newTagGroup) {{
+        if (oldTagGroup.innerHTML !== newTagGroup.innerHTML) {{
+          // Preserve active state
+          var activeTags = [];
+          oldTagGroup.querySelectorAll('.filter-btn.active').forEach(function(b) {{ activeTags.push(b.dataset.filter); }});
+          oldTagGroup.innerHTML = newTagGroup.innerHTML;
+          activeTags.forEach(function(t) {{
+            var btn = oldTagGroup.querySelector('.filter-btn[data-filter="'+t+'"]');
+            if (btn) btn.classList.add('active');
+          }});
+          // Rebind click handlers on new tag buttons
+          oldTagGroup.querySelectorAll('.filter-btn').forEach(function(btn) {{
+            btn.addEventListener('click', function() {{
+              btn.classList.toggle('active');
+              applyFilters();
+            }});
+          }});
+        }}
+      }} else if (!oldTagGroup && newTagGroup) {{
+        // Tag group appeared — insert before drafts divider
+        var sizeGroup = document.querySelector('.filter-group[data-group-name="size"]');
+        if (sizeGroup && sizeGroup.nextElementSibling) {{
+          var divider = document.createElement('span');
+          divider.className = 'filter-divider';
+          divider.id = 'tagFilterDivider';
+          var group = document.createElement('span');
+          group.className = 'filter-group';
+          group.dataset.groupName = 'tags';
+          group.id = 'tagFilterGroup';
+          group.innerHTML = newTagGroup.innerHTML;
+          sizeGroup.parentNode.insertBefore(divider, sizeGroup.nextElementSibling);
+          divider.parentNode.insertBefore(group, divider.nextSibling);
+          group.querySelectorAll('.filter-btn').forEach(function(btn) {{
+            btn.addEventListener('click', function() {{
+              btn.classList.toggle('active');
+              applyFilters();
+            }});
+          }});
+        }}
+      }} else if (oldTagGroup && !newTagGroup) {{
+        // Tag group removed
+        var prevDiv = oldTagGroup.previousElementSibling;
+        if (prevDiv && prevDiv.classList.contains('filter-divider')) prevDiv.remove();
+        oldTagGroup.remove();
+      }}
     }}
 
     setInterval(function() {{
@@ -3335,16 +3434,21 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         }});
       }}
 
+      var newTags = document.getElementById('newTicketTags');
       function submitNewTicket() {{
         var title = newTitle.value.trim();
         if (!title) return;
         newSubmit.disabled = true;
+        var tagsRaw = (newTags && newTags.value) ? newTags.value.split(',').map(function(s){{ return s.trim().toLowerCase(); }}).filter(Boolean) : [];
+        var payload = {{ title: title, section: newSection.value }};
+        if (tagsRaw.length) payload.tags = tagsRaw;
         fetch(EDIT_API + '/tickets', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ title: title, section: newSection.value }})
+          body: JSON.stringify(payload)
         }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
           newTitle.value = '';
+          if (newTags) newTags.value = '';
           newSubmit.disabled = false;
           newTitle.focus();
         }}).catch(function() {{ newSubmit.disabled = false; }});
@@ -3396,6 +3500,11 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       <span class="meta-chip meta-chip--complexity" title="Click to change complexity"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--parent"><span class="chip-label">Parent:</span> <span class="chip-value">None</span></span>
       <span class="meta-chip meta-chip--section"><span class="chip-text"></span></span>
+    </div>
+    <div class="detail-tags-strip" id="detail-tags-strip">
+      <span class="detail-tags-label">Tags:</span>
+      <span class="detail-tags-list" id="detail-tags-list"></span>
+      <input type="text" class="detail-tag-input" id="detail-tag-input" placeholder="+ add tag" />
     </div>
     <div class="detail-body">
       <!-- Gate banner (shown during column moves) -->
@@ -4605,6 +4714,56 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     if(descEd) descEd._origValue = descEd.value;
     populateMetaChips(data);
     refreshDCTRS(data);
+    populateTags(data);
+  }}
+
+  /* --- Tags --- */
+  var tagsListEl = document.getElementById('detail-tags-list');
+  var tagInputEl = document.getElementById('detail-tag-input');
+
+  function populateTags(data) {{
+    if (!tagsListEl) return;
+    tagsListEl.innerHTML = '';
+    var tags = data.tags || [];
+    tags.forEach(function(tag) {{
+      var span = document.createElement('span');
+      span.className = 'detail-tag';
+      span.textContent = tag;
+      if (EDIT_API) {{
+        var x = document.createElement('span');
+        x.className = 'tag-remove';
+        x.textContent = '\u00d7';
+        x.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+            method:'PUT', headers:{{'Content-Type':'application/json'}},
+            body: JSON.stringify({{remove_tag: tag}})
+          }}).then(function(r){{return r.json();}}).then(function(d) {{
+            if (d) {{ currentData = d; populateTags(d); }}
+          }});
+        }});
+        span.appendChild(x);
+      }}
+      tagsListEl.appendChild(span);
+    }});
+  }}
+
+  if (tagInputEl && EDIT_API) {{
+    tagInputEl.addEventListener('keydown', function(e) {{
+      if (e.key !== 'Enter') return;
+      var val = tagInputEl.value.trim().toLowerCase();
+      if (!val || !currentTicketId) return;
+      tagInputEl.value = '';
+      fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+        method:'PUT', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{add_tag: val}})
+      }}).then(function(r){{return r.json();}}).then(function(d) {{
+        if (d) {{ currentData = d; populateTags(d); }}
+      }});
+    }});
+  }}
+  if (tagInputEl && !EDIT_API) {{
+    tagInputEl.style.display = 'none';
   }}
 
   function openOverlay(tid, section) {{
@@ -6828,16 +6987,25 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     att_count = getattr(t, 'attachment_count', 0)
     att_badge_html = f'<span class="attachment-count-badge" title="{att_count} attachment(s)">{att_count}</span>' if att_count > 0 else ""
 
+    # Tags
+    tags_list = getattr(t, 'tags', [])
+    tags_attr = f' data-tags="{escape(" ".join(tags_list))}"' if tags_list else ''
+    tags_html = ""
+    if tags_list:
+        pills = "".join(f'<span class="tag-pill">{escape(tg)}</span>' for tg in tags_list)
+        tags_html = f'        <div class="card-tags">{pills}</div>\n'
+
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
         f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
-        f'{draft_attr}>\n'
+        f'{draft_attr}{tags_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
+        f'{tags_html}'
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
@@ -6941,12 +7109,14 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         readiness_html = _render_readiness_row(t)
         open_btn = f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button>'
 
+        list_tags_list = getattr(t, 'tags', [])
+        list_tags_attr = f' data-tags="{escape(" ".join(list_tags_list))}"' if list_tags_list else ''
         lines.append(
             f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
             f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
             f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
-            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}>\n'
+            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}{list_tags_attr}>\n'
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
             f'<span class="card-id">{id_esc}</span>'

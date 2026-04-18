@@ -50,6 +50,8 @@ git clone https://github.com/ytubecoder/ticket-takeaway.git ~/ticket-takeaway &&
 
 This installs the CLI, generator, and skills, registers your project, and seeds the DB from your existing `PRODUCT_BACKLOG.md` (if you have one). You can clone to any directory you prefer — just replace `~/ticket-takeaway` with your chosen path.
 
+The installer uses `--target auto` by default. Auto installs skills for the current agent when detectable, uses Codex when only `~/.codex` exists, and keeps the Claude default when no current agent is detectable. Use `--target codex`, `--target claude`, `--target both`, or `--target none` when you want to be explicit.
+
 ### Or tell your agent
 
 > Clone https://github.com/ytubecoder/ticket-takeaway to ~/ticket-takeaway and run `python3 ~/ticket-takeaway/install.py --register`. This will install the Ticket Takeaway dashboard system and register this project. If we have a PRODUCT_BACKLOG.md it will import existing tickets into the SQLite database automatically.

@@ -4289,6 +4289,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     cli.scaffold_project(conn, new_project)
                     result["scaffolded"] = True
                 conn.close()
+                cli.regenerate_dashboard(new_project)
                 self._send_json(result, 201)
                 return
 

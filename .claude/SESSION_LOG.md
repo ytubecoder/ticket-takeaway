@@ -1,5 +1,23 @@
 # Session Log
 
+## 2026-04-20 — Git sync, tag feature merge & deployment, feature parity audit
+
+### Summary
+- Synced local and remote: pushed 3 local commits, merged `origin/claude/add-ticket-tagging-filter-SodoZ` (ticket tagging feature) into main, pushed merge
+- Discovered deployed runtime files at `~/.claude/ticket-takeaway/` were stale — `actions.py` lacked tag support, causing CLI `--add-tag` to crash with `TypeError: unexpected keyword argument 'add_tags'`. Redeployed all source files.
+- Audited feature parity across CLI, API, actions.py, and SKILL.md. Found SKILL.md has zero mention of tags — agents can't discover the feature. Established memory rule for four-layer parity on all new features.
+
+### Lessons Learned
+- **Gotcha:** Merging a feature branch doesn't update the deployed runtime copies at `~/.claude/ticket-takeaway/`. The CLI and serve.py read from deployed copies, not `src/`. Must redeploy after every merge. [Promoted to CLAUDE.md]
+- **Gotcha:** The `dashboard` skill at `~/.claude/skills/dashboard/SKILL.md` is a stale older copy that doesn't know about SQLite, tags, or the current architecture. The canonical skill is `src/skills/ticket-takeaway/SKILL.md`.
+- **Accepted:** Feature parity checklist — every new feature must update: (1) actions.py, (2) tickets-cli.py, (3) serve.py API, (4) SKILL.md. Saved as memory rule.
+- **Rejected:** Assuming "code exists in src/" means "feature works" — deployment step is a hard requirement, not optional.
+
+### Decisions
+- All five core files redeployed: actions.py, db.py, generate.py, serve.py, tickets-cli.py
+- SKILL.md update for tags identified as needed but deferred to next session
+- Stale `~/.claude/skills/dashboard/SKILL.md` should be updated or deprecated in favor of `ticket-takeaway` skill
+
 ## 2026-04-16 — Settings/bounce split + workflow execution reliability
 
 ### Summary

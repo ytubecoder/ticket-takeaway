@@ -78,7 +78,7 @@ src/page_scraper.py — screen discovery for journey path builder
 5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved. **Polling is skipped when `body.bounce-open` is set** to prevent form/editor destruction.
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
-Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
+Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content, tags) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
 
 **Three-layer hierarchy** (see `docs/LIFECYCLE.md` Section 3b):
 - **Section** = where the work is (Ideas → Backlog → WIP → Review → Done)
@@ -131,6 +131,10 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 - `src/actions.py` → `~/.claude/ticket-takeaway/actions.py`
 - `src/journeys.py` → `~/.claude/ticket-takeaway/journeys.py`
 
+**Ticket Tagging** (migration 6): Tags are stored in `ticket_tags` table (ticket_id, project_id, tag). Supports CLI (`--tag`, `--add-tag`, `--remove-tag`), API (`GET /api/tags`, add/remove/set on PATCH, `tags` array on POST), and dashboard UI (filter bar tag buttons, card tag pills, detail overlay add/remove, new ticket panel input). Tag logic flows through `actions.py` (`add_ticket(tags=...)`, `update_ticket(add_tags=..., remove_tags=...)`). Tags are round-tripped through markdown sync as `Tags: tag1, tag2` lines.
+
+**Deployment gotcha:** Source files in `src/` must be deployed to `~/.claude/ticket-takeaway/` for runtime use. The running `serve.py` and CLI read from the deployed copies, not from `src/`. After merging new features, always redeploy changed files (e.g., `cp src/actions.py ~/.claude/ticket-takeaway/actions.py`) and restart the server. Forgetting this step causes runtime errors where CLI/API references code that doesn't exist in the deployed copy.
+
 **DB recovery:** If `tickets.db` is lost, run `tickets-cli.py seed` to reconstruct from PRODUCT_BACKLOG.md.
 
 ## Ticket Format in PRODUCT_BACKLOG.md
@@ -140,6 +144,7 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 Priority: {priority} | Complexity: {complexity} | Status: {status}
 Parent: {parent-id}       (optional — for sub-tickets)
 Depends: {id1}, {id2}     (optional — inter-ticket dependencies)
+Tags: {tag1}, {tag2}      (optional — thematic/sprint tags, stored in ticket_tags table)
 Commit: {hash}            (optional — git commit hash, auto-captured on done/accept)
 {Description}
 - [ ] Acceptance criterion
@@ -183,6 +188,11 @@ python3 $CLI add <project> "Bug description" --section bugs --parent <parent-ID>
 
 # Update description, criteria, or metadata
 python3 $CLI update <project> <ID> --description "..." --add-criteria "..."
+
+# Tags — add when creating or update later
+python3 $CLI add <project> "Title" --tag ux --tag onboarding
+python3 $CLI update <project> <ID> --add-tag sprint-apr-25
+python3 $CLI update <project> <ID> --remove-tag old-tag
 
 # Watch for live dashboard updates (detects direct markdown edits too)
 python3 $CLI watch &

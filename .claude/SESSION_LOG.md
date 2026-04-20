@@ -1,5 +1,21 @@
 # Session Log
 
+## 2026-04-20 — Project registration fix, DB recovery, ticket rubric
+
+### Summary
+- Fixed bug where adding a new project via the UI returned "Dashboard not generated yet" — POST `/api/projects` was missing `cli.regenerate_dashboard(new_project)` call after scaffold/seed
+- Recovered corrupted SQLite DB (WAL corruption from killed serve.py) by reseeding from PRODUCT_BACKLOG.md files across all projects
+- Established ticket tracking rubric in global `~/projects/CLAUDE.md`: what constitutes a ticket vs sub-ticket vs not-a-ticket, tag strategy (thematic + sprint/initiative), parent-child structure for epics
+
+### Lessons Learned
+- **Gotcha:** Killing serve.py while it's writing can corrupt the SQLite DB (WAL + SHM left in inconsistent state). Recovery: back up corrupted files, delete DB + WAL + SHM, reseed from markdown with `tickets-cli.py seed`
+- **Accepted:** DB recovery via reseed is safe — PRODUCT_BACKLOG.md is the durable source of truth for ticket content. Only ephemeral data (workflow runs, journey run history) is lost.
+- **Gotcha:** `ticket_tags` table didn't exist despite migration 6 code being present — the migration had never actually run against the live DB. Reseeding triggered `init_db()` which ran all migrations fresh.
+
+### Decisions
+- Ticket rubric: < 15 min single-file changes are not tickets; technical tasks are sub-tickets under feature parents; tags favor existing before creating new; sprint tags link epics in a batch
+- No startup-time dashboard regeneration added — the one project (flickki) that was affected was resolved by re-registering, which is a one-time occurrence
+
 ## 2026-04-20 — Git sync, tag feature merge & deployment, feature parity audit
 
 ### Summary

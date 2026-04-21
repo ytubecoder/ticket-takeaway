@@ -57,6 +57,7 @@ SVG_ICONS = {
     "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
     "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
     "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
+    "git-branch": '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
 }
 
 
@@ -94,6 +95,7 @@ class Ticket:
     draft: bool = False
     attachment_count: int = 0
     tags: list = field(default_factory=list)
+    branches: list = field(default_factory=list)  # list of dicts: name, pr_number, pr_status, ahead, behind
 
     @property
     def slug(self) -> str:
@@ -329,6 +331,23 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         except Exception:
             tags = []
 
+        # Branches
+        try:
+            branch_rows = conn.execute(
+                "SELECT branch_name, pr_number, pr_status, pr_url, ahead, behind, auto_linked "
+                "FROM ticket_branches WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
+                (r["id"], project_id)
+            ).fetchall()
+            branches = [
+                {"name": b["branch_name"], "pr_number": b["pr_number"],
+                 "pr_status": b["pr_status"], "pr_url": b["pr_url"] if "pr_url" in b.keys() else "",
+                 "ahead": b["ahead"], "behind": b["behind"],
+                 "auto_linked": bool(b["auto_linked"])}
+                for b in branch_rows
+            ]
+        except Exception:
+            branches = []
+
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -349,6 +368,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             draft=is_draft,
             attachment_count=attachment_count,
             tags=tags,
+            branches=branches,
         ))
 
     conn.close()
@@ -905,6 +925,17 @@ a {{ color: var(--accent); text-decoration: none; }}
 .card-tags {{ display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; padding: 0 2px; }}
 .tag-pill {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 500; background: rgba(139,92,246,0.15); color: #a78bfa; white-space: nowrap; }}
 [data-theme="light"] .tag-pill {{ background: rgba(139,92,246,0.1); color: #7c3aed; }}
+.card-branches {{ display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; padding: 0 2px; }}
+.branch-pill {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 500; background: rgba(56,189,248,0.15); color: #38bdf8; white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }}
+.branch-pill svg {{ flex-shrink: 0; }}
+.branch-pill.pr-open {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.branch-pill.pr-draft {{ background: rgba(34,197,94,0.1); color: #22c55e; opacity: 0.7; }}
+.branch-pill.pr-merged {{ background: rgba(168,85,247,0.15); color: #a855f7; }}
+.branch-pill.pr-closed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+[data-theme="light"] .branch-pill {{ background: rgba(14,165,233,0.1); color: #0284c7; }}
+[data-theme="light"] .branch-pill.pr-open {{ background: rgba(22,163,74,0.1); color: #16a34a; }}
+[data-theme="light"] .branch-pill.pr-merged {{ background: rgba(147,51,234,0.1); color: #9333ea; }}
+[data-theme="light"] .branch-pill.pr-closed {{ background: rgba(220,38,38,0.1); color: #dc2626; }}
 .tag-filter-btn {{ font-size: 11px !important; }}
 .card-id {{ font-size: 10px; color: var(--accent); opacity: 0.6; font-family: var(--font-mono); font-weight: 600; flex-shrink: 0; }}
 
@@ -1486,6 +1517,91 @@ a {{ color: var(--accent); text-decoration: none; }}
 .detail-tag-input {{ font-size: 11px; padding: 2px 6px; border-radius: 10px; border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-secondary); width: 80px; outline: none; font-family: var(--font-sans); }}
 .detail-tag-input:focus {{ border-color: var(--accent); width: 120px; }}
 .detail-tag-input::placeholder {{ color: var(--text-tertiary); }}
+.detail-branches-strip {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 20px; border-bottom: 1px solid var(--border-subtle); }}
+.detail-branches-label {{ font-size: 11px; color: var(--text-tertiary); font-weight: 600; font-family: var(--font-sans); }}
+.detail-branches-list {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }}
+.detail-branch {{ display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; background: rgba(56,189,248,0.15); color: #38bdf8; cursor: default; white-space: nowrap; font-family: var(--font-mono); }}
+.detail-branch.pr-open {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.detail-branch.pr-draft {{ background: rgba(34,197,94,0.1); color: #22c55e; opacity: 0.7; }}
+.detail-branch.pr-merged {{ background: rgba(168,85,247,0.15); color: #a855f7; }}
+.detail-branch.pr-closed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+[data-theme="light"] .detail-branch {{ background: rgba(14,165,233,0.1); color: #0284c7; }}
+[data-theme="light"] .detail-branch.pr-open {{ background: rgba(22,163,74,0.1); color: #16a34a; }}
+[data-theme="light"] .detail-branch.pr-merged {{ background: rgba(147,51,234,0.1); color: #9333ea; }}
+[data-theme="light"] .detail-branch.pr-closed {{ background: rgba(220,38,38,0.1); color: #dc2626; }}
+.detail-branch .branch-remove {{ cursor: pointer; font-weight: 700; margin-left: 2px; opacity: 0.6; }}
+.detail-branch .branch-remove:hover {{ opacity: 1; }}
+.detail-branch .branch-pr {{ font-weight: 600; margin-left: 2px; }}
+.detail-branch .branch-ahead-behind {{ font-size: 9px; opacity: 0.7; margin-left: 3px; }}
+.detail-branch-input {{ font-size: 11px; padding: 2px 6px; border-radius: 10px; border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-secondary); width: 100px; outline: none; font-family: var(--font-mono); }}
+.detail-branch-input:focus {{ border-color: var(--accent); width: 140px; }}
+.detail-branch-input::placeholder {{ color: var(--text-tertiary); }}
+.detail-branch-scan-btn {{ font-size: 10px; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); }}
+.detail-branch-scan-btn:hover {{ color: var(--accent); border-color: var(--accent); }}
+
+/* Branches dropdown panel */
+.branches-dropdown {{ position: relative; display: inline-flex; align-items: center; }}
+.branches-dropdown-btn {{
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
+  color: var(--text-tertiary); background: none; border: none; padding: 8px 12px;
+  border-radius: 6px; cursor: pointer; transition: all 0.15s; font-family: var(--font-sans);
+}}
+.branches-dropdown-btn:hover, .branches-dropdown-btn[aria-expanded="true"] {{ color: var(--text-primary); background: var(--bg-hover); }}
+.branches-dropdown-btn .branch-count {{ font-size: 9px; background: var(--accent); color: #fff; padding: 0 5px; border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center; }}
+.branches-panel {{
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 550;
+  width: 380px; max-height: 500px; overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none;
+}}
+.branches-panel.open {{ display: block; }}
+.branches-panel-header {{
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle); position: sticky; top: 0; background: var(--bg-card); z-index: 1;
+}}
+.branches-panel-title {{ font-size: 12px; font-weight: 700; color: var(--text-primary); font-family: var(--font-sans); }}
+.branches-panel-scan {{ font-size: 10px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); margin-left: auto; }}
+.branches-panel-scan:hover {{ color: var(--accent); border-color: var(--accent); }}
+.branch-group {{ border-bottom: 1px solid var(--border-subtle); }}
+.branch-group:last-child {{ border-bottom: none; }}
+.branch-group-header {{
+  display: flex; align-items: center; gap: 6px; padding: 8px 14px; cursor: pointer;
+  transition: background 0.1s; font-family: var(--font-mono);
+}}
+.branch-group-header:hover {{ background: var(--bg-hover); }}
+.branch-group-name {{ font-size: 12px; font-weight: 600; color: var(--text-primary); }}
+.branch-group-meta {{ font-size: 10px; color: var(--text-tertiary); margin-left: auto; display: flex; gap: 6px; align-items: center; }}
+.branch-group-pr {{ font-size: 9px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }}
+.branch-group-pr.pr-open {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.branch-group-pr.pr-merged {{ background: rgba(168,85,247,0.15); color: #a855f7; }}
+.branch-group-pr.pr-closed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+.branch-group-pr.pr-draft {{ background: rgba(34,197,94,0.1); color: #22c55e; opacity: 0.7; }}
+.branch-group-tickets {{ padding: 0 14px 8px 28px; }}
+.branch-group-tickets.collapsed {{ display: none; }}
+.branch-ticket-row {{
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px;
+  font-size: 11px; color: var(--text-secondary); transition: background 0.1s; cursor: default;
+}}
+.branch-ticket-row:hover {{ background: var(--bg-hover); }}
+.branch-ticket-row .ticket-id {{ font-family: var(--font-mono); color: var(--accent); font-weight: 600; font-size: 10px; }}
+.branch-ticket-row .ticket-title {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.branch-ticket-row .ticket-unlink {{ font-size: 12px; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity 0.1s; }}
+.branch-ticket-row:hover .ticket-unlink {{ opacity: 0.6; }}
+.branch-ticket-row .ticket-unlink:hover {{ opacity: 1; color: var(--red); }}
+.branch-add-ticket {{
+  display: flex; align-items: center; gap: 4px; padding: 4px 8px; margin-top: 2px;
+}}
+.branch-add-ticket input {{
+  flex: 1; font-size: 10px; padding: 3px 6px; border: 1px dashed var(--border-subtle);
+  background: transparent; color: var(--text-secondary); border-radius: 4px; outline: none;
+  font-family: var(--font-mono);
+}}
+.branch-add-ticket input:focus {{ border-color: var(--accent); }}
+.branch-add-ticket input::placeholder {{ color: var(--text-tertiary); }}
+.branch-no-tickets {{ font-size: 10px; color: var(--text-tertiary); padding: 2px 8px; font-style: italic; }}
+.branch-group-arrow {{ font-size: 8px; color: var(--text-tertiary); transition: transform 0.15s; }}
+.branch-group-header[aria-expanded="true"] .branch-group-arrow {{ transform: rotate(90deg); }}
+.branches-empty {{ padding: 20px 14px; text-align: center; color: var(--text-tertiary); font-size: 12px; }}
 /* Status dropdown for meta chip */
 .meta-status-dropdown {{ position: absolute; z-index: 1010; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); min-width: 140px; }}
 .meta-status-opt {{ display: block; width: 100%; text-align: left; font-size: 12px; padding: 6px 10px; border: none; background: none; color: var(--text-secondary); cursor: pointer; border-radius: 4px; font-family: var(--font-sans); }}
@@ -2110,6 +2226,16 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
+  <div class="branches-dropdown" id="branchesDropdown">
+    <button class="branches-dropdown-btn" id="branchesDropdownBtn" title="Branches" aria-expanded="false" aria-haspopup="true">{_svg_icon("git-branch", 15)} Branches</button>
+    <div class="branches-panel" id="branchesPanel">
+      <div class="branches-panel-header">
+        <span class="branches-panel-title">Remote Branches</span>
+        <button class="branches-panel-scan" id="branchesPanelScan">Scan</button>
+      </div>
+      <div id="branchesPanelBody"></div>
+    </div>
+  </div>
   <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
   <button class="settings-toggle" id="bounceToggleBtn" data-testid="bounce-toggle" title="Workflows &amp; Agents">{_icon_bounce}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
@@ -3643,6 +3769,12 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
       <span class="detail-tags-list" id="detail-tags-list"></span>
       <input type="text" class="detail-tag-input" id="detail-tag-input" placeholder="+ add tag" />
     </div>
+    <div class="detail-branches-strip" id="detail-branches-strip">
+      <span class="detail-branches-label">{_svg_icon("git-branch", 12)} Branches:</span>
+      <span class="detail-branches-list" id="detail-branches-list"></span>
+      <input type="text" class="detail-branch-input" id="detail-branch-input" placeholder="+ link branch" />
+      <button class="detail-branch-scan-btn" id="detail-branch-scan-btn" title="Scan for branches">Scan</button>
+    </div>
     <div class="detail-body">
       <!-- Gate banner (shown during column moves) -->
       <div class="detail-gate-banner hidden" id="detail-gate-banner">
@@ -4852,6 +4984,7 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     populateMetaChips(data);
     refreshDCTRS(data);
     populateTags(data);
+    populateBranches(data);
   }}
 
   /* --- Tags --- */
@@ -4902,6 +5035,266 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
   if (tagInputEl && !EDIT_API) {{
     tagInputEl.style.display = 'none';
   }}
+
+  /* --- Branches --- */
+  var branchesListEl = document.getElementById('detail-branches-list');
+  var branchInputEl = document.getElementById('detail-branch-input');
+  var branchScanBtn = document.getElementById('detail-branch-scan-btn');
+
+  function populateBranches(data) {{
+    if (!branchesListEl) return;
+    branchesListEl.innerHTML = '';
+    var branches = data.branches || [];
+    if (!branches.length && !EDIT_API) {{
+      document.getElementById('detail-branches-strip').style.display = 'none';
+      return;
+    }}
+    document.getElementById('detail-branches-strip').style.display = '';
+    branches.forEach(function(br) {{
+      var span = document.createElement('span');
+      var cls = 'detail-branch';
+      if (br.pr_status === 'merged') cls += ' pr-merged';
+      else if (br.pr_status === 'open') cls += ' pr-open';
+      else if (br.pr_status === 'draft') cls += ' pr-draft';
+      else if (br.pr_status === 'closed') cls += ' pr-closed';
+      span.className = cls;
+      var nameText = br.name.length > 30 ? br.name.slice(0, 28) + '\u2026' : br.name;
+      span.title = br.name + (br.ahead || br.behind ? ' (+' + br.ahead + '/-' + br.behind + ')' : '');
+      var inner = nameText;
+      if (br.pr_number) inner += ' <span class="branch-pr">#' + br.pr_number + '</span>';
+      if (br.ahead || br.behind) inner += ' <span class="branch-ahead-behind">\u2191' + br.ahead + ' \u2193' + br.behind + '</span>';
+      span.innerHTML = inner;
+      if (EDIT_API) {{
+        var x = document.createElement('span');
+        x.className = 'branch-remove';
+        x.textContent = '\u00d7';
+        x.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+            method:'PUT', headers:{{'Content-Type':'application/json'}},
+            body: JSON.stringify({{remove_branch: br.name}})
+          }}).then(function(r){{return r.json();}}).then(function(d) {{
+            if (d) {{ currentData = d; populateBranches(d); }}
+          }});
+        }});
+        span.appendChild(x);
+      }}
+      branchesListEl.appendChild(span);
+    }});
+  }}
+
+  if (branchInputEl && EDIT_API) {{
+    branchInputEl.addEventListener('keydown', function(e) {{
+      if (e.key !== 'Enter') return;
+      var val = branchInputEl.value.trim();
+      if (!val || !currentTicketId) return;
+      branchInputEl.value = '';
+      fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+        method:'PUT', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{add_branch: val}})
+      }}).then(function(r){{return r.json();}}).then(function(d) {{
+        if (d) {{ currentData = d; populateBranches(d); }}
+      }});
+    }});
+  }}
+  if (branchInputEl && !EDIT_API) {{
+    branchInputEl.style.display = 'none';
+  }}
+  if (branchScanBtn && !EDIT_API) {{
+    branchScanBtn.style.display = 'none';
+  }}
+  if (branchScanBtn && EDIT_API) {{
+    branchScanBtn.addEventListener('click', function() {{
+      branchScanBtn.textContent = 'Scanning\u2026';
+      branchScanBtn.disabled = true;
+      fetch(EDIT_API+'/branches/scan', {{
+        method:'POST', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{include_prs: true}})
+      }}).then(function(r){{return r.json();}}).then(function(result) {{
+        branchScanBtn.textContent = 'Scan';
+        branchScanBtn.disabled = false;
+        // Refresh current ticket data to show newly linked branches
+        if (currentTicketId) {{
+          fetch(EDIT_API+'/tickets/'+currentTicketId).then(function(r){{return r.json();}}).then(function(d) {{
+            if (d) {{ currentData = d; populateBranches(d); }}
+          }});
+        }}
+        var msg = 'Linked ' + (result.linked||0) + ' branches';
+        if (result.pr_updated) msg += ', enriched ' + result.pr_updated + ' PRs';
+        showAppToast(msg, 'success');
+      }}).catch(function() {{
+        branchScanBtn.textContent = 'Scan';
+        branchScanBtn.disabled = false;
+      }});
+    }});
+  }}
+
+  /* --- Branches Dropdown Panel --- */
+  (function() {{
+    var btn = document.getElementById('branchesDropdownBtn');
+    var panel = document.getElementById('branchesPanel');
+    var body = document.getElementById('branchesPanelBody');
+    var scanBtn = document.getElementById('branchesPanelScan');
+    if (!btn || !panel || !EDIT_API) {{
+      if (btn && !EDIT_API) btn.style.display = 'none';
+      return;
+    }}
+
+    function togglePanel() {{
+      var isOpen = panel.classList.toggle('open');
+      btn.setAttribute('aria-expanded', isOpen);
+      if (isOpen) loadBranches();
+    }}
+
+    btn.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      togglePanel();
+    }});
+
+    document.addEventListener('click', function(e) {{
+      if (!panel.contains(e.target) && e.target !== btn) {{
+        panel.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }}
+    }});
+
+    panel.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+
+    function loadBranches() {{
+      fetch(EDIT_API + '/branches/overview')
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+          renderBranches(data.branches || []);
+        }})
+        .catch(function() {{ body.innerHTML = '<div class="branches-empty">Failed to load branches</div>'; }});
+    }}
+
+    function renderBranches(branches) {{
+      if (!branches.length) {{
+        body.innerHTML = '<div class="branches-empty">No remote branches found.<br>Push a branch or click Scan.</div>';
+        return;
+      }}
+      body.innerHTML = '';
+      branches.forEach(function(br) {{
+        var group = document.createElement('div');
+        group.className = 'branch-group';
+
+        // Header
+        var header = document.createElement('div');
+        header.className = 'branch-group-header';
+        header.setAttribute('aria-expanded', br.tickets.length > 0 ? 'true' : 'false');
+
+        var arrow = document.createElement('span');
+        arrow.className = 'branch-group-arrow';
+        arrow.textContent = '\u25b6';
+        header.appendChild(arrow);
+
+        var name = document.createElement('span');
+        name.className = 'branch-group-name';
+        name.textContent = br.name;
+        header.appendChild(name);
+
+        var meta = document.createElement('span');
+        meta.className = 'branch-group-meta';
+        if (br.pr_number) {{
+          var prBadge = document.createElement('span');
+          prBadge.className = 'branch-group-pr pr-' + (br.pr_status || 'open');
+          prBadge.textContent = '#' + br.pr_number + (br.pr_status ? ' ' + br.pr_status : '');
+          meta.appendChild(prBadge);
+        }}
+        if (br.ahead || br.behind) {{
+          var ab = document.createElement('span');
+          ab.textContent = '\u2191' + br.ahead + ' \u2193' + br.behind;
+          ab.style.fontSize = '10px';
+          meta.appendChild(ab);
+        }}
+        if (br.tickets.length) {{
+          var count = document.createElement('span');
+          count.textContent = br.tickets.length + ' ticket' + (br.tickets.length > 1 ? 's' : '');
+          count.style.fontSize = '10px';
+          meta.appendChild(count);
+        }}
+        header.appendChild(meta);
+
+        // Tickets body
+        var ticketsDiv = document.createElement('div');
+        ticketsDiv.className = 'branch-group-tickets' + (br.tickets.length > 0 ? '' : ' collapsed');
+
+        br.tickets.forEach(function(t) {{
+          var row = document.createElement('div');
+          row.className = 'branch-ticket-row';
+          row.innerHTML = '<span class="ticket-id">' + t.id + '</span>'
+            + '<span class="ticket-title">' + (t.title||'') + '</span>';
+          var unlink = document.createElement('span');
+          unlink.className = 'ticket-unlink';
+          unlink.textContent = '\u00d7';
+          unlink.title = 'Unlink from branch';
+          unlink.addEventListener('click', function() {{
+            fetch(EDIT_API + '/tickets/' + t.id, {{
+              method: 'PUT', headers: {{'Content-Type': 'application/json'}},
+              body: JSON.stringify({{remove_branch: br.name}})
+            }}).then(function() {{ loadBranches(); }});
+          }});
+          row.appendChild(unlink);
+          ticketsDiv.appendChild(row);
+        }});
+
+        // Add ticket input
+        var addRow = document.createElement('div');
+        addRow.className = 'branch-add-ticket';
+        var addInput = document.createElement('input');
+        addInput.type = 'text';
+        addInput.placeholder = '+ add ticket ID';
+        addInput.addEventListener('keydown', function(e) {{
+          if (e.key !== 'Enter') return;
+          var tid = addInput.value.trim().toUpperCase();
+          if (!tid) return;
+          addInput.value = '';
+          fetch(EDIT_API + '/tickets/' + tid, {{
+            method: 'PUT', headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{add_branch: br.name}})
+          }}).then(function(r) {{
+            if (r.ok) loadBranches();
+            else showAppToast('Ticket not found', 'error');
+          }});
+        }});
+        addRow.appendChild(addInput);
+        ticketsDiv.appendChild(addRow);
+
+        // Toggle expand/collapse
+        header.addEventListener('click', function() {{
+          var expanded = header.getAttribute('aria-expanded') === 'true';
+          header.setAttribute('aria-expanded', !expanded);
+          ticketsDiv.classList.toggle('collapsed', expanded);
+        }});
+
+        group.appendChild(header);
+        group.appendChild(ticketsDiv);
+        body.appendChild(group);
+      }});
+    }}
+
+    if (scanBtn) {{
+      scanBtn.addEventListener('click', function() {{
+        scanBtn.textContent = 'Scanning\u2026';
+        scanBtn.disabled = true;
+        fetch(EDIT_API + '/branches/scan', {{
+          method: 'POST', headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{include_prs: true}})
+        }}).then(function(r) {{ return r.json(); }}).then(function(result) {{
+          scanBtn.textContent = 'Scan';
+          scanBtn.disabled = false;
+          loadBranches();
+          var msg = 'Linked ' + (result.linked||0) + ' branches';
+          if (result.pr_updated) msg += ', enriched ' + result.pr_updated + ' PRs';
+          showAppToast(msg, 'success');
+        }}).catch(function() {{
+          scanBtn.textContent = 'Scan';
+          scanBtn.disabled = false;
+        }});
+      }});
+    }}
+  }})();
 
   function openOverlay(tid, section) {{
     currentTicketId = tid;
@@ -7528,6 +7921,27 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         pills = "".join(f'<span class="tag-pill">{escape(tg)}</span>' for tg in tags_list)
         tags_html = f'        <div class="card-tags">{pills}</div>\n'
 
+    # Branches
+    branches_list = getattr(t, 'branches', [])
+    branches_html = ""
+    if branches_list:
+        br_pills = []
+        for br in branches_list:
+            cls = "branch-pill"
+            if br.get("pr_status") == "merged": cls += " pr-merged"
+            elif br.get("pr_status") == "open": cls += " pr-open"
+            elif br.get("pr_status") == "draft": cls += " pr-draft"
+            elif br.get("pr_status") == "closed": cls += " pr-closed"
+            label = br["name"]
+            if len(label) > 20:
+                label = label[:18] + "\u2026"
+            pr_str = f' #{br["pr_number"]}' if br.get("pr_number") else ""
+            br_pills.append(
+                f'<span class="{cls}" title="{escape(br["name"])}">'
+                f'{_svg_icon("git-branch", 10)}{escape(label)}{pr_str}</span>'
+            )
+        branches_html = f'        <div class="card-branches">{"".join(br_pills)}</div>\n'
+
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
@@ -7539,6 +7953,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'<span class="card-id">{id_esc}</span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
         f'{tags_html}'
+        f'{branches_html}'
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'

@@ -318,6 +318,8 @@ def update_ticket(
     remove_depends: Optional[list[str]] = None,
     add_tags: Optional[list[str]] = None,
     remove_tags: Optional[list[str]] = None,
+    add_branches: Optional[list[str]] = None,
+    remove_branches: Optional[list[str]] = None,
 ) -> str:
     """Partial update of a ticket.  Only fields that are not None/sentinel are changed.
 
@@ -413,6 +415,27 @@ def update_ticket(
                     "DELETE FROM ticket_tags "
                     "WHERE ticket_id = ? AND project_id = ? AND tag = ?",
                     (tid, project_id, tag),
+                )
+
+    # ---- branch operations ----
+    if add_branches:
+        for branch in add_branches:
+            branch = branch.strip()
+            if branch:
+                conn.execute(
+                    "INSERT OR IGNORE INTO ticket_branches "
+                    "(ticket_id, project_id, branch_name) VALUES (?, ?, ?)",
+                    (tid, project_id, branch),
+                )
+
+    if remove_branches:
+        for branch in remove_branches:
+            branch = branch.strip()
+            if branch:
+                conn.execute(
+                    "DELETE FROM ticket_branches "
+                    "WHERE ticket_id = ? AND project_id = ? AND branch_name = ?",
+                    (tid, project_id, branch),
                 )
 
     # Post-change hooks (status only — section unchanged by update)
@@ -584,6 +607,258 @@ def _after_section_change(
                         break
             except Exception:
                 pass  # Best-effort — move_ticket already captures this in most paths
+
+
+# ---------------------------------------------------------------------------
+# Branch operations
+# ---------------------------------------------------------------------------
+
+def link_branch(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+    branch_name: str,
+    remote: str = "origin",
+    auto_linked: bool = False,
+) -> bool:
+    """Link a branch to a ticket.  Returns True if a new link was created."""
+    _find_ticket(conn, project_id, ticket_id)  # validate ticket exists
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO ticket_branches "
+        "(ticket_id, project_id, branch_name, remote, auto_linked) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (ticket_id, project_id, branch_name, remote, int(auto_linked)),
+    )
+    return cur.rowcount > 0
+
+
+def unlink_branch(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+    branch_name: str,
+) -> bool:
+    """Unlink a branch from a ticket.  Returns True if a link was removed."""
+    cur = conn.execute(
+        "DELETE FROM ticket_branches "
+        "WHERE ticket_id = ? AND project_id = ? AND branch_name = ?",
+        (ticket_id, project_id, branch_name),
+    )
+    return cur.rowcount > 0
+
+
+def get_ticket_branches(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+) -> list[dict]:
+    """Return all branches linked to a ticket."""
+    rows = conn.execute(
+        "SELECT * FROM ticket_branches "
+        "WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
+        (ticket_id, project_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_project_branches(
+    conn: sqlite3.Connection,
+    project_id: str,
+) -> list[dict]:
+    """Return all branch links for a project."""
+    rows = conn.execute(
+        "SELECT * FROM ticket_branches WHERE project_id = ? ORDER BY ticket_id, created_at",
+        (project_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _match_branch_to_ticket(branch_name: str, ticket_ids: list[str]) -> Optional[str]:
+    """Check if branch_name starts with a ticket ID (case-insensitive).
+
+    Handles both direct names (B-01-feature) and path prefixes (feature/B-01-thing).
+    Returns the matched ticket ID or None.
+    """
+    # Strip remote prefix if present
+    if "/" in branch_name:
+        parts = branch_name.split("/")
+        # origin/B-01-feature → B-01-feature
+        # origin/feature/B-01-thing → feature/B-01-thing → B-01-thing
+        candidates = ["/".join(parts[i:]) for i in range(len(parts))]
+    else:
+        candidates = [branch_name]
+
+    lower_name_candidates = [c.lower() for c in candidates]
+
+    # Sort ticket IDs longest-first to match BUG-03 before B-0
+    for tid in sorted(ticket_ids, key=len, reverse=True):
+        tid_lower = tid.lower()
+        for cand in lower_name_candidates:
+            # Must start with ticket ID followed by end-of-string, dash, or slash
+            if cand == tid_lower or cand.startswith(tid_lower + "-") or cand.startswith(tid_lower + "/"):
+                return tid
+    return None
+
+
+def scan_branches(
+    conn: sqlite3.Connection,
+    project_id: str,
+    project_path: str,
+) -> dict:
+    """Scan remote branches and auto-link those matching ticket IDs.
+
+    Returns {"linked": N, "total_remote": N} or {"error": str}.
+    """
+    if not project_path:
+        return {"error": "no project path", "linked": 0, "total_remote": 0}
+
+    # Get remote branch names
+    try:
+        result = subprocess.run(
+            ["git", "branch", "-r", "--list", "origin/*"],
+            cwd=project_path, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return {"error": "git branch failed", "linked": 0, "total_remote": 0}
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return {"error": "git not available", "linked": 0, "total_remote": 0}
+
+    branches = []
+    for line in result.stdout.strip().splitlines():
+        name = line.strip()
+        if " -> " in name:
+            continue  # skip HEAD pointers like origin/HEAD -> origin/main
+        if name:
+            branches.append(name)
+
+    # Load all ticket IDs for this project
+    ticket_rows = conn.execute(
+        "SELECT id FROM tickets WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    ticket_ids = [r["id"] for r in ticket_rows]
+
+    linked = 0
+    for branch in branches:
+        # Strip "origin/" for matching but store the short name
+        short_name = branch.replace("origin/", "", 1) if branch.startswith("origin/") else branch
+        matched_tid = _match_branch_to_ticket(short_name, ticket_ids)
+        if matched_tid:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO ticket_branches "
+                "(ticket_id, project_id, branch_name, remote, auto_linked) "
+                "VALUES (?, ?, ?, 'origin', 1)",
+                (matched_tid, project_id, short_name),
+            )
+            if cur.rowcount > 0:
+                linked += 1
+
+    # Update ahead/behind for all linked branches
+    all_linked = conn.execute(
+        "SELECT ticket_id, branch_name FROM ticket_branches WHERE project_id = ?",
+        (project_id,),
+    ).fetchall()
+
+    for row in all_linked:
+        try:
+            res = subprocess.run(
+                ["git", "rev-list", "--count", "--left-right",
+                 f"origin/main...origin/{row['branch_name']}"],
+                cwd=project_path, capture_output=True, text=True, timeout=5,
+            )
+            if res.returncode == 0 and "\t" in res.stdout.strip():
+                behind_str, ahead_str = res.stdout.strip().split("\t")
+                conn.execute(
+                    "UPDATE ticket_branches SET ahead = ?, behind = ?, last_synced = ? "
+                    "WHERE ticket_id = ? AND project_id = ? AND branch_name = ?",
+                    (int(ahead_str), int(behind_str),
+                     datetime.now().isoformat(),
+                     row["ticket_id"], project_id, row["branch_name"]),
+                )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
+            pass  # best-effort
+
+    return {"linked": linked, "total_remote": len(branches)}
+
+
+def scan_prs(
+    conn: sqlite3.Connection,
+    project_id: str,
+    project_path: str,
+) -> dict:
+    """Enrich branch links with PR metadata via `gh pr list`.
+
+    Returns {"updated": N} or {"error": str}.
+    """
+    if not project_path:
+        return {"error": "no project path", "updated": 0}
+
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--json",
+             "number,title,headRefName,state,url,isDraft",
+             "--limit", "100", "--state", "all"],
+            cwd=project_path, capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return {"error": "gh pr list failed", "updated": 0}
+        prs = json.loads(result.stdout)
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError,
+            OSError, ValueError):
+        return {"error": "gh not available", "updated": 0}
+
+    # Load ticket IDs for auto-linking unlinked PR branches
+    ticket_rows = conn.execute(
+        "SELECT id FROM tickets WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    ticket_ids = [r["id"] for r in ticket_rows]
+
+    updated = 0
+    for pr in prs:
+        head_ref = pr.get("headRefName", "")
+        if not head_ref:
+            continue
+
+        pr_number = pr.get("number")
+        pr_url = pr.get("url", "")
+        state = pr.get("state", "").upper()
+        is_draft = pr.get("isDraft", False)
+
+        if state == "MERGED":
+            pr_status = "merged"
+        elif state == "CLOSED":
+            pr_status = "closed"
+        elif is_draft:
+            pr_status = "draft"
+        else:
+            pr_status = "open"
+
+        # Try to update existing branch link
+        cur = conn.execute(
+            "UPDATE ticket_branches SET pr_number = ?, pr_status = ?, pr_url = ?, "
+            "last_synced = ? "
+            "WHERE project_id = ? AND branch_name = ?",
+            (pr_number, pr_status, pr_url,
+             datetime.now().isoformat(), project_id, head_ref),
+        )
+        if cur.rowcount > 0:
+            updated += cur.rowcount
+            continue
+
+        # Try auto-linking if the branch matches a ticket ID
+        matched_tid = _match_branch_to_ticket(head_ref, ticket_ids)
+        if matched_tid:
+            conn.execute(
+                "INSERT OR IGNORE INTO ticket_branches "
+                "(ticket_id, project_id, branch_name, remote, auto_linked, "
+                "pr_number, pr_status, pr_url, last_synced) "
+                "VALUES (?, ?, ?, 'origin', 1, ?, ?, ?, ?)",
+                (matched_tid, project_id, head_ref,
+                 pr_number, pr_status, pr_url,
+                 datetime.now().isoformat()),
+            )
+            updated += 1
+
+    return {"updated": updated}
 
 
 def _maybe_promote_parent(

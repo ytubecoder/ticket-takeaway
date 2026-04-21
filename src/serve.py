@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, parse_qs
 
 # ---------------------------------------------------------------------------
 # Import tickets-cli.py (hyphenated filename requires importlib)
@@ -58,7 +58,13 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
                        WORKFLOW_AGENT_TIMEOUT, WORKFLOW_RUN_STATUSES)
 from db import get_db, init_db
-from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
+from actions import (move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket,
+                     add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket,
+                     capture_commit_hash, auto_generate_id, execute_scheduled_event,
+                     link_branch as _actions_link_branch, unlink_branch as _actions_unlink_branch,
+                     get_ticket_branches as _actions_get_ticket_branches,
+                     get_project_branches as _actions_get_project_branches,
+                     scan_branches as _actions_scan_branches, scan_prs as _actions_scan_prs)
 from scenarios import discover_scenarios
 from journeys import (
     add_journey, update_journey, delete_journey, list_journeys, get_journey,
@@ -2026,6 +2032,29 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
     except Exception:
         tags = []
 
+    # Branches
+    try:
+        branch_rows = conn.execute(
+            "SELECT branch_name, remote, pr_number, pr_status, pr_url, ahead, behind, auto_linked "
+            "FROM ticket_branches WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
+            (row["id"], project_id),
+        ).fetchall()
+        branches = [
+            {
+                "name": b["branch_name"],
+                "remote": b["remote"],
+                "pr_number": b["pr_number"],
+                "pr_status": b["pr_status"],
+                "pr_url": b["pr_url"],
+                "ahead": b["ahead"],
+                "behind": b["behind"],
+                "auto_linked": bool(b["auto_linked"]),
+            }
+            for b in branch_rows
+        ]
+    except Exception:
+        branches = []
+
     conn.close()
 
     # Build criteria text for clipboard prompts
@@ -2050,6 +2079,7 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "readiness_flags": readiness_flags,
         "attachment_count": attachment_count,
         "tags": tags,
+        "branches": branches,
     }
 
 
@@ -3655,6 +3685,94 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"tags": [{"tag": r["tag"], "count": r["cnt"]} for r in rows]})
             return
 
+        # Branch overview: all remote branches + linked tickets
+        if remainder == "/api/branches/overview":
+            project_id = proj["id"]
+            project_path = os.path.expanduser(proj.get("path", ""))
+            # Get remote branches
+            remote_branches = []
+            try:
+                result = subprocess.run(
+                    ["git", "branch", "-r", "--list", "origin/*"],
+                    cwd=project_path, capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().splitlines():
+                        name = line.strip()
+                        if " -> " in name or not name:
+                            continue
+                        short = name.replace("origin/", "", 1) if name.startswith("origin/") else name
+                        remote_branches.append(short)
+            except Exception:
+                pass
+
+            # Get all linked branches with their tickets
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                links = conn.execute(
+                    "SELECT tb.branch_name, tb.ticket_id, tb.pr_number, tb.pr_status, tb.pr_url, "
+                    "tb.ahead, tb.behind, t.title, t.status, t.priority, t.section "
+                    "FROM ticket_branches tb "
+                    "LEFT JOIN tickets t ON tb.ticket_id = t.id AND tb.project_id = t.project_id "
+                    "WHERE tb.project_id = ? ORDER BY tb.branch_name, t.sort_order",
+                    (project_id,),
+                ).fetchall()
+                conn.close()
+
+            # Build branch-centric view
+            branch_map = {}
+            for link in links:
+                bname = link["branch_name"]
+                if bname not in branch_map:
+                    branch_map[bname] = {
+                        "name": bname,
+                        "pr_number": link["pr_number"],
+                        "pr_status": link["pr_status"],
+                        "pr_url": link["pr_url"],
+                        "ahead": link["ahead"],
+                        "behind": link["behind"],
+                        "tickets": [],
+                    }
+                if link["ticket_id"]:
+                    branch_map[bname]["tickets"].append({
+                        "id": link["ticket_id"],
+                        "title": link["title"] or "",
+                        "status": link["status"] or "",
+                        "priority": link["priority"] or "medium",
+                        "section": link["section"] or "",
+                    })
+
+            # Add remote branches that have no links
+            for rb in remote_branches:
+                if rb not in branch_map:
+                    branch_map[rb] = {
+                        "name": rb,
+                        "pr_number": None, "pr_status": "", "pr_url": "",
+                        "ahead": 0, "behind": 0, "tickets": [],
+                    }
+
+            # Sort: branches with tickets first, then alphabetical
+            branches = sorted(branch_map.values(), key=lambda b: (len(b["tickets"]) == 0, b["name"]))
+            self._send_json({"branches": branches})
+            return
+
+        # Branch links for this project
+        if remainder == "/api/branches":
+            project_id = proj["id"]
+            params = parse_qs(urlparse(self.path).query)
+            ticket_filter = params.get("ticket_id", [None])[0]
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                if ticket_filter:
+                    rows = _actions_get_ticket_branches(conn, project_id, ticket_filter)
+                else:
+                    rows = _actions_get_project_branches(conn, project_id)
+                conn.close()
+            self._send_json({"branches": rows})
+            return
+
         # Settings
         if remainder == "/api/settings":
             self._send_json(_get_all_settings())
@@ -4236,6 +4354,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t or {"ok": True})
                 return
 
+        # Handle branch operations
+        if "add_branch" in body or "remove_branch" in body:
+            add_br = body.get("add_branch")
+            remove_br = body.get("remove_branch")
+            add_branches = [add_br] if isinstance(add_br, str) and add_br.strip() else None
+            remove_branches = [remove_br] if isinstance(remove_br, str) and remove_br.strip() else None
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                cli.ingest_markdown(conn, proj)
+                try:
+                    _actions_update_ticket(conn, project_id, ticket_id,
+                                          add_branches=add_branches, remove_branches=remove_branches)
+                    conn.commit()
+                    cli.sync_to_markdown(conn, proj)
+                    cli.regenerate_dashboard(proj)
+                except (ValueError, IndexError):
+                    pass
+                conn.close()
+            t = _get_ticket_json(project_id, ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
         # Update individual fields
         for field, value in body.items():
             if not _update_ticket_field(proj, ticket_id, field, value):
@@ -4458,6 +4599,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(result, 201)
             else:
                 self._send_json({"error": "Failed to create ticket"}, 400)
+            return
+
+        # Scan branches + PRs
+        if remainder == "/api/branches/scan":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            include_prs = body.get("include_prs", True)
+            project_id = proj["id"]
+            project_path = os.path.expanduser(proj.get("path", ""))
+
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                result = _actions_scan_branches(conn, project_id, project_path)
+                pr_result = {"updated": 0}
+                if include_prs:
+                    pr_result = _actions_scan_prs(conn, project_id, project_path)
+                conn.commit()
+                cli.sync_to_markdown(conn, proj)
+                conn.close()
+            cli.regenerate_dashboard(proj)
+            self._send_json({
+                "linked": result.get("linked", 0),
+                "total_remote": result.get("total_remote", 0),
+                "pr_updated": pr_result.get("updated", 0),
+                "error": result.get("error") or pr_result.get("error") or None,
+            })
             return
 
         if remainder == "/api/seek":

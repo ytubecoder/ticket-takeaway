@@ -322,3 +322,29 @@ def init_db(conn: sqlite3.Connection):
         """)
         conn.execute("INSERT INTO _migrations (version) VALUES (6)")
         conn.commit()
+
+    # Migration 7: ticket branches (GitHub branch awareness)
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 7").fetchone():
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS ticket_branches (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id   TEXT NOT NULL,
+                project_id  TEXT NOT NULL,
+                branch_name TEXT NOT NULL,
+                remote      TEXT NOT NULL DEFAULT 'origin',
+                pr_number   INTEGER,
+                pr_status   TEXT NOT NULL DEFAULT '',
+                pr_url      TEXT NOT NULL DEFAULT '',
+                ahead       INTEGER NOT NULL DEFAULT 0,
+                behind      INTEGER NOT NULL DEFAULT 0,
+                auto_linked INTEGER NOT NULL DEFAULT 0,
+                last_synced TEXT NOT NULL DEFAULT '',
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(ticket_id, project_id, branch_name)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_branches_ticket ON ticket_branches(ticket_id, project_id);
+            CREATE INDEX IF NOT EXISTS idx_branches_project ON ticket_branches(project_id);
+        """)
+        conn.execute("INSERT INTO _migrations (version) VALUES (7)")
+        conn.commit()

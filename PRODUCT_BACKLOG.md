@@ -126,6 +126,9 @@ POST /api/tickets/{id}/record returns feedbacks URL. window.open() popup. POST /
 Priority: medium | Complexity: M | Status: for-review
 Spec for feedbacks team: compact recorder widget (?mode=recorder), callback on session complete, auto-close popup. See docs/superpowers/specs/2026-04-05-feedbacks-recorder-widget.md
 
+### B-43: GitHub branch awareness — link branches to tickets, scan from git/gh, branches dropdown panel
+Priority: high | Complexity: M | Status: for-review
+
 ## Backlog
 
 ### B-23: Editable AI suggestions before accepting

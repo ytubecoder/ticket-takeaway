@@ -1533,9 +1533,9 @@ a {{ color: var(--accent); text-decoration: none; }}
 .detail-branch .branch-remove:hover {{ opacity: 1; }}
 .detail-branch .branch-pr {{ font-weight: 600; margin-left: 2px; }}
 .detail-branch .branch-ahead-behind {{ font-size: 9px; opacity: 0.7; margin-left: 3px; }}
-.detail-branch-input {{ font-size: 11px; padding: 2px 6px; border-radius: 10px; border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-secondary); width: 100px; outline: none; font-family: var(--font-mono); }}
-.detail-branch-input:focus {{ border-color: var(--accent); width: 140px; }}
-.detail-branch-input::placeholder {{ color: var(--text-tertiary); }}
+.detail-branch-select {{ font-size: 11px; padding: 2px 6px; border-radius: 10px; border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-secondary); outline: none; font-family: var(--font-mono); cursor: pointer; max-width: 180px; }}
+.detail-branch-select:focus {{ border-color: var(--accent); }}
+.detail-branch-select option {{ background: var(--bg-card); color: var(--text-primary); }}
 .detail-branch-scan-btn {{ font-size: 10px; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); }}
 .detail-branch-scan-btn:hover {{ color: var(--accent); border-color: var(--accent); }}
 
@@ -3772,7 +3772,7 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     <div class="detail-branches-strip" id="detail-branches-strip">
       <span class="detail-branches-label">{_svg_icon("git-branch", 12)} Branches:</span>
       <span class="detail-branches-list" id="detail-branches-list"></span>
-      <input type="text" class="detail-branch-input" id="detail-branch-input" placeholder="+ link branch" />
+      <select class="detail-branch-select" id="detail-branch-select"><option value="">+ link branch</option></select>
       <button class="detail-branch-scan-btn" id="detail-branch-scan-btn" title="Scan for branches">Scan</button>
     </div>
     <div class="detail-body">
@@ -5038,8 +5038,9 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
 
   /* --- Branches --- */
   var branchesListEl = document.getElementById('detail-branches-list');
-  var branchInputEl = document.getElementById('detail-branch-input');
+  var branchSelectEl = document.getElementById('detail-branch-select');
   var branchScanBtn = document.getElementById('detail-branch-scan-btn');
+  var _cachedRemoteBranches = null;
 
   function populateBranches(data) {{
     if (!branchesListEl) return;
@@ -5074,21 +5075,50 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
             method:'PUT', headers:{{'Content-Type':'application/json'}},
             body: JSON.stringify({{remove_branch: br.name}})
           }}).then(function(r){{return r.json();}}).then(function(d) {{
-            if (d) {{ currentData = d; populateBranches(d); }}
+            if (d) {{ currentData = d; populateBranches(d); refreshBranchSelect(d); }}
           }});
         }});
         span.appendChild(x);
       }}
       branchesListEl.appendChild(span);
     }});
+    // Refresh select options to exclude already-linked branches
+    if (EDIT_API) refreshBranchSelect(data);
   }}
 
-  if (branchInputEl && EDIT_API) {{
-    branchInputEl.addEventListener('keydown', function(e) {{
-      if (e.key !== 'Enter') return;
-      var val = branchInputEl.value.trim();
+  function refreshBranchSelect(ticketData) {{
+    if (!branchSelectEl || !EDIT_API) return;
+    var linked = (ticketData.branches || []).map(function(b) {{ return b.name; }});
+    function fillOptions(remoteBranches) {{
+      branchSelectEl.innerHTML = '<option value="">+ link branch</option>';
+      remoteBranches.forEach(function(br) {{
+        if (linked.indexOf(br.name) === -1) {{
+          var opt = document.createElement('option');
+          opt.value = br.name;
+          var label = br.name;
+          if (br.pr_number) label += ' (#' + br.pr_number + ')';
+          opt.textContent = label;
+          branchSelectEl.appendChild(opt);
+        }}
+      }});
+    }}
+    if (_cachedRemoteBranches) {{
+      fillOptions(_cachedRemoteBranches);
+    }} else {{
+      fetch(EDIT_API + '/branches/overview')
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+          _cachedRemoteBranches = data.branches || [];
+          fillOptions(_cachedRemoteBranches);
+        }});
+    }}
+  }}
+
+  if (branchSelectEl && EDIT_API) {{
+    branchSelectEl.addEventListener('change', function() {{
+      var val = branchSelectEl.value;
       if (!val || !currentTicketId) return;
-      branchInputEl.value = '';
+      branchSelectEl.value = '';
       fetch(EDIT_API+'/tickets/'+currentTicketId, {{
         method:'PUT', headers:{{'Content-Type':'application/json'}},
         body: JSON.stringify({{add_branch: val}})
@@ -5097,8 +5127,8 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
       }});
     }});
   }}
-  if (branchInputEl && !EDIT_API) {{
-    branchInputEl.style.display = 'none';
+  if (branchSelectEl && !EDIT_API) {{
+    branchSelectEl.style.display = 'none';
   }}
   if (branchScanBtn && !EDIT_API) {{
     branchScanBtn.style.display = 'none';
@@ -5113,6 +5143,7 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
       }}).then(function(r){{return r.json();}}).then(function(result) {{
         branchScanBtn.textContent = 'Scan';
         branchScanBtn.disabled = false;
+        _cachedRemoteBranches = null; // invalidate cache after scan
         // Refresh current ticket data to show newly linked branches
         if (currentTicketId) {{
           fetch(EDIT_API+'/tickets/'+currentTicketId).then(function(r){{return r.json();}}).then(function(d) {{

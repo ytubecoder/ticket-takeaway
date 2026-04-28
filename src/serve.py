@@ -3484,6 +3484,269 @@ textarea {{ min-height: 60px; resize: vertical; }}
 </html>'''
 
 
+def _aggregate_kitchen_state() -> dict:
+    """Aggregate Kitchen state across all registered projects.
+
+    Returns the shape consumed by /api/kitchen and _render_kitchen_view:
+
+      {
+        "buckets": {
+          "needs_me": [...], "running": [...], "ready_to_delegate": [...],
+          "held": [...], "failed": [...],
+        },
+        "projects": [{id, name, counts: {wip, review, blocked, running, needs_me}}, ...],
+      }
+
+    Each item is {project_id, project_name, ticket_id, title, section, status,
+                  automation_mode, latest_run_status, hold_reason, eligibility_reasons?}.
+    Subjects appear in at most one bucket, with priority needs_me > running >
+    ready_to_delegate > held > failed.
+    """
+    from actions import eligibility as _elig
+
+    with _PROJECTS_CACHE_LOCK:
+        projects = list(_PROJECTS_CACHE.values())
+
+    buckets = {k: [] for k in ("needs_me", "running", "ready_to_delegate", "held", "failed")}
+    project_summaries = []
+
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+
+        for proj in projects:
+            pid = proj["id"]
+            pname = proj.get("name", pid)
+            counts = {"wip": 0, "review": 0, "blocked": 0, "running": 0, "needs_me": 0}
+
+            tickets = conn.execute(
+                "SELECT id, title, section, status FROM tickets "
+                "WHERE project_id = ? AND archived = 0 AND draft = 0",
+                (pid,),
+            ).fetchall()
+
+            for t in tickets:
+                tid = t["id"]
+                if t["section"] == "WIP":
+                    counts["wip"] += 1
+                elif t["section"] == "For Review":
+                    counts["review"] += 1
+                if t["status"] == "blocked":
+                    counts["blocked"] += 1
+
+                am_row = conn.execute(
+                    "SELECT automation_mode, hold_reason FROM automation_subjects "
+                    "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
+                    (pid, tid),
+                ).fetchone()
+                mode = am_row["automation_mode"] if am_row else "manual"
+                hold_reason = am_row["hold_reason"] if am_row else None
+
+                latest = conn.execute(
+                    "SELECT status FROM runs WHERE project_id = ? AND subject_type='ticket' AND subject_id=? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (pid, tid),
+                ).fetchone()
+                run_status = latest["status"] if latest else None
+
+                if run_status in ("preparing", "running"):
+                    counts["running"] += 1
+                if run_status == "needs_input":
+                    counts["needs_me"] += 1
+
+                base_item = {
+                    "project_id": pid, "project_name": pname,
+                    "ticket_id": tid, "title": t["title"],
+                    "section": t["section"], "status": t["status"],
+                    "automation_mode": mode, "latest_run_status": run_status,
+                    "hold_reason": hold_reason,
+                }
+
+                # Bucket assignment with single-priority placement.
+                if run_status == "needs_input":
+                    buckets["needs_me"].append(base_item)
+                elif run_status in ("preparing", "running"):
+                    buckets["running"].append(base_item)
+                elif run_status in ("failed", "stalled"):
+                    buckets["failed"].append(base_item)
+                elif mode == "held":
+                    buckets["held"].append(base_item)
+                elif mode == "auto":
+                    # Eligibility check — only show in Ready To Delegate when
+                    # there's no active run AND DCSTL gates pass.
+                    try:
+                        er = _elig(conn, pid, "ticket", tid)
+                        if er.eligible:
+                            buckets["ready_to_delegate"].append(base_item)
+                    except Exception:
+                        pass
+
+            project_summaries.append({
+                "id": pid, "name": pname,
+                "path": proj.get("path", ""),
+                "counts": counts,
+            })
+
+        conn.close()
+
+    # Sort each bucket: most-recent activity first by ticket id desc
+    # (proxy for recency without joining timestamps; cheap, deterministic).
+    for k in buckets:
+        buckets[k].sort(key=lambda x: (x["project_id"], x["ticket_id"]))
+
+    return {"buckets": buckets, "projects": project_summaries}
+
+
+def _render_kitchen_view(port: int) -> str:
+    """Render the Kitchen landing page — cross-project work surface."""
+    state = _aggregate_kitchen_state()
+    bucket_titles = [
+        ("needs_me",          "Needs Me",          "Paused for human input or eligible-but-failed."),
+        ("running",           "Running",           "Active runs — agents currently cooking."),
+        ("ready_to_delegate", "Ready To Delegate", "Auto + all gates clear — waiting for a slot."),
+        ("held",              "Held",              "Paused intentionally, with a reason."),
+        ("failed",            "Failed",            "Last run failed or stalled — needs attention."),
+    ]
+
+    def _items_html(items: list) -> str:
+        if not items:
+            return '<div class="kv-empty">Nothing here.</div>'
+        rows = []
+        for it in items:
+            ticket_url = f"/{it['project_id']}/?ticket={it['ticket_id']}"
+            mode_html = f'<span class="kv-mode kv-mode-{it["automation_mode"]}">{it["automation_mode"]}</span>'
+            run_html = (
+                f'<span class="kv-run kv-run-{it["latest_run_status"]}">{it["latest_run_status"]}</span>'
+                if it["latest_run_status"] else ""
+            )
+            hold_html = (
+                f'<span class="kv-hold-reason" title="{_html.escape(it["hold_reason"] or "")}">— {_html.escape(it["hold_reason"] or "")}</span>'
+                if it["hold_reason"] else ""
+            )
+            rows.append(
+                f'<a class="kv-row" href="{ticket_url}">'
+                f'<span class="kv-tid">{_html.escape(it["ticket_id"])}</span>'
+                f'<span class="kv-title">{_html.escape(it["title"])}</span>'
+                f'<span class="kv-proj">{_html.escape(it["project_name"])}</span>'
+                f'{mode_html}{run_html}{hold_html}'
+                f'</a>'
+            )
+        return "".join(rows)
+
+    sections_html = ""
+    for key, title, desc in bucket_titles:
+        items = state["buckets"][key]
+        sections_html += (
+            f'<section class="kv-bucket" data-bucket="{key}">'
+            f'  <header class="kv-bucket-header">'
+            f'    <h2>{_html.escape(title)} <span class="kv-count">{len(items)}</span></h2>'
+            f'    <span class="kv-bucket-desc">{_html.escape(desc)}</span>'
+            f'  </header>'
+            f'  <div class="kv-bucket-list">{_items_html(items)}</div>'
+            f'</section>'
+        )
+
+    project_rows = []
+    for p in state["projects"]:
+        c = p["counts"]
+        project_rows.append(
+            f'<a class="kv-project-row" href="/{p["id"]}/">'
+            f'  <span class="kv-project-name">{_html.escape(p["name"])}</span>'
+            f'  <span class="kv-project-stat">WIP <strong>{c["wip"]}</strong></span>'
+            f'  <span class="kv-project-stat">Review <strong>{c["review"]}</strong></span>'
+            f'  <span class="kv-project-stat">Blocked <strong>{c["blocked"]}</strong></span>'
+            f'  <span class="kv-project-stat">Running <strong>{c["running"]}</strong></span>'
+            f'  <span class="kv-project-stat">Needs Me <strong>{c["needs_me"]}</strong></span>'
+            f'</a>'
+        )
+    projects_html = "".join(project_rows) or '<div class="kv-empty">No projects registered. Add one from <a href="/projects">the project picker</a>.</div>'
+
+    return f"""<!doctype html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen — Ticket Takeaway</title>
+<script>
+(function () {{
+  var t = localStorage.getItem('tt-theme') || 'system';
+  var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+}})();
+</script>
+<style>
+:root[data-theme="dark"] {{
+  --bg: #0a0a0d; --surface: #16161a; --border: #2a2a32;
+  --text: #e8e8ec; --text-2: #9b9ba6; --text-3: #6e6e7a;
+  --accent: #6b9eff;
+}}
+:root[data-theme="light"] {{
+  --bg: #f8f8fb; --surface: #ffffff; --border: #e5e5ec;
+  --text: #1a1a22; --text-2: #5f5f6e; --text-3: #8b8b96;
+  --accent: #3b82f6;
+}}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; }}
+.kv-page {{ max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }}
+.kv-header {{ display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }}
+.kv-header h1 {{ margin: 0; font-size: 22px; font-weight: 700; }}
+.kv-header-sub {{ color: var(--text-3); font-size: 13px; }}
+.kv-header-nav {{ margin-left: auto; display: flex; gap: 12px; }}
+.kv-header-nav a {{ color: var(--text-2); text-decoration: none; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid transparent; }}
+.kv-header-nav a:hover {{ color: var(--text); border-color: var(--border); }}
+.kv-bucket {{ margin-bottom: 22px; }}
+.kv-bucket-header {{ display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }}
+.kv-bucket-header h2 {{ margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); font-weight: 700; }}
+.kv-bucket-header .kv-count {{ font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--surface); color: var(--text-3); border: 1px solid var(--border); }}
+.kv-bucket-desc {{ color: var(--text-3); font-size: 12px; }}
+.kv-bucket-list {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}
+.kv-empty {{ padding: 14px 16px; color: var(--text-3); font-size: 12px; font-style: italic; }}
+.kv-row {{ display: grid; grid-template-columns: 70px 1fr 140px auto auto auto; gap: 10px; padding: 8px 14px; align-items: center; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; font-size: 13px; }}
+.kv-row:last-child {{ border-bottom: 0; }}
+.kv-row:hover {{ background: rgba(255,255,255,0.03); }}
+.kv-tid {{ font-family: ui-monospace, SF Mono, monospace; font-size: 11px; color: var(--accent); opacity: 0.75; }}
+.kv-title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.kv-proj {{ font-size: 11px; color: var(--text-3); }}
+.kv-mode, .kv-run {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; text-transform: uppercase; }}
+.kv-mode-auto {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
+.kv-mode-held {{ background: rgba(245,158,11,0.18); color: #f59e0b; }}
+.kv-mode-manual {{ display: none; }}
+.kv-run-running, .kv-run-preparing, .kv-run-queued {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
+.kv-run-needs_input {{ background: rgba(245,158,11,0.22); color: #f59e0b; }}
+.kv-run-failed, .kv-run-stalled {{ background: rgba(239,68,68,0.18); color: #ef4444; }}
+.kv-run-cancelled {{ background: rgba(107,114,128,0.18); color: #9ca3af; }}
+.kv-hold-reason {{ font-size: 11px; color: var(--text-3); font-style: italic; }}
+.kv-projects-section {{ margin-top: 32px; }}
+.kv-project-row {{ display: grid; grid-template-columns: 1fr repeat(5, 110px); gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; align-items: center; font-size: 13px; }}
+.kv-project-row:last-child {{ border-bottom: 0; }}
+.kv-project-row:hover {{ background: rgba(255,255,255,0.03); }}
+.kv-project-name {{ font-weight: 600; }}
+.kv-project-stat {{ font-size: 11px; color: var(--text-3); text-align: right; }}
+.kv-project-stat strong {{ color: var(--text); margin-left: 4px; font-variant-numeric: tabular-nums; }}
+</style>
+</head>
+<body>
+<div class="kv-page">
+  <header class="kv-header">
+    <h1>Kitchen</h1>
+    <span class="kv-header-sub">Cross-project work surface — what needs me, what's running, what's ready.</span>
+    <nav class="kv-header-nav">
+      <a href="/projects">All Projects</a>
+    </nav>
+  </header>
+  {sections_html}
+  <section class="kv-projects-section">
+    <header class="kv-bucket-header">
+      <h2>Projects</h2>
+      <span class="kv-bucket-desc">Per-project health snapshot.</span>
+    </header>
+    <div class="kv-bucket-list">{projects_html}</div>
+  </section>
+</div>
+</body>
+</html>"""
+
+
 def _render_project_picker(port: int) -> str:
     """Render the project picker page as self-contained HTML."""
     conn = get_db()
@@ -3858,10 +4121,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes (proj is None) ────────────────────────────
         if proj is None:
-            # Root: project picker page
+            # Root: Kitchen — cross-project work surface (M2)
             if remainder == "/" or remainder == "":
+                html = _render_kitchen_view(SERVER_PORT)
+                self._send_html(html)
+                return
+
+            # Project picker (relocated from / in M2)
+            if remainder == "/projects":
                 html = _render_project_picker(SERVER_PORT)
                 self._send_html(html)
+                return
+
+            # Kitchen JSON aggregation (M2)
+            if remainder == "/api/kitchen":
+                self._send_json(_aggregate_kitchen_state())
                 return
 
             # GET /api/projects — list all projects with ticket counts

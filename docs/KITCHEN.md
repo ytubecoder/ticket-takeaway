@@ -182,7 +182,7 @@ CREATE TABLE runs (
   -- relationships
   attempt            INTEGER NOT NULL DEFAULT 1,
   parent_run_id      INTEGER,
-  retry_kind         TEXT CHECK (retry_kind IN (NULL, 'resume', 'fresh')),
+  retry_kind         TEXT CHECK (retry_kind IS NULL OR retry_kind IN ('resume','fresh')),
   triggered_by       TEXT NOT NULL CHECK (triggered_by IN
                        ('human','run-now','journey-cascade','retry','scheduled','pr-merge'))
 );
@@ -250,7 +250,7 @@ def eligibility(subject, conn) -> EligibilityResult:
 - Archived dep treated as missing → blocks. (Forces explicit cleanup.)
 
 **Tests covered means** (any one):
-- A `readiness_flags` row exists for `kind='tests'` with non-empty content, OR
+- A `readiness_flags` row exists with `flag='tests'` AND non-empty `content`, OR
 - The ticket has at least one `journey_tickets` link and that linked journey
   compiles (`compile_to_manifest()` returns) AND validates
   (`validate_manifest()` passes), OR

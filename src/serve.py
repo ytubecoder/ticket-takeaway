@@ -66,12 +66,15 @@ from actions import (
     capture_commit_hash,
     auto_generate_id,
     execute_scheduled_event,
+    emit_event as _kitchen_emit_event,
     # Kitchen (M1a)
     ActorContext,
     eligibility as _kitchen_eligibility,
     set_automation_mode as _kitchen_set_mode,
     set_no_test_required as _kitchen_set_ntr,
 )
+import kitchen as _kitchen
+from workspaces import wipe_for_retry_fresh as _kitchen_wipe_fresh
 from scenarios import discover_scenarios
 from journeys import (
     add_journey, update_journey, delete_journey, list_journeys, get_journey,
@@ -4341,6 +4344,59 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"events": events})
             return
 
+        # Kitchen (M3): list runs for a ticket. Newest first. Powers the live run panel.
+        # Path: /api/runs?ticket={id}&limit={n}  (limit defaults 10, max 50)
+        if remainder.startswith("/api/runs?") or remainder == "/api/runs":
+            qs = parse_qs(urlparse(self.path).query)
+            ticket_id = (qs.get("ticket", [""])[0] or "").strip()
+            try:
+                limit = max(1, min(int(qs.get("limit", ["10"])[0]), 50))
+            except (ValueError, TypeError):
+                limit = 10
+            if not ticket_id:
+                self._send_json({"runs": []})
+                return
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                row = conn.execute(
+                    "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, proj["id"]),
+                ).fetchone()
+                tid = row["id"] if row else ticket_id
+                rows = conn.execute(
+                    "SELECT id, project_id, subject_type, subject_id, runner_kind, status, "
+                    "       workspace_path, started_at, finished_at, duration_ms, "
+                    "       error_class, error_message, summary, needs_input_prompt, "
+                    "       attempt, triggered_by "
+                    "FROM runs WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+                    "ORDER BY id DESC LIMIT ?",
+                    (proj["id"], tid, limit),
+                ).fetchall()
+                conn.close()
+            self._send_json({"runs": [dict(r) for r in rows]})
+            return
+
+        # Kitchen (M3): single run detail.
+        m = re.match(r"^/api/runs/(\d+)$", remainder)
+        if m:
+            run_id = int(m.group(1))
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                r = conn.execute(
+                    "SELECT id, project_id, subject_type, subject_id, runner_kind, status, "
+                    "       workspace_path, started_at, finished_at, duration_ms, "
+                    "       error_class, error_message, summary, needs_input_prompt, "
+                    "       attempt, triggered_by "
+                    "FROM runs WHERE id = ? AND project_id = ?",
+                    (run_id, proj["id"]),
+                ).fetchone()
+                conn.close()
+            if not r:
+                self._send_json({"error": "run not found"}, 404)
+                return
+            self._send_json(dict(r))
+            return
+
         # Workflow Bounce GET routes
         if remainder == "/api/workflow/agents":
             custom = _list_workflow_agents()
@@ -4949,6 +5005,177 @@ class DashboardHandler(BaseHTTPRequestHandler):
             t = _get_ticket_json(proj["id"], ticket_id)
             self._send_json(t or {"ok": True})
             return
+
+        # Kitchen (M3): manual "Run now" trigger.
+        # POST /api/tickets/{id}/run-now → spawns an agent run for this ticket.
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/run-now$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            # Resolve canonical id + check eligibility for a clean error path.
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                row = conn.execute(
+                    "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, proj["id"]),
+                ).fetchone()
+                if not row:
+                    conn.close()
+                    self._send_json({"error": "ticket not found"}, 404)
+                    return
+                tid = row["id"]
+                er = _kitchen_eligibility(conn, proj["id"], "ticket", tid)
+                conn.close()
+            if not er.eligible:
+                self._send_json(
+                    {"error": "ticket not eligible to run", "reasons": list(er.reasons)},
+                    422,
+                )
+                return
+            settings = {}  # WORKFLOW.toml read inside trigger_run
+            run_id = _kitchen.trigger_run(
+                lambda: get_db(), proj["id"], "ticket", tid, settings,
+                triggered_by="human",
+            )
+            if run_id is None:
+                # Could be no project path or active-run conflict.
+                self._send_json({"error": "could not start run (already active or project misconfigured)"}, 409)
+                return
+            # Return the new run row.
+            conn = get_db()
+            try:
+                r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            finally:
+                conn.close()
+            self._send_json(dict(r) if r else {"id": run_id})
+            return
+
+        # Kitchen (M3): per-run actions.
+        # POST /api/runs/{rid}/{action} where action in (stop|discard|retry|retry-fresh|respond)
+        m = re.match(r"^/api/runs/(\d+)/(stop|discard|retry|retry-fresh|respond)$", remainder)
+        if m:
+            run_id = int(m.group(1))
+            action = m.group(2)
+            try:
+                body = self._read_body() if action == "respond" else {}
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                run = conn.execute(
+                    "SELECT * FROM runs WHERE id = ? AND project_id = ?",
+                    (run_id, proj["id"]),
+                ).fetchone()
+                conn.close()
+            if not run:
+                self._send_json({"error": "run not found"}, 404)
+                return
+
+            if action == "stop":
+                ok = _kitchen.request_cancel(run_id)
+                # Also flip the row defensively if the runner thread isn't ours.
+                if not ok:
+                    with _db_lock:
+                        conn = get_db()
+                        conn.execute(
+                            "UPDATE runs SET status='cancelled', finished_at=?, "
+                            "heartbeat_at=?, summary='cancelled by user' "
+                            "WHERE id = ? AND status IN ('queued','preparing','running','needs_input')",
+                            (datetime.now().isoformat(), datetime.now().isoformat(), run_id),
+                        )
+                        _kitchen_emit_event(
+                            conn, run["project_id"], run["subject_type"], run["subject_id"],
+                            "run_cancelled", {"run_id": run_id}, ActorContext.human(),
+                        )
+                        conn.commit(); conn.close()
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": run_id})
+                return
+
+            if action == "discard":
+                # Mark every event from this run as discarded; emit run_discarded.
+                with _db_lock:
+                    conn = get_db()
+                    cur = conn.execute(
+                        "UPDATE activity_events SET discarded_run_id = ? "
+                        "WHERE actor_type = 'agent' AND actor_id = ?",
+                        (run_id, str(run_id)),
+                    )
+                    reverted = cur.rowcount
+                    _kitchen_emit_event(
+                        conn, run["project_id"], run["subject_type"], run["subject_id"],
+                        "run_discarded",
+                        {"run_id": run_id, "reason": "user-initiated discard",
+                         "reverted_event_count": reverted},
+                        ActorContext.human(),
+                    )
+                    conn.commit(); conn.close()
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": run_id})
+                return
+
+            if action in ("retry", "retry-fresh"):
+                # Spawn a fresh run on the same subject. retry-fresh wipes the
+                # worktree first so after_create runs again.
+                if action == "retry-fresh":
+                    project_path = _kitchen._resolve_project_path(run["project_id"])
+                    if project_path is not None:
+                        _kitchen_wipe_fresh(
+                            project_path, run["project_id"],
+                            run["subject_type"], run["subject_id"],
+                        )
+                new_rid = _kitchen.trigger_run(
+                    lambda: get_db(), run["project_id"],
+                    run["subject_type"], run["subject_id"], {},
+                    triggered_by="retry",
+                )
+                if new_rid is None:
+                    self._send_json({"error": "could not start retry (active run exists?)"}, 409)
+                    return
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (new_rid,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": new_rid})
+                return
+
+            if action == "respond":
+                response_text = (body.get("response") or "").strip()
+                if not response_text:
+                    self._send_json({"error": "response is required"}, 400)
+                    return
+                # Flip status back to running + emit input_provided.
+                with _db_lock:
+                    conn = get_db()
+                    conn.execute(
+                        "UPDATE runs SET status = 'running', heartbeat_at = ?, "
+                        "needs_input_prompt = NULL WHERE id = ? AND status = 'needs_input'",
+                        (datetime.now().isoformat(), run_id),
+                    )
+                    _kitchen_emit_event(
+                        conn, run["project_id"], run["subject_type"], run["subject_id"],
+                        "input_provided",
+                        {"run_id": run_id, "response_excerpt": response_text[:500]},
+                        ActorContext.human(),
+                    )
+                    conn.commit(); conn.close()
+                # NOTE: M3 doesn't yet wire the response back into the agent
+                # subprocess — that requires a richer agent integration. For
+                # now the human-side flip happens; the agent itself doesn't see it
+                # until M3+ adds an agent-side input channel.
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": run_id})
+                return
 
         # AI-powered field enrichment with diff hunks
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/enrich$", remainder)
@@ -6063,6 +6290,13 @@ def main():
     _start_scheduled_event_poller()
     _start_feedbacks_session_watcher()
 
+    # Kitchen orchestrator (M3) — polls eligible subjects, dispatches agent runs.
+    # Pinned to 5s tick by default; WORKFLOW.toml's automation.* settings are
+    # read per-project at dispatch time inside trigger logic.
+    _kitchen.start(get_db, settings={"kitchen_poll_seconds": 5.0,
+                                      "max_concurrent_runs": 3,
+                                      "max_concurrent_per_project": 1})
+
     server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"
     print(f"Dashboard server: {url}")
@@ -6086,6 +6320,7 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
+        _kitchen.stop()
         server.server_close()
 
 

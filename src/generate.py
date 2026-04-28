@@ -56,6 +56,9 @@ SVG_ICONS = {
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
     "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+    "square": '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+    "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    "send": '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
 }
 
 
@@ -1508,6 +1511,75 @@ a {{ color: var(--accent); text-decoration: none; }}
 .history-row .h-time {{ font-size: 10px; color: var(--text-tertiary); text-align: right; font-variant-numeric: tabular-nums; }}
 .history-empty {{ padding: 20px; text-align: center; color: var(--text-tertiary); font-size: 12px; }}
 
+/* Live run panel (M3) */
+.detail-runs {{ border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px; background: var(--bg-card); }}
+.detail-runs.hidden {{ display: none; }}
+.detail-runs .detail-section-header {{ margin-bottom: 6px; padding-bottom: 6px; }}
+.run-now-btn {{
+  font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--accent);
+  background: rgba(59,130,246,0.10); color: var(--accent); cursor: pointer;
+  font-family: var(--font-sans); transition: all 0.15s; display: inline-flex; align-items: center; gap: 4px;
+}}
+.run-now-btn:hover {{ background: rgba(59,130,246,0.20); }}
+.run-now-btn:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+.run-card {{ border: 1px solid var(--border-subtle); border-radius: 6px; background: rgba(255,255,255,0.02); padding: 8px 10px; margin-top: 6px; }}
+.run-card-top {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }}
+.run-pill {{
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 8px; text-transform: uppercase;
+  letter-spacing: 0.4px; white-space: nowrap;
+}}
+.run-pill-queued, .run-pill-preparing {{ background: rgba(59,130,246,0.15); color: #3b82f6; animation: kitchen-pulse 1.6s ease-in-out infinite; }}
+.run-pill-running  {{ background: rgba(59,130,246,0.20); color: #60a5fa; animation: kitchen-pulse 1.6s ease-in-out infinite; }}
+.run-pill-needs_input {{ background: rgba(245,158,11,0.20); color: #f59e0b; }}
+.run-pill-succeeded {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.run-pill-failed, .run-pill-stalled {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+.run-pill-cancelled {{ background: rgba(107,114,128,0.15); color: #9ca3af; }}
+.run-summary {{ font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.run-meta {{ font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; font-variant-numeric: tabular-nums; }}
+.run-ws-link {{ font-size: 11px; color: var(--accent); text-decoration: none; word-break: break-all; }}
+.run-ws-link:hover {{ text-decoration: underline; }}
+.run-actions {{ display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }}
+.run-action-btn {{
+  font-size: 11px; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--border-default);
+  background: var(--bg-page); color: var(--text-secondary); cursor: pointer;
+  font-family: var(--font-sans); display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s;
+}}
+.run-action-btn:hover {{ background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }}
+.run-action-btn.primary {{ background: rgba(59,130,246,0.12); color: var(--accent); border-color: var(--accent); }}
+.run-action-btn.primary:hover {{ background: rgba(59,130,246,0.22); }}
+.run-action-btn.danger {{ color: #ef4444; border-color: rgba(239,68,68,0.4); }}
+.run-action-btn.danger:hover {{ background: rgba(239,68,68,0.1); }}
+.run-action-btn svg {{ width: 12px; height: 12px; vertical-align: -1px; }}
+.run-discard-confirm {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }}
+.run-discard-confirm.hidden {{ display: none; }}
+.run-discard-confirm button {{ font-size: 11px; padding: 2px 10px; border-radius: 4px; border: 1px solid var(--border-default); background: none; color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans); }}
+.run-discard-confirm button.danger {{ color: #ef4444; border-color: rgba(239,68,68,0.5); }}
+.run-discard-confirm button:hover {{ background: var(--bg-hover); }}
+.run-history-list {{ margin-top: 8px; border-top: 1px dashed var(--border-subtle); padding-top: 8px; display: none; }}
+.run-history-list.visible {{ display: block; }}
+.run-history-toggle {{ font-size: 11px; color: var(--text-tertiary); cursor: pointer; background: none; border: none; padding: 0; font-family: var(--font-sans); }}
+.run-history-toggle:hover {{ color: var(--text-secondary); }}
+.run-history-row {{ display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; font-size: 11px; color: var(--text-secondary); cursor: default; }}
+.run-history-row:hover {{ background: var(--bg-hover); }}
+.run-history-row .run-pill {{ font-size: 9px; padding: 1px 6px; }}
+.run-history-row .rh-time {{ color: var(--text-tertiary); margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }}
+/* needs_input inline response panel */
+.run-ni-panel {{ margin-top: 8px; padding: 8px 10px; border: 1px solid rgba(245,158,11,0.35); border-radius: 6px; background: rgba(245,158,11,0.05); }}
+.run-ni-panel.hidden {{ display: none; }}
+.run-ni-prompt {{ font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }}
+.run-ni-textarea {{ display: block; width: 100%; box-sizing: border-box; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-card); color: var(--text-primary); font-family: var(--font-sans); resize: vertical; min-height: 56px; outline: none; }}
+.run-ni-textarea:focus {{ border-color: var(--accent); }}
+.run-ni-actions {{ display: flex; gap: 6px; margin-top: 6px; }}
+.run-ni-send {{ font-size: 11px; padding: 4px 14px; border-radius: 5px; border: none; background: var(--accent); color: #fff; cursor: pointer; font-family: var(--font-sans); display: inline-flex; align-items: center; gap: 4px; }}
+.run-ni-send:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+.run-ni-cancel {{ font-size: 11px; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--border-default); background: none; color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans); }}
+/* Per-card run-now button */
+.card-run-now-btn {{
+  display: none; cursor: pointer; background: none; border: none; padding: 2px 4px;
+  color: var(--accent); opacity: 0.7; line-height: 1; transition: opacity 0.15s;
+}}
+.card-run-now-btn:hover {{ opacity: 1; background: rgba(59,130,246,0.10); border-radius: 3px; }}
+.edit-enabled .card[data-eligible="true"] .card-run-now-btn {{ display: inline-flex; align-items: center; }}
 /* No-tests-required block in Tests section (M1a) */
 .ntr-block {{ margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle); }}
 .ntr-checkbox-row {{ display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }}
@@ -3497,6 +3569,53 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       </span>
     </div>
     <div class="detail-body">
+      <!-- Live run panel (M3) — hidden when no runs exist -->
+      <div class="detail-section detail-runs hidden" id="section-runs" data-testid="section-runs">
+        <div class="detail-section-header">
+          <h3>Runs <span id="runs-count" style="font-weight:400;opacity:0.6;font-size:11px;"></span></h3>
+          <button class="run-now-btn" id="run-now-btn" data-testid="run-now-btn" style="display:none">{_svg_icon("play", 11)} Run now</button>
+        </div>
+        <!-- Latest run card -->
+        <div id="run-latest-card" class="run-card" style="display:none">
+          <div class="run-card-top">
+            <span class="run-pill" id="run-latest-pill"></span>
+            <span class="run-summary" id="run-latest-summary"></span>
+          </div>
+          <div class="run-meta">
+            <span id="run-latest-time"></span>
+            <span id="run-latest-duration"></span>
+            <a id="run-latest-ws" class="run-ws-link" href="#" target="_blank" rel="noopener noreferrer">—</a>
+          </div>
+          <!-- needs_input inline response panel -->
+          <div class="run-ni-panel hidden" id="run-ni-panel" data-testid="run-ni-panel">
+            <div class="run-ni-prompt" id="run-ni-prompt"></div>
+            <textarea class="run-ni-textarea" id="run-ni-textarea" data-testid="run-ni-textarea" placeholder="Type your response…" rows="3"></textarea>
+            <div class="run-ni-actions">
+              <button class="run-ni-send" id="run-ni-send" data-testid="run-ni-send" disabled>{_svg_icon("send", 11)} Send response</button>
+              <button class="run-ni-cancel" id="run-ni-cancel" data-testid="run-ni-cancel">Cancel</button>
+            </div>
+          </div>
+          <!-- Action buttons -->
+          <div class="run-actions" id="run-latest-actions">
+            <button class="run-action-btn danger" id="run-stop-btn" style="display:none" data-testid="run-stop">{_svg_icon("square", 11)} Stop</button>
+            <button class="run-action-btn" id="run-retry-btn" style="display:none" data-testid="run-retry">{_svg_icon("rotate-ccw", 11)} Retry</button>
+            <button class="run-action-btn" id="run-retry-fresh-btn" style="display:none" data-testid="run-retry-fresh">{_svg_icon("rotate-ccw", 11)} Retry fresh</button>
+            <button class="run-action-btn danger" id="run-discard-btn" style="display:none" data-testid="run-discard">{_svg_icon("trash-2", 11)} Discard</button>
+          </div>
+          <!-- Inline discard confirm -->
+          <div class="run-discard-confirm hidden" id="run-discard-confirm">
+            <span>Discard this run?</span>
+            <button class="danger" id="run-discard-yes" data-testid="run-discard-yes">Yes, discard</button>
+            <button id="run-discard-no" data-testid="run-discard-no">Cancel</button>
+          </div>
+        </div>
+        <!-- Recent runs collapsed list (max 5 prior entries) -->
+        <div id="run-history-wrapper" style="margin-top:4px;">
+          <button class="run-history-toggle" id="run-history-toggle" data-testid="run-history-toggle" style="display:none">Show recent runs</button>
+          <div class="run-history-list" id="run-history-list"></div>
+        </div>
+      </div>
+
       <!-- Gate banner (shown during column moves) -->
       <div class="detail-gate-banner hidden" id="detail-gate-banner">
         <div class="detail-gate-verdict">
@@ -4001,6 +4120,302 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       listEl.innerHTML = '<div class="history-empty">Failed: ' + escapeHtmlForHistory(err.message || err) + '</div>';
     }});
   }}
+  /* =====================================================================
+     Live run panel (M3)
+     ===================================================================== */
+  var _runsSection    = overlay.querySelector('#section-runs');
+  var _runNowBtn      = overlay.querySelector('#run-now-btn');
+  var _runLatestCard  = overlay.querySelector('#run-latest-card');
+  var _runLatestPill  = overlay.querySelector('#run-latest-pill');
+  var _runLatestSumm  = overlay.querySelector('#run-latest-summary');
+  var _runLatestTime  = overlay.querySelector('#run-latest-time');
+  var _runLatestDur   = overlay.querySelector('#run-latest-duration');
+  var _runLatestWs    = overlay.querySelector('#run-latest-ws');
+  var _runStopBtn     = overlay.querySelector('#run-stop-btn');
+  var _runRetryBtn    = overlay.querySelector('#run-retry-btn');
+  var _runRetryFresh  = overlay.querySelector('#run-retry-fresh-btn');
+  var _runDiscardBtn  = overlay.querySelector('#run-discard-btn');
+  var _runDiscardConf = overlay.querySelector('#run-discard-confirm');
+  var _runDiscardYes  = overlay.querySelector('#run-discard-yes');
+  var _runDiscardNo   = overlay.querySelector('#run-discard-no');
+  var _runsCount      = overlay.querySelector('#runs-count');
+  var _runHistToggle  = overlay.querySelector('#run-history-toggle');
+  var _runHistList    = overlay.querySelector('#run-history-list');
+  var _runNiPanel     = overlay.querySelector('#run-ni-panel');
+  var _runNiPrompt    = overlay.querySelector('#run-ni-prompt');
+  var _runNiTextarea  = overlay.querySelector('#run-ni-textarea');
+  var _runNiSend      = overlay.querySelector('#run-ni-send');
+  var _runNiCancel    = overlay.querySelector('#run-ni-cancel');
+
+  var _currentRunId   = null;   // ID of the latest run being displayed
+  var _runsPollTimer  = null;   // setInterval handle for active run polling
+
+  var ACTIVE_RUN_STATUSES = {{'queued':1,'preparing':1,'running':1,'needs_input':1}};
+  var TERMINAL_RUN_STATUSES = {{'succeeded':1,'failed':1,'stalled':1,'cancelled':1}};
+
+  function _esc(s) {{ return escapeHtmlForHistory(s == null ? '' : String(s)); }}
+
+  function _runPillClass(status) {{
+    var safe = (status || 'unknown').replace(/[^a-z_]/g, '');
+    return 'run-pill run-pill-' + safe;
+  }}
+
+  function _runPillLabel(status) {{
+    var labels = {{
+      queued: 'queued', preparing: 'preparing', running: 'running',
+      needs_input: 'needs input', succeeded: 'succeeded',
+      failed: 'failed', stalled: 'stalled', cancelled: 'cancelled'
+    }};
+    return labels[status] || (status || '—');
+  }}
+
+  function _fmtDuration(ms) {{
+    if (!ms) return '';
+    if (ms < 1000) return ms + 'ms';
+    if (ms < 60000) return Math.round(ms / 1000) + 's';
+    return Math.round(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's';
+  }}
+
+  function renderRuns(data) {{
+    var runs = (data && data.runs) || [];
+    if (!runs.length) {{
+      _runsSection.classList.add('hidden');
+      _stopRunsPolling();
+      return;
+    }}
+    _runsSection.classList.remove('hidden');
+    var latest = runs[0];
+    _currentRunId = latest.id;
+    var isActive = !!ACTIVE_RUN_STATUSES[latest.status];
+    var isTerminal = !!TERMINAL_RUN_STATUSES[latest.status];
+
+    // Count badge
+    if (_runsCount) _runsCount.textContent = '(' + runs.length + ')';
+
+    // Run-now button — show when eligible and no active run
+    var eligible = currentData && currentData.automation_eligible;
+    if (_runNowBtn) {{
+      _runNowBtn.style.display = (eligible && !isActive) ? 'inline-flex' : 'none';
+    }}
+
+    // Latest card
+    _runLatestCard.style.display = 'block';
+    _runLatestPill.className = _runPillClass(latest.status);
+    _runLatestPill.textContent = _runPillLabel(latest.status);
+
+    var summaryText = latest.summary || (latest.error_message ? latest.error_message : '—');
+    _runLatestSumm.textContent = summaryText;
+    _runLatestSumm.title = summaryText;
+
+    _runLatestTime.textContent = latest.started_at ? timeAgo(latest.started_at) : '—';
+    _runLatestDur.textContent = latest.duration_ms ? '(' + _fmtDuration(latest.duration_ms) + ')' : (isActive ? '(running…)' : '');
+
+    if (latest.workspace_path) {{
+      _runLatestWs.href = 'file://' + _esc(latest.workspace_path);
+      _runLatestWs.textContent = latest.workspace_path;
+      _runLatestWs.title = latest.workspace_path;
+    }} else {{
+      _runLatestWs.href = '#';
+      _runLatestWs.textContent = '—';
+      _runLatestWs.removeAttribute('title');
+    }}
+
+    // Action buttons
+    _runStopBtn.style.display    = isActive    ? 'inline-flex' : 'none';
+    _runRetryBtn.style.display   = isTerminal  ? 'inline-flex' : 'none';
+    _runRetryFresh.style.display = isTerminal  ? 'inline-flex' : 'none';
+    _runDiscardBtn.style.display = isTerminal  ? 'inline-flex' : 'none';
+
+    // Store run id on buttons for handlers
+    [_runStopBtn, _runRetryBtn, _runRetryFresh, _runDiscardBtn].forEach(function(b) {{
+      if (b) b.dataset.runId = latest.id;
+    }});
+
+    // needs_input panel
+    if (latest.status === 'needs_input' && _runNiPanel) {{
+      _runNiPanel.classList.remove('hidden');
+      if (_runNiPrompt) _runNiPrompt.textContent = latest.needs_input_prompt || 'The agent is waiting for your input.';
+      if (_runNiTextarea) {{ _runNiTextarea.value = ''; _runNiTextarea.dataset.runId = latest.id; }}
+      if (_runNiSend) {{ _runNiSend.disabled = true; _runNiSend.dataset.runId = latest.id; }}
+      if (_runNiCancel) _runNiCancel.dataset.runId = latest.id;
+    }} else {{
+      if (_runNiPanel) _runNiPanel.classList.add('hidden');
+    }}
+
+    // Recent history (skip latest = runs[0])
+    var older = runs.slice(1, 6);
+    if (_runHistToggle) _runHistToggle.style.display = older.length ? 'inline' : 'none';
+    if (_runHistList) {{
+      _runHistList.innerHTML = older.map(function(r) {{
+        return '<div class="run-history-row">' +
+          '<span class="' + _esc(_runPillClass(r.status)) + '">' + _esc(_runPillLabel(r.status)) + '</span>' +
+          '<span>' + _esc(r.summary || r.error_message || '—') + '</span>' +
+          '<span class="rh-time">' + _esc(r.started_at ? timeAgo(r.started_at) : '—') + '</span>' +
+          '</div>';
+      }}).join('');
+    }}
+
+    // Manage polling
+    if (isActive) {{
+      _startRunsPolling(currentTicketId);
+    }} else {{
+      _stopRunsPolling();
+    }}
+  }}
+
+  function loadRuns(ticketId) {{
+    if (!ticketId) return;
+    var url = EDIT_API + '/api/runs?ticket=' + encodeURIComponent(ticketId);
+    fetch(url).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      renderRuns(data);
+    }}).catch(function() {{
+      // Silently fail — runs API may not be deployed yet
+    }});
+  }}
+
+  function _startRunsPolling(ticketId) {{
+    if (_runsPollTimer) return;  // already polling
+    _runsPollTimer = setInterval(function() {{
+      if (overlay.classList.contains('hidden')) {{ _stopRunsPolling(); return; }}
+      loadRuns(ticketId);
+    }}, 2000);
+  }}
+
+  function _stopRunsPolling() {{
+    if (_runsPollTimer) {{ clearInterval(_runsPollTimer); _runsPollTimer = null; }}
+  }}
+
+  function postRunNow(ticketId) {{
+    if (!ticketId) return;
+    var btn = _runNowBtn;
+    if (btn) btn.disabled = true;
+    var url = EDIT_API + '/api/tickets/' + encodeURIComponent(ticketId) + '/run-now';
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+      .then(function(r) {{
+        if (r.status === 409) {{ showAppToast('A run is already active for this ticket.', 'error'); if(btn) btn.disabled=false; return null; }}
+        if (r.status === 422) {{ return r.json().then(function(d) {{ showAppToast('Not eligible: ' + ((d.reasons||[]).join('; ')||'unknown reason'), 'error'); if(btn) btn.disabled=false; return null; }}); }}
+        if (!r.ok) {{ showAppToast('Run failed to start.', 'error'); if(btn) btn.disabled=false; return null; }}
+        return r.json();
+      }})
+      .then(function(run) {{
+        if (!run) return;
+        showAppToast('Run started', 'success');
+        loadRuns(currentTicketId);
+      }})
+      .catch(function() {{ showAppToast('Network error starting run.', 'error'); if(btn) btn.disabled=false; }});
+  }}
+
+  function postRunAction(runId, action) {{
+    if (!runId) return;
+    var url = EDIT_API + '/api/runs/' + encodeURIComponent(runId) + '/' + action;
+    return fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(run) {{
+        showAppToast(action.charAt(0).toUpperCase() + action.slice(1).replace(/-/g,' ') + ' sent', 'success');
+        loadRuns(currentTicketId);
+        return run;
+      }})
+      .catch(function() {{ showAppToast('Network error.', 'error'); }});
+  }}
+
+  function postNeedsInputResponse(runId, text) {{
+    if (!runId || !text) return;
+    var url = EDIT_API + '/api/runs/' + encodeURIComponent(runId) + '/respond';
+    if (_runNiSend) _runNiSend.disabled = true;
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{response: text}})}})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(run) {{
+        showAppToast('Response sent', 'success');
+        if (_runNiTextarea) _runNiTextarea.value = '';
+        loadRuns(currentTicketId);
+      }})
+      .catch(function() {{ showAppToast('Network error sending response.', 'error'); if(_runNiSend) _runNiSend.disabled=false; }});
+  }}
+
+  // Run-now button in detail header
+  if (_runNowBtn) {{
+    _runNowBtn.addEventListener('click', function() {{
+      postRunNow(currentTicketId);
+    }});
+  }}
+
+  // Stop button
+  if (_runStopBtn) {{
+    _runStopBtn.addEventListener('click', function() {{
+      postRunAction(this.dataset.runId, 'stop');
+    }});
+  }}
+
+  // Retry button
+  if (_runRetryBtn) {{
+    _runRetryBtn.addEventListener('click', function() {{
+      postRunAction(this.dataset.runId, 'retry');
+    }});
+  }}
+
+  // Retry fresh button
+  if (_runRetryFresh) {{
+    _runRetryFresh.addEventListener('click', function() {{
+      postRunAction(this.dataset.runId, 'retry-fresh');
+    }});
+  }}
+
+  // Discard button — show inline confirm
+  if (_runDiscardBtn) {{
+    _runDiscardBtn.addEventListener('click', function() {{
+      _runDiscardConf.classList.remove('hidden');
+      _runDiscardBtn.style.display = 'none';
+    }});
+  }}
+  if (_runDiscardYes) {{
+    _runDiscardYes.addEventListener('click', function() {{
+      _runDiscardConf.classList.add('hidden');
+      if (_runDiscardBtn) _runDiscardBtn.style.display = 'none';
+      postRunAction(_currentRunId, 'discard');
+    }});
+  }}
+  if (_runDiscardNo) {{
+    _runDiscardNo.addEventListener('click', function() {{
+      _runDiscardConf.classList.add('hidden');
+      if (_runDiscardBtn && TERMINAL_RUN_STATUSES[_currentRunId]) _runDiscardBtn.style.display = 'inline-flex';
+      else if (_runDiscardBtn) _runDiscardBtn.style.display = 'inline-flex';
+    }});
+  }}
+
+  // needs_input textarea — enable send when non-empty
+  if (_runNiTextarea) {{
+    _runNiTextarea.addEventListener('input', function() {{
+      if (_runNiSend) _runNiSend.disabled = !this.value.trim();
+    }});
+    _runNiTextarea.addEventListener('keydown', function(e) {{
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {{
+        e.preventDefault();
+        if (_runNiSend && !_runNiSend.disabled) _runNiSend.click();
+      }}
+    }});
+  }}
+  if (_runNiSend) {{
+    _runNiSend.addEventListener('click', function() {{
+      var tid = this.dataset.runId;
+      var txt = _runNiTextarea ? _runNiTextarea.value.trim() : '';
+      if (tid && txt) postNeedsInputResponse(tid, txt);
+    }});
+  }}
+  if (_runNiCancel) {{
+    _runNiCancel.addEventListener('click', function() {{
+      // Cancel = stop the run
+      postRunAction(this.dataset.runId || _currentRunId, 'stop');
+    }});
+  }}
+
+  // Recent runs toggle
+  if (_runHistToggle) {{
+    _runHistToggle.addEventListener('click', function() {{
+      var isVisible = _runHistList.classList.toggle('visible');
+      this.textContent = isVisible ? 'Hide recent runs' : 'Show recent runs';
+    }});
+  }}
+
   var historyToggleBtn = overlay.querySelector('#history-toggle');
   if (historyToggleBtn) {{
     historyToggleBtn.addEventListener('click', function() {{
@@ -4716,11 +5131,14 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
           history.pushState({{ ticket: true, id: tid, flag: scrollFlag }}, '', ticketHash);
         }}
       }}
+      // Load live run panel (M3)
+      loadRuns(tid);
     }});
   }}
 
   function closeOverlay() {{
     closeStatusDropdown();
+    _stopRunsPolling();
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
     currentTicketId = null; currentData = null;
@@ -6254,6 +6672,32 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     }}
   }});
 
+  // Per-card run-now buttons (delegated) — visible only when data-eligible="true" and no active run
+  document.addEventListener('click', function(e) {{
+    var btn = e.target.closest('.card-run-now-btn');
+    if (!btn) return;
+    e.stopPropagation();
+    var tid = btn.dataset.ticketId;
+    if (!tid) return;
+    btn.disabled = true;
+    var url = EDIT_API + '/api/tickets/' + encodeURIComponent(tid) + '/run-now';
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+      .then(function(r) {{
+        if (r.status === 409) {{ showAppToast('A run is already active.', 'error'); btn.disabled=false; return null; }}
+        if (r.status === 422) {{ return r.json().then(function(d) {{ showAppToast('Not eligible: ' + ((d.reasons||[]).join('; ')||''), 'error'); btn.disabled=false; return null; }}); }}
+        if (!r.ok) {{ showAppToast('Run failed to start.', 'error'); btn.disabled=false; return null; }}
+        return r.json();
+      }})
+      .then(function(run) {{
+        if (!run) return;
+        showAppToast('Run started for ' + _esc(tid), 'success');
+        // Update card data attribute so button hides until next page refresh
+        var card = btn.closest('.card');
+        if (card) {{ card.dataset.runStatus = 'queued'; btn.style.display = 'none'; }}
+      }})
+      .catch(function() {{ showAppToast('Network error starting run.', 'error'); btn.disabled=false; }});
+  }});
+
   function _createRecordingPlaceholder(text) {{
     var row = document.createElement('div');
     row.className = 'attachment-row attachment-placeholder';
@@ -6953,6 +7397,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'<span class="status-badge {status_class}">{status_class}</span>'
         f'{kb_html}'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
+        f'<button class="card-run-now-btn" data-testid="card-run-now-{id_esc}" data-ticket-id="{id_esc}" title="Run now" aria-label="Run now for {id_esc}">{_svg_icon("play", 12)}</button>'
         f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details" aria-label="Open {id_esc}">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
         f'{readiness_html}'
         f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'

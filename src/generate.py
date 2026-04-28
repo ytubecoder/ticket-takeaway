@@ -95,6 +95,8 @@ class Ticket:
     # Kitchen (M1a) — derived for the card badge.
     automation_mode: str = "manual"   # manual | auto | held
     latest_run_status: Optional[str] = None  # None until M3 produces real runs
+    # Kitchen (M2) — computed eligibility (auto ∧ all DCSTL gates clear).
+    automation_eligible: bool = False
 
     @property
     def slug(self) -> str:
@@ -324,6 +326,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         # silently fall back to defaults.
         automation_mode = "manual"
         latest_run_status = None
+        automation_eligible = False
         try:
             am = conn.execute(
                 "SELECT automation_mode FROM automation_subjects "
@@ -339,6 +342,13 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             ).fetchone()
             if lr:
                 latest_run_status = lr["status"]
+            # M2: compute eligibility once at load. Cheap because conn is hot.
+            try:
+                from actions import eligibility as _kitchen_eligibility  # local import: avoids hard dep at module load
+                er = _kitchen_eligibility(conn, project_id, "ticket", r["id"])
+                automation_eligible = er.eligible
+            except Exception:
+                automation_eligible = False
         except Exception:
             pass
 
@@ -363,6 +373,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             attachment_count=attachment_count,
             automation_mode=automation_mode,
             latest_run_status=latest_run_status,
+            automation_eligible=automation_eligible,
         ))
 
     conn.close()
@@ -633,6 +644,13 @@ def generate_html(project: Project) -> str:
     count_size_s = sum(1 for t in all_visible if t.complexity == "S")
     count_size_m = sum(1 for t in all_visible if t.complexity == "M")
     count_size_l = sum(1 for t in all_visible if t.complexity == "L")
+
+    # Kitchen filter counts (M2)
+    count_auto = sum(1 for t in all_visible if t.automation_mode == "auto")
+    count_held = sum(1 for t in all_visible if t.automation_mode == "held")
+    count_eligible = sum(1 for t in all_visible if t.automation_eligible)
+    count_needs_input = sum(1 for t in all_visible if t.latest_run_status == "needs_input")
+    count_failed = sum(1 for t in all_visible if t.latest_run_status in ("failed", "stalled"))
 
     # Progress: done items / (done + remaining)
     total_all = count_total + count_wontdo + count_icebox
@@ -2012,6 +2030,15 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     <button class="filter-btn" data-filter="L" data-group="size">L <span class="count">{count_size_l}</span></button>
   </span>
   <span class="filter-divider"></span>
+  <!-- Kitchen filters (M2) — automation lens on the existing kanban -->
+  <span class="filter-group" data-group-name="kitchen">
+    <button class="filter-btn" data-filter="auto"        data-group="kitchen" title="Tickets with automation_mode=auto">Auto <span class="count">{count_auto}</span></button>
+    <button class="filter-btn" data-filter="held"        data-group="kitchen" title="Paused with reason">Held <span class="count">{count_held}</span></button>
+    <button class="filter-btn" data-filter="eligible"    data-group="kitchen" title="Auto AND all eligibility gates clear">Eligible <span class="count">{count_eligible}</span></button>
+    <button class="filter-btn" data-filter="needs_input" data-group="kitchen" title="Run paused awaiting human input">Needs Input <span class="count">{count_needs_input}</span></button>
+    <button class="filter-btn" data-filter="failed"      data-group="kitchen" title="Last run failed or stalled">Failed <span class="count">{count_failed}</span></button>
+  </span>
+  <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
@@ -2309,6 +2336,17 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
           if (g === 'status') {{ match = vals.indexOf(card.dataset.status) !== -1; }}
           else if (g === 'type') {{ match = card.dataset.isBug === 'true'; }}
           else if (g === 'size') {{ match = vals.indexOf(card.dataset.complexity) !== -1; }}
+          else if (g === 'kitchen') {{
+            // Multi-select within group is OR. A card matches if ANY chip applies.
+            for (var i = 0; i < vals.length; i++) {{
+              var v = vals[i];
+              if (v === 'auto'        && card.dataset.automationMode === 'auto')   {{ match = true; break; }}
+              if (v === 'held'        && card.dataset.automationMode === 'held')   {{ match = true; break; }}
+              if (v === 'eligible'    && card.dataset.eligible === 'true')         {{ match = true; break; }}
+              if (v === 'needs_input' && card.dataset.runStatus === 'needs_input') {{ match = true; break; }}
+              if (v === 'failed'      && (card.dataset.runStatus === 'failed' || card.dataset.runStatus === 'stalled')) {{ match = true; break; }}
+            }}
+          }}
           if (!match) show = false;
         }});
         card.style.display = show ? '' : 'none';
@@ -6905,6 +6943,8 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
         f' data-automation-mode="{escape(t.automation_mode)}"'
+        f'{" data-eligible=" + chr(34) + "true" + chr(34) if t.automation_eligible else ""}'
+        f'{" data-run-status=" + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ""}'
         f'{draft_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'

@@ -16,6 +16,14 @@ docs/features/
 
 # Scenario runner raw artifacts (rebuild with: pytest tests/test_scenarios.py)
 .artifacts/scenarios/
+.artifacts/journeys/
+
+# run_journey.py output
+pics/
+
+# Local tool state
+.codex
+.superpowers/
 
 # Editor
 *.swp

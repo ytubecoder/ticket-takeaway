@@ -1811,7 +1811,7 @@ def _validate_project_registration(body: dict) -> str | None:
     return None
 
 
-def _render_journeys_page(proj: dict, port: int) -> str:
+def _render_journeys_page(proj: dict, port: int, open_journey_id: str = "") -> str:
     """Render the journeys page for a single project.
 
     Note: innerHTML usage is safe here — all dynamic values pass through the
@@ -2417,6 +2417,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       var dv = document.getElementById('detail-view');
       dv.style.display = 'block';
       dv.className = 'journey-detail active';
+      history.pushState({{ journeyId: id }}, '', '/{pid}/journeys/' + id);
       document.getElementById('detail-title').onblur = saveJourneyMeta;
       document.getElementById('detail-persona').onblur = saveJourneyMeta;
       document.getElementById('detail-description').onblur = saveJourneyMeta;
@@ -2436,6 +2437,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     var dv = document.getElementById('detail-view');
     dv.style.display = 'none';
     dv.className = 'journey-detail';
+    history.pushState({{}}, '', '/{pid}/journeys');
     loadList();
   }};
 
@@ -2812,6 +2814,21 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 
   /* ── Init ────────────────────────────────────────────── */
   loadList();
+
+  // Auto-open journey from URL
+  var openId = '{open_journey_id}';
+  if (openId) {{
+    setTimeout(function() {{ openJourney(openId); }}, 200);
+  }}
+
+  // Browser back/forward
+  window.addEventListener('popstate', function(e) {{
+    if (e.state && e.state.journeyId) {{
+      openJourney(e.state.journeyId);
+    }} else {{
+      showList();
+    }}
+  }});
 }})();
 </script>
 </body>
@@ -3757,6 +3774,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Journeys page
         if remainder == "/journeys":
             html = _render_journeys_page(proj, SERVER_PORT)
+            self._send_html(html)
+            return
+
+        m = re.match(r"^/journeys/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            html = _render_journeys_page(proj, SERVER_PORT, open_journey_id=m.group(1))
             self._send_html(html)
             return
 

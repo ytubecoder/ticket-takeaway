@@ -92,6 +92,9 @@ class Ticket:
     readiness_content: dict = field(default_factory=dict)  # {flag: content_text}
     draft: bool = False
     attachment_count: int = 0
+    # Kitchen (M1a) — derived for the card badge.
+    automation_mode: str = "manual"   # manual | auto | held
+    latest_run_status: Optional[str] = None  # None until M3 produces real runs
 
     @property
     def slug(self) -> str:
@@ -317,6 +320,28 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         except Exception:
             attachment_count = 0
 
+        # Kitchen state (M1a) — automation_mode + latest_run_status. Pre-migration DBs
+        # silently fall back to defaults.
+        automation_mode = "manual"
+        latest_run_status = None
+        try:
+            am = conn.execute(
+                "SELECT automation_mode FROM automation_subjects "
+                "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
+                (project_id, r["id"]),
+            ).fetchone()
+            if am:
+                automation_mode = am["automation_mode"]
+            lr = conn.execute(
+                "SELECT status FROM runs WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (project_id, r["id"]),
+            ).fetchone()
+            if lr:
+                latest_run_status = lr["status"]
+        except Exception:
+            pass
+
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -336,6 +361,8 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             readiness_content=readiness_content,
             draft=is_draft,
             attachment_count=attachment_count,
+            automation_mode=automation_mode,
+            latest_run_status=latest_run_status,
         ))
 
     conn.close()
@@ -866,6 +893,25 @@ a {{ color: var(--accent); text-decoration: none; }}
 
 .card-meta {{ display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }}
 .card-id {{ font-size: 10px; color: var(--accent); opacity: 0.6; font-family: var(--font-mono); font-weight: 600; flex-shrink: 0; }}
+
+/* Kitchen badge — small status dot indicating automation state. M1a only renders
+   it when there's something meaningful (auto, held, or an actual run); manual
+   tickets get no badge so the kanban stays clean. */
+.kitchen-badge {{
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); opacity: 0.6; flex-shrink: 0;
+    margin-left: 2px;
+}}
+.kitchen-badge.kb-idle    {{ background: #94a3b8; opacity: 0.55; }}
+.kitchen-badge.kb-held    {{ background: #f59e0b; opacity: 0.85; }}
+.kitchen-badge.kb-queued,
+.kitchen-badge.kb-running {{ background: #3b82f6; opacity: 0.95; box-shadow: 0 0 0 2px rgba(59,130,246,0.18); }}
+.kitchen-badge.kb-needs-input {{ background: #f59e0b; opacity: 1; box-shadow: 0 0 0 2px rgba(245,158,11,0.22); }}
+.kitchen-badge.kb-failed   {{ background: #ef4444; opacity: 1; }}
+.kitchen-badge.kb-cancelled {{ background: #6b7280; opacity: 0.7; }}
+@keyframes kitchen-pulse {{ 0%, 100% {{ opacity: 0.95; }} 50% {{ opacity: 0.55; }} }}
+.kitchen-badge.kb-running, .kitchen-badge.kb-queued {{ animation: kitchen-pulse 1.6s ease-in-out infinite; }}
+
 
 .status-badge {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 600; text-transform: uppercase; }}
 .status-badge.proposed {{ background: var(--status-backlog-bg); color: var(--status-backlog); }}
@@ -1409,6 +1455,32 @@ a {{ color: var(--accent); text-decoration: none; }}
 .meta-status-opt {{ display: block; width: 100%; text-align: left; font-size: 12px; padding: 6px 10px; border: none; background: none; color: var(--text-secondary); cursor: pointer; border-radius: 4px; font-family: var(--font-sans); }}
 .meta-status-opt:hover {{ background: var(--bg-hover); color: var(--text-primary); }}
 .meta-status-opt.active {{ color: var(--accent); font-weight: 600; }}
+
+/* Kitchen automation chip + picker (M1a) */
+.meta-chip--automation .chip-label {{ color: var(--text-tertiary); }}
+.meta-chip--automation .chip-value {{ font-weight: 700; }}
+.meta-chip--automation[data-mode="manual"] .chip-value {{ color: var(--text-tertiary); }}
+.meta-chip--automation[data-mode="auto"]    .chip-value {{ color: #3b82f6; }}
+.meta-chip--automation[data-mode="held"]    .chip-value {{ color: #f59e0b; }}
+.automation-picker {{ position: absolute; z-index: 1010; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); min-width: 240px; }}
+.automation-picker-row {{ display: flex; gap: 4px; margin-bottom: 6px; }}
+.automation-picker-opt {{ flex: 1; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); background: none; color: var(--text-secondary); cursor: pointer; border-radius: 6px; font-family: var(--font-sans); }}
+.automation-picker-opt:hover {{ border-color: var(--accent); }}
+.automation-picker-opt.active {{ border-color: var(--accent); color: var(--accent); font-weight: 700; }}
+.automation-picker-reason {{ width: 100%; box-sizing: border-box; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-family: var(--font-sans); resize: vertical; min-height: 50px; outline: none; }}
+.automation-picker-reason:focus {{ border-color: var(--accent); }}
+.automation-picker-actions {{ display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }}
+.automation-picker-actions button {{ font-size: 11px; padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-subtle); background: none; color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans); }}
+.automation-picker-actions button.primary {{ background: var(--accent); color: white; border-color: var(--accent); }}
+.automation-picker-error {{ font-size: 11px; color: #ef4444; margin-top: 4px; min-height: 14px; }}
+
+/* No-tests-required block in Tests section (M1a) */
+.ntr-block {{ margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle); }}
+.ntr-checkbox-row {{ display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }}
+.ntr-checkbox-row input[type="checkbox"] {{ cursor: pointer; }}
+.ntr-note {{ display: block; width: 100%; box-sizing: border-box; margin-top: 8px; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-family: var(--font-sans); resize: vertical; outline: none; }}
+.ntr-note:focus {{ border-color: var(--accent); }}
+.ntr-note.hidden {{ display: none; }}
 /* Scroll body */
 .detail-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
 /* Sections — always visible, stacked */
@@ -3365,6 +3437,10 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       <span class="meta-chip meta-chip--complexity" title="Click to change complexity"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--parent"><span class="chip-label">Parent:</span> <span class="chip-value">None</span></span>
       <span class="meta-chip meta-chip--section"><span class="chip-text"></span></span>
+      <!-- Kitchen automation toggle (M1a) — Manual / Auto / Held + hold reason -->
+      <span class="meta-chip meta-chip--automation" title="Automation mode" data-testid="detail-automation">
+        <span class="chip-label">Auto:</span> <span class="chip-value">Manual</span>
+      </span>
     </div>
     <div class="detail-body">
       <!-- Gate banner (shown during column moves) -->
@@ -3424,6 +3500,16 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         <div class="detail-assessment hidden" data-cat-result="T"></div>
         <ul class="detail-criteria-list" data-list-field="tests"></ul>
         <input type="text" class="criteria-add-input" data-list-add="tests" placeholder="+ Add test item and press Enter">
+        <!-- Kitchen no-test-required bypass (M1a) -->
+        <div class="ntr-block" data-testid="ntr-block">
+          <label class="ntr-checkbox-row">
+            <input type="checkbox" id="ntr-checkbox" data-testid="ntr-checkbox">
+            <span>No tests required</span>
+          </label>
+          <textarea id="ntr-note" data-testid="ntr-note" class="ntr-note hidden"
+                    placeholder="Why no tests? (required — e.g. 'pure docs change', 'config-only')"
+                    rows="2"></textarea>
+        </div>
       </div>
 
       <!-- Learnings -->
@@ -3576,6 +3662,30 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     // Column
     var colText = overlay.querySelector('.meta-chip--section .chip-text');
     colText.textContent = (data.section || '').replace(/^\\w/, function(c){{ return c.toUpperCase(); }});
+
+    // Kitchen automation chip (M1a)
+    var autoChip = overlay.querySelector('.meta-chip--automation');
+    if (autoChip) {{
+      var mode = data.automation_mode || 'manual';
+      autoChip.setAttribute('data-mode', mode);
+      var label = mode.charAt(0).toUpperCase() + mode.slice(1);
+      if (mode === 'held' && data.hold_reason) {{
+        label += ' — ' + data.hold_reason;
+        autoChip.title = 'Held: ' + data.hold_reason;
+      }} else {{
+        autoChip.title = 'Automation: ' + label;
+      }}
+      autoChip.querySelector('.chip-value').textContent = label;
+    }}
+
+    // No-tests-required block (M1a)
+    var ntrCb = overlay.querySelector('#ntr-checkbox');
+    var ntrNote = overlay.querySelector('#ntr-note');
+    if (ntrCb && ntrNote) {{
+      ntrCb.checked = !!data.no_test_required;
+      ntrNote.value = data.no_test_required_note || '';
+      ntrNote.classList.toggle('hidden', !ntrCb.checked);
+    }}
   }}
 
   // Priority cycling
@@ -3622,6 +3732,138 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     _statusDropdown = dd;
   }});
   document.addEventListener('click', function() {{ closeStatusDropdown(); }});
+
+  /* Kitchen automation chip + picker (M1a) */
+  var _autoPicker = null;
+  function closeAutoPicker() {{
+    if (_autoPicker) {{ _autoPicker.parentNode.removeChild(_autoPicker); _autoPicker = null; }}
+  }}
+  function postAutomation(mode, holdReason) {{
+    if (!currentData || !currentData.id) return Promise.reject(new Error('no ticket'));
+    var apiBase = (document.querySelector('meta[name="edit-api"]') || {{}}).content || '';
+    var url = (apiBase ? apiBase : '') + '/api/tickets/' + encodeURIComponent(currentData.id) + '/automation';
+    var body = {{ mode: mode }};
+    if (mode === 'held') body.hold_reason = holdReason || '';
+    return fetch(url, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify(body),
+    }}).then(function(r) {{
+      return r.json().then(function(j) {{
+        if (!r.ok) throw new Error(j.error || 'failed');
+        return j;
+      }});
+    }});
+  }}
+  var autoChipEl = overlay.querySelector('.meta-chip--automation');
+  if (autoChipEl) {{
+    autoChipEl.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      if (_autoPicker) {{ closeAutoPicker(); return; }}
+      var rect = this.getBoundingClientRect();
+      var current = (currentData && currentData.automation_mode) || 'manual';
+      var currentReason = (currentData && currentData.hold_reason) || '';
+      var pkr = document.createElement('div');
+      pkr.className = 'automation-picker';
+      pkr.style.position = 'fixed';
+      pkr.style.top = (rect.bottom + 4) + 'px';
+      pkr.style.left = rect.left + 'px';
+      pkr.innerHTML =
+        '<div class="automation-picker-row">' +
+          ['manual','auto','held'].map(function(m) {{
+            return '<button class="automation-picker-opt' + (m===current?' active':'') + '" data-mode="' + m + '">' + m.charAt(0).toUpperCase()+m.slice(1) + '</button>';
+          }}).join('') +
+        '</div>' +
+        '<textarea class="automation-picker-reason" placeholder="Reason (required for Held)"' + (current==='held'?'':' style="display:none"') + '>' + (currentReason ? currentReason.replace(/[&<>"]/g, function(c){{return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];}}) : '') + '</textarea>' +
+        '<div class="automation-picker-error"></div>' +
+        '<div class="automation-picker-actions">' +
+          '<button data-act="cancel">Cancel</button>' +
+          '<button class="primary" data-act="save">Save</button>' +
+        '</div>';
+      document.body.appendChild(pkr);
+      _autoPicker = pkr;
+      var selectedMode = current;
+      var reasonEl = pkr.querySelector('.automation-picker-reason');
+      var errEl = pkr.querySelector('.automation-picker-error');
+      pkr.querySelectorAll('.automation-picker-opt').forEach(function(btn) {{
+        btn.addEventListener('click', function(ev) {{
+          ev.stopPropagation();
+          selectedMode = btn.getAttribute('data-mode');
+          pkr.querySelectorAll('.automation-picker-opt').forEach(function(b) {{ b.classList.toggle('active', b===btn); }});
+          reasonEl.style.display = selectedMode === 'held' ? '' : 'none';
+          errEl.textContent = '';
+        }});
+      }});
+      pkr.querySelector('[data-act="cancel"]').addEventListener('click', function(ev) {{ ev.stopPropagation(); closeAutoPicker(); }});
+      pkr.querySelector('[data-act="save"]').addEventListener('click', function(ev) {{
+        ev.stopPropagation();
+        var reason = (reasonEl.value || '').trim();
+        if (selectedMode === 'held' && !reason) {{
+          errEl.textContent = 'Reason required when holding.';
+          reasonEl.focus();
+          return;
+        }}
+        postAutomation(selectedMode, reason).then(function(updated) {{
+          currentData = updated;
+          populateMetaChips(currentData);
+          closeAutoPicker();
+          toast('Automation: ' + selectedMode);
+        }}).catch(function(err) {{
+          errEl.textContent = err.message || 'failed';
+        }});
+      }});
+      pkr.addEventListener('click', function(ev) {{ ev.stopPropagation(); }});
+    }});
+  }}
+  document.addEventListener('click', function() {{ closeAutoPicker(); }});
+
+  /* Kitchen no-tests-required (M1a) */
+  function postNoTestRequired(enabled, note) {{
+    if (!currentData || !currentData.id) return Promise.reject(new Error('no ticket'));
+    var apiBase = (document.querySelector('meta[name="edit-api"]') || {{}}).content || '';
+    var url = (apiBase ? apiBase : '') + '/api/tickets/' + encodeURIComponent(currentData.id) + '/no-test-required';
+    return fetch(url, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ enabled: enabled, note: note || '' }}),
+    }}).then(function(r) {{
+      return r.json().then(function(j) {{
+        if (!r.ok) throw new Error(j.error || 'failed');
+        return j;
+      }});
+    }});
+  }}
+  var ntrCb = overlay.querySelector('#ntr-checkbox');
+  var ntrNoteEl = overlay.querySelector('#ntr-note');
+  if (ntrCb && ntrNoteEl) {{
+    ntrCb.addEventListener('change', function() {{
+      ntrNoteEl.classList.toggle('hidden', !ntrCb.checked);
+      if (ntrCb.checked) {{
+        ntrNoteEl.focus();
+      }} else {{
+        // Disabled — clear server-side immediately.
+        postNoTestRequired(false, '').then(function(updated) {{
+          currentData = updated;
+          ntrNoteEl.value = '';
+          toast('Tests required again');
+        }}).catch(function(err) {{ toast('Failed: ' + (err.message || err)); }});
+      }}
+    }});
+    ntrNoteEl.addEventListener('blur', function() {{
+      if (!ntrCb.checked) return;
+      var note = (ntrNoteEl.value || '').trim();
+      if (!note) {{
+        // Re-prompt — empty note when checked is invalid.
+        toast('Note is required when no_test_required is on');
+        ntrNoteEl.focus();
+        return;
+      }}
+      postNoTestRequired(true, note).then(function(updated) {{
+        currentData = updated;
+        toast('Saved no-tests rationale');
+      }}).catch(function(err) {{ toast('Failed: ' + (err.message || err)); }});
+    }});
+  }}
 
   // Parent chip — click to edit inline
   overlay.querySelector('.meta-chip--parent').addEventListener('click', function() {{
@@ -6518,18 +6760,48 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     att_count = getattr(t, 'attachment_count', 0)
     att_badge_html = f'<span class="attachment-count-badge" title="{att_count} attachment(s)">{att_count}</span>' if att_count > 0 else ""
 
+    # Kitchen badge (M1a). Latest run status takes precedence over mode-only states.
+    # Visible classes: kb-idle (auto, no run yet), kb-held, kb-queued/preparing/running/needs-input/failed/cancelled,
+    # plus "hidden" for manual mode with no run.
+    kb_class = ""
+    kb_title = ""
+    if t.latest_run_status in ("queued", "preparing"):
+        kb_class, kb_title = "kb-queued", "Queued for run"
+    elif t.latest_run_status == "running":
+        kb_class, kb_title = "kb-running", "Run in progress"
+    elif t.latest_run_status == "needs_input":
+        kb_class, kb_title = "kb-needs-input", "Run needs your input"
+    elif t.latest_run_status == "failed":
+        kb_class, kb_title = "kb-failed", "Last run failed"
+    elif t.latest_run_status == "cancelled":
+        kb_class, kb_title = "kb-cancelled", "Last run cancelled"
+    elif t.latest_run_status == "stalled":
+        kb_class, kb_title = "kb-failed", "Last run stalled"
+    elif t.automation_mode == "held":
+        kb_class, kb_title = "kb-held", "Automation held"
+    elif t.automation_mode == "auto":
+        kb_class, kb_title = "kb-idle", "Auto — eligible to run"
+    kb_html = (
+        f'<span class="kitchen-badge {kb_class}" title="{escape(kb_title)}" '
+        f'data-automation-mode="{escape(t.automation_mode)}" '
+        f'data-run-status="{escape(t.latest_run_status or "")}"></span>'
+        if kb_class else ""
+    )
+
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
         f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
+        f' data-automation-mode="{escape(t.automation_mode)}"'
         f'{draft_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
+        f'{kb_html}'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
         f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details" aria-label="Open {id_esc}">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
         f'{readiness_html}'

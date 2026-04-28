@@ -4265,7 +4265,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
   function loadRuns(ticketId) {{
     if (!ticketId) return;
-    var url = EDIT_API + '/api/runs?ticket=' + encodeURIComponent(ticketId);
+    var url = EDIT_API + '/runs?ticket=' + encodeURIComponent(ticketId);
     fetch(url).then(function(r) {{ return r.json(); }}).then(function(data) {{
       renderRuns(data);
     }}).catch(function() {{
@@ -4289,7 +4289,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     if (!ticketId) return;
     var btn = _runNowBtn;
     if (btn) btn.disabled = true;
-    var url = EDIT_API + '/api/tickets/' + encodeURIComponent(ticketId) + '/run-now';
+    var url = EDIT_API + '/tickets/' + encodeURIComponent(ticketId) + '/run-now';
     fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
       .then(function(r) {{
         if (r.status === 409) {{ showAppToast('A run is already active for this ticket.', 'error'); if(btn) btn.disabled=false; return null; }}
@@ -4307,7 +4307,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
   function postRunAction(runId, action) {{
     if (!runId) return;
-    var url = EDIT_API + '/api/runs/' + encodeURIComponent(runId) + '/' + action;
+    var url = EDIT_API + '/runs/' + encodeURIComponent(runId) + '/' + action;
     return fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
       .then(function(r) {{ return r.json(); }})
       .then(function(run) {{
@@ -4320,7 +4320,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
   function postNeedsInputResponse(runId, text) {{
     if (!runId || !text) return;
-    var url = EDIT_API + '/api/runs/' + encodeURIComponent(runId) + '/respond';
+    var url = EDIT_API + '/runs/' + encodeURIComponent(runId) + '/respond';
     if (_runNiSend) _runNiSend.disabled = true;
     fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{response: text}})}})
       .then(function(r) {{ return r.json(); }})
@@ -6680,7 +6680,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     var tid = btn.dataset.ticketId;
     if (!tid) return;
     btn.disabled = true;
-    var url = EDIT_API + '/api/tickets/' + encodeURIComponent(tid) + '/run-now';
+    var url = EDIT_API + '/tickets/' + encodeURIComponent(tid) + '/run-now';
     fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
       .then(function(r) {{
         if (r.status === 409) {{ showAppToast('A run is already active.', 'error'); btn.disabled=false; return null; }}

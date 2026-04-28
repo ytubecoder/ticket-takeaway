@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, parse_qs
 
 # ---------------------------------------------------------------------------
 # Import tickets-cli.py (hyphenated filename requires importlib)
@@ -4017,6 +4017,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             atts = _list_attachments(proj["id"], m.group(1))
             self._send_json(atts)
+            return
+
+        # Kitchen (M1b): activity history for a ticket. Newest first.
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/history$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                limit = int(parse_qs(urlparse(self.path).query).get("limit", ["100"])[0])
+            except (ValueError, TypeError):
+                limit = 100
+            limit = max(1, min(limit, 500))
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                # Resolve canonical id (case-insensitive lookup) to match how
+                # subject_id is written by emit_event.
+                row = conn.execute(
+                    "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, proj["id"]),
+                ).fetchone()
+                tid = row["id"] if row else ticket_id
+                rows = conn.execute(
+                    "SELECT id, actor_type, actor_id, event_kind, payload_json, "
+                    "       occurred_at, discarded_run_id "
+                    "FROM activity_events "
+                    "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+                    "ORDER BY id DESC LIMIT ?",
+                    (proj["id"], tid, limit),
+                ).fetchall()
+                conn.close()
+            events = []
+            for r in rows:
+                try:
+                    payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
+                except Exception:
+                    payload = {}
+                events.append({
+                    "id": r["id"],
+                    "actor_type": r["actor_type"],
+                    "actor_id": r["actor_id"],
+                    "event_kind": r["event_kind"],
+                    "payload": payload,
+                    "occurred_at": r["occurred_at"],
+                    "discarded_run_id": r["discarded_run_id"],
+                })
+            self._send_json({"events": events})
             return
 
         # Workflow Bounce GET routes

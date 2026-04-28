@@ -1474,6 +1474,22 @@ a {{ color: var(--accent); text-decoration: none; }}
 .automation-picker-actions button.primary {{ background: var(--accent); color: white; border-color: var(--accent); }}
 .automation-picker-error {{ font-size: 11px; color: #ef4444; margin-top: 4px; min-height: 14px; }}
 
+/* Kitchen activity history list (M1b) */
+.history-list {{ display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }}
+.history-list.hidden {{ display: none; }}
+.history-row {{ display: grid; grid-template-columns: 80px 70px 1fr 110px; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 11px; border: 1px solid var(--border-subtle); background: rgba(255,255,255,0.02); align-items: start; }}
+.history-row.discarded {{ opacity: 0.45; text-decoration: line-through; }}
+.history-row .h-actor {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; text-align: center; }}
+.history-row .h-actor.human  {{ background: rgba(99,102,241,0.18); color: #818cf8; }}
+.history-row .h-actor.agent  {{ background: rgba(34,197,94,0.18); color: #22c55e; }}
+.history-row .h-actor.system {{ background: rgba(234,179,8,0.18); color: #eab308; }}
+.history-row .h-kind {{ font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.history-row .h-summary {{ color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; word-break: break-word; }}
+.history-row .h-summary .h-old {{ color: var(--text-tertiary); text-decoration: line-through; }}
+.history-row .h-summary .h-new {{ color: var(--accent); }}
+.history-row .h-time {{ font-size: 10px; color: var(--text-tertiary); text-align: right; font-variant-numeric: tabular-nums; }}
+.history-empty {{ padding: 20px; text-align: center; color: var(--text-tertiary); font-size: 12px; }}
+
 /* No-tests-required block in Tests section (M1a) */
 .ntr-block {{ margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle); }}
 .ntr-checkbox-row {{ display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }}
@@ -3548,6 +3564,15 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         <div id="workflow-runs-list" class="workflow-runs-list"></div>
       </div>
 
+      <!-- Kitchen activity history (M1b) — newest first; collapsed by default -->
+      <div class="detail-section" id="section-history">
+        <div class="detail-section-header">
+          <h3>History</h3>
+          <button class="section-assess-btn" id="history-toggle" data-testid="history-toggle">Show</button>
+        </div>
+        <div id="history-list" class="history-list hidden"></div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -3862,6 +3887,91 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         currentData = updated;
         toast('Saved no-tests rationale');
       }}).catch(function(err) {{ toast('Failed: ' + (err.message || err)); }});
+    }});
+  }}
+
+  /* Kitchen activity history (M1b) */
+  function escapeHtmlForHistory(s) {{
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/[&<>"]/g, function(c) {{
+      return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];
+    }});
+  }}
+  function renderHistorySummary(ev) {{
+    var p = ev.payload || {{}};
+    var k = ev.event_kind;
+    function diff(before, after) {{
+      var b = escapeHtmlForHistory(typeof before === 'object' ? JSON.stringify(before) : (before === '' || before === null ? '∅' : before));
+      var a = escapeHtmlForHistory(typeof after === 'object'  ? JSON.stringify(after)  : (after  === '' || after  === null ? '∅' : after));
+      return '<span class="h-old">' + b + '</span> → <span class="h-new">' + a + '</span>';
+    }}
+    if (k === 'section_change')      return diff(p.before, p.after);
+    if (k === 'status_change')        return diff(p.before, p.after);
+    if (k === 'mode_changed')         return 'mode: ' + diff(p.before, p.after);
+    if (k === 'hold_set')             return 'held: ' + escapeHtmlForHistory(p.reason || '');
+    if (k === 'hold_cleared')         return 'unheld → ' + escapeHtmlForHistory(p.after || '');
+    if (k === 'criteria_check')       return 'criterion #' + p.criterion_id + ': ' + diff(p.before, p.after);
+    if (k === 'criteria_added')       return '+ ' + escapeHtmlForHistory(p.text || '');
+    if (k === 'criteria_removed')     return '− ' + escapeHtmlForHistory(p.text || '');
+    if (k === 'criteria_changed')     return diff(p.before, p.after);
+    if (k === 'field_changed')        return p.field + ': ' + diff(p.before, p.after);
+    if (k === 'dependency_changed')   return diff(p.before, p.after);
+    if (k === 'readiness_changed')    return p.flag + ': ' + diff(
+      (p.before && p.before.present) ? (p.before.content || '✓') : '∅',
+      (p.after  && p.after.present ) ? (p.after.content  || '✓') : '∅'
+    );
+    if (k === 'attachment_added')     return '+ ' + escapeHtmlForHistory((p.kind || '') + ':' + (p.label || ''));
+    if (k === 'attachment_removed')   return '− ' + escapeHtmlForHistory((p.kind || '') + ':' + (p.label || ''));
+    if (k === 'ticket_created')       return 'created in ' + escapeHtmlForHistory(p.section || '');
+    if (k === 'ticket_deleted')       return 'deleted';
+    if (k === 'run_started')          return 'run #' + p.run_id + ' (' + (p.runner_kind || '') + ')';
+    if (k === 'run_succeeded')        return '✓ run #' + p.run_id + (p.summary ? ' — ' + escapeHtmlForHistory(p.summary) : '');
+    if (k === 'run_failed')           return '✗ run #' + p.run_id + ' — ' + escapeHtmlForHistory(p.error_message || p.error_class || '');
+    if (k === 'run_cancelled')        return '⏹ run #' + p.run_id;
+    if (k === 'needs_input')          return '? ' + escapeHtmlForHistory(p.prompt || '');
+    if (k === 'input_provided')       return escapeHtmlForHistory(p.response_excerpt || '');
+    return escapeHtmlForHistory(JSON.stringify(p));
+  }}
+  function timeAgo(iso) {{
+    if (!iso) return '';
+    var t = Date.parse(iso); if (isNaN(t)) return iso;
+    var diff = (Date.now() - t) / 1000;
+    if (diff < 60) return Math.round(diff) + 's ago';
+    if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.round(diff / 3600) + 'h ago';
+    return Math.round(diff / 86400) + 'd ago';
+  }}
+  function loadHistory(ticketId) {{
+    var listEl = overlay.querySelector('#history-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="history-empty">Loading…</div>';
+    var apiBase = (document.querySelector('meta[name="edit-api"]') || {{}}).content || '';
+    var url = (apiBase || '') + '/api/tickets/' + encodeURIComponent(ticketId) + '/history';
+    fetch(url).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      var events = (data && data.events) || [];
+      if (!events.length) {{ listEl.innerHTML = '<div class="history-empty">No history yet.</div>'; return; }}
+      listEl.innerHTML = events.map(function(ev) {{
+        var discardCls = ev.discarded_run_id ? ' discarded' : '';
+        return '<div class="history-row' + discardCls + '">' +
+          '<span class="h-time" title="' + escapeHtmlForHistory(ev.occurred_at) + '">' + escapeHtmlForHistory(timeAgo(ev.occurred_at)) + '</span>' +
+          '<span class="h-actor ' + escapeHtmlForHistory(ev.actor_type) + '">' + escapeHtmlForHistory(ev.actor_type) + '</span>' +
+          '<span class="h-summary"><span class="h-kind">' + escapeHtmlForHistory(ev.event_kind) + '</span> ' + renderHistorySummary(ev) + '</span>' +
+          '<span></span>' +
+        '</div>';
+      }}).join('');
+    }}).catch(function(err) {{
+      listEl.innerHTML = '<div class="history-empty">Failed: ' + escapeHtmlForHistory(err.message || err) + '</div>';
+    }});
+  }}
+  var historyToggleBtn = overlay.querySelector('#history-toggle');
+  if (historyToggleBtn) {{
+    historyToggleBtn.addEventListener('click', function() {{
+      var listEl = overlay.querySelector('#history-list');
+      var isHidden = listEl.classList.toggle('hidden');
+      historyToggleBtn.textContent = isHidden ? 'Show' : 'Hide';
+      if (!isHidden && currentData && currentData.id) {{
+        loadHistory(currentData.id);
+      }}
     }});
   }}
 

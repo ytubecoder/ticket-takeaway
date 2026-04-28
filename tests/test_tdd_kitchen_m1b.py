@@ -312,6 +312,43 @@ class TestAttachmentEvents:
 # (or per-event invertable equivalent). Same DB the M1b tests build up.
 # ---------------------------------------------------------------------------
 
+class TestHistoryEndpointPayload:
+    """Verify the GET /api/tickets/{id}/history endpoint returns the right shape.
+
+    We don't boot the HTTP server — we exercise the same SQL path the handler
+    uses and assert the row→dict transformation produces the expected JSON.
+    """
+
+    def test_endpoint_returns_events_newest_first(self, serve_mod):
+        serve, db_file = serve_mod
+        c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
+        _seed(c); c.commit(); c.close()
+        proj = _proj()
+        # Drive a few mutations so we have history.
+        serve._update_ticket_field(proj, "B-1", "title", "X1")
+        serve._update_ticket_field(proj, "B-1", "title", "X2")
+        serve._add_criterion(proj, "B-1", "C1")
+        # Replicate the endpoint's SQL + dict-shaping logic to assert the
+        # payload format the dashboard JS will consume.
+        c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
+        rows = c.execute(
+            "SELECT id, actor_type, actor_id, event_kind, payload_json, occurred_at, discarded_run_id "
+            "FROM activity_events WHERE project_id='p' AND subject_type='ticket' AND subject_id='B-1' "
+            "ORDER BY id DESC"
+        ).fetchall()
+        events = [{
+            "id": r["id"], "actor_type": r["actor_type"], "actor_id": r["actor_id"],
+            "event_kind": r["event_kind"], "payload": json.loads(r["payload_json"]),
+            "occurred_at": r["occurred_at"], "discarded_run_id": r["discarded_run_id"],
+        } for r in rows]
+        # Newest first: criteria_added came last
+        assert events[0]["event_kind"] == "criteria_added"
+        # Each event has the documented top-level keys
+        for e in events:
+            assert {"id", "actor_type", "actor_id", "event_kind", "payload",
+                    "occurred_at", "discarded_run_id"} <= set(e.keys())
+
+
 class TestWireFormatInvariant:
     """Drive every M1b emission path once, then assert payload shape rules."""
 

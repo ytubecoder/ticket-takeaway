@@ -3505,7 +3505,9 @@ def _aggregate_kitchen_state() -> dict:
     from actions import eligibility as _elig
 
     with _PROJECTS_CACHE_LOCK:
-        projects = list(_PROJECTS_CACHE.values())
+        # Skip projects with watched=false. Default (missing key) is true so
+        # the aggregator includes everything by default.
+        projects = [p for p in _PROJECTS_CACHE.values() if p.get("watched", True)]
 
     buckets = {k: [] for k in ("needs_me", "running", "ready_to_delegate", "held", "failed")}
     project_summaries = []
@@ -4587,7 +4589,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 updated_entry = None
                 for entry in registry["projects"]:
                     if entry["id"] == pid:
-                        for field in ("name", "path", "description", "active"):
+                        # M2-03: 'watched' is a Kitchen-aggregator filter flag.
+                        for field in ("name", "path", "description", "active", "watched"):
                             if field in body:
                                 entry[field] = body[field]
                         found = True

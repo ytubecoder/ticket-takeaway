@@ -188,6 +188,31 @@ class TestAggregatorBuckets:
 # Project summaries
 # ---------------------------------------------------------------------------
 
+class TestWatchedProjects:
+    """M2-03: projects with watched=false are excluded from Kitchen aggregation."""
+
+    def test_default_includes_all_projects(self, serve_mod):
+        serve, db_file = serve_mod
+        _seed_ticket(db_file, "alpha", "B-1")
+        _set_mode(db_file, "alpha", "B-1", "held", hold_reason="x")
+        _seed_ticket(db_file, "beta", "B-2")
+        _set_mode(db_file, "beta", "B-2", "held", hold_reason="y")
+        state = serve._aggregate_kitchen_state()
+        assert {i["project_id"] for i in state["buckets"]["held"]} == {"alpha", "beta"}
+
+    def test_unwatched_project_dropped_from_buckets_and_summaries(self, serve_mod):
+        serve, db_file = serve_mod
+        _seed_ticket(db_file, "alpha", "B-1")
+        _set_mode(db_file, "alpha", "B-1", "held", hold_reason="x")
+        _seed_ticket(db_file, "beta",  "B-2")
+        _set_mode(db_file, "beta",  "B-2", "held", hold_reason="y")
+        # Mark beta unwatched in the cache (simulates the registry flag).
+        serve._PROJECTS_CACHE["beta"]["watched"] = False
+        state = serve._aggregate_kitchen_state()
+        assert {i["project_id"] for i in state["buckets"]["held"]} == {"alpha"}
+        assert {p["id"] for p in state["projects"]} == {"alpha"}
+
+
 class TestProjectSummaries:
     def test_counts_wip_and_review(self, serve_mod):
         serve, db_file = serve_mod

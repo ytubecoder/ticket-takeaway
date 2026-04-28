@@ -337,12 +337,18 @@ def _add_attachment(project_id, ticket_id, attachment_type, name, path="", summa
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (tid, project_id, attachment_type, name, path, summary, metadata),
             )
-            conn.commit()
             att = conn.execute(
                 "SELECT * FROM ticket_attachments "
                 "WHERE ticket_id = ? AND project_id = ? AND name = ? AND attachment_type = ?",
                 (tid, project_id, name, attachment_type),
             ).fetchone()
+            # M1b: attachment_added event in same tx as INSERT
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "attachment_added",
+                  {"attachment_id": att["id"] if att else None,
+                   "kind": attachment_type, "label": name},
+                  _AC.human())
+            conn.commit()
             conn.close()
             return dict(att) if att else None
         except sqlite3.IntegrityError:
@@ -354,10 +360,22 @@ def _delete_attachment(project_id, ticket_id, attachment_id):
     with _db_lock:
         conn = get_db()
         init_db(conn)
+        # Snapshot for the audit event before we delete.
+        att = conn.execute(
+            "SELECT ticket_id, attachment_type, name FROM ticket_attachments "
+            "WHERE id = ? AND project_id = ?",
+            (attachment_id, project_id),
+        ).fetchone()
         cur = conn.execute(
             "DELETE FROM ticket_attachments WHERE id = ? AND project_id = ?",
             (attachment_id, project_id),
         )
+        if cur.rowcount > 0 and att:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", att["ticket_id"], "attachment_removed",
+                  {"attachment_id": attachment_id,
+                   "kind": att["attachment_type"], "label": att["name"]},
+                  _AC.human())
         conn.commit()
         conn.close()
     return cur.rowcount > 0
@@ -397,9 +415,9 @@ def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
         init_db(conn)
         cli.ingest_markdown(conn, proj)
 
-        # Verify ticket exists
+        # Capture the before-value so the audit event is invertable.
         row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            f"SELECT id, {field} FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
             (ticket_id, project_id)
         ).fetchone()
         if not row:
@@ -407,10 +425,25 @@ def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
             return False
 
         tid = row["id"]
+        before_val = row[field]
+        if before_val == value:
+            # No-op write — skip the SQL and the event so we don't pollute history.
+            conn.close()
+            return True
+
         conn.execute(
             f"UPDATE tickets SET {field} = ?, updated_at = ? WHERE id = ? AND project_id = ?",
             (value, datetime.now().isoformat(), tid, project_id)
         )
+        # M1b: emit_event in same tx. status changes stay on the M1a status_change
+        # event; everything else is field_changed.
+        from actions import emit_event as _emit, ActorContext as _AC
+        if field == "status":
+            _emit(conn, project_id, "ticket", tid, "status_change",
+                  {"before": before_val, "after": value}, _AC.human())
+        else:
+            _emit(conn, project_id, "ticket", tid, "field_changed",
+                  {"field": field, "before": before_val, "after": value}, _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -512,16 +545,23 @@ def _update_criterion_text(proj: dict, ticket_id: str, criterion_index: int, new
 
         tid = row["id"]
         criterion = conn.execute(
-            "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
+            "SELECT id, text FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
             (tid, project_id, criterion_index)
         ).fetchone()
         if not criterion:
             conn.close()
             return False
 
+        before_text = criterion["text"]
         conn.execute("UPDATE acceptance_criteria SET text = ? WHERE id = ?", (new_text, criterion["id"]))
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: criteria_changed event with {before, after}
+        if before_text != new_text:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "criteria_changed",
+                  {"criterion_id": criterion["id"], "before": before_text, "after": new_text},
+                  _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -547,14 +587,16 @@ def _remove_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
 
         tid = row["id"]
         criterion = conn.execute(
-            "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
+            "SELECT id, text FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
             (tid, project_id, criterion_index)
         ).fetchone()
         if not criterion:
             conn.close()
             return False
 
-        conn.execute("DELETE FROM acceptance_criteria WHERE id = ?", (criterion["id"],))
+        removed_id = criterion["id"]
+        removed_text = criterion["text"]
+        conn.execute("DELETE FROM acceptance_criteria WHERE id = ?", (removed_id,))
         # Re-number sort_order
         remaining = conn.execute(
             "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
@@ -565,6 +607,11 @@ def _remove_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
 
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: criteria_removed event carries the removed text for restoration.
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "criteria_removed",
+              {"criterion_id": removed_id, "text": removed_text},
+              _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -594,12 +641,18 @@ def _add_criterion(proj: dict, ticket_id: str, text: str) -> bool:
             (tid, project_id)
         ).fetchone()["next_order"]
 
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,0,?)",
             (tid, project_id, text, max_order)
         )
+        new_crit_id = cur.lastrowid
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: criteria_added event
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "criteria_added",
+              {"criterion_id": new_crit_id, "text": text},
+              _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -624,7 +677,12 @@ def _update_depends(proj: dict, ticket_id: str, depends_list: list) -> bool:
             return False
 
         tid = row["id"]
+        before = [r[0] for r in conn.execute(
+            "SELECT depends_on_id FROM depends WHERE ticket_id = ? AND project_id = ? ORDER BY depends_on_id",
+            (tid, project_id),
+        ).fetchall()]
         conn.execute("DELETE FROM depends WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
+        cleaned: list[str] = []
         for dep_id in depends_list:
             dep_id = dep_id.strip()
             if dep_id:
@@ -632,8 +690,16 @@ def _update_depends(proj: dict, ticket_id: str, depends_list: list) -> bool:
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
                     (tid, project_id, dep_id)
                 )
+                cleaned.append(dep_id)
+        after = sorted(set(cleaned))
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: dependency_changed event with sorted-list before/after for clean diffs.
+        if sorted(before) != after:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "dependency_changed",
+                  {"before": before, "after": after},
+                  _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -666,6 +732,11 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
             complexity=complexity, description=description,
             draft=draft,
         )
+        # M1b: ticket_created event
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", ticket_id, "ticket_created",
+              {"id": ticket_id, "title": title, "section": section},
+              _AC.human())
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -683,8 +754,10 @@ def _delete_ticket(proj: dict, ticket_id: str) -> bool:
         init_db(conn)
         cli.ingest_markdown(conn, proj)
 
+        # Snapshot the row so the ticket_deleted event carries enough state
+        # for a future "undelete" / restore path.
         row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
             (ticket_id, project_id)
         ).fetchone()
         if not row:
@@ -692,9 +765,17 @@ def _delete_ticket(proj: dict, ticket_id: str) -> bool:
             return False
 
         tid = row["id"]
+        snapshot = {k: row[k] for k in row.keys()}
         conn.execute("DELETE FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
         conn.execute("DELETE FROM depends WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
         conn.execute("DELETE FROM tickets WHERE id = ? AND project_id = ?", (tid, project_id))
+        # M1b: ticket_deleted event with snapshot. Activity row references a
+        # subject that no longer exists in tickets — by design, the audit log
+        # outlives the row.
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "ticket_deleted",
+              {"snapshot": snapshot},
+              _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -1654,21 +1735,29 @@ def _toggle_readiness(proj: dict, ticket_id: str, flag: str) -> bool:
 
         tid = row["id"]
         existing = conn.execute(
-            "SELECT flag FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+            "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
             (tid, project_id, flag)
         ).fetchone()
 
         if existing:
+            before = {"present": True, "content": existing["content"] or ""}
             conn.execute(
                 "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
                 (tid, project_id, flag)
             )
+            after = {"present": False, "content": ""}
         else:
+            before = {"present": False, "content": ""}
             conn.execute(
                 "INSERT INTO readiness_flags (ticket_id, project_id, flag, set_by) VALUES (?, ?, ?, 'dashboard')",
                 (tid, project_id, flag)
             )
+            after = {"present": True, "content": ""}
 
+        # M1b: readiness_changed event with before/after presence + content
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "readiness_changed",
+              {"flag": flag, "before": before, "after": after}, _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -1697,6 +1786,14 @@ def _update_readiness_content(proj: dict, ticket_id: str, flag: str, content: st
         tid = row["id"]
         content = content.strip()
 
+        # Capture before
+        existing = conn.execute(
+            "SELECT content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+            (tid, project_id, flag)
+        ).fetchone()
+        before = {"present": existing is not None,
+                  "content": (existing["content"] if existing else "") or ""}
+
         if content:
             conn.execute("""
                 INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
@@ -1704,12 +1801,19 @@ def _update_readiness_content(proj: dict, ticket_id: str, flag: str, content: st
                 ON CONFLICT (ticket_id, project_id, flag)
                 DO UPDATE SET content = excluded.content
             """, (tid, project_id, flag, content))
+            after = {"present": True, "content": content}
         else:
             conn.execute(
                 "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
                 (tid, project_id, flag)
             )
+            after = {"present": False, "content": ""}
 
+        # M1b: readiness_changed event (no-op writes are also skipped from emit).
+        if before != after:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "readiness_changed",
+                  {"flag": flag, "before": before, "after": after}, _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -4322,32 +4426,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Empty body"}, 400)
             return
 
-        # Handle adding a new acceptance criterion (from gate-check panel)
+        # Handle adding a new acceptance criterion (from gate-check panel) —
+        # routed through _add_criterion so the criteria_added M1b event fires.
         if "add_criteria" in body:
             text = body["add_criteria"]
             if isinstance(text, str) and text.strip():
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    cli.ingest_markdown(conn, proj)
-                    row = conn.execute(
-                        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-                        (ticket_id, project_id)
-                    ).fetchone()
-                    if row:
-                        tid = row["id"]
-                        sort_row = conn.execute(
-                            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
-                            (tid, project_id)
-                        ).fetchone()
-                        conn.execute(
-                            "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?, ?, ?, 0, ?)",
-                            (tid, project_id, text.strip(), sort_row["next_order"])
-                        )
-                        conn.commit()
-                        cli.sync_to_markdown(conn, proj)
-                        cli.regenerate_dashboard(proj)
-                    conn.close()
+                _add_criterion(proj, ticket_id, text.strip())
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
                 return

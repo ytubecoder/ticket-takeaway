@@ -58,7 +58,20 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
                        WORKFLOW_AGENT_TIMEOUT, WORKFLOW_RUN_STATUSES)
 from db import get_db, init_db
-from actions import move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket, add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket, capture_commit_hash, auto_generate_id, execute_scheduled_event
+from actions import (
+    move_ticket as _actions_move_ticket,
+    accept_ticket as _actions_accept_ticket,
+    add_ticket as _actions_add_ticket,
+    update_ticket as _actions_update_ticket,
+    capture_commit_hash,
+    auto_generate_id,
+    execute_scheduled_event,
+    # Kitchen (M1a)
+    ActorContext,
+    eligibility as _kitchen_eligibility,
+    set_automation_mode as _kitchen_set_mode,
+    set_no_test_required as _kitchen_set_ntr,
+)
 from scenarios import discover_scenarios
 from journeys import (
     add_journey, update_journey, delete_journey, list_journeys, get_journey,
@@ -1749,6 +1762,44 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
     except Exception:
         attachment_count = 0
 
+    # Kitchen state (M1a) — automation intent + computed eligibility + latest run.
+    # Errors here are non-fatal: pre-migration DBs or transient failures fall
+    # back to default 'manual' / no run / not eligible.
+    automation_mode = "manual"
+    hold_reason = None
+    no_test_required = False
+    no_test_required_note = ""
+    latest_run_status = None
+    try:
+        am_row = conn.execute(
+            "SELECT automation_mode, hold_reason FROM automation_subjects "
+            "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
+            (project_id, row["id"]),
+        ).fetchone()
+        if am_row:
+            automation_mode = am_row["automation_mode"]
+            hold_reason = am_row["hold_reason"]
+        if "no_test_required" in row.keys():
+            no_test_required = bool(row["no_test_required"])
+            no_test_required_note = row["no_test_required_note"] or ""
+        latest = conn.execute(
+            "SELECT status FROM runs WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (project_id, row["id"]),
+        ).fetchone()
+        if latest:
+            latest_run_status = latest["status"]
+    except Exception:
+        pass
+
+    try:
+        elig = _kitchen_eligibility(conn, project_id, "ticket", row["id"])
+        eligible = elig.eligible
+        eligibility_reasons = list(elig.reasons)
+    except Exception:
+        eligible = False
+        eligibility_reasons = ["eligibility check failed"]
+
     conn.close()
 
     # Build criteria text for clipboard prompts
@@ -1772,6 +1823,14 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "depends": [d["depends_on_id"] for d in deps],
         "readiness_flags": readiness_flags,
         "attachment_count": attachment_count,
+        # Kitchen state (M1a)
+        "automation_mode": automation_mode,
+        "hold_reason": hold_reason,
+        "no_test_required": no_test_required,
+        "no_test_required_note": no_test_required_note,
+        "latest_run_status": latest_run_status,
+        "automation_eligible": eligible,
+        "automation_eligibility_reasons": eligibility_reasons,
     }
 
 
@@ -4430,6 +4489,58 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t or {"ok": True})
             else:
                 self._send_json({"error": "Failed to move ticket"}, 400)
+            return
+
+        # Kitchen (M1a): set automation mode (manual / auto / held)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/automation$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            mode = body.get("mode", "")
+            hold_reason = body.get("hold_reason")
+            try:
+                with _db_lock:
+                    conn = get_db(); init_db(conn)
+                    _kitchen_set_mode(
+                        conn, proj["id"], "ticket", ticket_id, mode,
+                        ActorContext.human(), hold_reason=hold_reason,
+                    )
+                    conn.commit(); conn.close()
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+            t = _get_ticket_json(proj["id"], ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
+        # Kitchen (M1a): toggle no_test_required eligibility bypass
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/no-test-required$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            enabled = bool(body.get("enabled", False))
+            note = body.get("note", "")
+            try:
+                with _db_lock:
+                    conn = get_db(); init_db(conn)
+                    _kitchen_set_ntr(
+                        conn, proj["id"], ticket_id, enabled, note,
+                        ActorContext.human(),
+                    )
+                    conn.commit(); conn.close()
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+            t = _get_ticket_json(proj["id"], ticket_id)
+            self._send_json(t or {"ok": True})
             return
 
         # AI-powered field enrichment with diff hunks

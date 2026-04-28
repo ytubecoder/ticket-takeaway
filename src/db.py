@@ -303,3 +303,110 @@ def init_db(conn: sqlite3.Connection):
         """)
         conn.execute("INSERT INTO _migrations (version) VALUES (5)")
         conn.commit()
+
+    # Migration 6: Kitchen — automation intent, run facts, activity audit.
+    # See docs/KITCHEN.md §6 for the full rationale.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 6").fetchone():
+        # Eligibility bypass for tickets that genuinely don't need tests.
+        # CHECK constraints on ALTER ADD COLUMN are version-dependent in SQLite;
+        # the (0,1) invariant is enforced by actions.py helpers.
+        for col, decl in [
+            ("no_test_required",      "INTEGER NOT NULL DEFAULT 0"),
+            ("no_test_required_note", "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        conn.executescript("""
+            -- Intent: how the human (or agent) wants this subject treated.
+            CREATE TABLE IF NOT EXISTS automation_subjects (
+                project_id      TEXT NOT NULL,
+                subject_type    TEXT NOT NULL CHECK (subject_type IN ('ticket','journey','investigation')),
+                subject_id      TEXT NOT NULL,
+                automation_mode TEXT NOT NULL DEFAULT 'manual'
+                                CHECK (automation_mode IN ('manual','auto','held')),
+                hold_reason     TEXT,
+                watched_at      TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                created_by      TEXT,
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_by      TEXT,
+                PRIMARY KEY (project_id, subject_type, subject_id)
+            );
+
+            -- Facts: every execution attempt against any subject.
+            CREATE TABLE IF NOT EXISTS runs (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id         TEXT NOT NULL,
+                subject_type       TEXT NOT NULL CHECK (subject_type IN ('ticket','journey','investigation')),
+                subject_id         TEXT NOT NULL,
+                runner_kind        TEXT NOT NULL CHECK (runner_kind IN ('agent','scenario','gap_analyzer')),
+                status             TEXT NOT NULL CHECK (status IN
+                                     ('queued','preparing','running','needs_input',
+                                      'succeeded','failed','stalled','cancelled')),
+                workspace_path     TEXT,
+                thread_id          TEXT,
+
+                claimed_at         TEXT,
+                claim_owner        TEXT,
+                heartbeat_at       TEXT,
+
+                started_at         TEXT,
+                finished_at        TEXT,
+                duration_ms        INTEGER,
+
+                exit_code          INTEGER,
+                error_class        TEXT,
+                error_message      TEXT,
+                summary            TEXT,
+                metadata_json      TEXT NOT NULL DEFAULT '{}',
+                evidence_dir       TEXT,
+                evidence_status    TEXT NOT NULL DEFAULT 'live'
+                                   CHECK (evidence_status IN ('live','summarised','pruned')),
+
+                needs_input_prompt TEXT,
+
+                attempt            INTEGER NOT NULL DEFAULT 1,
+                parent_run_id      INTEGER,
+                retry_kind         TEXT CHECK (retry_kind IS NULL OR retry_kind IN ('resume','fresh')),
+                triggered_by       TEXT NOT NULL CHECK (triggered_by IN
+                                     ('human','run-now','journey-cascade','retry','scheduled','pr-merge'))
+            );
+
+            CREATE INDEX IF NOT EXISTS runs_subject_latest
+                ON runs (project_id, subject_type, subject_id, id DESC);
+            CREATE INDEX IF NOT EXISTS runs_active
+                ON runs (status) WHERE status IN ('queued','preparing','running','needs_input');
+            CREATE INDEX IF NOT EXISTS runs_evidence_age
+                ON runs (finished_at, evidence_status);
+
+            -- DURABILITY: at most one active run per subject. Makes "is this
+            -- subject currently being worked?" derivable from runs without a
+            -- denormalized cache, and prevents double-dispatch under any race.
+            CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_subject
+                ON runs (project_id, subject_type, subject_id)
+                WHERE status IN ('queued','preparing','running','needs_input');
+
+            -- Audit: every state-changing event with actor attribution.
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id       TEXT NOT NULL,
+                subject_type     TEXT NOT NULL CHECK (subject_type IN ('ticket','journey','investigation')),
+                subject_id       TEXT NOT NULL,
+                actor_type       TEXT NOT NULL CHECK (actor_type IN ('human','agent','system')),
+                actor_id         TEXT,
+                event_kind       TEXT NOT NULL,
+                payload_json     TEXT NOT NULL DEFAULT '{}',
+                occurred_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                discarded_run_id INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS activity_subject
+                ON activity_events (project_id, subject_type, subject_id, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS activity_run
+                ON activity_events (actor_type, actor_id) WHERE actor_type = 'agent';
+        """)
+        conn.execute("INSERT INTO _migrations (version) VALUES (6)")
+        conn.commit()

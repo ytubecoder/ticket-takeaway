@@ -14,9 +14,10 @@ import json
 import os
 import sqlite3
 import subprocess
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from constants import (
     DEFAULT_STATUS_BY_SECTION,
@@ -139,7 +140,411 @@ def execute_scheduled_event(conn: sqlite3.Connection, event: sqlite3.Row) -> Non
             f"UPDATE tickets SET {update_fields} WHERE id = ? AND project_id = ?",
             params,
         )
+        # Internal-side-effect rule (§9): scheduled auto-accept emits with system actor.
+        emit_event(conn, project_id, "ticket", ticket_id, "section_change",
+                   {"before": "For Review", "after": "Done"}, ActorContext.system())
     # else: unknown event type — silently skip
+
+
+# ---------------------------------------------------------------------------
+# Kitchen — actor attribution, audit emission, eligibility, mode actions.
+# See docs/KITCHEN.md §6-§9b. Activity events are written in the same DB
+# transaction as the mutation that produced them; callers commit once.
+# ---------------------------------------------------------------------------
+
+CANONICAL_SECTIONS_FOR_ELIGIBILITY = ("Backlog", "WIP", "For Review")
+CLEARED_DEP_STATUSES = ("done", "released")
+ACTIVE_RUN_STATUSES = ("queued", "preparing", "running", "needs_input")
+
+
+def utcnow_iso() -> str:
+    """ISO-8601 UTC timestamp suitable for activity_events.occurred_at and similar."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class ActorContext:
+    """Who is performing a mutation. Threaded through every actions.py call.
+
+    actor_type ∈ {'human', 'agent', 'system'}.
+    actor_id is run_id (as str) for agent, user identifier for human, None for system.
+    """
+    actor_type: str
+    actor_id: Optional[str] = None
+
+    @classmethod
+    def human(cls, user_id: Optional[str] = None) -> "ActorContext":
+        return cls(actor_type="human", actor_id=user_id)
+
+    @classmethod
+    def agent(cls, run_id: int | str) -> "ActorContext":
+        return cls(actor_type="agent", actor_id=str(run_id))
+
+    @classmethod
+    def system(cls) -> "ActorContext":
+        return cls(actor_type="system", actor_id=None)
+
+
+def emit_event(
+    conn: sqlite3.Connection,
+    project_id: str,
+    subject_type: str,
+    subject_id: str,
+    event_kind: str,
+    payload: dict[str, Any],
+    actor: ActorContext,
+) -> int:
+    """Insert one activity_events row in the caller's open transaction.
+
+    Returns the new row id. Caller must commit. Mutation and emit_event MUST
+    share a transaction so the audit log can never disagree with state.
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO activity_events
+            (project_id, subject_type, subject_id, actor_type, actor_id,
+             event_kind, payload_json, occurred_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            project_id, subject_type, subject_id,
+            actor.actor_type, actor.actor_id,
+            event_kind, json.dumps(payload, ensure_ascii=False),
+            utcnow_iso(),
+        ),
+    )
+    return cur.lastrowid
+
+
+# ---- Eligibility -----------------------------------------------------------
+
+@dataclass(frozen=True)
+class EligibilityResult:
+    """Outcome of an eligibility check. Always carries reasons (for UI tooltips)."""
+    eligible: bool
+    reasons: tuple[str, ...]
+
+
+def _has_active_run(
+    conn: sqlite3.Connection, project_id: str, subject_type: str, subject_id: str
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1 FROM runs
+        WHERE project_id = ? AND subject_type = ? AND subject_id = ?
+              AND status IN ('queued', 'preparing', 'running', 'needs_input')
+        LIMIT 1
+        """,
+        (project_id, subject_type, subject_id),
+    ).fetchone()
+    return row is not None
+
+
+def _automation_mode(conn: sqlite3.Connection, project_id: str, subject_type: str, subject_id: str) -> str:
+    """Return automation_mode for a subject; 'manual' if no row exists."""
+    row = conn.execute(
+        "SELECT automation_mode FROM automation_subjects "
+        "WHERE project_id = ? AND subject_type = ? AND subject_id = ?",
+        (project_id, subject_type, subject_id),
+    ).fetchone()
+    return row[0] if row else "manual"
+
+
+def _deps_clear(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> tuple[bool, list[str]]:
+    """Return (clear, blocking_reasons). See docs/KITCHEN.md §7 'Deps clear means'."""
+    deps = conn.execute(
+        "SELECT depends_on_id FROM depends WHERE ticket_id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    ).fetchall()
+    blocking: list[str] = []
+    for (dep_id,) in deps:
+        row = conn.execute(
+            "SELECT id, section, status, archived FROM tickets "
+            "WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (dep_id, project_id),
+        ).fetchone()
+        if not row:
+            blocking.append(f"missing dep: {dep_id}")
+            continue
+        if row["archived"] == 1:
+            blocking.append(f"dep {row['id']} is archived")
+            continue
+        if row["section"] != "Done" and row["status"] not in CLEARED_DEP_STATUSES:
+            blocking.append(f"dep {row['id']} not done (section={row['section']}, status={row['status']})")
+    return (len(blocking) == 0, blocking)
+
+
+def _journey_compiles_and_validates(conn: sqlite3.Connection, project_id: str, journey_id: str) -> bool:
+    """True if the journey can be compiled to a manifest and that manifest validates."""
+    try:
+        from journeys import compile_to_manifest
+        from scenarios import validate_manifest
+    except ImportError:
+        return False
+    try:
+        manifest = compile_to_manifest(conn, project_id, journey_id)
+        validate_manifest(manifest)
+        return True
+    except Exception:
+        return False
+
+
+def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+    """Return (covered, reasons). See docs/KITCHEN.md §7 'Tests covered means'."""
+    reasons: list[str] = []
+    project_id = ticket["project_id"]
+    ticket_id = ticket["id"]
+
+    # Path 1: readiness_flags row with flag='tests' AND non-empty content.
+    tests_row = conn.execute(
+        "SELECT content FROM readiness_flags "
+        "WHERE ticket_id = ? AND project_id = ? AND flag = 'tests'",
+        (ticket_id, project_id),
+    ).fetchone()
+    if tests_row and (tests_row["content"] or "").strip():
+        return (True, ["tests readiness flag has content"])
+
+    # Path 2: any linked journey that compiles + validates.
+    journey_rows = conn.execute(
+        "SELECT journey_id FROM journey_tickets "
+        "WHERE ticket_id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    ).fetchall()
+    for (journey_id,) in journey_rows:
+        if _journey_compiles_and_validates(conn, project_id, journey_id):
+            return (True, [f"linked journey {journey_id} compiles+validates"])
+
+    # Path 3: explicit no_test_required with non-empty note.
+    if ticket["no_test_required"] == 1 and (ticket["no_test_required_note"] or "").strip():
+        return (True, ["no_test_required (explicit)"])
+
+    # No path satisfied — explain.
+    if not tests_row:
+        reasons.append("no tests readiness flag")
+    elif not (tests_row["content"] or "").strip():
+        reasons.append("tests readiness flag is empty")
+    if journey_rows and not any(
+        _journey_compiles_and_validates(conn, project_id, jid) for (jid,) in journey_rows
+    ):
+        reasons.append("linked journeys do not compile/validate")
+    elif not journey_rows:
+        reasons.append("no linked journey")
+    if ticket["no_test_required"] != 1:
+        reasons.append("no_test_required not set")
+    elif not (ticket["no_test_required_note"] or "").strip():
+        reasons.append("no_test_required has no rationale note")
+    return (False, reasons)
+
+
+def _ticket_eligibility(conn: sqlite3.Connection, ticket: sqlite3.Row) -> EligibilityResult:
+    """Eligibility for a ticket subject. See docs/KITCHEN.md §7."""
+    reasons: list[str] = []
+    project_id = ticket["project_id"]
+    ticket_id = ticket["id"]
+
+    mode = _automation_mode(conn, project_id, "ticket", ticket_id)
+    if mode != "auto":
+        reasons.append(f"automation_mode is {mode}, not auto")
+
+    if ticket["section"] not in CANONICAL_SECTIONS_FOR_ELIGIBILITY:
+        reasons.append(f"section {ticket['section']!r} is not Backlog/WIP/For Review")
+
+    if ticket["draft"] == 1:
+        reasons.append("ticket is draft")
+    if ticket["archived"] == 1:
+        reasons.append("ticket is archived")
+
+    if not (ticket["description"] or "").strip():
+        reasons.append("description is empty")
+
+    crit_count = conn.execute(
+        "SELECT COUNT(*) FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    ).fetchone()[0]
+    if crit_count == 0:
+        reasons.append("no acceptance criteria")
+
+    deps_ok, dep_reasons = _deps_clear(conn, project_id, ticket_id)
+    if not deps_ok:
+        reasons.extend(dep_reasons)
+
+    tests_ok, test_reasons = _tests_covered(conn, ticket)
+    if not tests_ok:
+        reasons.extend(test_reasons)
+
+    if _has_active_run(conn, project_id, "ticket", ticket_id):
+        reasons.append("active run already exists")
+
+    eligible = (
+        mode == "auto"
+        and ticket["section"] in CANONICAL_SECTIONS_FOR_ELIGIBILITY
+        and ticket["draft"] != 1
+        and ticket["archived"] != 1
+        and (ticket["description"] or "").strip()
+        and crit_count > 0
+        and deps_ok
+        and tests_ok
+        and not _has_active_run(conn, project_id, "ticket", ticket_id)
+    )
+    return EligibilityResult(eligible=bool(eligible), reasons=tuple(reasons))
+
+
+def _journey_eligibility(conn: sqlite3.Connection, project_id: str, journey_id: str) -> EligibilityResult:
+    """Eligibility for a journey subject. See docs/KITCHEN.md §7."""
+    reasons: list[str] = []
+    mode = _automation_mode(conn, project_id, "journey", journey_id)
+    if mode != "auto":
+        reasons.append(f"automation_mode is {mode}, not auto")
+    if not _journey_compiles_and_validates(conn, project_id, journey_id):
+        reasons.append("manifest does not compile/validate")
+    if _has_active_run(conn, project_id, "journey", journey_id):
+        reasons.append("active run already exists")
+    eligible = (
+        mode == "auto"
+        and _journey_compiles_and_validates(conn, project_id, journey_id)
+        and not _has_active_run(conn, project_id, "journey", journey_id)
+    )
+    return EligibilityResult(eligible=bool(eligible), reasons=tuple(reasons))
+
+
+def eligibility(conn: sqlite3.Connection, project_id: str, subject_type: str, subject_id: str) -> EligibilityResult:
+    """Compute Kitchen eligibility for any subject. See docs/KITCHEN.md §7.
+
+    Always returns reasons, even when eligible=True (for UI tooltips).
+    """
+    if subject_type == "ticket":
+        try:
+            ticket = _find_ticket(conn, project_id, subject_id)
+        except ValueError:
+            return EligibilityResult(False, (f"ticket {subject_id!r} not found",))
+        return _ticket_eligibility(conn, ticket)
+    if subject_type == "journey":
+        return _journey_eligibility(conn, project_id, subject_id)
+    if subject_type == "investigation":
+        return EligibilityResult(False, ("investigations not implemented in M1a",))
+    return EligibilityResult(False, (f"unknown subject_type {subject_type!r}",))
+
+
+# ---- Mode actions ----------------------------------------------------------
+
+def _upsert_subject(
+    conn: sqlite3.Connection,
+    project_id: str,
+    subject_type: str,
+    subject_id: str,
+    actor: ActorContext,
+) -> None:
+    """Lazy-create the automation_subjects row at default 'manual' if missing."""
+    now = utcnow_iso()
+    actor_str = f"{actor.actor_type}:{actor.actor_id}" if actor.actor_id else actor.actor_type
+    conn.execute(
+        """
+        INSERT INTO automation_subjects
+            (project_id, subject_type, subject_id, automation_mode,
+             created_at, created_by, updated_at, updated_by)
+        VALUES (?, ?, ?, 'manual', ?, ?, ?, ?)
+        ON CONFLICT (project_id, subject_type, subject_id) DO NOTHING
+        """,
+        (project_id, subject_type, subject_id, now, actor_str, now, actor_str),
+    )
+
+
+def set_automation_mode(
+    conn: sqlite3.Connection,
+    project_id: str,
+    subject_type: str,
+    subject_id: str,
+    mode: str,
+    actor: ActorContext,
+    hold_reason: str | None = None,
+) -> None:
+    """Set a subject's automation_mode. Held requires hold_reason. Emits the
+    appropriate event(s). Caller must commit.
+
+    Valid modes: 'manual', 'auto', 'held'. Held without reason is rejected.
+    Lazy-creates the automation_subjects row if it doesn't exist.
+    """
+    if mode not in ("manual", "auto", "held"):
+        raise ValueError(f"invalid mode: {mode!r}")
+    if mode == "held" and not (hold_reason or "").strip():
+        raise ValueError("hold requires a non-empty reason")
+
+    _upsert_subject(conn, project_id, subject_type, subject_id, actor)
+
+    prior = conn.execute(
+        "SELECT automation_mode, hold_reason FROM automation_subjects "
+        "WHERE project_id = ? AND subject_type = ? AND subject_id = ?",
+        (project_id, subject_type, subject_id),
+    ).fetchone()
+    prior_mode = prior["automation_mode"]
+    prior_reason = prior["hold_reason"]
+
+    if prior_mode == mode and (mode != "held" or prior_reason == hold_reason):
+        return  # no-op
+
+    now = utcnow_iso()
+    actor_str = f"{actor.actor_type}:{actor.actor_id}" if actor.actor_id else actor.actor_type
+    conn.execute(
+        """
+        UPDATE automation_subjects
+        SET automation_mode = ?, hold_reason = ?, updated_at = ?, updated_by = ?
+        WHERE project_id = ? AND subject_type = ? AND subject_id = ?
+        """,
+        (mode, hold_reason if mode == "held" else None, now, actor_str,
+         project_id, subject_type, subject_id),
+    )
+
+    if mode == "held":
+        emit_event(
+            conn, project_id, subject_type, subject_id,
+            "hold_set",
+            {"before": prior_mode, "after": "held", "reason": hold_reason},
+            actor,
+        )
+    elif prior_mode == "held":
+        emit_event(
+            conn, project_id, subject_type, subject_id,
+            "hold_cleared",
+            {"before": "held", "after": mode, "prior_reason": prior_reason},
+            actor,
+        )
+    else:
+        emit_event(
+            conn, project_id, subject_type, subject_id,
+            "mode_changed",
+            {"before": prior_mode, "after": mode},
+            actor,
+        )
+
+
+def set_no_test_required(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+    enabled: bool,
+    note: str,
+    actor: ActorContext,
+) -> None:
+    """Toggle the no_test_required eligibility bypass on a ticket.
+
+    When enabled=True, note must be non-empty (the rationale).
+    No event_kind in the M1a spine covers this — field_changed lands in M1b.
+    Caller must commit.
+    """
+    if enabled and not (note or "").strip():
+        raise ValueError("no_test_required requires a non-empty rationale note")
+
+    ticket = _find_ticket(conn, project_id, ticket_id)
+    flag = 1 if enabled else 0
+    note_text = note.strip() if enabled else ""
+    if ticket["no_test_required"] == flag and (ticket["no_test_required_note"] or "") == note_text:
+        return  # no-op
+
+    conn.execute(
+        "UPDATE tickets SET no_test_required = ?, no_test_required_note = ?, updated_at = ? "
+        "WHERE id = ? AND project_id = ?",
+        (flag, note_text, utcnow_iso(), ticket["id"], project_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -152,12 +557,14 @@ def move_ticket(
     ticket_id: str,
     target_section: str,
     project_path: str = "",
+    actor: ActorContext = ActorContext.human(),
 ) -> str:
     """Move a ticket to *target_section*.
 
     Uses compute_status_on_move() to decide the new status (preserves the
     current status when it is valid in the target section).  Captures the
-    HEAD commit hash when moving to Done.
+    HEAD commit hash when moving to Done. Emits M1a spine events
+    `section_change` and (when status changes) `status_change`.
 
     Returns the canonical ticket ID.
     """
@@ -191,7 +598,16 @@ def move_ticket(
             (target_section, new_status, sort_order, now, tid, project_id),
         )
 
-    # Post-change hooks
+    # M1a spine events — emit BEFORE side-effect hooks so they appear first in history.
+    if old_section != target_section:
+        emit_event(conn, project_id, "ticket", tid, "section_change",
+                   {"before": old_section, "after": target_section}, actor)
+    if old_status != new_status:
+        emit_event(conn, project_id, "ticket", tid, "status_change",
+                   {"before": old_status, "after": new_status}, actor)
+
+    # Post-change hooks (auto-promote parent, scheduled auto-accept).
+    # These use ActorContext.system() internally for any cascaded events.
     _after_section_change(conn, project_id, tid, old_section, target_section)
     _after_status_change(conn, project_id, tid, old_status, new_status)
 
@@ -204,9 +620,11 @@ def accept_ticket(
     ticket_id: str,
     project_path: str,
     project_name: str,
+    actor: ActorContext = ActorContext.human(),
 ) -> str:
     """Accept a ticket: move to Done with status 'done' and append to PRODUCT_SPECIFICATION.md.
 
+    Emits M1a spine events `section_change` and `status_change` as needed.
     Returns the canonical ticket ID.
     """
     ticket = _find_ticket(conn, project_id, ticket_id)
@@ -224,6 +642,13 @@ def accept_ticket(
         "WHERE id = ? AND project_id = ?",
         (sort_order, now, commit_hash_val, tid, project_id),
     )
+
+    if old_section != "Done":
+        emit_event(conn, project_id, "ticket", tid, "section_change",
+                   {"before": old_section, "after": "Done"}, actor)
+    if old_status != "done":
+        emit_event(conn, project_id, "ticket", tid, "status_change",
+                   {"before": old_status, "after": "done"}, actor)
 
     # Append to PRODUCT_SPECIFICATION.md
     spec_path = Path(project_path) / "PRODUCT_SPECIFICATION.md"
@@ -305,8 +730,14 @@ def update_ticket(
     remove_criteria: Optional[int] = None,
     add_depends: Optional[list[str]] = None,
     remove_depends: Optional[list[str]] = None,
+    actor: ActorContext = ActorContext.human(),
 ) -> str:
     """Partial update of a ticket.  Only fields that are not None/sentinel are changed.
+
+    Emits M1a spine `status_change` and `criteria_check` events. Other field
+    edits (title, description, criteria text, deps) emit no event in M1a — they
+    move to M1b's `field_changed` / `criteria_added` / `criteria_removed` /
+    `criteria_changed` / `dependency_changed` vocabulary.
 
     Returns the canonical ticket ID.
     """
@@ -356,10 +787,10 @@ def update_ticket(
             )
 
     if check_criteria is not None:
-        _update_criterion(conn, tid, project_id, check_criteria, checked=1)
+        _update_criterion(conn, tid, project_id, check_criteria, checked=1, actor=actor)
 
     if uncheck_criteria is not None:
-        _update_criterion(conn, tid, project_id, uncheck_criteria, checked=0)
+        _update_criterion(conn, tid, project_id, uncheck_criteria, checked=0, actor=actor)
 
     if remove_criteria is not None:
         _remove_criterion(conn, tid, project_id, remove_criteria)
@@ -381,9 +812,11 @@ def update_ticket(
                 (tid, project_id, dep),
             )
 
-    # Post-change hooks (status only — section unchanged by update)
+    # M1a spine event for status change. Field/dep/criteria-text events land in M1b.
     new_status = updates.get("status", old_status)
     if new_status != old_status:
+        emit_event(conn, project_id, "ticket", tid, "status_change",
+                   {"before": old_status, "after": new_status}, actor)
         _after_status_change(conn, project_id, tid, old_status, new_status)
 
     return tid
@@ -406,19 +839,27 @@ def confirm_ticket(conn: sqlite3.Connection, project_id: str, ticket_id: str) ->
 # ---------------------------------------------------------------------------
 
 def _update_criterion(
-    conn: sqlite3.Connection, tid: str, project_id: str, index: int, checked: int
+    conn: sqlite3.Connection, tid: str, project_id: str, index: int, checked: int,
+    actor: ActorContext = ActorContext.human(),
 ):
-    """Update the checked state of the Nth criterion (1-indexed)."""
+    """Update the checked state of the Nth criterion (1-indexed). Emits `criteria_check`."""
     criteria = conn.execute(
-        "SELECT id FROM acceptance_criteria "
+        "SELECT id, checked FROM acceptance_criteria "
         "WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
         (tid, project_id),
     ).fetchall()
     if 1 <= index <= len(criteria):
+        criterion = criteria[index - 1]
+        before = bool(criterion["checked"])
+        after = bool(checked)
+        if before == after:
+            return  # no-op
         conn.execute(
             "UPDATE acceptance_criteria SET checked = ? WHERE id = ?",
-            (checked, criteria[index - 1]["id"]),
+            (checked, criterion["id"]),
         )
+        emit_event(conn, project_id, "ticket", tid, "criteria_check",
+                   {"criterion_id": criterion["id"], "before": before, "after": after}, actor)
     else:
         raise IndexError(
             f"Criterion index {index} out of range (1-{len(criteria)})"
@@ -594,9 +1035,16 @@ def _maybe_promote_parent(
 
     done_statuses = {"for-review", "bug-fixed", "done"}
     if all(c["status"] in done_statuses for c in children):
+        old_parent_section = parent_ticket["section"]
+        if old_parent_section == "For Review":
+            return  # idempotent — already promoted
         sort_order = _next_sort_order(conn, project_id, "For Review")
         conn.execute(
             "UPDATE tickets SET section = 'For Review', sort_order = ?, updated_at = ? "
             "WHERE id = ? AND project_id = ?",
             (sort_order, datetime.now().isoformat(), parent_id, project_id),
         )
+        # Internal-side-effect rule (§9): system-actor event for the cascaded promotion.
+        emit_event(conn, project_id, "ticket", parent_id, "section_change",
+                   {"before": old_parent_section, "after": "For Review"},
+                   ActorContext.system())

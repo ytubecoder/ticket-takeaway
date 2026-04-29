@@ -164,6 +164,34 @@ Priority: medium | Complexity: S | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
 
+### B-44: Add 'Ready' pill to auto+eligible kanban cards
+Priority: medium | Complexity: S | Status: proposed
+When a ticket is in auto mode AND eligibility checks pass, show a green 'Ready' pill in the card meta row. Today the only signal is the subtle gray kitchen-badge dot, which triggers off automation_mode alone — not strict eligibility — so a ticket marked auto but missing acceptance criteria still shows the dot. The Eligible filter chip in the top bar is currently the only place that reflects real eligibility, which is too easy to miss.
+- [ ] Cards with automation_mode=auto AND automation_eligible=true render a green 'Ready' pill in the meta row (next to the status badge)
+- [ ] Pill hidden on manual-mode tickets
+- [ ] Pill hidden on auto-mode tickets that fail eligibility
+- [ ] Pill replaced by the run-state indicator when a run is active (queued/running/needs-input/failed)
+- [ ] Hover tooltip reads 'Eligible — would dispatch on next tick'
+
+### B-45: Show eligibility reasons in ticket detail overlay when not ready
+Priority: medium | Complexity: S | Status: proposed
+When a ticket is auto-mode but not eligible, show why on the detail overlay. The reasons are already returned in the ticket JSON as automation_eligibility_reasons but never displayed anywhere. PMs and devs currently have no way to see why Kitchen isn't picking up a ticket without inspecting the API directly.
+- [ ] Detail overlay shows a 'Not ready' section when automation_mode=auto AND automation_eligible=false
+- [ ] Section lists each failure reason as a bullet (e.g., 'No acceptance criteria', 'Blocked by B-12 (status: in-progress)')
+- [ ] Section hidden when ticket is eligible OR when mode is manual/held
+- [ ] Reason text is human-readable, not enum codes
+- [ ] Updates live when eligibility state changes (e.g., adding criteria removes that reason on the next refresh)
+
+### B-46: Add inline 'why not ready' indicator on auto kanban cards
+Priority: medium | Complexity: M | Status: proposed
+Depends: B-44
+Auto-mode cards that fail eligibility need a quick on-card view of why. Today scanning the board for blockers requires opening each ticket's detail overlay just to see what's missing — too much friction. A small info icon with a popover keeps the diagnostic on the board itself.
+- [ ] Auto-mode cards that fail eligibility show a small info icon next to the kitchen-badge dot
+- [ ] Hovering or clicking the icon opens a popover listing the top reasons (cap at 3, with '+N more' if longer)
+- [ ] No icon shown on manual-mode cards
+- [ ] No icon shown when the ticket is fully eligible (the Ready pill from ticket #1 takes over)
+- [ ] Reasons sourced from automation_eligibility_reasons already in the ticket JSON — no extra API call
+
 ## Ideas
 
 ### I-04: Persist filter and search state in localStorage

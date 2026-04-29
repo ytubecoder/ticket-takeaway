@@ -304,9 +304,13 @@ def init_db(conn: sqlite3.Connection):
         conn.execute("INSERT INTO _migrations (version) VALUES (5)")
         conn.commit()
 
-    # Migration 6: Kitchen — automation intent, run facts, activity audit.
-    # See docs/KITCHEN.md §6 for the full rationale.
-    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 6").fetchone():
+    # Migration 8: Kitchen — automation intent, run facts, activity audit.
+    # See docs/KITCHEN.md §6 for the full rationale. Numbered 8 because
+    # main shipped migrations 6 (ticket_branches) and 7 (ticket_tags) while
+    # the kitchen branch was in flight; the kitchen schema is independent
+    # of those so the renumber is purely about avoiding the version-key
+    # collision in the _migrations table.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 8").fetchone():
         # Eligibility bypass for tickets that genuinely don't need tests.
         # CHECK constraints on ALTER ADD COLUMN are version-dependent in SQLite;
         # the (0,1) invariant is enforced by actions.py helpers.
@@ -408,5 +412,5 @@ def init_db(conn: sqlite3.Connection):
             CREATE INDEX IF NOT EXISTS activity_run
                 ON activity_events (actor_type, actor_id) WHERE actor_type = 'agent';
         """)
-        conn.execute("INSERT INTO _migrations (version) VALUES (6)")
+        conn.execute("INSERT INTO _migrations (version) VALUES (8)")
         conn.commit()

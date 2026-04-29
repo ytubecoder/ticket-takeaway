@@ -377,15 +377,365 @@ class AgentRunner(Runner):
 
 
 # ---------------------------------------------------------------------------
-# ScenarioRunner / GapAnalyzer — stubs for M4 to flesh out.
+# classify_scenario_failure — pure rule-based gap classification (M4).
+#
+# Heuristic rules (no LLM — LLM-backed classifier is M4+):
+#   1. engine-level error (RunResult.status == "error") → test_harness_gap
+#   2. no failed step at all → ambiguous_goal
+#   3. "open" action with 4xx/5xx indicator → missing_screen
+#   4. "assert_visible" on existing-but-not-visible element → missing_feature
+#   5. wait_for / locator timeout / 0-element → missing_selector
+#      (target has testid/css/role/text key)
+#   6. timeout / network error in error_message → external_dependency
+#   7. error_message contains "ambiguous" → ambiguous_goal
+#   8. fallback → missing_feature
+# ---------------------------------------------------------------------------
+
+_SELECTOR_TARGET_KEYS = {"testid", "css", "role", "text"}
+_TIMEOUT_PHRASES = ("timeout", "net::err", "connection refused", "econnrefused", "socket")
+_SCREEN_PHRASES = ("404", "403", "500", "502", "503", "not found", "page not found")
+
+
+def classify_scenario_failure(result, manifest: dict) -> dict:
+    """Return a gap_report dict for a non-passing RunResult.
+
+    ``result`` must be a RunResult-like object with attributes:
+        .status        str — "failed" | "error"
+        .failed_step   dict | None
+        .failed_step_index  int | None
+        .error_message str
+        .screenshots   list[str]
+
+    ``manifest`` must be a compiled scenario manifest dict with a "steps" list.
+    """
+    steps = manifest.get("steps", [])
+    step_count = len(steps)
+    manifest_id = manifest.get("id", "")
+    error_message = result.error_message or ""
+    failed_step = result.failed_step
+    failed_step_index = result.failed_step_index
+
+    # Screenshot: last entry in screenshots list that contains "FAILURE", else last overall.
+    screenshot_path: Optional[str] = None
+    if result.screenshots:
+        failure_shots = [s for s in result.screenshots if "FAILURE" in s]
+        screenshot_path = failure_shots[-1] if failure_shots else result.screenshots[-1]
+
+    failed_step_action: Optional[str] = None
+    failed_step_target: Optional[dict] = None
+    if failed_step:
+        failed_step_action = failed_step.get("action")
+        failed_step_target = failed_step.get("target")
+
+    def _build(gap_kind: str) -> dict:
+        return {
+            "gap_kind": gap_kind,
+            "failed_step_index": failed_step_index,
+            "failed_step_action": failed_step_action,
+            "failed_step_target": failed_step_target,
+            "screenshot_path": screenshot_path,
+            "error_message": error_message,
+            "manifest_id": manifest_id,
+            "step_count": step_count,
+        }
+
+    # Rule 1: engine-level error
+    if result.status == "error":
+        return _build("test_harness_gap")
+
+    # Rule 2: no failed step at all (passed but somehow we're here — edge case)
+    if failed_step is None:
+        # Rule 7 before rule 2 fallback
+        if "ambiguous" in error_message.lower():
+            return _build("ambiguous_goal")
+        return _build("ambiguous_goal")
+
+    # Rule 7: error_message contains "ambiguous"
+    if "ambiguous" in error_message.lower():
+        return _build("ambiguous_goal")
+
+    # Rule 3: open action with nav error hinting at 4xx/5xx
+    if failed_step_action == "open":
+        em_lower = error_message.lower()
+        if any(phrase in em_lower for phrase in _SCREEN_PHRASES):
+            return _build("missing_screen")
+        # open action without a clear HTTP error also maps to missing_screen
+        return _build("missing_screen")
+
+    # Rule 6: timeout / network — checked before selector so timeout on any step maps here
+    em_lower = error_message.lower()
+    if any(phrase in em_lower for phrase in _TIMEOUT_PHRASES):
+        # But if it's a selector-style target that timed out, prefer missing_selector
+        if failed_step_target and _SELECTOR_TARGET_KEYS & set(failed_step_target.keys()):
+            return _build("missing_selector")
+        return _build("external_dependency")
+
+    # Rule 5: wait_for / click / fill etc. with a selector target → missing_selector
+    if failed_step_action in ("wait_for", "click", "fill", "select", "press",
+                               "double_click", "dblclick"):
+        if failed_step_target and _SELECTOR_TARGET_KEYS & set(failed_step_target.keys()):
+            return _build("missing_selector")
+
+    # Rule 4: assert_visible → missing_feature
+    if failed_step_action == "assert_visible":
+        return _build("missing_feature")
+
+    # Rule 8: fallback
+    return _build("missing_feature")
+
+
+# ---------------------------------------------------------------------------
+# ScenarioRunner — M4 implementation.
+#
+# Compiles a journey into a scenario manifest and executes it via the
+# tests/scenario_runner.py Playwright engine.  On non-pass results, builds a
+# structured gap_report and stores it in runs.metadata_json.
+#
+# NOTE: tests/scenario_runner.py is appended to sys.path at call time (inside
+# execute()) rather than at module import time so that:
+#   a) importing runners.py never requires Playwright to be installed, and
+#   b) the path surgery is isolated to the one runner that needs it.
+# Longer-term, the engine should be copied to src/ so the path hack goes away.
 # ---------------------------------------------------------------------------
 
 class ScenarioRunner(Runner):
     runner_kind = "scenario"
 
-    def execute(self, run_id, project_id, subject_type, subject_id,
-                workspace, config, conn_factory, cancel_event=None):
-        raise NotImplementedError("ScenarioRunner lands in M4 (closed loop)")
+    DEFAULT_TIMEOUT_S = 300  # 5 min hard cap for a scenario run
+
+    def execute(
+        self,
+        run_id: int,
+        project_id: str,
+        subject_type: str,
+        subject_id: str,
+        workspace,
+        config: dict,
+        conn_factory,
+        cancel_event=None,
+    ) -> RunOutcome:
+        # Late imports — keep top-of-module clean; playwright + journeys + scenarios
+        # are only needed for this runner.
+        import json as _json
+        import sys as _sys
+        import os as _os
+
+        # Make the scenario_runner engine importable from tests/.
+        _tests_dir = _os.path.join(_os.path.dirname(__file__), "..", "tests")
+        _tests_dir = _os.path.abspath(_tests_dir)
+        if _tests_dir not in _sys.path:
+            _sys.path.insert(0, _tests_dir)
+
+        # Make src/ importable (journeys, scenarios live there).
+        _src_dir = _os.path.dirname(_os.path.abspath(__file__))
+        if _src_dir not in _sys.path:
+            _sys.path.insert(0, _src_dir)
+
+        from scenario_runner import execute_scenario, ScenarioContext, RunResult
+        from journeys import compile_to_manifest
+        from scenarios import validate_manifest
+
+        actor = ActorContext.agent(run_id)
+        started = time.monotonic()
+
+        # ── Phase 1: preparing ─────────────────────────────────────────────
+        with db_session(conn_factory) as conn:
+            _set_run_status(conn, run_id, "preparing",
+                            workspace_path=str(workspace.path))
+            emit_event(conn, project_id, subject_type, subject_id, "workspace_created",
+                       {"path": str(workspace.path), "reused": not workspace.created_now}, actor)
+            conn.commit()
+
+        # Honour cancel before touching Playwright.
+        if cancel_event is not None and cancel_event.is_set():
+            return self._cancel(run_id, project_id, subject_type, subject_id,
+                                actor, conn_factory, started)
+
+        # ── Compile + validate manifest ────────────────────────────────────
+        try:
+            with db_session(conn_factory) as conn:
+                manifest = compile_to_manifest(conn, project_id, subject_id)
+            validate_manifest(manifest)
+        except Exception as exc:
+            return self._fail_with_gap(
+                run_id, project_id, subject_type, subject_id, actor,
+                conn_factory, started, "manifest_error", str(exc),
+                manifest=None, result=None, conn_factory_for_meta=conn_factory,
+            )
+
+        # ── Phase 2: running ───────────────────────────────────────────────
+        with db_session(conn_factory) as conn:
+            _set_run_status(conn, run_id, "running")
+            conn.commit()
+
+        # Resolve output directory.
+        output_dir = _os.path.expanduser(
+            f"~/.claude/ticket-takeaway/evidence/{run_id}/scenario_runner"
+        )
+        _os.makedirs(output_dir, exist_ok=True)
+
+        # Resolve base_url.
+        scenario_cfg = config.get("scenario", {})
+        default_base = f"http://localhost:8787/{project_id}"
+        base_url = scenario_cfg.get("base_url", default_base)
+        # Explicit substitution so the template is clear in config.
+        base_url = base_url.replace("{project_id}", project_id)
+
+        # ── Launch Playwright and run the scenario ─────────────────────────
+        result: Optional[RunResult] = None
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                try:
+                    ctx_obj = ScenarioContext(base_url, browser, output_dir, manifest)
+                    try:
+                        result = execute_scenario(ctx_obj)
+                    except Exception as exc:
+                        # execute_scenario raises on failure but attaches RunResult.
+                        result = getattr(exc, "__run_result__", None)
+                        if result is None:
+                            # Engine-level error (not a scenario step failure).
+                            elapsed_ms = int((time.monotonic() - started) * 1000)
+                            result = RunResult(
+                                scenario_id=manifest.get("id", ""),
+                                status="error",
+                                duration_ms=elapsed_ms,
+                                error_message=str(exc),
+                            )
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+        except Exception as exc:
+            # Playwright itself failed to launch (no binary, etc.)
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            result = RunResult(
+                scenario_id=manifest.get("id", ""),
+                status="error",
+                duration_ms=elapsed_ms,
+                error_message=f"playwright launch error: {exc}",
+            )
+
+        # ── Phase 3: terminal ─────────────────────────────────────────────
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        step_count = len(manifest.get("steps", []))
+
+        if result is not None and result.status == "passed":
+            summary = f"scenario passed ({step_count} steps)"
+            with db_session(conn_factory) as conn:
+                _set_run_status(conn, run_id, "succeeded",
+                                summary=summary, finished=True)
+                emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
+                           {"run_id": run_id, "summary": summary,
+                            "duration_ms": elapsed_ms}, actor)
+                conn.commit()
+            return RunOutcome(run_id=run_id, final_status="succeeded",
+                              duration_ms=elapsed_ms, summary=summary)
+
+        # Non-passing — build gap report and store in metadata_json.
+        if result is None:
+            elapsed_ms_r = elapsed_ms
+            result = RunResult(
+                scenario_id=manifest.get("id", ""),
+                status="error",
+                duration_ms=elapsed_ms_r,
+                error_message="unknown scenario error",
+            )
+
+        gap_report = classify_scenario_failure(result, manifest)
+        error_class = (
+            "scenario_step_failed" if result.status == "failed" else "scenario_error"
+        )
+        error_msg = result.error_message or "scenario did not pass"
+        summary = (error_msg[:200] if error_msg else "scenario failed")
+
+        with db_session(conn_factory) as conn:
+            _set_run_status(conn, run_id, "failed",
+                            error_class=error_class,
+                            error_message=error_msg,
+                            summary=summary,
+                            finished=True)
+            conn.execute(
+                "UPDATE runs SET metadata_json = ? WHERE id = ?",
+                (_json.dumps({"gap_report": gap_report}), run_id),
+            )
+            emit_event(conn, project_id, subject_type, subject_id, "run_failed",
+                       {"run_id": run_id, "error_class": error_class,
+                        "error_message": error_msg[:500]}, actor)
+            conn.commit()
+
+        return RunOutcome(
+            run_id=run_id, final_status="failed",
+            duration_ms=elapsed_ms, summary=summary,
+            error_class=error_class, error_message=error_msg,
+        )
+
+    def _fail_with_gap(
+        self, run_id, project_id, subject_type, subject_id, actor,
+        conn_factory, started, error_class, error_message,
+        manifest, result, conn_factory_for_meta,
+    ):
+        import json as _json
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        summary = error_message[:200] if error_message else "scenario failed"
+
+        # Build a minimal gap report even when we don't have a full result.
+        if result is not None and manifest is not None:
+            gap_report = classify_scenario_failure(result, manifest)
+        elif manifest is not None:
+            gap_report = {
+                "gap_kind": "test_harness_gap",
+                "failed_step_index": None,
+                "failed_step_action": None,
+                "failed_step_target": None,
+                "screenshot_path": None,
+                "error_message": error_message,
+                "manifest_id": manifest.get("id", ""),
+                "step_count": len(manifest.get("steps", [])),
+            }
+        else:
+            gap_report = {
+                "gap_kind": "test_harness_gap",
+                "failed_step_index": None,
+                "failed_step_action": None,
+                "failed_step_target": None,
+                "screenshot_path": None,
+                "error_message": error_message,
+                "manifest_id": "",
+                "step_count": 0,
+            }
+
+        with db_session(conn_factory) as conn:
+            _set_run_status(conn, run_id, "failed",
+                            error_class=error_class,
+                            error_message=error_message,
+                            summary=summary, finished=True)
+            conn.execute(
+                "UPDATE runs SET metadata_json = ? WHERE id = ?",
+                (_json.dumps({"gap_report": gap_report}), run_id),
+            )
+            emit_event(conn, project_id, subject_type, subject_id, "run_failed",
+                       {"run_id": run_id, "error_class": error_class,
+                        "error_message": error_message[:500]}, actor)
+            conn.commit()
+        return RunOutcome(run_id=run_id, final_status="failed",
+                          duration_ms=elapsed_ms, summary=summary,
+                          error_class=error_class, error_message=error_message)
+
+    def _cancel(self, run_id, project_id, subject_type, subject_id, actor,
+                conn_factory, started):
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        with db_session(conn_factory) as conn:
+            _set_run_status(conn, run_id, "cancelled",
+                            summary="cancelled by user", finished=True)
+            emit_event(conn, project_id, subject_type, subject_id, "run_cancelled",
+                       {"run_id": run_id}, actor)
+            conn.commit()
+        return RunOutcome(run_id=run_id, final_status="cancelled",
+                          duration_ms=elapsed_ms, summary="cancelled by user")
 
 
 class GapAnalyzer(Runner):

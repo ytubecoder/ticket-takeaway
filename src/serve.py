@@ -75,6 +75,7 @@ from actions import (
 )
 import kitchen as _kitchen
 from workspaces import wipe_for_retry_fresh as _kitchen_wipe_fresh
+import evidence as _kitchen_evidence
 from scenarios import discover_scenarios
 from journeys import (
     add_journey, update_journey, delete_journey, list_journeys, get_journey,
@@ -6407,6 +6408,10 @@ def main():
                                       "max_concurrent_runs": 3,
                                       "max_concurrent_per_project": 1})
 
+    # Kitchen evidence rotation (M5) — daily sweep transitions on-disk
+    # artifacts live → summarised → pruned per docs/KITCHEN.md §13.
+    _kitchen_evidence.start_rotation_daemon(get_db, live_days=30, summarised_days=60)
+
     server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"
     print(f"Dashboard server: {url}")
@@ -6431,6 +6436,7 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down.")
         _kitchen.stop()
+        _kitchen_evidence.stop_rotation_daemon()
         server.server_close()
 
 

@@ -967,6 +967,13 @@ def _after_section_change(
     """Run post-move logic after a ticket changes section."""
     _maybe_promote_parent(conn, project_id, ticket_id)
 
+    # Kitchen M4: when a ticket reaches Done, cascade to any linked journeys.
+    # Each linked journey gets a scenario run queued with triggered_by='journey-cascade'.
+    # If the journey already has an active run, the partial unique index simply
+    # rejects the second claim — that's fine.
+    if new_section == "Done" and old_section != "Done":
+        _cascade_to_linked_journeys(conn, project_id, ticket_id)
+
     # Capture commit hash when moving to Done (if not already set)
     if new_section == "Done":
         ticket = conn.execute(
@@ -991,6 +998,49 @@ def _after_section_change(
                         break
             except Exception:
                 pass  # Best-effort — move_ticket already captures this in most paths
+
+
+def _cascade_to_linked_journeys(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+) -> None:
+    """Queue a scenario run for every journey linked to *ticket_id*.
+
+    Best-effort: if kitchen isn't available (e.g. tests not exercising it,
+    or the project has no resolvable path), we log and move on. The journey
+    table may also not exist in pre-migration DBs.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT journey_id FROM journey_tickets "
+            "WHERE ticket_id = ? AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return  # journey_tickets table doesn't exist
+    if not rows:
+        return
+
+    # Lazy import to break the actions ↔ kitchen ↔ runners cycle.
+    try:
+        import kitchen as _kitchen
+        from db import get_db
+    except ImportError:
+        return
+
+    for r in rows:
+        jid = r["journey_id"] if "journey_id" in r.keys() else r[0]
+        # Each cascade run is a separate trigger_run call so a partial unique
+        # index conflict on one journey doesn't block others. trigger_run
+        # opens its own connection — passes get_db so it can.
+        try:
+            _kitchen.trigger_run(
+                get_db, project_id, "journey", jid, {},
+                triggered_by="journey-cascade",
+            )
+        except Exception:
+            pass  # don't break the section move on a cascade failure
 
 
 def _maybe_promote_parent(

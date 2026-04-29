@@ -3600,6 +3600,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
             <button class="run-action-btn danger" id="run-stop-btn" style="display:none" data-testid="run-stop">{_svg_icon("square", 11)} Stop</button>
             <button class="run-action-btn" id="run-retry-btn" style="display:none" data-testid="run-retry">{_svg_icon("rotate-ccw", 11)} Retry</button>
             <button class="run-action-btn" id="run-retry-fresh-btn" style="display:none" data-testid="run-retry-fresh">{_svg_icon("rotate-ccw", 11)} Retry fresh</button>
+            <button class="run-action-btn" id="run-file-gap-btn" style="display:none" data-testid="run-file-gap" title="File a draft ticket from this gap and link to the journey">{_svg_icon("plus", 11)} File gap ticket</button>
             <button class="run-action-btn danger" id="run-discard-btn" style="display:none" data-testid="run-discard">{_svg_icon("trash-2", 11)} Discard</button>
           </div>
           <!-- Inline discard confirm -->
@@ -4138,6 +4139,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
   var _runDiscardConf = overlay.querySelector('#run-discard-confirm');
   var _runDiscardYes  = overlay.querySelector('#run-discard-yes');
   var _runDiscardNo   = overlay.querySelector('#run-discard-no');
+  var _runFileGapBtn  = overlay.querySelector('#run-file-gap-btn');
   var _runsCount      = overlay.querySelector('#runs-count');
   var _runHistToggle  = overlay.querySelector('#run-history-toggle');
   var _runHistList    = overlay.querySelector('#run-history-list');
@@ -4225,6 +4227,14 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     _runRetryBtn.style.display   = isTerminal  ? 'inline-flex' : 'none';
     _runRetryFresh.style.display = isTerminal  ? 'inline-flex' : 'none';
     _runDiscardBtn.style.display = isTerminal  ? 'inline-flex' : 'none';
+
+    // Kitchen M4: "File gap ticket" — only on red scenario runs (failed/stalled).
+    var canFileGap = (latest.runner_kind === 'scenario' &&
+                      (latest.status === 'failed' || latest.status === 'stalled'));
+    if (_runFileGapBtn) {{
+      _runFileGapBtn.style.display = canFileGap ? 'inline-flex' : 'none';
+      _runFileGapBtn.dataset.runId = latest.id;
+    }}
 
     // Store run id on buttons for handlers
     [_runStopBtn, _runRetryBtn, _runRetryFresh, _runDiscardBtn].forEach(function(b) {{
@@ -4379,6 +4389,33 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       _runDiscardConf.classList.add('hidden');
       if (_runDiscardBtn && TERMINAL_RUN_STATUSES[_currentRunId]) _runDiscardBtn.style.display = 'inline-flex';
       else if (_runDiscardBtn) _runDiscardBtn.style.display = 'inline-flex';
+    }});
+  }}
+
+  /* Kitchen M4: file gap ticket from a red scenario run. */
+  if (_runFileGapBtn) {{
+    _runFileGapBtn.addEventListener('click', function() {{
+      var runId = this.dataset.runId;
+      if (!runId) return;
+      _runFileGapBtn.disabled = true;
+      var url = EDIT_API + '/runs/' + encodeURIComponent(runId) + '/file-gap-ticket';
+      fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+        .then(function(r) {{ return r.json().then(function(j) {{ return [r.ok, j]; }}); }})
+        .then(function(arr) {{
+          var ok = arr[0], j = arr[1];
+          _runFileGapBtn.disabled = false;
+          if (!ok) {{
+            if (typeof showAppToast === 'function') showAppToast('File gap failed: ' + (j.error || 'unknown'), 'error');
+            return;
+          }}
+          var ticket = j.ticket || {{}};
+          var msg = 'Gap ticket filed: ' + (ticket.id || '?');
+          if (typeof showAppToast === 'function') showAppToast(msg, 'success');
+        }})
+        .catch(function(err) {{
+          _runFileGapBtn.disabled = false;
+          if (typeof showAppToast === 'function') showAppToast('File gap failed: ' + (err.message || err), 'error');
+        }});
     }});
   }}
 

@@ -5177,6 +5177,116 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(dict(r) if r else {"id": run_id})
                 return
 
+        # Kitchen (M4): file a gap ticket from a red scenario run.
+        # POST /api/runs/{rid}/file-gap-ticket — closes the loop between a failed
+        # journey scenario and the implementation work it implies.
+        m = re.match(r"^/api/runs/(\d+)/file-gap-ticket$", remainder)
+        if m:
+            run_id = int(m.group(1))
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                run = conn.execute(
+                    "SELECT * FROM runs WHERE id = ? AND project_id = ?",
+                    (run_id, proj["id"]),
+                ).fetchone()
+                conn.close()
+            if not run:
+                self._send_json({"error": "run not found"}, 404)
+                return
+            if run["subject_type"] != "journey":
+                self._send_json({"error": "gap tickets only file from scenario (journey) runs"}, 400)
+                return
+            if run["status"] not in ("failed", "stalled"):
+                self._send_json({"error": "gap tickets only file from failed runs"}, 400)
+                return
+            try:
+                meta = json.loads(run["metadata_json"] or "{}")
+            except (ValueError, TypeError):
+                meta = {}
+            gap = meta.get("gap_report") or {}
+            if not gap:
+                self._send_json({"error": "no gap_report on this run"}, 400)
+                return
+
+            gap_kind = gap.get("gap_kind", "missing_feature")
+            failed_action = gap.get("failed_step_action") or ""
+            failed_target = gap.get("failed_step_target") or {}
+            target_repr = ""
+            if isinstance(failed_target, dict):
+                # Pick the most useful key for the ticket title.
+                for k in ("testid", "css", "role", "text", "title"):
+                    if k in failed_target:
+                        target_repr = f"{k}={failed_target[k]!r}"
+                        break
+
+            # Title + description prefilled from the gap.
+            journey_id = run["subject_id"]
+            title = f"[gap:{gap_kind}] {failed_action} step in journey {journey_id}".strip()
+            desc_lines = [
+                f"_Auto-filed from red scenario run #{run_id} (journey `{journey_id}`)._",
+                "",
+                f"**Gap kind:** `{gap_kind}`",
+            ]
+            if failed_action:
+                desc_lines.append(f"**Failed action:** `{failed_action}`")
+            if target_repr:
+                desc_lines.append(f"**Target:** `{target_repr}`")
+            err = (gap.get("error_message") or run["error_message"] or "").strip()
+            if err:
+                desc_lines.append("")
+                desc_lines.append("**Error:**")
+                desc_lines.append("```")
+                desc_lines.append(err[:1000])
+                desc_lines.append("```")
+            screenshot = gap.get("screenshot_path")
+            if screenshot:
+                desc_lines.append("")
+                desc_lines.append(f"**Screenshot:** `{screenshot}`")
+            description = "\n".join(desc_lines)
+
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                # Create the draft ticket. Prefilled criterion mirrors the gap
+                # so the human triaging it has something to react to.
+                tid = _actions_add_ticket(
+                    conn, proj["id"], title,
+                    section="Ideas", priority="medium", complexity="M",
+                    description=description, draft=True,
+                )
+                # Pre-populate one acceptance criterion so the ticket reads as
+                # actionable rather than empty.
+                criterion = {
+                    "missing_selector":     f"Element selectable by {target_repr or 'the failed target'} exists and is visible",
+                    "missing_screen":       f"Route reached by {failed_action or 'the failed open step'} renders successfully",
+                    "missing_feature":      f"User can complete the {failed_action or 'failed'} step end-to-end",
+                    "ambiguous_goal":       f"Journey {journey_id} re-spec'd with concrete acceptance steps",
+                    "external_dependency":  f"External dependency identified by run #{run_id} resolved or mocked",
+                    "test_harness_gap":     f"Scenario harness can drive journey {journey_id} without engine-level error",
+                }.get(gap_kind, f"Resolve gap from run #{run_id}")
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text) VALUES (?, ?, ?)",
+                    (tid, proj["id"], criterion),
+                )
+                # Link the new ticket to the journey via journey_tickets so the
+                # next cascade after this ticket lands in Done re-runs the
+                # journey to prove green.
+                conn.execute(
+                    "INSERT OR IGNORE INTO journey_tickets (journey_id, project_id, ticket_id) "
+                    "VALUES (?, ?, ?)",
+                    (journey_id, proj["id"], tid),
+                )
+                _kitchen_emit_event(
+                    conn, proj["id"], "ticket", tid, "ticket_created",
+                    {"id": tid, "title": title, "section": "Ideas",
+                     "from_gap_run_id": run_id, "linked_journey": journey_id},
+                    ActorContext.system(),
+                )
+                conn.commit(); conn.close()
+
+            t = _get_ticket_json(proj["id"], tid)
+            self._send_json({"ticket": t, "linked_journey": journey_id, "gap_kind": gap_kind}, 201)
+            return
+
         # AI-powered field enrichment with diff hunks
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/enrich$", remainder)
         if m:

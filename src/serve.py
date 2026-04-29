@@ -3606,10 +3606,31 @@ def _aggregate_kitchen_state() -> dict:
 def _render_kitchen_view(port: int) -> str:
     """Render the Kitchen landing page — cross-project work surface."""
     state = _aggregate_kitchen_state()
+    paused = _kitchen.is_paused()
+    ready_count = len(state["buckets"]["ready_to_delegate"])
+    if paused:
+        pause_banner_class = "is-paused"
+        pause_pill_label = "Simulation"
+        if ready_count:
+            pause_msg = (
+                f"Auto-dispatch is OFF. {ready_count} ticket"
+                f"{'s' if ready_count != 1 else ''} would start running on Resume — "
+                "review them under Ready To Delegate first."
+            )
+        else:
+            pause_msg = "Auto-dispatch is OFF. Nothing will run automatically until you press Resume."
+        pause_btn_label = "Resume — let agents run"
+    else:
+        pause_banner_class = "is-running"
+        pause_pill_label = "Live"
+        pause_msg = "Auto-dispatch is ON. Eligible tickets are picked up by the polling tick."
+        pause_btn_label = "Pause auto-dispatch"
+
     bucket_titles = [
         ("needs_me",          "Needs Me",          "Paused for human input or eligible-but-failed."),
         ("running",           "Running",           "Active runs — agents currently cooking."),
-        ("ready_to_delegate", "Ready To Delegate", "Auto + all gates clear — waiting for a slot."),
+        ("ready_to_delegate", "Ready To Delegate",
+         "Auto + all gates clear — would dispatch on next tick (simulated while paused)."),
         ("held",              "Held",              "Paused intentionally, with a reason."),
         ("failed",            "Failed",            "Last run failed or stalled — needs attention."),
     ]
@@ -3729,6 +3750,19 @@ body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -ap
 .kv-project-name {{ font-weight: 600; }}
 .kv-project-stat {{ font-size: 11px; color: var(--text-3); text-align: right; }}
 .kv-project-stat strong {{ color: var(--text); margin-left: 4px; font-variant-numeric: tabular-nums; }}
+
+/* Pause/resume control (M6) */
+.kv-pause-banner {{ display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid; }}
+.kv-pause-banner.is-paused {{ background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.40); color: var(--text); }}
+.kv-pause-banner.is-running {{ background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.32); color: var(--text); }}
+.kv-pause-pill {{ font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }}
+.kv-pause-banner.is-paused  .kv-pause-pill {{ background: #f59e0b; color: #1a1a22; }}
+.kv-pause-banner.is-running .kv-pause-pill {{ background: #22c55e; color: #1a1a22; }}
+.kv-pause-msg  {{ flex: 1; font-size: 13px; color: var(--text-2); }}
+.kv-pause-btn  {{ background: var(--accent); color: white; border: 0; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }}
+.kv-pause-btn:hover {{ filter: brightness(1.08); }}
+.kv-pause-btn.secondary {{ background: transparent; color: var(--text-2); border: 1px solid var(--border); }}
+.kv-pause-btn.secondary:hover {{ color: var(--text); border-color: var(--text-3); }}
 </style>
 </head>
 <body>
@@ -3740,6 +3774,11 @@ body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -ap
       <a href="/projects">All Projects</a>
     </nav>
   </header>
+  <div class="kv-pause-banner {pause_banner_class}" id="kv-pause-banner" data-testid="kv-pause-banner">
+    <span class="kv-pause-pill">{pause_pill_label}</span>
+    <span class="kv-pause-msg">{pause_msg}</span>
+    <button class="kv-pause-btn" id="kv-pause-btn" data-testid="kv-pause-btn">{pause_btn_label}</button>
+  </div>
   {sections_html}
   <section class="kv-projects-section">
     <header class="kv-bucket-header">
@@ -3749,6 +3788,21 @@ body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -ap
     <div class="kv-bucket-list">{projects_html}</div>
   </section>
 </div>
+<script>
+(function() {{
+  var btn = document.getElementById('kv-pause-btn');
+  if (!btn) return;
+  btn.addEventListener('click', function() {{
+    var paused = document.getElementById('kv-pause-banner').classList.contains('is-paused');
+    var url = '/api/kitchen/' + (paused ? 'resume' : 'pause');
+    btn.disabled = true;
+    fetch(url, {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: '{{}}' }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function() {{ window.location.reload(); }})
+      .catch(function() {{ btn.disabled = false; }});
+  }});
+}})();
+</script>
 </body>
 </html>"""
 
@@ -4141,7 +4195,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             # Kitchen JSON aggregation (M2)
             if remainder == "/api/kitchen":
-                self._send_json(_aggregate_kitchen_state())
+                state = _aggregate_kitchen_state()
+                state["paused"] = _kitchen.is_paused()
+                self._send_json(state)
+                return
+
+            # Kitchen control surface (M6) — pause / resume / state.
+            if remainder == "/api/kitchen/state":
+                self._send_json({
+                    "paused": _kitchen.is_paused(),
+                    "active_runs": len(_kitchen.active_runs_snapshot()),
+                })
                 return
 
             # GET /api/projects — list all projects with ticket counts
@@ -4883,6 +4947,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes ───────────────────────────────────────────
         if proj is None:
+            # Kitchen pause/resume (M6) — global control surface.
+            if remainder in ("/api/kitchen/pause", "/api/kitchen/resume"):
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                reason = (body.get("reason") if isinstance(body, dict) else "") or ""
+                if remainder.endswith("/pause"):
+                    changed = _kitchen.pause(get_db, reason=reason)
+                else:
+                    changed = _kitchen.resume(get_db, reason=reason)
+                self._send_json({
+                    "paused": _kitchen.is_paused(),
+                    "changed": changed,
+                })
+                return
+
             if remainder == "/api/projects":
                 try:
                     body = self._read_body()

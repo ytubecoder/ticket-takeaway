@@ -175,6 +175,12 @@ class TestEmptyState:
 # ---------------------------------------------------------------------------
 
 class TestDispatch:
+    """Dispatch flows assume the orchestrator is unpaused (M6 default is paused)."""
+    @pytest.fixture(autouse=True)
+    def _resume_orchestrator(self, env):
+        env["kitchen"].resume(env["conn_factory"])
+        yield
+
     def test_eligible_ticket_dispatches_one_run(self, env):
         rec = _RecordingRunner(mark_succeeded=True)
         env["kitchen"].register_runner("agent", rec)

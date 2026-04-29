@@ -68,6 +68,14 @@ _loop_thread: Optional[threading.Thread] = None
 _active_runs: dict[int, _ActiveRun] = {}
 _active_runs_lock = threading.Lock()
 
+# M6: pause flag. True (default) = orchestrator polls + reconciles but does
+# NOT auto-dispatch. The user has to explicitly resume() to start runs flowing.
+# Manual `trigger_run` (per-ticket "Run now") works regardless — pressing
+# that button IS the explicit OK. Settings table persists last user choice.
+_paused = True
+_paused_lock = threading.Lock()
+_PAUSED_SETTING_KEY = "kitchen.paused"
+
 # Runner registry — maps runner_kind to Runner instance. Tests can swap.
 _RUNNERS: dict[str, Runner] = {"agent": AgentRunner(), "scenario": ScenarioRunner()}
 
@@ -92,11 +100,32 @@ _PROJECT_PATH_RESOLVER: Optional[Callable[[str], Optional[Path]]] = None
 # ---------------------------------------------------------------------------
 
 def start(get_db: Callable[[], sqlite3.Connection], settings: dict | None = None) -> None:
-    """Start the orchestrator background thread."""
-    global _started, _stop_event, _loop_thread
+    """Start the orchestrator background thread.
+
+    On first start the paused flag is loaded from the settings table; if the
+    setting is missing the default is paused=True. The user explicitly resumes
+    via the UI / API to start auto-dispatch.
+    """
+    global _started, _stop_event, _loop_thread, _paused
     if _started:
         logger.warning("kitchen.start called twice — ignoring")
         return
+    # Load persisted pause state. Default = paused.
+    try:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (_PAUSED_SETTING_KEY,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is not None:
+            with _paused_lock:
+                _paused = (str(row[0]).lower() != "false")  # missing/anything-else = paused
+    except Exception:
+        # Pre-migration or transient DB issue — stay paused (the safe default).
+        pass
+
     _stop_event = threading.Event()
     _loop_thread = threading.Thread(
         target=_run_loop,
@@ -106,7 +135,100 @@ def start(get_db: Callable[[], sqlite3.Connection], settings: dict | None = None
     )
     _loop_thread.start()
     _started = True
-    logger.info("kitchen started (M3 orchestrator)")
+    state = "paused" if is_paused() else "running"
+    logger.info("kitchen started (M3 orchestrator) — %s", state)
+
+
+# ---------------------------------------------------------------------------
+# Pause / resume — M6
+# ---------------------------------------------------------------------------
+
+def is_paused() -> bool:
+    with _paused_lock:
+        return _paused
+
+
+def pause(get_db: Optional[Callable[[], sqlite3.Connection]] = None,
+          actor=None, reason: str = "") -> bool:
+    """Pause auto-dispatch. Returns True if state actually changed.
+
+    Reconciliation (stall detection) keeps running; new runs do NOT get
+    claimed by the polling tick. Manual `trigger_run` calls still work.
+    Idempotent: pausing while already paused is a no-op.
+    """
+    global _paused
+    with _paused_lock:
+        if _paused:
+            return False
+        _paused = True
+    _persist_paused(get_db, True)
+    _emit_pause_event(get_db, "paused", reason, actor)
+    logger.info("kitchen paused (reason=%r)", reason)
+    return True
+
+
+def resume(get_db: Optional[Callable[[], sqlite3.Connection]] = None,
+           actor=None, reason: str = "") -> bool:
+    """Resume auto-dispatch. Returns True if state actually changed.
+
+    Idempotent: resuming while already running is a no-op.
+    """
+    global _paused
+    with _paused_lock:
+        if not _paused:
+            return False
+        _paused = False
+    _persist_paused(get_db, False)
+    _emit_pause_event(get_db, "resumed", reason, actor)
+    logger.info("kitchen resumed (reason=%r)", reason)
+    return True
+
+
+def _persist_paused(get_db, value: bool) -> None:
+    """Best-effort write of the pause flag to the settings table."""
+    if get_db is None:
+        return
+    try:
+        conn = get_db()
+        try:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (_PAUSED_SETTING_KEY, "true" if value else "false"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("failed to persist kitchen.paused")
+
+
+def _emit_pause_event(get_db, kind: str, reason: str, actor) -> None:
+    """Audit kitchen pause/resume so the History tab can show why work stopped.
+
+    Logged as a system-level event on a synthetic 'kitchen/lifecycle' subject;
+    not bound to any one project. Best-effort — never breaks the toggle.
+    """
+    if get_db is None:
+        return
+    try:
+        from actions import emit_event, ActorContext
+        if actor is None:
+            actor = ActorContext.system()
+        conn = get_db()
+        try:
+            # Use a sentinel project_id so it's surfaceable in any cross-project view.
+            emit_event(
+                conn, "_kitchen", "investigation", "lifecycle",
+                f"kitchen_{kind}",  # kitchen_paused | kitchen_resumed
+                {"reason": reason},
+                actor,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("failed to emit kitchen %s event", kind)
 
 
 def stop(timeout: float = 5.0) -> None:
@@ -190,11 +312,16 @@ def _run_loop(get_db: Callable, settings: dict, stop_event: threading.Event) -> 
 
 
 def tick(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
-    """One poll cycle: reconcile → compute slots → dispatch.
+    """One poll cycle: reconcile → (if not paused) compute slots → dispatch.
+
+    Reconciliation runs even while paused — stall detection is safety, not new
+    work. Auto-dispatch is gated on the paused flag.
 
     Public so tests can drive it deterministically without spinning the loop.
     """
     _reconcile(get_db)
+    if is_paused():
+        return
     _dispatch_eligible(get_db, settings)
 
 

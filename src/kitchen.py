@@ -34,7 +34,7 @@ from typing import Any, Callable, Optional
 
 from actions import ActorContext, emit_event, utcnow_iso
 from db import REGISTRY_PATH
-from runners import AgentRunner, RunOutcome, Runner
+from runners import AgentRunner, RunOutcome, Runner, ScenarioRunner
 from workspaces import WorkspaceInfo, create_or_reuse, run_hook, workspace_path_for
 from workflow_config import load_workflow_config, load_prompt_template
 
@@ -69,7 +69,19 @@ _active_runs: dict[int, _ActiveRun] = {}
 _active_runs_lock = threading.Lock()
 
 # Runner registry — maps runner_kind to Runner instance. Tests can swap.
-_RUNNERS: dict[str, Runner] = {"agent": AgentRunner()}
+_RUNNERS: dict[str, Runner] = {"agent": AgentRunner(), "scenario": ScenarioRunner()}
+
+
+def _runner_kind_for(subject_type: str) -> str:
+    """Map subject_type to the runner_kind that handles it.
+
+    M4 convention: tickets → agent (claude/codex), journeys → scenario (Playwright),
+    investigations → agent (deferred). The orchestrator stamps this on the
+    runs row at claim time.
+    """
+    if subject_type == "journey":
+        return "scenario"
+    return "agent"
 
 # Test seam: lets tests inject project paths without touching the real registry.
 _PROJECT_PATH_RESOLVER: Optional[Callable[[str], Optional[Path]]] = None
@@ -344,6 +356,7 @@ def _try_claim_and_dispatch(
     # Insert the queued row inside a BEGIN IMMEDIATE tx so a concurrent tick
     # would block; the partial unique index makes the race safe regardless.
     claim_owner = _INSTANCE_OWNER
+    runner_kind = _runner_kind_for(subject_type)
     conn = get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -352,13 +365,13 @@ def _try_claim_and_dispatch(
                 "INSERT INTO runs "
                 "(project_id, subject_type, subject_id, runner_kind, status, "
                 " claimed_at, claim_owner, heartbeat_at, started_at, triggered_by) "
-                "VALUES (?, ?, ?, 'agent', 'queued', ?, ?, ?, ?, 'scheduled')",
-                (project_id, subject_type, subject_id,
+                "VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, 'scheduled')",
+                (project_id, subject_type, subject_id, runner_kind,
                  utcnow_iso(), claim_owner, utcnow_iso(), utcnow_iso()),
             )
             run_id = cur.lastrowid
             emit_event(conn, project_id, subject_type, subject_id, "run_started",
-                       {"run_id": run_id, "runner_kind": "agent",
+                       {"run_id": run_id, "runner_kind": runner_kind,
                         "triggered_by": "scheduled"},
                        ActorContext.system())
             conn.commit()
@@ -390,9 +403,9 @@ def _try_claim_and_dispatch(
         return False
 
     # Spawn the runner thread.
-    runner = _RUNNERS.get("agent")
+    runner = _RUNNERS.get(runner_kind)
     if runner is None:
-        logger.error("no agent runner registered")
+        logger.error("no runner registered for kind %r", runner_kind)
         return False
 
     cancel = threading.Event()
@@ -506,6 +519,7 @@ def trigger_run(
     base_ref = (config.get("agent", {}) or {}).get("base_ref", "origin/main")
 
     # Claim atomically.
+    runner_kind = _runner_kind_for(subject_type)
     conn = get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -514,13 +528,13 @@ def trigger_run(
                 "INSERT INTO runs "
                 "(project_id, subject_type, subject_id, runner_kind, status, "
                 " claimed_at, claim_owner, heartbeat_at, started_at, triggered_by) "
-                "VALUES (?, ?, ?, 'agent', 'queued', ?, ?, ?, ?, ?)",
-                (project_id, subject_type, subject_id,
+                "VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+                (project_id, subject_type, subject_id, runner_kind,
                  utcnow_iso(), _INSTANCE_OWNER, utcnow_iso(), utcnow_iso(), triggered_by),
             )
             run_id = cur.lastrowid
             emit_event(conn, project_id, subject_type, subject_id, "run_started",
-                       {"run_id": run_id, "runner_kind": "agent",
+                       {"run_id": run_id, "runner_kind": runner_kind,
                         "triggered_by": triggered_by},
                        ActorContext.human() if triggered_by == "human" else ActorContext.system())
             conn.commit()
@@ -548,7 +562,7 @@ def trigger_run(
             c.close()
         return run_id  # Failed but row exists — return id so caller can show it.
 
-    runner = _RUNNERS.get("agent")
+    runner = _RUNNERS.get(runner_kind)
     if runner is None:
         return run_id
 

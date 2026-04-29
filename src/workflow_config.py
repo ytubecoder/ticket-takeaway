@@ -43,6 +43,11 @@ DEFAULTS: dict = {
         "after_run": "",
         "before_remove": "",
     },
+    # M4: ScenarioRunner reads base_url. Project_id is substituted by the
+    # runner — '{project_id}' in the URL is a literal placeholder.
+    "scenario": {
+        "base_url": "http://localhost:8787/{project_id}",
+    },
 }
 
 

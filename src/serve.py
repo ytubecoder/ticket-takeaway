@@ -58,13 +58,31 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
                        WORKFLOW_AGENT_TIMEOUT, WORKFLOW_RUN_STATUSES)
 from db import get_db, init_db
-from actions import (move_ticket as _actions_move_ticket, accept_ticket as _actions_accept_ticket,
-                     add_ticket as _actions_add_ticket, update_ticket as _actions_update_ticket,
-                     capture_commit_hash, auto_generate_id, execute_scheduled_event,
-                     link_branch as _actions_link_branch, unlink_branch as _actions_unlink_branch,
-                     get_ticket_branches as _actions_get_ticket_branches,
-                     get_project_branches as _actions_get_project_branches,
-                     scan_branches as _actions_scan_branches, scan_prs as _actions_scan_prs)
+from actions import (
+    move_ticket as _actions_move_ticket,
+    accept_ticket as _actions_accept_ticket,
+    add_ticket as _actions_add_ticket,
+    update_ticket as _actions_update_ticket,
+    capture_commit_hash,
+    auto_generate_id,
+    execute_scheduled_event,
+    emit_event as _kitchen_emit_event,
+    # Branch / PR (main)
+    link_branch as _actions_link_branch,
+    unlink_branch as _actions_unlink_branch,
+    get_ticket_branches as _actions_get_ticket_branches,
+    get_project_branches as _actions_get_project_branches,
+    scan_branches as _actions_scan_branches,
+    scan_prs as _actions_scan_prs,
+    # Kitchen (M1a)
+    ActorContext,
+    eligibility as _kitchen_eligibility,
+    set_automation_mode as _kitchen_set_mode,
+    set_no_test_required as _kitchen_set_ntr,
+)
+import kitchen as _kitchen
+from workspaces import wipe_for_retry_fresh as _kitchen_wipe_fresh
+import evidence as _kitchen_evidence
 from scenarios import discover_scenarios
 from journeys import (
     add_journey, update_journey, delete_journey, list_journeys, get_journey,
@@ -330,12 +348,18 @@ def _add_attachment(project_id, ticket_id, attachment_type, name, path="", summa
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (tid, project_id, attachment_type, name, path, summary, metadata),
             )
-            conn.commit()
             att = conn.execute(
                 "SELECT * FROM ticket_attachments "
                 "WHERE ticket_id = ? AND project_id = ? AND name = ? AND attachment_type = ?",
                 (tid, project_id, name, attachment_type),
             ).fetchone()
+            # M1b: attachment_added event in same tx as INSERT
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "attachment_added",
+                  {"attachment_id": att["id"] if att else None,
+                   "kind": attachment_type, "label": name},
+                  _AC.human())
+            conn.commit()
             conn.close()
             return dict(att) if att else None
         except sqlite3.IntegrityError:
@@ -347,10 +371,22 @@ def _delete_attachment(project_id, ticket_id, attachment_id):
     with _db_lock:
         conn = get_db()
         init_db(conn)
+        # Snapshot for the audit event before we delete.
+        att = conn.execute(
+            "SELECT ticket_id, attachment_type, name FROM ticket_attachments "
+            "WHERE id = ? AND project_id = ?",
+            (attachment_id, project_id),
+        ).fetchone()
         cur = conn.execute(
             "DELETE FROM ticket_attachments WHERE id = ? AND project_id = ?",
             (attachment_id, project_id),
         )
+        if cur.rowcount > 0 and att:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", att["ticket_id"], "attachment_removed",
+                  {"attachment_id": attachment_id,
+                   "kind": att["attachment_type"], "label": att["name"]},
+                  _AC.human())
         conn.commit()
         conn.close()
     return cur.rowcount > 0
@@ -390,9 +426,9 @@ def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
         init_db(conn)
         cli.ingest_markdown(conn, proj)
 
-        # Verify ticket exists
+        # Capture the before-value so the audit event is invertable.
         row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            f"SELECT id, {field} FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
             (ticket_id, project_id)
         ).fetchone()
         if not row:
@@ -400,10 +436,25 @@ def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
             return False
 
         tid = row["id"]
+        before_val = row[field]
+        if before_val == value:
+            # No-op write — skip the SQL and the event so we don't pollute history.
+            conn.close()
+            return True
+
         conn.execute(
             f"UPDATE tickets SET {field} = ?, updated_at = ? WHERE id = ? AND project_id = ?",
             (value, datetime.now().isoformat(), tid, project_id)
         )
+        # M1b: emit_event in same tx. status changes stay on the M1a status_change
+        # event; everything else is field_changed.
+        from actions import emit_event as _emit, ActorContext as _AC
+        if field == "status":
+            _emit(conn, project_id, "ticket", tid, "status_change",
+                  {"before": before_val, "after": value}, _AC.human())
+        else:
+            _emit(conn, project_id, "ticket", tid, "field_changed",
+                  {"field": field, "before": before_val, "after": value}, _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -505,16 +556,23 @@ def _update_criterion_text(proj: dict, ticket_id: str, criterion_index: int, new
 
         tid = row["id"]
         criterion = conn.execute(
-            "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
+            "SELECT id, text FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
             (tid, project_id, criterion_index)
         ).fetchone()
         if not criterion:
             conn.close()
             return False
 
+        before_text = criterion["text"]
         conn.execute("UPDATE acceptance_criteria SET text = ? WHERE id = ?", (new_text, criterion["id"]))
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: criteria_changed event with {before, after}
+        if before_text != new_text:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "criteria_changed",
+                  {"criterion_id": criterion["id"], "before": before_text, "after": new_text},
+                  _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -540,14 +598,16 @@ def _remove_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
 
         tid = row["id"]
         criterion = conn.execute(
-            "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
+            "SELECT id, text FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC LIMIT 1 OFFSET ?",
             (tid, project_id, criterion_index)
         ).fetchone()
         if not criterion:
             conn.close()
             return False
 
-        conn.execute("DELETE FROM acceptance_criteria WHERE id = ?", (criterion["id"],))
+        removed_id = criterion["id"]
+        removed_text = criterion["text"]
+        conn.execute("DELETE FROM acceptance_criteria WHERE id = ?", (removed_id,))
         # Re-number sort_order
         remaining = conn.execute(
             "SELECT id FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
@@ -558,6 +618,11 @@ def _remove_criterion(proj: dict, ticket_id: str, criterion_index: int) -> bool:
 
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: criteria_removed event carries the removed text for restoration.
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "criteria_removed",
+              {"criterion_id": removed_id, "text": removed_text},
+              _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -587,12 +652,18 @@ def _add_criterion(proj: dict, ticket_id: str, text: str) -> bool:
             (tid, project_id)
         ).fetchone()["next_order"]
 
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,0,?)",
             (tid, project_id, text, max_order)
         )
+        new_crit_id = cur.lastrowid
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: criteria_added event
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "criteria_added",
+              {"criterion_id": new_crit_id, "text": text},
+              _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -617,7 +688,12 @@ def _update_depends(proj: dict, ticket_id: str, depends_list: list) -> bool:
             return False
 
         tid = row["id"]
+        before = [r[0] for r in conn.execute(
+            "SELECT depends_on_id FROM depends WHERE ticket_id = ? AND project_id = ? ORDER BY depends_on_id",
+            (tid, project_id),
+        ).fetchall()]
         conn.execute("DELETE FROM depends WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
+        cleaned: list[str] = []
         for dep_id in depends_list:
             dep_id = dep_id.strip()
             if dep_id:
@@ -625,8 +701,16 @@ def _update_depends(proj: dict, ticket_id: str, depends_list: list) -> bool:
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
                     (tid, project_id, dep_id)
                 )
+                cleaned.append(dep_id)
+        after = sorted(set(cleaned))
         conn.execute("UPDATE tickets SET updated_at = ? WHERE id = ? AND project_id = ?",
                      (datetime.now().isoformat(), tid, project_id))
+        # M1b: dependency_changed event with sorted-list before/after for clean diffs.
+        if sorted(before) != after:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "dependency_changed",
+                  {"before": before, "after": after},
+                  _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -662,6 +746,11 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
             draft=draft,
             tags=tags or None,
         )
+        # M1b: ticket_created event
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", ticket_id, "ticket_created",
+              {"id": ticket_id, "title": title, "section": section},
+              _AC.human())
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
@@ -679,8 +768,10 @@ def _delete_ticket(proj: dict, ticket_id: str) -> bool:
         init_db(conn)
         cli.ingest_markdown(conn, proj)
 
+        # Snapshot the row so the ticket_deleted event carries enough state
+        # for a future "undelete" / restore path.
         row = conn.execute(
-            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
             (ticket_id, project_id)
         ).fetchone()
         if not row:
@@ -688,9 +779,17 @@ def _delete_ticket(proj: dict, ticket_id: str) -> bool:
             return False
 
         tid = row["id"]
+        snapshot = {k: row[k] for k in row.keys()}
         conn.execute("DELETE FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
         conn.execute("DELETE FROM depends WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
         conn.execute("DELETE FROM tickets WHERE id = ? AND project_id = ?", (tid, project_id))
+        # M1b: ticket_deleted event with snapshot. Activity row references a
+        # subject that no longer exists in tickets — by design, the audit log
+        # outlives the row.
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "ticket_deleted",
+              {"snapshot": snapshot},
+              _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -1914,21 +2013,29 @@ def _toggle_readiness(proj: dict, ticket_id: str, flag: str) -> bool:
 
         tid = row["id"]
         existing = conn.execute(
-            "SELECT flag FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+            "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
             (tid, project_id, flag)
         ).fetchone()
 
         if existing:
+            before = {"present": True, "content": existing["content"] or ""}
             conn.execute(
                 "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
                 (tid, project_id, flag)
             )
+            after = {"present": False, "content": ""}
         else:
+            before = {"present": False, "content": ""}
             conn.execute(
                 "INSERT INTO readiness_flags (ticket_id, project_id, flag, set_by) VALUES (?, ?, ?, 'dashboard')",
                 (tid, project_id, flag)
             )
+            after = {"present": True, "content": ""}
 
+        # M1b: readiness_changed event with before/after presence + content
+        from actions import emit_event as _emit, ActorContext as _AC
+        _emit(conn, project_id, "ticket", tid, "readiness_changed",
+              {"flag": flag, "before": before, "after": after}, _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -1957,6 +2064,14 @@ def _update_readiness_content(proj: dict, ticket_id: str, flag: str, content: st
         tid = row["id"]
         content = content.strip()
 
+        # Capture before
+        existing = conn.execute(
+            "SELECT content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+            (tid, project_id, flag)
+        ).fetchone()
+        before = {"present": existing is not None,
+                  "content": (existing["content"] if existing else "") or ""}
+
         if content:
             conn.execute("""
                 INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
@@ -1964,12 +2079,19 @@ def _update_readiness_content(proj: dict, ticket_id: str, flag: str, content: st
                 ON CONFLICT (ticket_id, project_id, flag)
                 DO UPDATE SET content = excluded.content
             """, (tid, project_id, flag, content))
+            after = {"present": True, "content": content}
         else:
             conn.execute(
                 "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
                 (tid, project_id, flag)
             )
+            after = {"present": False, "content": ""}
 
+        # M1b: readiness_changed event (no-op writes are also skipped from emit).
+        if before != after:
+            from actions import emit_event as _emit, ActorContext as _AC
+            _emit(conn, project_id, "ticket", tid, "readiness_changed",
+                  {"flag": flag, "before": before, "after": after}, _AC.human())
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
@@ -2021,6 +2143,44 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         attachment_count = att_count_row["cnt"] if att_count_row else 0
     except Exception:
         attachment_count = 0
+
+    # Kitchen state (M1a) — automation intent + computed eligibility + latest run.
+    # Errors here are non-fatal: pre-migration DBs or transient failures fall
+    # back to default 'manual' / no run / not eligible.
+    automation_mode = "manual"
+    hold_reason = None
+    no_test_required = False
+    no_test_required_note = ""
+    latest_run_status = None
+    try:
+        am_row = conn.execute(
+            "SELECT automation_mode, hold_reason FROM automation_subjects "
+            "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
+            (project_id, row["id"]),
+        ).fetchone()
+        if am_row:
+            automation_mode = am_row["automation_mode"]
+            hold_reason = am_row["hold_reason"]
+        if "no_test_required" in row.keys():
+            no_test_required = bool(row["no_test_required"])
+            no_test_required_note = row["no_test_required_note"] or ""
+        latest = conn.execute(
+            "SELECT status FROM runs WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (project_id, row["id"]),
+        ).fetchone()
+        if latest:
+            latest_run_status = latest["status"]
+    except Exception:
+        pass
+
+    try:
+        elig = _kitchen_eligibility(conn, project_id, "ticket", row["id"])
+        eligible = elig.eligible
+        eligibility_reasons = list(elig.reasons)
+    except Exception:
+        eligible = False
+        eligibility_reasons = ["eligibility check failed"]
 
     # Tags
     try:
@@ -2078,6 +2238,14 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "depends": [d["depends_on_id"] for d in deps],
         "readiness_flags": readiness_flags,
         "attachment_count": attachment_count,
+        # Kitchen state (M1a)
+        "automation_mode": automation_mode,
+        "hold_reason": hold_reason,
+        "no_test_required": no_test_required,
+        "no_test_required_note": no_test_required_note,
+        "latest_run_status": latest_run_status,
+        "automation_eligible": eligible,
+        "automation_eligibility_reasons": eligibility_reasons,
         "tags": tags,
         "branches": branches,
     }
@@ -3158,6 +3326,325 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 </html>'''
 
 
+def _aggregate_kitchen_state() -> dict:
+    """Aggregate Kitchen state across all registered projects.
+
+    Returns the shape consumed by /api/kitchen and _render_kitchen_view:
+
+      {
+        "buckets": {
+          "needs_me": [...], "running": [...], "ready_to_delegate": [...],
+          "held": [...], "failed": [...],
+        },
+        "projects": [{id, name, counts: {wip, review, blocked, running, needs_me}}, ...],
+      }
+
+    Each item is {project_id, project_name, ticket_id, title, section, status,
+                  automation_mode, latest_run_status, hold_reason, eligibility_reasons?}.
+    Subjects appear in at most one bucket, with priority needs_me > running >
+    ready_to_delegate > held > failed.
+    """
+    from actions import eligibility as _elig
+
+    with _PROJECTS_CACHE_LOCK:
+        # Skip projects with watched=false. Default (missing key) is true so
+        # the aggregator includes everything by default.
+        projects = [p for p in _PROJECTS_CACHE.values() if p.get("watched", True)]
+
+    buckets = {k: [] for k in ("needs_me", "running", "ready_to_delegate", "held", "failed")}
+    project_summaries = []
+
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+
+        for proj in projects:
+            pid = proj["id"]
+            pname = proj.get("name", pid)
+            counts = {"wip": 0, "review": 0, "blocked": 0, "running": 0, "needs_me": 0}
+
+            tickets = conn.execute(
+                "SELECT id, title, section, status FROM tickets "
+                "WHERE project_id = ? AND archived = 0 AND draft = 0",
+                (pid,),
+            ).fetchall()
+
+            for t in tickets:
+                tid = t["id"]
+                if t["section"] == "WIP":
+                    counts["wip"] += 1
+                elif t["section"] == "For Review":
+                    counts["review"] += 1
+                if t["status"] == "blocked":
+                    counts["blocked"] += 1
+
+                am_row = conn.execute(
+                    "SELECT automation_mode, hold_reason FROM automation_subjects "
+                    "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
+                    (pid, tid),
+                ).fetchone()
+                mode = am_row["automation_mode"] if am_row else "manual"
+                hold_reason = am_row["hold_reason"] if am_row else None
+
+                latest = conn.execute(
+                    "SELECT status FROM runs WHERE project_id = ? AND subject_type='ticket' AND subject_id=? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (pid, tid),
+                ).fetchone()
+                run_status = latest["status"] if latest else None
+
+                if run_status in ("preparing", "running"):
+                    counts["running"] += 1
+                if run_status == "needs_input":
+                    counts["needs_me"] += 1
+
+                base_item = {
+                    "project_id": pid, "project_name": pname,
+                    "ticket_id": tid, "title": t["title"],
+                    "section": t["section"], "status": t["status"],
+                    "automation_mode": mode, "latest_run_status": run_status,
+                    "hold_reason": hold_reason,
+                }
+
+                # Bucket assignment with single-priority placement.
+                if run_status == "needs_input":
+                    buckets["needs_me"].append(base_item)
+                elif run_status in ("preparing", "running"):
+                    buckets["running"].append(base_item)
+                elif run_status in ("failed", "stalled"):
+                    buckets["failed"].append(base_item)
+                elif mode == "held":
+                    buckets["held"].append(base_item)
+                elif mode == "auto":
+                    # Eligibility check — only show in Ready To Delegate when
+                    # there's no active run AND DCSTL gates pass.
+                    try:
+                        er = _elig(conn, pid, "ticket", tid)
+                        if er.eligible:
+                            buckets["ready_to_delegate"].append(base_item)
+                    except Exception:
+                        pass
+
+            project_summaries.append({
+                "id": pid, "name": pname,
+                "path": proj.get("path", ""),
+                "counts": counts,
+            })
+
+        conn.close()
+
+    # Sort each bucket: most-recent activity first by ticket id desc
+    # (proxy for recency without joining timestamps; cheap, deterministic).
+    for k in buckets:
+        buckets[k].sort(key=lambda x: (x["project_id"], x["ticket_id"]))
+
+    return {"buckets": buckets, "projects": project_summaries}
+
+
+def _render_kitchen_view(port: int) -> str:
+    """Render the Kitchen landing page — cross-project work surface."""
+    state = _aggregate_kitchen_state()
+    paused = _kitchen.is_paused()
+    ready_count = len(state["buckets"]["ready_to_delegate"])
+    if paused:
+        pause_banner_class = "is-paused"
+        pause_pill_label = "Simulation"
+        if ready_count:
+            pause_msg = (
+                f"Auto-dispatch is OFF. {ready_count} ticket"
+                f"{'s' if ready_count != 1 else ''} would start running on Resume — "
+                "review them under Ready To Delegate first."
+            )
+        else:
+            pause_msg = "Auto-dispatch is OFF. Nothing will run automatically until you press Resume."
+        pause_btn_label = "Resume — let agents run"
+    else:
+        pause_banner_class = "is-running"
+        pause_pill_label = "Live"
+        pause_msg = "Auto-dispatch is ON. Eligible tickets are picked up by the polling tick."
+        pause_btn_label = "Pause auto-dispatch"
+
+    bucket_titles = [
+        ("needs_me",          "Needs Me",          "Paused for human input or eligible-but-failed."),
+        ("running",           "Running",           "Active runs — agents currently cooking."),
+        ("ready_to_delegate", "Ready To Delegate",
+         "Auto + all gates clear — would dispatch on next tick (simulated while paused)."),
+        ("held",              "Held",              "Paused intentionally, with a reason."),
+        ("failed",            "Failed",            "Last run failed or stalled — needs attention."),
+    ]
+
+    def _items_html(items: list) -> str:
+        if not items:
+            return '<div class="kv-empty">Nothing here.</div>'
+        rows = []
+        for it in items:
+            ticket_url = f"/{it['project_id']}/?ticket={it['ticket_id']}"
+            mode_html = f'<span class="kv-mode kv-mode-{it["automation_mode"]}">{it["automation_mode"]}</span>'
+            run_html = (
+                f'<span class="kv-run kv-run-{it["latest_run_status"]}">{it["latest_run_status"]}</span>'
+                if it["latest_run_status"] else ""
+            )
+            hold_html = (
+                f'<span class="kv-hold-reason" title="{_html.escape(it["hold_reason"] or "")}">— {_html.escape(it["hold_reason"] or "")}</span>'
+                if it["hold_reason"] else ""
+            )
+            rows.append(
+                f'<a class="kv-row" href="{ticket_url}">'
+                f'<span class="kv-tid">{_html.escape(it["ticket_id"])}</span>'
+                f'<span class="kv-title">{_html.escape(it["title"])}</span>'
+                f'<span class="kv-proj">{_html.escape(it["project_name"])}</span>'
+                f'{mode_html}{run_html}{hold_html}'
+                f'</a>'
+            )
+        return "".join(rows)
+
+    sections_html = ""
+    for key, title, desc in bucket_titles:
+        items = state["buckets"][key]
+        sections_html += (
+            f'<section class="kv-bucket" data-bucket="{key}">'
+            f'  <header class="kv-bucket-header">'
+            f'    <h2>{_html.escape(title)} <span class="kv-count">{len(items)}</span></h2>'
+            f'    <span class="kv-bucket-desc">{_html.escape(desc)}</span>'
+            f'  </header>'
+            f'  <div class="kv-bucket-list">{_items_html(items)}</div>'
+            f'</section>'
+        )
+
+    project_rows = []
+    for p in state["projects"]:
+        c = p["counts"]
+        project_rows.append(
+            f'<a class="kv-project-row" href="/{p["id"]}/">'
+            f'  <span class="kv-project-name">{_html.escape(p["name"])}</span>'
+            f'  <span class="kv-project-stat">WIP <strong>{c["wip"]}</strong></span>'
+            f'  <span class="kv-project-stat">Review <strong>{c["review"]}</strong></span>'
+            f'  <span class="kv-project-stat">Blocked <strong>{c["blocked"]}</strong></span>'
+            f'  <span class="kv-project-stat">Running <strong>{c["running"]}</strong></span>'
+            f'  <span class="kv-project-stat">Needs Me <strong>{c["needs_me"]}</strong></span>'
+            f'</a>'
+        )
+    projects_html = "".join(project_rows) or '<div class="kv-empty">No projects registered. Add one from <a href="/projects">the project picker</a>.</div>'
+
+    return f"""<!doctype html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen — Ticket Takeaway</title>
+<script>
+(function () {{
+  var t = localStorage.getItem('tt-theme') || 'system';
+  var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+}})();
+</script>
+<style>
+:root[data-theme="dark"] {{
+  --bg: #0a0a0d; --surface: #16161a; --border: #2a2a32;
+  --text: #e8e8ec; --text-2: #9b9ba6; --text-3: #6e6e7a;
+  --accent: #6b9eff;
+}}
+:root[data-theme="light"] {{
+  --bg: #f8f8fb; --surface: #ffffff; --border: #e5e5ec;
+  --text: #1a1a22; --text-2: #5f5f6e; --text-3: #8b8b96;
+  --accent: #3b82f6;
+}}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; }}
+.kv-page {{ max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }}
+.kv-header {{ display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }}
+.kv-header h1 {{ margin: 0; font-size: 22px; font-weight: 700; }}
+.kv-header-sub {{ color: var(--text-3); font-size: 13px; }}
+.kv-header-nav {{ margin-left: auto; display: flex; gap: 12px; }}
+.kv-header-nav a {{ color: var(--text-2); text-decoration: none; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid transparent; }}
+.kv-header-nav a:hover {{ color: var(--text); border-color: var(--border); }}
+.kv-bucket {{ margin-bottom: 22px; }}
+.kv-bucket-header {{ display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }}
+.kv-bucket-header h2 {{ margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); font-weight: 700; }}
+.kv-bucket-header .kv-count {{ font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--surface); color: var(--text-3); border: 1px solid var(--border); }}
+.kv-bucket-desc {{ color: var(--text-3); font-size: 12px; }}
+.kv-bucket-list {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}
+.kv-empty {{ padding: 14px 16px; color: var(--text-3); font-size: 12px; font-style: italic; }}
+.kv-row {{ display: grid; grid-template-columns: 70px 1fr 140px auto auto auto; gap: 10px; padding: 8px 14px; align-items: center; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; font-size: 13px; }}
+.kv-row:last-child {{ border-bottom: 0; }}
+.kv-row:hover {{ background: rgba(255,255,255,0.03); }}
+.kv-tid {{ font-family: ui-monospace, SF Mono, monospace; font-size: 11px; color: var(--accent); opacity: 0.75; }}
+.kv-title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.kv-proj {{ font-size: 11px; color: var(--text-3); }}
+.kv-mode, .kv-run {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; text-transform: uppercase; }}
+.kv-mode-auto {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
+.kv-mode-held {{ background: rgba(245,158,11,0.18); color: #f59e0b; }}
+.kv-mode-manual {{ display: none; }}
+.kv-run-running, .kv-run-preparing, .kv-run-queued {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
+.kv-run-needs_input {{ background: rgba(245,158,11,0.22); color: #f59e0b; }}
+.kv-run-failed, .kv-run-stalled {{ background: rgba(239,68,68,0.18); color: #ef4444; }}
+.kv-run-cancelled {{ background: rgba(107,114,128,0.18); color: #9ca3af; }}
+.kv-hold-reason {{ font-size: 11px; color: var(--text-3); font-style: italic; }}
+.kv-projects-section {{ margin-top: 32px; }}
+.kv-project-row {{ display: grid; grid-template-columns: 1fr repeat(5, 110px); gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; align-items: center; font-size: 13px; }}
+.kv-project-row:last-child {{ border-bottom: 0; }}
+.kv-project-row:hover {{ background: rgba(255,255,255,0.03); }}
+.kv-project-name {{ font-weight: 600; }}
+.kv-project-stat {{ font-size: 11px; color: var(--text-3); text-align: right; }}
+.kv-project-stat strong {{ color: var(--text); margin-left: 4px; font-variant-numeric: tabular-nums; }}
+
+/* Pause/resume control (M6) */
+.kv-pause-banner {{ display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid; }}
+.kv-pause-banner.is-paused {{ background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.40); color: var(--text); }}
+.kv-pause-banner.is-running {{ background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.32); color: var(--text); }}
+.kv-pause-pill {{ font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }}
+.kv-pause-banner.is-paused  .kv-pause-pill {{ background: #f59e0b; color: #1a1a22; }}
+.kv-pause-banner.is-running .kv-pause-pill {{ background: #22c55e; color: #1a1a22; }}
+.kv-pause-msg  {{ flex: 1; font-size: 13px; color: var(--text-2); }}
+.kv-pause-btn  {{ background: var(--accent); color: white; border: 0; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }}
+.kv-pause-btn:hover {{ filter: brightness(1.08); }}
+.kv-pause-btn.secondary {{ background: transparent; color: var(--text-2); border: 1px solid var(--border); }}
+.kv-pause-btn.secondary:hover {{ color: var(--text); border-color: var(--text-3); }}
+</style>
+</head>
+<body>
+<div class="kv-page">
+  <header class="kv-header">
+    <h1>Kitchen</h1>
+    <span class="kv-header-sub">Cross-project work surface — what needs me, what's running, what's ready.</span>
+    <nav class="kv-header-nav">
+      <a href="/projects">All Projects</a>
+    </nav>
+  </header>
+  <div class="kv-pause-banner {pause_banner_class}" id="kv-pause-banner" data-testid="kv-pause-banner">
+    <span class="kv-pause-pill">{pause_pill_label}</span>
+    <span class="kv-pause-msg">{pause_msg}</span>
+    <button class="kv-pause-btn" id="kv-pause-btn" data-testid="kv-pause-btn">{pause_btn_label}</button>
+  </div>
+  {sections_html}
+  <section class="kv-projects-section">
+    <header class="kv-bucket-header">
+      <h2>Projects</h2>
+      <span class="kv-bucket-desc">Per-project health snapshot.</span>
+    </header>
+    <div class="kv-bucket-list">{projects_html}</div>
+  </section>
+</div>
+<script>
+(function() {{
+  var btn = document.getElementById('kv-pause-btn');
+  if (!btn) return;
+  btn.addEventListener('click', function() {{
+    var paused = document.getElementById('kv-pause-banner').classList.contains('is-paused');
+    var url = '/api/kitchen/' + (paused ? 'resume' : 'pause');
+    btn.disabled = true;
+    fetch(url, {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: '{{}}' }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function() {{ window.location.reload(); }})
+      .catch(function() {{ btn.disabled = false; }});
+  }});
+}})();
+</script>
+</body>
+</html>"""
+
+
 def _render_project_picker(port: int) -> str:
     """Render the project picker page as self-contained HTML."""
     conn = get_db()
@@ -3532,10 +4019,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes (proj is None) ────────────────────────────
         if proj is None:
-            # Root: project picker page
+            # Root: Kitchen — cross-project work surface (M2)
             if remainder == "/" or remainder == "":
+                html = _render_kitchen_view(SERVER_PORT)
+                self._send_html(html)
+                return
+
+            # Project picker (relocated from / in M2)
+            if remainder == "/projects":
                 html = _render_project_picker(SERVER_PORT)
                 self._send_html(html)
+                return
+
+            # Kitchen JSON aggregation (M2)
+            if remainder == "/api/kitchen":
+                state = _aggregate_kitchen_state()
+                state["paused"] = _kitchen.is_paused()
+                self._send_json(state)
+                return
+
+            # Kitchen control surface (M6) — pause / resume / state.
+            if remainder == "/api/kitchen/state":
+                self._send_json({
+                    "paused": _kitchen.is_paused(),
+                    "active_runs": len(_kitchen.active_runs_snapshot()),
+                })
                 return
 
             # GET /api/projects — list all projects with ticket counts
@@ -3793,6 +4301,105 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             atts = _list_attachments(proj["id"], m.group(1))
             self._send_json(atts)
+            return
+
+        # Kitchen (M1b): activity history for a ticket. Newest first.
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/history$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                limit = int(parse_qs(urlparse(self.path).query).get("limit", ["100"])[0])
+            except (ValueError, TypeError):
+                limit = 100
+            limit = max(1, min(limit, 500))
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                # Resolve canonical id (case-insensitive lookup) to match how
+                # subject_id is written by emit_event.
+                row = conn.execute(
+                    "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, proj["id"]),
+                ).fetchone()
+                tid = row["id"] if row else ticket_id
+                rows = conn.execute(
+                    "SELECT id, actor_type, actor_id, event_kind, payload_json, "
+                    "       occurred_at, discarded_run_id "
+                    "FROM activity_events "
+                    "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+                    "ORDER BY id DESC LIMIT ?",
+                    (proj["id"], tid, limit),
+                ).fetchall()
+                conn.close()
+            events = []
+            for r in rows:
+                try:
+                    payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
+                except Exception:
+                    payload = {}
+                events.append({
+                    "id": r["id"],
+                    "actor_type": r["actor_type"],
+                    "actor_id": r["actor_id"],
+                    "event_kind": r["event_kind"],
+                    "payload": payload,
+                    "occurred_at": r["occurred_at"],
+                    "discarded_run_id": r["discarded_run_id"],
+                })
+            self._send_json({"events": events})
+            return
+
+        # Kitchen (M3): list runs for a ticket. Newest first. Powers the live run panel.
+        # Path: /api/runs?ticket={id}&limit={n}  (limit defaults 10, max 50)
+        if remainder.startswith("/api/runs?") or remainder == "/api/runs":
+            qs = parse_qs(urlparse(self.path).query)
+            ticket_id = (qs.get("ticket", [""])[0] or "").strip()
+            try:
+                limit = max(1, min(int(qs.get("limit", ["10"])[0]), 50))
+            except (ValueError, TypeError):
+                limit = 10
+            if not ticket_id:
+                self._send_json({"runs": []})
+                return
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                row = conn.execute(
+                    "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, proj["id"]),
+                ).fetchone()
+                tid = row["id"] if row else ticket_id
+                rows = conn.execute(
+                    "SELECT id, project_id, subject_type, subject_id, runner_kind, status, "
+                    "       workspace_path, started_at, finished_at, duration_ms, "
+                    "       error_class, error_message, summary, needs_input_prompt, "
+                    "       attempt, triggered_by "
+                    "FROM runs WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+                    "ORDER BY id DESC LIMIT ?",
+                    (proj["id"], tid, limit),
+                ).fetchall()
+                conn.close()
+            self._send_json({"runs": [dict(r) for r in rows]})
+            return
+
+        # Kitchen (M3): single run detail.
+        m = re.match(r"^/api/runs/(\d+)$", remainder)
+        if m:
+            run_id = int(m.group(1))
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                r = conn.execute(
+                    "SELECT id, project_id, subject_type, subject_id, runner_kind, status, "
+                    "       workspace_path, started_at, finished_at, duration_ms, "
+                    "       error_class, error_message, summary, needs_input_prompt, "
+                    "       attempt, triggered_by "
+                    "FROM runs WHERE id = ? AND project_id = ?",
+                    (run_id, proj["id"]),
+                ).fetchone()
+                conn.close()
+            if not r:
+                self._send_json({"error": "run not found"}, 404)
+                return
+            self._send_json(dict(r))
             return
 
         # Workflow Bounce GET routes
@@ -4062,7 +4669,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 updated_entry = None
                 for entry in registry["projects"]:
                     if entry["id"] == pid:
-                        for field in ("name", "path", "description", "active"):
+                        # M2-03: 'watched' is a Kitchen-aggregator filter flag.
+                        for field in ("name", "path", "description", "active", "watched"):
                             if field in body:
                                 entry[field] = body[field]
                         found = True
@@ -4221,32 +4829,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Empty body"}, 400)
             return
 
-        # Handle adding a new acceptance criterion (from gate-check panel)
+        # Handle adding a new acceptance criterion (from gate-check panel) —
+        # routed through _add_criterion so the criteria_added M1b event fires.
         if "add_criteria" in body:
             text = body["add_criteria"]
             if isinstance(text, str) and text.strip():
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    cli.ingest_markdown(conn, proj)
-                    row = conn.execute(
-                        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-                        (ticket_id, project_id)
-                    ).fetchone()
-                    if row:
-                        tid = row["id"]
-                        sort_row = conn.execute(
-                            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
-                            (tid, project_id)
-                        ).fetchone()
-                        conn.execute(
-                            "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?, ?, ?, 0, ?)",
-                            (tid, project_id, text.strip(), sort_row["next_order"])
-                        )
-                        conn.commit()
-                        cli.sync_to_markdown(conn, proj)
-                        cli.regenerate_dashboard(proj)
-                    conn.close()
+                _add_criterion(proj, ticket_id, text.strip())
                 t = _get_ticket_json(project_id, ticket_id)
                 self._send_json(t or {"ok": True})
                 return
@@ -4393,6 +4981,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes ───────────────────────────────────────────
         if proj is None:
+            # Kitchen pause/resume (M6) — global control surface.
+            if remainder in ("/api/kitchen/pause", "/api/kitchen/resume"):
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                reason = (body.get("reason") if isinstance(body, dict) else "") or ""
+                if remainder.endswith("/pause"):
+                    changed = _kitchen.pause(get_db, reason=reason)
+                else:
+                    changed = _kitchen.resume(get_db, reason=reason)
+                self._send_json({
+                    "paused": _kitchen.is_paused(),
+                    "changed": changed,
+                })
+                return
+
             if remainder == "/api/projects":
                 try:
                     body = self._read_body()
@@ -4464,6 +5069,339 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t or {"ok": True})
             else:
                 self._send_json({"error": "Failed to move ticket"}, 400)
+            return
+
+        # Kitchen (M1a): set automation mode (manual / auto / held)
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/automation$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            mode = body.get("mode", "")
+            hold_reason = body.get("hold_reason")
+            try:
+                with _db_lock:
+                    conn = get_db(); init_db(conn)
+                    _kitchen_set_mode(
+                        conn, proj["id"], "ticket", ticket_id, mode,
+                        ActorContext.human(), hold_reason=hold_reason,
+                    )
+                    conn.commit(); conn.close()
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+            t = _get_ticket_json(proj["id"], ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
+        # Kitchen (M1a): toggle no_test_required eligibility bypass
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/no-test-required$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            enabled = bool(body.get("enabled", False))
+            note = body.get("note", "")
+            try:
+                with _db_lock:
+                    conn = get_db(); init_db(conn)
+                    _kitchen_set_ntr(
+                        conn, proj["id"], ticket_id, enabled, note,
+                        ActorContext.human(),
+                    )
+                    conn.commit(); conn.close()
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+            t = _get_ticket_json(proj["id"], ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
+        # Kitchen (M3): manual "Run now" trigger.
+        # POST /api/tickets/{id}/run-now → spawns an agent run for this ticket.
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/run-now$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            # Resolve canonical id + check eligibility for a clean error path.
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                row = conn.execute(
+                    "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, proj["id"]),
+                ).fetchone()
+                if not row:
+                    conn.close()
+                    self._send_json({"error": "ticket not found"}, 404)
+                    return
+                tid = row["id"]
+                er = _kitchen_eligibility(conn, proj["id"], "ticket", tid)
+                conn.close()
+            if not er.eligible:
+                self._send_json(
+                    {"error": "ticket not eligible to run", "reasons": list(er.reasons)},
+                    422,
+                )
+                return
+            settings = {}  # WORKFLOW.toml read inside trigger_run
+            run_id = _kitchen.trigger_run(
+                lambda: get_db(), proj["id"], "ticket", tid, settings,
+                triggered_by="human",
+            )
+            if run_id is None:
+                # Could be no project path or active-run conflict.
+                self._send_json({"error": "could not start run (already active or project misconfigured)"}, 409)
+                return
+            # Return the new run row.
+            conn = get_db()
+            try:
+                r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            finally:
+                conn.close()
+            self._send_json(dict(r) if r else {"id": run_id})
+            return
+
+        # Kitchen (M3): per-run actions.
+        # POST /api/runs/{rid}/{action} where action in (stop|discard|retry|retry-fresh|respond)
+        m = re.match(r"^/api/runs/(\d+)/(stop|discard|retry|retry-fresh|respond)$", remainder)
+        if m:
+            run_id = int(m.group(1))
+            action = m.group(2)
+            try:
+                body = self._read_body() if action == "respond" else {}
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                run = conn.execute(
+                    "SELECT * FROM runs WHERE id = ? AND project_id = ?",
+                    (run_id, proj["id"]),
+                ).fetchone()
+                conn.close()
+            if not run:
+                self._send_json({"error": "run not found"}, 404)
+                return
+
+            if action == "stop":
+                ok = _kitchen.request_cancel(run_id)
+                # Also flip the row defensively if the runner thread isn't ours.
+                if not ok:
+                    with _db_lock:
+                        conn = get_db()
+                        conn.execute(
+                            "UPDATE runs SET status='cancelled', finished_at=?, "
+                            "heartbeat_at=?, summary='cancelled by user' "
+                            "WHERE id = ? AND status IN ('queued','preparing','running','needs_input')",
+                            (datetime.now().isoformat(), datetime.now().isoformat(), run_id),
+                        )
+                        _kitchen_emit_event(
+                            conn, run["project_id"], run["subject_type"], run["subject_id"],
+                            "run_cancelled", {"run_id": run_id}, ActorContext.human(),
+                        )
+                        conn.commit(); conn.close()
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": run_id})
+                return
+
+            if action == "discard":
+                # Mark every event from this run as discarded; emit run_discarded.
+                with _db_lock:
+                    conn = get_db()
+                    cur = conn.execute(
+                        "UPDATE activity_events SET discarded_run_id = ? "
+                        "WHERE actor_type = 'agent' AND actor_id = ?",
+                        (run_id, str(run_id)),
+                    )
+                    reverted = cur.rowcount
+                    _kitchen_emit_event(
+                        conn, run["project_id"], run["subject_type"], run["subject_id"],
+                        "run_discarded",
+                        {"run_id": run_id, "reason": "user-initiated discard",
+                         "reverted_event_count": reverted},
+                        ActorContext.human(),
+                    )
+                    conn.commit(); conn.close()
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": run_id})
+                return
+
+            if action in ("retry", "retry-fresh"):
+                # Spawn a fresh run on the same subject. retry-fresh wipes the
+                # worktree first so after_create runs again.
+                if action == "retry-fresh":
+                    project_path = _kitchen._resolve_project_path(run["project_id"])
+                    if project_path is not None:
+                        _kitchen_wipe_fresh(
+                            project_path, run["project_id"],
+                            run["subject_type"], run["subject_id"],
+                        )
+                new_rid = _kitchen.trigger_run(
+                    lambda: get_db(), run["project_id"],
+                    run["subject_type"], run["subject_id"], {},
+                    triggered_by="retry",
+                )
+                if new_rid is None:
+                    self._send_json({"error": "could not start retry (active run exists?)"}, 409)
+                    return
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (new_rid,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": new_rid})
+                return
+
+            if action == "respond":
+                response_text = (body.get("response") or "").strip()
+                if not response_text:
+                    self._send_json({"error": "response is required"}, 400)
+                    return
+                # Flip status back to running + emit input_provided.
+                with _db_lock:
+                    conn = get_db()
+                    conn.execute(
+                        "UPDATE runs SET status = 'running', heartbeat_at = ?, "
+                        "needs_input_prompt = NULL WHERE id = ? AND status = 'needs_input'",
+                        (datetime.now().isoformat(), run_id),
+                    )
+                    _kitchen_emit_event(
+                        conn, run["project_id"], run["subject_type"], run["subject_id"],
+                        "input_provided",
+                        {"run_id": run_id, "response_excerpt": response_text[:500]},
+                        ActorContext.human(),
+                    )
+                    conn.commit(); conn.close()
+                # NOTE: M3 doesn't yet wire the response back into the agent
+                # subprocess — that requires a richer agent integration. For
+                # now the human-side flip happens; the agent itself doesn't see it
+                # until M3+ adds an agent-side input channel.
+                with _db_lock:
+                    conn = get_db()
+                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                    conn.close()
+                self._send_json(dict(r) if r else {"id": run_id})
+                return
+
+        # Kitchen (M4): file a gap ticket from a red scenario run.
+        # POST /api/runs/{rid}/file-gap-ticket — closes the loop between a failed
+        # journey scenario and the implementation work it implies.
+        m = re.match(r"^/api/runs/(\d+)/file-gap-ticket$", remainder)
+        if m:
+            run_id = int(m.group(1))
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                run = conn.execute(
+                    "SELECT * FROM runs WHERE id = ? AND project_id = ?",
+                    (run_id, proj["id"]),
+                ).fetchone()
+                conn.close()
+            if not run:
+                self._send_json({"error": "run not found"}, 404)
+                return
+            if run["subject_type"] != "journey":
+                self._send_json({"error": "gap tickets only file from scenario (journey) runs"}, 400)
+                return
+            if run["status"] not in ("failed", "stalled"):
+                self._send_json({"error": "gap tickets only file from failed runs"}, 400)
+                return
+            try:
+                meta = json.loads(run["metadata_json"] or "{}")
+            except (ValueError, TypeError):
+                meta = {}
+            gap = meta.get("gap_report") or {}
+            if not gap:
+                self._send_json({"error": "no gap_report on this run"}, 400)
+                return
+
+            gap_kind = gap.get("gap_kind", "missing_feature")
+            failed_action = gap.get("failed_step_action") or ""
+            failed_target = gap.get("failed_step_target") or {}
+            target_repr = ""
+            if isinstance(failed_target, dict):
+                # Pick the most useful key for the ticket title.
+                for k in ("testid", "css", "role", "text", "title"):
+                    if k in failed_target:
+                        target_repr = f"{k}={failed_target[k]!r}"
+                        break
+
+            # Title + description prefilled from the gap.
+            journey_id = run["subject_id"]
+            title = f"[gap:{gap_kind}] {failed_action} step in journey {journey_id}".strip()
+            desc_lines = [
+                f"_Auto-filed from red scenario run #{run_id} (journey `{journey_id}`)._",
+                "",
+                f"**Gap kind:** `{gap_kind}`",
+            ]
+            if failed_action:
+                desc_lines.append(f"**Failed action:** `{failed_action}`")
+            if target_repr:
+                desc_lines.append(f"**Target:** `{target_repr}`")
+            err = (gap.get("error_message") or run["error_message"] or "").strip()
+            if err:
+                desc_lines.append("")
+                desc_lines.append("**Error:**")
+                desc_lines.append("```")
+                desc_lines.append(err[:1000])
+                desc_lines.append("```")
+            screenshot = gap.get("screenshot_path")
+            if screenshot:
+                desc_lines.append("")
+                desc_lines.append(f"**Screenshot:** `{screenshot}`")
+            description = "\n".join(desc_lines)
+
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                # Create the draft ticket. Prefilled criterion mirrors the gap
+                # so the human triaging it has something to react to.
+                tid = _actions_add_ticket(
+                    conn, proj["id"], title,
+                    section="Ideas", priority="medium", complexity="M",
+                    description=description, draft=True,
+                )
+                # Pre-populate one acceptance criterion so the ticket reads as
+                # actionable rather than empty.
+                criterion = {
+                    "missing_selector":     f"Element selectable by {target_repr or 'the failed target'} exists and is visible",
+                    "missing_screen":       f"Route reached by {failed_action or 'the failed open step'} renders successfully",
+                    "missing_feature":      f"User can complete the {failed_action or 'failed'} step end-to-end",
+                    "ambiguous_goal":       f"Journey {journey_id} re-spec'd with concrete acceptance steps",
+                    "external_dependency":  f"External dependency identified by run #{run_id} resolved or mocked",
+                    "test_harness_gap":     f"Scenario harness can drive journey {journey_id} without engine-level error",
+                }.get(gap_kind, f"Resolve gap from run #{run_id}")
+                conn.execute(
+                    "INSERT INTO acceptance_criteria (ticket_id, project_id, text) VALUES (?, ?, ?)",
+                    (tid, proj["id"], criterion),
+                )
+                # Link the new ticket to the journey via journey_tickets so the
+                # next cascade after this ticket lands in Done re-runs the
+                # journey to prove green.
+                conn.execute(
+                    "INSERT OR IGNORE INTO journey_tickets (journey_id, project_id, ticket_id) "
+                    "VALUES (?, ?, ?)",
+                    (journey_id, proj["id"], tid),
+                )
+                _kitchen_emit_event(
+                    conn, proj["id"], "ticket", tid, "ticket_created",
+                    {"id": tid, "title": title, "section": "Ideas",
+                     "from_gap_run_id": run_id, "linked_journey": journey_id},
+                    ActorContext.system(),
+                )
+                conn.commit(); conn.close()
+
+            t = _get_ticket_json(proj["id"], tid)
+            self._send_json({"ticket": t, "linked_journey": journey_id, "gap_kind": gap_kind}, 201)
             return
 
         # AI-powered field enrichment with diff hunks
@@ -5643,6 +6581,17 @@ def main():
     _start_scheduled_event_poller()
     _start_feedbacks_session_watcher()
 
+    # Kitchen orchestrator (M3) — polls eligible subjects, dispatches agent runs.
+    # Pinned to 5s tick by default; WORKFLOW.toml's automation.* settings are
+    # read per-project at dispatch time inside trigger logic.
+    _kitchen.start(get_db, settings={"kitchen_poll_seconds": 5.0,
+                                      "max_concurrent_runs": 3,
+                                      "max_concurrent_per_project": 1})
+
+    # Kitchen evidence rotation (M5) — daily sweep transitions on-disk
+    # artifacts live → summarised → pruned per docs/KITCHEN.md §13.
+    _kitchen_evidence.start_rotation_daemon(get_db, live_days=30, summarised_days=60)
+
     server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"
     print(f"Dashboard server: {url}")
@@ -5666,6 +6615,8 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
+        _kitchen.stop()
+        _kitchen_evidence.stop_rotation_daemon()
         server.server_close()
 
 

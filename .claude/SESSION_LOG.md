@@ -1,5 +1,36 @@
 # Session Log
 
+## 2026-04-28→30 — Kitchen: agentic work orchestrator (M1a–M6) on `feat/kitchen`
+
+### Summary
+- Designed Kitchen end-to-end through three rounds of Codex review (`/plan-check`); shipped as plan v4 with consultant sign-off baked in. Spec at `docs/KITCHEN.md`.
+- Shipped M1a (schema + spine events + UI badges/chips), M1b (audit completion + history tab), M2 (Kitchen view + filters + watched flag), M3 (workspaces + AgentRunner + orchestrator + live run panel + run management API), M4 (ScenarioRunner + rule-based gap classifier + journey cascade + gap-ticket flow), M5 (evidence rotation pipeline), and M6 (pause-by-default + simulate mode added during demo).
+- Three parallel sub-agents during M3/M4 cut serial time: workflow_config.py reader, live run panel UI, ScenarioRunner+gap classifier. Each returned with contract questions; net win after fixing one URL doubling bug and one orchestrator runner_kind dispatch oversight.
+- 24 commits, 456 TDD tests passing (no regressions across the milestone arc), live demo at `https://llm.rhino-balance.ts.net:9443/` via Caddy + tailscale serve.
+
+### Lessons Learned
+- **Accepted:** Pause-by-default for the orchestrator. User's framing ("nothing runs without me saying to run it") is the right safety posture for an autonomous-execution system. Persist the choice to `settings.kitchen.paused` so explicit Resume survives restarts; manual Run-now bypasses the gate (clicking IS the OK).
+- **Accepted:** Same-transaction event emission as the audit invariant. Every mutation in actions.py + every routed-through helper in serve.py calls `emit_event()` inside the caller's open `conn` transaction, never in two separate transactions. The `db_session()` wrapper in runners.py enforces this for thread-bound code.
+- **Accepted:** Single-priority bucket assignment in Mission Control aggregator (Needs Me > Running > Failed > Held > Ready To Delegate). Each subject appears in at most one bucket → no double-counting, no UI ambiguity.
+- **Accepted:** Parallel sub-agents work well when paths don't overlap and contract is pre-spec'd. Workflow_config (new file), UI in generate.py only (separate file from my serve.py), ScenarioRunner in runners.py only — three agents in parallel saved roughly an hour of serial work.
+- **Rejected:** Storing `automation_state` enum on the ticket. Earlier plan v2 had it; v3 dropped it because the latest non-terminal `runs` row is the source of truth for "is this subject currently being worked." Caching would create two sources of truth and inevitable drift.
+- **Rejected:** PR auto-merge by Kitchen. Plan §16 explicitly excludes it — humans stay the merge gate. Kitchen detects merged PRs and reconciles state but never runs `gh pr merge`.
+- **Gotcha:** macOS `socket.getfqdn(127.0.0.1)` hangs `serve.py` startup for 30s+. Symptom: `Serving N project(s)` prints, then nothing. Workaround in `/tmp/start-kitchen-demo.py` — 6-line wrapper that monkey-patches `HTTPServer.server_bind` to skip the reverse-DNS lookup. WSL/Linux unaffected.
+- **Gotcha:** Cross-machine migration collision. Plan called for migration #6 but `origin/main` had already shipped #6 (`ticket_branches`) and #7 (`ticket_tags`) in parallel. Renumbered Kitchen migration to #8. Future Kitchen-branch migrations must be #9+.
+- **Gotcha:** Parallel UI agent built `EDIT_API + '/api/runs?ticket=...'` URLs but `EDIT_API` already includes `/api`. The doubling produced 404s. Fixed via `sed` across 5 lines once their report flagged it. Convention check: `grep "EDIT_API + '/api"` before assuming new endpoints work.
+- **Gotcha:** ScenarioRunner agent's tests used uppercase journey IDs (`J-1`); `compile_to_manifest` produces `id="journey-J-1"` which fails `validate_manifest`'s `[a-z0-9][a-z0-9-]*` pattern. Tests use lowercase (`j-1`). Followup: normalize in `compile_to_manifest` itself (deferred to M4+ polish).
+
+### Decisions
+- Kitchen ships as a feature branch (`feat/kitchen`) — not merged to main yet. Live demo is the verification surface; merge happens after WSL-side dogfooding.
+- Migration #8 instead of plan's #6 (collision avoidance with shipped main work).
+- Pause/resume audit events live on a synthetic `_kitchen/investigation/lifecycle` subject so they're cross-project visible and don't pollute any one ticket's history.
+- Investigations table deferred. Schema enum already accepts `investigation` so future M1.5 doesn't require migration.
+- `_PROJECT_PATH_RESOLVER` test seam in `kitchen.py` lets tests inject fake project paths without touching the real registry.
+
+[Promoted to CLAUDE.md] — Kitchen architecture pointer + the four critical gotchas (pause-by-default, migration numbering, macOS getfqdn hang, same-tx audit invariant) + cross-machine WSL note.
+
+---
+
 ## 2026-04-20 — Project registration fix, DB recovery, ticket rubric
 
 ### Summary

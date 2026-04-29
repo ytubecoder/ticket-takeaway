@@ -56,6 +56,9 @@ SVG_ICONS = {
     "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     "mic": '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
     "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+    "square": '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+    "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    "send": '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
     "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
     "git-branch": '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
 }
@@ -94,6 +97,11 @@ class Ticket:
     readiness_content: dict = field(default_factory=dict)  # {flag: content_text}
     draft: bool = False
     attachment_count: int = 0
+    # Kitchen (M1a) — derived for the card badge.
+    automation_mode: str = "manual"   # manual | auto | held
+    latest_run_status: Optional[str] = None  # None until M3 produces real runs
+    # Kitchen (M2) — computed eligibility (auto ∧ all DCSTL gates clear).
+    automation_eligible: bool = False
     tags: list = field(default_factory=list)
     branches: list = field(default_factory=list)  # list of dicts: name, pr_number, pr_status, ahead, behind
 
@@ -321,6 +329,36 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         except Exception:
             attachment_count = 0
 
+        # Kitchen state (M1a) — automation_mode + latest_run_status. Pre-migration DBs
+        # silently fall back to defaults.
+        automation_mode = "manual"
+        latest_run_status = None
+        automation_eligible = False
+        try:
+            am = conn.execute(
+                "SELECT automation_mode FROM automation_subjects "
+                "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
+                (project_id, r["id"]),
+            ).fetchone()
+            if am:
+                automation_mode = am["automation_mode"]
+            lr = conn.execute(
+                "SELECT status FROM runs WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (project_id, r["id"]),
+            ).fetchone()
+            if lr:
+                latest_run_status = lr["status"]
+            # M2: compute eligibility once at load. Cheap because conn is hot.
+            try:
+                from actions import eligibility as _kitchen_eligibility  # local import: avoids hard dep at module load
+                er = _kitchen_eligibility(conn, project_id, "ticket", r["id"])
+                automation_eligible = er.eligible
+            except Exception:
+                automation_eligible = False
+        except Exception:
+            pass
+
         # Tags
         try:
             tag_rows = conn.execute(
@@ -367,6 +405,9 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             readiness_content=readiness_content,
             draft=is_draft,
             attachment_count=attachment_count,
+            automation_mode=automation_mode,
+            latest_run_status=latest_run_status,
+            automation_eligible=automation_eligible,
             tags=tags,
             branches=branches,
         ))
@@ -639,6 +680,13 @@ def generate_html(project: Project) -> str:
     count_size_s = sum(1 for t in all_visible if t.complexity == "S")
     count_size_m = sum(1 for t in all_visible if t.complexity == "M")
     count_size_l = sum(1 for t in all_visible if t.complexity == "L")
+
+    # Kitchen filter counts (M2)
+    count_auto = sum(1 for t in all_visible if t.automation_mode == "auto")
+    count_held = sum(1 for t in all_visible if t.automation_mode == "held")
+    count_eligible = sum(1 for t in all_visible if t.automation_eligible)
+    count_needs_input = sum(1 for t in all_visible if t.latest_run_status == "needs_input")
+    count_failed = sum(1 for t in all_visible if t.latest_run_status in ("failed", "stalled"))
 
     # Collect all unique tags with counts (for filter bar)
     tag_counts: dict[str, int] = {}
@@ -938,6 +986,25 @@ a {{ color: var(--accent); text-decoration: none; }}
 [data-theme="light"] .branch-pill.pr-closed {{ background: rgba(220,38,38,0.1); color: #dc2626; }}
 .tag-filter-btn {{ font-size: 11px !important; }}
 .card-id {{ font-size: 10px; color: var(--accent); opacity: 0.6; font-family: var(--font-mono); font-weight: 600; flex-shrink: 0; }}
+
+/* Kitchen badge — small status dot indicating automation state. M1a only renders
+   it when there's something meaningful (auto, held, or an actual run); manual
+   tickets get no badge so the kanban stays clean. */
+.kitchen-badge {{
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); opacity: 0.6; flex-shrink: 0;
+    margin-left: 2px;
+}}
+.kitchen-badge.kb-idle    {{ background: #94a3b8; opacity: 0.55; }}
+.kitchen-badge.kb-held    {{ background: #f59e0b; opacity: 0.85; }}
+.kitchen-badge.kb-queued,
+.kitchen-badge.kb-running {{ background: #3b82f6; opacity: 0.95; box-shadow: 0 0 0 2px rgba(59,130,246,0.18); }}
+.kitchen-badge.kb-needs-input {{ background: #f59e0b; opacity: 1; box-shadow: 0 0 0 2px rgba(245,158,11,0.22); }}
+.kitchen-badge.kb-failed   {{ background: #ef4444; opacity: 1; }}
+.kitchen-badge.kb-cancelled {{ background: #6b7280; opacity: 0.7; }}
+@keyframes kitchen-pulse {{ 0%, 100% {{ opacity: 0.95; }} 50% {{ opacity: 0.55; }} }}
+.kitchen-badge.kb-running, .kitchen-badge.kb-queued {{ animation: kitchen-pulse 1.6s ease-in-out infinite; }}
+
 
 .status-badge {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 600; text-transform: uppercase; }}
 .status-badge.proposed {{ background: var(--status-backlog-bg); color: var(--status-backlog); }}
@@ -1607,6 +1674,117 @@ a {{ color: var(--accent); text-decoration: none; }}
 .meta-status-opt {{ display: block; width: 100%; text-align: left; font-size: 12px; padding: 6px 10px; border: none; background: none; color: var(--text-secondary); cursor: pointer; border-radius: 4px; font-family: var(--font-sans); }}
 .meta-status-opt:hover {{ background: var(--bg-hover); color: var(--text-primary); }}
 .meta-status-opt.active {{ color: var(--accent); font-weight: 600; }}
+
+/* Kitchen automation chip + picker (M1a) */
+.meta-chip--automation .chip-label {{ color: var(--text-tertiary); }}
+.meta-chip--automation .chip-value {{ font-weight: 700; }}
+.meta-chip--automation[data-mode="manual"] .chip-value {{ color: var(--text-tertiary); }}
+.meta-chip--automation[data-mode="auto"]    .chip-value {{ color: #3b82f6; }}
+.meta-chip--automation[data-mode="held"]    .chip-value {{ color: #f59e0b; }}
+.automation-picker {{ position: absolute; z-index: 1010; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); min-width: 240px; }}
+.automation-picker-row {{ display: flex; gap: 4px; margin-bottom: 6px; }}
+.automation-picker-opt {{ flex: 1; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); background: none; color: var(--text-secondary); cursor: pointer; border-radius: 6px; font-family: var(--font-sans); }}
+.automation-picker-opt:hover {{ border-color: var(--accent); }}
+.automation-picker-opt.active {{ border-color: var(--accent); color: var(--accent); font-weight: 700; }}
+.automation-picker-reason {{ width: 100%; box-sizing: border-box; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-family: var(--font-sans); resize: vertical; min-height: 50px; outline: none; }}
+.automation-picker-reason:focus {{ border-color: var(--accent); }}
+.automation-picker-actions {{ display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }}
+.automation-picker-actions button {{ font-size: 11px; padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-subtle); background: none; color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans); }}
+.automation-picker-actions button.primary {{ background: var(--accent); color: white; border-color: var(--accent); }}
+.automation-picker-error {{ font-size: 11px; color: #ef4444; margin-top: 4px; min-height: 14px; }}
+
+/* Kitchen activity history list (M1b) */
+.history-list {{ display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }}
+.history-list.hidden {{ display: none; }}
+.history-row {{ display: grid; grid-template-columns: 80px 70px 1fr 110px; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 11px; border: 1px solid var(--border-subtle); background: rgba(255,255,255,0.02); align-items: start; }}
+.history-row.discarded {{ opacity: 0.45; text-decoration: line-through; }}
+.history-row .h-actor {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; text-align: center; }}
+.history-row .h-actor.human  {{ background: rgba(99,102,241,0.18); color: #818cf8; }}
+.history-row .h-actor.agent  {{ background: rgba(34,197,94,0.18); color: #22c55e; }}
+.history-row .h-actor.system {{ background: rgba(234,179,8,0.18); color: #eab308; }}
+.history-row .h-kind {{ font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.history-row .h-summary {{ color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; word-break: break-word; }}
+.history-row .h-summary .h-old {{ color: var(--text-tertiary); text-decoration: line-through; }}
+.history-row .h-summary .h-new {{ color: var(--accent); }}
+.history-row .h-time {{ font-size: 10px; color: var(--text-tertiary); text-align: right; font-variant-numeric: tabular-nums; }}
+.history-empty {{ padding: 20px; text-align: center; color: var(--text-tertiary); font-size: 12px; }}
+
+/* Live run panel (M3) */
+.detail-runs {{ border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px; background: var(--bg-card); }}
+.detail-runs.hidden {{ display: none; }}
+.detail-runs .detail-section-header {{ margin-bottom: 6px; padding-bottom: 6px; }}
+.run-now-btn {{
+  font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--accent);
+  background: rgba(59,130,246,0.10); color: var(--accent); cursor: pointer;
+  font-family: var(--font-sans); transition: all 0.15s; display: inline-flex; align-items: center; gap: 4px;
+}}
+.run-now-btn:hover {{ background: rgba(59,130,246,0.20); }}
+.run-now-btn:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+.run-card {{ border: 1px solid var(--border-subtle); border-radius: 6px; background: rgba(255,255,255,0.02); padding: 8px 10px; margin-top: 6px; }}
+.run-card-top {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }}
+.run-pill {{
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 8px; text-transform: uppercase;
+  letter-spacing: 0.4px; white-space: nowrap;
+}}
+.run-pill-queued, .run-pill-preparing {{ background: rgba(59,130,246,0.15); color: #3b82f6; animation: kitchen-pulse 1.6s ease-in-out infinite; }}
+.run-pill-running  {{ background: rgba(59,130,246,0.20); color: #60a5fa; animation: kitchen-pulse 1.6s ease-in-out infinite; }}
+.run-pill-needs_input {{ background: rgba(245,158,11,0.20); color: #f59e0b; }}
+.run-pill-succeeded {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.run-pill-failed, .run-pill-stalled {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+.run-pill-cancelled {{ background: rgba(107,114,128,0.15); color: #9ca3af; }}
+.run-summary {{ font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.run-meta {{ font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; font-variant-numeric: tabular-nums; }}
+.run-ws-link {{ font-size: 11px; color: var(--accent); text-decoration: none; word-break: break-all; }}
+.run-ws-link:hover {{ text-decoration: underline; }}
+.run-actions {{ display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }}
+.run-action-btn {{
+  font-size: 11px; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--border-default);
+  background: var(--bg-page); color: var(--text-secondary); cursor: pointer;
+  font-family: var(--font-sans); display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s;
+}}
+.run-action-btn:hover {{ background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }}
+.run-action-btn.primary {{ background: rgba(59,130,246,0.12); color: var(--accent); border-color: var(--accent); }}
+.run-action-btn.primary:hover {{ background: rgba(59,130,246,0.22); }}
+.run-action-btn.danger {{ color: #ef4444; border-color: rgba(239,68,68,0.4); }}
+.run-action-btn.danger:hover {{ background: rgba(239,68,68,0.1); }}
+.run-action-btn svg {{ width: 12px; height: 12px; vertical-align: -1px; }}
+.run-discard-confirm {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }}
+.run-discard-confirm.hidden {{ display: none; }}
+.run-discard-confirm button {{ font-size: 11px; padding: 2px 10px; border-radius: 4px; border: 1px solid var(--border-default); background: none; color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans); }}
+.run-discard-confirm button.danger {{ color: #ef4444; border-color: rgba(239,68,68,0.5); }}
+.run-discard-confirm button:hover {{ background: var(--bg-hover); }}
+.run-history-list {{ margin-top: 8px; border-top: 1px dashed var(--border-subtle); padding-top: 8px; display: none; }}
+.run-history-list.visible {{ display: block; }}
+.run-history-toggle {{ font-size: 11px; color: var(--text-tertiary); cursor: pointer; background: none; border: none; padding: 0; font-family: var(--font-sans); }}
+.run-history-toggle:hover {{ color: var(--text-secondary); }}
+.run-history-row {{ display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; font-size: 11px; color: var(--text-secondary); cursor: default; }}
+.run-history-row:hover {{ background: var(--bg-hover); }}
+.run-history-row .run-pill {{ font-size: 9px; padding: 1px 6px; }}
+.run-history-row .rh-time {{ color: var(--text-tertiary); margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }}
+/* needs_input inline response panel */
+.run-ni-panel {{ margin-top: 8px; padding: 8px 10px; border: 1px solid rgba(245,158,11,0.35); border-radius: 6px; background: rgba(245,158,11,0.05); }}
+.run-ni-panel.hidden {{ display: none; }}
+.run-ni-prompt {{ font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }}
+.run-ni-textarea {{ display: block; width: 100%; box-sizing: border-box; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-card); color: var(--text-primary); font-family: var(--font-sans); resize: vertical; min-height: 56px; outline: none; }}
+.run-ni-textarea:focus {{ border-color: var(--accent); }}
+.run-ni-actions {{ display: flex; gap: 6px; margin-top: 6px; }}
+.run-ni-send {{ font-size: 11px; padding: 4px 14px; border-radius: 5px; border: none; background: var(--accent); color: #fff; cursor: pointer; font-family: var(--font-sans); display: inline-flex; align-items: center; gap: 4px; }}
+.run-ni-send:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+.run-ni-cancel {{ font-size: 11px; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--border-default); background: none; color: var(--text-secondary); cursor: pointer; font-family: var(--font-sans); }}
+/* Per-card run-now button */
+.card-run-now-btn {{
+  display: none; cursor: pointer; background: none; border: none; padding: 2px 4px;
+  color: var(--accent); opacity: 0.7; line-height: 1; transition: opacity 0.15s;
+}}
+.card-run-now-btn:hover {{ opacity: 1; background: rgba(59,130,246,0.10); border-radius: 3px; }}
+.edit-enabled .card[data-eligible="true"] .card-run-now-btn {{ display: inline-flex; align-items: center; }}
+/* No-tests-required block in Tests section (M1a) */
+.ntr-block {{ margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle); }}
+.ntr-checkbox-row {{ display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }}
+.ntr-checkbox-row input[type="checkbox"] {{ cursor: pointer; }}
+.ntr-note {{ display: block; width: 100%; box-sizing: border-box; margin-top: 8px; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-family: var(--font-sans); resize: vertical; outline: none; }}
+.ntr-note:focus {{ border-color: var(--accent); }}
+.ntr-note.hidden {{ display: none; }}
 /* Scroll body */
 .detail-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
 /* Sections — always visible, stacked */
@@ -2222,6 +2400,16 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     <button class="filter-btn" data-filter="M" data-group="size">M <span class="count">{count_size_m}</span></button>
     <button class="filter-btn" data-filter="L" data-group="size">L <span class="count">{count_size_l}</span></button>
   </span>
+  <span class="filter-divider"></span>
+  <!-- Kitchen filters (M2) — automation lens on the existing kanban -->
+  <span class="filter-group" data-group-name="kitchen">
+    <button class="filter-btn" data-filter="auto"        data-group="kitchen" title="Tickets with automation_mode=auto">Auto <span class="count">{count_auto}</span></button>
+    <button class="filter-btn" data-filter="held"        data-group="kitchen" title="Paused with reason">Held <span class="count">{count_held}</span></button>
+    <button class="filter-btn" data-filter="eligible"    data-group="kitchen" title="Auto AND all eligibility gates clear">Eligible <span class="count">{count_eligible}</span></button>
+    <button class="filter-btn" data-filter="needs_input" data-group="kitchen" title="Run paused awaiting human input">Needs Input <span class="count">{count_needs_input}</span></button>
+    <button class="filter-btn" data-filter="failed"      data-group="kitchen" title="Last run failed or stalled">Failed <span class="count">{count_failed}</span></button>
+  </span>
+  <span class="filter-divider"></span>
 {_tag_filter_html}  <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
@@ -2557,6 +2745,17 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
           if (g === 'status') {{ match = vals.indexOf(card.dataset.status) !== -1; }}
           else if (g === 'type') {{ match = card.dataset.isBug === 'true'; }}
           else if (g === 'size') {{ match = vals.indexOf(card.dataset.complexity) !== -1; }}
+          else if (g === 'kitchen') {{
+            // Multi-select within group is OR. A card matches if ANY chip applies.
+            for (var i = 0; i < vals.length; i++) {{
+              var v = vals[i];
+              if (v === 'auto'        && card.dataset.automationMode === 'auto')   {{ match = true; break; }}
+              if (v === 'held'        && card.dataset.automationMode === 'held')   {{ match = true; break; }}
+              if (v === 'eligible'    && card.dataset.eligible === 'true')         {{ match = true; break; }}
+              if (v === 'needs_input' && card.dataset.runStatus === 'needs_input') {{ match = true; break; }}
+              if (v === 'failed'      && (card.dataset.runStatus === 'failed' || card.dataset.runStatus === 'stalled')) {{ match = true; break; }}
+            }}
+          }}
           else if (g === 'tags') {{ var ct = (card.dataset.tags || '').split(' '); match = vals.some(function(v){{ return ct.indexOf(v) !== -1; }}); }}
           if (!match) show = false;
         }});
@@ -3763,6 +3962,10 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
       <span class="meta-chip meta-chip--complexity" title="Click to change complexity"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--parent"><span class="chip-label">Parent:</span> <span class="chip-value">None</span></span>
       <span class="meta-chip meta-chip--section"><span class="chip-text"></span></span>
+      <!-- Kitchen automation toggle (M1a) — Manual / Auto / Held + hold reason -->
+      <span class="meta-chip meta-chip--automation" title="Automation mode" data-testid="detail-automation">
+        <span class="chip-label">Auto:</span> <span class="chip-value">Manual</span>
+      </span>
     </div>
     <div class="detail-tags-strip" id="detail-tags-strip">
       <span class="detail-tags-label">Tags:</span>
@@ -3776,6 +3979,54 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
       <button class="detail-branch-scan-btn" id="detail-branch-scan-btn" title="Scan for branches">Scan</button>
     </div>
     <div class="detail-body">
+      <!-- Live run panel (M3) — hidden when no runs exist -->
+      <div class="detail-section detail-runs hidden" id="section-runs" data-testid="section-runs">
+        <div class="detail-section-header">
+          <h3>Runs <span id="runs-count" style="font-weight:400;opacity:0.6;font-size:11px;"></span></h3>
+          <button class="run-now-btn" id="run-now-btn" data-testid="run-now-btn" style="display:none">{_svg_icon("play", 11)} Run now</button>
+        </div>
+        <!-- Latest run card -->
+        <div id="run-latest-card" class="run-card" style="display:none">
+          <div class="run-card-top">
+            <span class="run-pill" id="run-latest-pill"></span>
+            <span class="run-summary" id="run-latest-summary"></span>
+          </div>
+          <div class="run-meta">
+            <span id="run-latest-time"></span>
+            <span id="run-latest-duration"></span>
+            <a id="run-latest-ws" class="run-ws-link" href="#" target="_blank" rel="noopener noreferrer">—</a>
+          </div>
+          <!-- needs_input inline response panel -->
+          <div class="run-ni-panel hidden" id="run-ni-panel" data-testid="run-ni-panel">
+            <div class="run-ni-prompt" id="run-ni-prompt"></div>
+            <textarea class="run-ni-textarea" id="run-ni-textarea" data-testid="run-ni-textarea" placeholder="Type your response…" rows="3"></textarea>
+            <div class="run-ni-actions">
+              <button class="run-ni-send" id="run-ni-send" data-testid="run-ni-send" disabled>{_svg_icon("send", 11)} Send response</button>
+              <button class="run-ni-cancel" id="run-ni-cancel" data-testid="run-ni-cancel">Cancel</button>
+            </div>
+          </div>
+          <!-- Action buttons -->
+          <div class="run-actions" id="run-latest-actions">
+            <button class="run-action-btn danger" id="run-stop-btn" style="display:none" data-testid="run-stop">{_svg_icon("square", 11)} Stop</button>
+            <button class="run-action-btn" id="run-retry-btn" style="display:none" data-testid="run-retry">{_svg_icon("rotate-ccw", 11)} Retry</button>
+            <button class="run-action-btn" id="run-retry-fresh-btn" style="display:none" data-testid="run-retry-fresh">{_svg_icon("rotate-ccw", 11)} Retry fresh</button>
+            <button class="run-action-btn" id="run-file-gap-btn" style="display:none" data-testid="run-file-gap" title="File a draft ticket from this gap and link to the journey">{_svg_icon("plus", 11)} File gap ticket</button>
+            <button class="run-action-btn danger" id="run-discard-btn" style="display:none" data-testid="run-discard">{_svg_icon("trash-2", 11)} Discard</button>
+          </div>
+          <!-- Inline discard confirm -->
+          <div class="run-discard-confirm hidden" id="run-discard-confirm">
+            <span>Discard this run?</span>
+            <button class="danger" id="run-discard-yes" data-testid="run-discard-yes">Yes, discard</button>
+            <button id="run-discard-no" data-testid="run-discard-no">Cancel</button>
+          </div>
+        </div>
+        <!-- Recent runs collapsed list (max 5 prior entries) -->
+        <div id="run-history-wrapper" style="margin-top:4px;">
+          <button class="run-history-toggle" id="run-history-toggle" data-testid="run-history-toggle" style="display:none">Show recent runs</button>
+          <div class="run-history-list" id="run-history-list"></div>
+        </div>
+      </div>
+
       <!-- Gate banner (shown during column moves) -->
       <div class="detail-gate-banner hidden" id="detail-gate-banner">
         <div class="detail-gate-verdict">
@@ -3833,6 +4084,16 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
         <div class="detail-assessment hidden" data-cat-result="T"></div>
         <ul class="detail-criteria-list" data-list-field="tests"></ul>
         <input type="text" class="criteria-add-input" data-list-add="tests" placeholder="+ Add test item and press Enter">
+        <!-- Kitchen no-test-required bypass (M1a) -->
+        <div class="ntr-block" data-testid="ntr-block">
+          <label class="ntr-checkbox-row">
+            <input type="checkbox" id="ntr-checkbox" data-testid="ntr-checkbox">
+            <span>No tests required</span>
+          </label>
+          <textarea id="ntr-note" data-testid="ntr-note" class="ntr-note hidden"
+                    placeholder="Why no tests? (required — e.g. 'pure docs change', 'config-only')"
+                    rows="2"></textarea>
+        </div>
       </div>
 
       <!-- Learnings -->
@@ -3869,6 +4130,15 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
           </div>
         </div>
         <div id="workflow-runs-list" class="workflow-runs-list"></div>
+      </div>
+
+      <!-- Kitchen activity history (M1b) — newest first; collapsed by default -->
+      <div class="detail-section" id="section-history">
+        <div class="detail-section-header">
+          <h3>History</h3>
+          <button class="section-assess-btn" id="history-toggle" data-testid="history-toggle">Show</button>
+        </div>
+        <div id="history-list" class="history-list hidden"></div>
       </div>
 
     </div>
@@ -3989,6 +4259,30 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     // Column
     var colText = overlay.querySelector('.meta-chip--section .chip-text');
     colText.textContent = (data.section || '').replace(/^\\w/, function(c){{ return c.toUpperCase(); }});
+
+    // Kitchen automation chip (M1a)
+    var autoChip = overlay.querySelector('.meta-chip--automation');
+    if (autoChip) {{
+      var mode = data.automation_mode || 'manual';
+      autoChip.setAttribute('data-mode', mode);
+      var label = mode.charAt(0).toUpperCase() + mode.slice(1);
+      if (mode === 'held' && data.hold_reason) {{
+        label += ' — ' + data.hold_reason;
+        autoChip.title = 'Held: ' + data.hold_reason;
+      }} else {{
+        autoChip.title = 'Automation: ' + label;
+      }}
+      autoChip.querySelector('.chip-value').textContent = label;
+    }}
+
+    // No-tests-required block (M1a)
+    var ntrCb = overlay.querySelector('#ntr-checkbox');
+    var ntrNote = overlay.querySelector('#ntr-note');
+    if (ntrCb && ntrNote) {{
+      ntrCb.checked = !!data.no_test_required;
+      ntrNote.value = data.no_test_required_note || '';
+      ntrNote.classList.toggle('hidden', !ntrCb.checked);
+    }}
   }}
 
   // Priority cycling
@@ -4035,6 +4329,555 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     _statusDropdown = dd;
   }});
   document.addEventListener('click', function() {{ closeStatusDropdown(); }});
+
+  /* Kitchen automation chip + picker (M1a) */
+  var _autoPicker = null;
+  function closeAutoPicker() {{
+    if (_autoPicker) {{ _autoPicker.parentNode.removeChild(_autoPicker); _autoPicker = null; }}
+  }}
+  function postAutomation(mode, holdReason) {{
+    if (!currentData || !currentData.id) return Promise.reject(new Error('no ticket'));
+    var apiBase = (document.querySelector('meta[name="edit-api"]') || {{}}).content || '';
+    var url = (apiBase ? apiBase : '') + '/api/tickets/' + encodeURIComponent(currentData.id) + '/automation';
+    var body = {{ mode: mode }};
+    if (mode === 'held') body.hold_reason = holdReason || '';
+    return fetch(url, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify(body),
+    }}).then(function(r) {{
+      return r.json().then(function(j) {{
+        if (!r.ok) throw new Error(j.error || 'failed');
+        return j;
+      }});
+    }});
+  }}
+  var autoChipEl = overlay.querySelector('.meta-chip--automation');
+  if (autoChipEl) {{
+    autoChipEl.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      if (_autoPicker) {{ closeAutoPicker(); return; }}
+      var rect = this.getBoundingClientRect();
+      var current = (currentData && currentData.automation_mode) || 'manual';
+      var currentReason = (currentData && currentData.hold_reason) || '';
+      var pkr = document.createElement('div');
+      pkr.className = 'automation-picker';
+      pkr.style.position = 'fixed';
+      pkr.style.top = (rect.bottom + 4) + 'px';
+      pkr.style.left = rect.left + 'px';
+      pkr.innerHTML =
+        '<div class="automation-picker-row">' +
+          ['manual','auto','held'].map(function(m) {{
+            return '<button class="automation-picker-opt' + (m===current?' active':'') + '" data-mode="' + m + '">' + m.charAt(0).toUpperCase()+m.slice(1) + '</button>';
+          }}).join('') +
+        '</div>' +
+        '<textarea class="automation-picker-reason" placeholder="Reason (required for Held)"' + (current==='held'?'':' style="display:none"') + '>' + (currentReason ? currentReason.replace(/[&<>"]/g, function(c){{return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];}}) : '') + '</textarea>' +
+        '<div class="automation-picker-error"></div>' +
+        '<div class="automation-picker-actions">' +
+          '<button data-act="cancel">Cancel</button>' +
+          '<button class="primary" data-act="save">Save</button>' +
+        '</div>';
+      document.body.appendChild(pkr);
+      _autoPicker = pkr;
+      var selectedMode = current;
+      var reasonEl = pkr.querySelector('.automation-picker-reason');
+      var errEl = pkr.querySelector('.automation-picker-error');
+      pkr.querySelectorAll('.automation-picker-opt').forEach(function(btn) {{
+        btn.addEventListener('click', function(ev) {{
+          ev.stopPropagation();
+          selectedMode = btn.getAttribute('data-mode');
+          pkr.querySelectorAll('.automation-picker-opt').forEach(function(b) {{ b.classList.toggle('active', b===btn); }});
+          reasonEl.style.display = selectedMode === 'held' ? '' : 'none';
+          errEl.textContent = '';
+        }});
+      }});
+      pkr.querySelector('[data-act="cancel"]').addEventListener('click', function(ev) {{ ev.stopPropagation(); closeAutoPicker(); }});
+      pkr.querySelector('[data-act="save"]').addEventListener('click', function(ev) {{
+        ev.stopPropagation();
+        var reason = (reasonEl.value || '').trim();
+        if (selectedMode === 'held' && !reason) {{
+          errEl.textContent = 'Reason required when holding.';
+          reasonEl.focus();
+          return;
+        }}
+        postAutomation(selectedMode, reason).then(function(updated) {{
+          currentData = updated;
+          populateMetaChips(currentData);
+          closeAutoPicker();
+          toast('Automation: ' + selectedMode);
+        }}).catch(function(err) {{
+          errEl.textContent = err.message || 'failed';
+        }});
+      }});
+      pkr.addEventListener('click', function(ev) {{ ev.stopPropagation(); }});
+    }});
+  }}
+  document.addEventListener('click', function() {{ closeAutoPicker(); }});
+
+  /* Kitchen no-tests-required (M1a) */
+  function postNoTestRequired(enabled, note) {{
+    if (!currentData || !currentData.id) return Promise.reject(new Error('no ticket'));
+    var apiBase = (document.querySelector('meta[name="edit-api"]') || {{}}).content || '';
+    var url = (apiBase ? apiBase : '') + '/api/tickets/' + encodeURIComponent(currentData.id) + '/no-test-required';
+    return fetch(url, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ enabled: enabled, note: note || '' }}),
+    }}).then(function(r) {{
+      return r.json().then(function(j) {{
+        if (!r.ok) throw new Error(j.error || 'failed');
+        return j;
+      }});
+    }});
+  }}
+  var ntrCb = overlay.querySelector('#ntr-checkbox');
+  var ntrNoteEl = overlay.querySelector('#ntr-note');
+  if (ntrCb && ntrNoteEl) {{
+    ntrCb.addEventListener('change', function() {{
+      ntrNoteEl.classList.toggle('hidden', !ntrCb.checked);
+      if (ntrCb.checked) {{
+        ntrNoteEl.focus();
+      }} else {{
+        // Disabled — clear server-side immediately.
+        postNoTestRequired(false, '').then(function(updated) {{
+          currentData = updated;
+          ntrNoteEl.value = '';
+          toast('Tests required again');
+        }}).catch(function(err) {{ toast('Failed: ' + (err.message || err)); }});
+      }}
+    }});
+    ntrNoteEl.addEventListener('blur', function() {{
+      if (!ntrCb.checked) return;
+      var note = (ntrNoteEl.value || '').trim();
+      if (!note) {{
+        // Re-prompt — empty note when checked is invalid.
+        toast('Note is required when no_test_required is on');
+        ntrNoteEl.focus();
+        return;
+      }}
+      postNoTestRequired(true, note).then(function(updated) {{
+        currentData = updated;
+        toast('Saved no-tests rationale');
+      }}).catch(function(err) {{ toast('Failed: ' + (err.message || err)); }});
+    }});
+  }}
+
+  /* Kitchen activity history (M1b) */
+  function escapeHtmlForHistory(s) {{
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/[&<>"]/g, function(c) {{
+      return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];
+    }});
+  }}
+  function renderHistorySummary(ev) {{
+    var p = ev.payload || {{}};
+    var k = ev.event_kind;
+    function diff(before, after) {{
+      var b = escapeHtmlForHistory(typeof before === 'object' ? JSON.stringify(before) : (before === '' || before === null ? '∅' : before));
+      var a = escapeHtmlForHistory(typeof after === 'object'  ? JSON.stringify(after)  : (after  === '' || after  === null ? '∅' : after));
+      return '<span class="h-old">' + b + '</span> → <span class="h-new">' + a + '</span>';
+    }}
+    if (k === 'section_change')      return diff(p.before, p.after);
+    if (k === 'status_change')        return diff(p.before, p.after);
+    if (k === 'mode_changed')         return 'mode: ' + diff(p.before, p.after);
+    if (k === 'hold_set')             return 'held: ' + escapeHtmlForHistory(p.reason || '');
+    if (k === 'hold_cleared')         return 'unheld → ' + escapeHtmlForHistory(p.after || '');
+    if (k === 'criteria_check')       return 'criterion #' + p.criterion_id + ': ' + diff(p.before, p.after);
+    if (k === 'criteria_added')       return '+ ' + escapeHtmlForHistory(p.text || '');
+    if (k === 'criteria_removed')     return '− ' + escapeHtmlForHistory(p.text || '');
+    if (k === 'criteria_changed')     return diff(p.before, p.after);
+    if (k === 'field_changed')        return p.field + ': ' + diff(p.before, p.after);
+    if (k === 'dependency_changed')   return diff(p.before, p.after);
+    if (k === 'readiness_changed')    return p.flag + ': ' + diff(
+      (p.before && p.before.present) ? (p.before.content || '✓') : '∅',
+      (p.after  && p.after.present ) ? (p.after.content  || '✓') : '∅'
+    );
+    if (k === 'attachment_added')     return '+ ' + escapeHtmlForHistory((p.kind || '') + ':' + (p.label || ''));
+    if (k === 'attachment_removed')   return '− ' + escapeHtmlForHistory((p.kind || '') + ':' + (p.label || ''));
+    if (k === 'ticket_created')       return 'created in ' + escapeHtmlForHistory(p.section || '');
+    if (k === 'ticket_deleted')       return 'deleted';
+    if (k === 'run_started')          return 'run #' + p.run_id + ' (' + (p.runner_kind || '') + ')';
+    if (k === 'run_succeeded')        return '✓ run #' + p.run_id + (p.summary ? ' — ' + escapeHtmlForHistory(p.summary) : '');
+    if (k === 'run_failed')           return '✗ run #' + p.run_id + ' — ' + escapeHtmlForHistory(p.error_message || p.error_class || '');
+    if (k === 'run_cancelled')        return '⏹ run #' + p.run_id;
+    if (k === 'needs_input')          return '? ' + escapeHtmlForHistory(p.prompt || '');
+    if (k === 'input_provided')       return escapeHtmlForHistory(p.response_excerpt || '');
+    return escapeHtmlForHistory(JSON.stringify(p));
+  }}
+  function timeAgo(iso) {{
+    if (!iso) return '';
+    var t = Date.parse(iso); if (isNaN(t)) return iso;
+    var diff = (Date.now() - t) / 1000;
+    if (diff < 60) return Math.round(diff) + 's ago';
+    if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.round(diff / 3600) + 'h ago';
+    return Math.round(diff / 86400) + 'd ago';
+  }}
+  function loadHistory(ticketId) {{
+    var listEl = overlay.querySelector('#history-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="history-empty">Loading…</div>';
+    var apiBase = (document.querySelector('meta[name="edit-api"]') || {{}}).content || '';
+    var url = (apiBase || '') + '/api/tickets/' + encodeURIComponent(ticketId) + '/history';
+    fetch(url).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      var events = (data && data.events) || [];
+      if (!events.length) {{ listEl.innerHTML = '<div class="history-empty">No history yet.</div>'; return; }}
+      listEl.innerHTML = events.map(function(ev) {{
+        var discardCls = ev.discarded_run_id ? ' discarded' : '';
+        return '<div class="history-row' + discardCls + '">' +
+          '<span class="h-time" title="' + escapeHtmlForHistory(ev.occurred_at) + '">' + escapeHtmlForHistory(timeAgo(ev.occurred_at)) + '</span>' +
+          '<span class="h-actor ' + escapeHtmlForHistory(ev.actor_type) + '">' + escapeHtmlForHistory(ev.actor_type) + '</span>' +
+          '<span class="h-summary"><span class="h-kind">' + escapeHtmlForHistory(ev.event_kind) + '</span> ' + renderHistorySummary(ev) + '</span>' +
+          '<span></span>' +
+        '</div>';
+      }}).join('');
+    }}).catch(function(err) {{
+      listEl.innerHTML = '<div class="history-empty">Failed: ' + escapeHtmlForHistory(err.message || err) + '</div>';
+    }});
+  }}
+  /* =====================================================================
+     Live run panel (M3)
+     ===================================================================== */
+  var _runsSection    = overlay.querySelector('#section-runs');
+  var _runNowBtn      = overlay.querySelector('#run-now-btn');
+  var _runLatestCard  = overlay.querySelector('#run-latest-card');
+  var _runLatestPill  = overlay.querySelector('#run-latest-pill');
+  var _runLatestSumm  = overlay.querySelector('#run-latest-summary');
+  var _runLatestTime  = overlay.querySelector('#run-latest-time');
+  var _runLatestDur   = overlay.querySelector('#run-latest-duration');
+  var _runLatestWs    = overlay.querySelector('#run-latest-ws');
+  var _runStopBtn     = overlay.querySelector('#run-stop-btn');
+  var _runRetryBtn    = overlay.querySelector('#run-retry-btn');
+  var _runRetryFresh  = overlay.querySelector('#run-retry-fresh-btn');
+  var _runDiscardBtn  = overlay.querySelector('#run-discard-btn');
+  var _runDiscardConf = overlay.querySelector('#run-discard-confirm');
+  var _runDiscardYes  = overlay.querySelector('#run-discard-yes');
+  var _runDiscardNo   = overlay.querySelector('#run-discard-no');
+  var _runFileGapBtn  = overlay.querySelector('#run-file-gap-btn');
+  var _runsCount      = overlay.querySelector('#runs-count');
+  var _runHistToggle  = overlay.querySelector('#run-history-toggle');
+  var _runHistList    = overlay.querySelector('#run-history-list');
+  var _runNiPanel     = overlay.querySelector('#run-ni-panel');
+  var _runNiPrompt    = overlay.querySelector('#run-ni-prompt');
+  var _runNiTextarea  = overlay.querySelector('#run-ni-textarea');
+  var _runNiSend      = overlay.querySelector('#run-ni-send');
+  var _runNiCancel    = overlay.querySelector('#run-ni-cancel');
+
+  var _currentRunId   = null;   // ID of the latest run being displayed
+  var _runsPollTimer  = null;   // setInterval handle for active run polling
+
+  var ACTIVE_RUN_STATUSES = {{'queued':1,'preparing':1,'running':1,'needs_input':1}};
+  var TERMINAL_RUN_STATUSES = {{'succeeded':1,'failed':1,'stalled':1,'cancelled':1}};
+
+  function _esc(s) {{ return escapeHtmlForHistory(s == null ? '' : String(s)); }}
+
+  function _runPillClass(status) {{
+    var safe = (status || 'unknown').replace(/[^a-z_]/g, '');
+    return 'run-pill run-pill-' + safe;
+  }}
+
+  function _runPillLabel(status) {{
+    var labels = {{
+      queued: 'queued', preparing: 'preparing', running: 'running',
+      needs_input: 'needs input', succeeded: 'succeeded',
+      failed: 'failed', stalled: 'stalled', cancelled: 'cancelled'
+    }};
+    return labels[status] || (status || '—');
+  }}
+
+  function _fmtDuration(ms) {{
+    if (!ms) return '';
+    if (ms < 1000) return ms + 'ms';
+    if (ms < 60000) return Math.round(ms / 1000) + 's';
+    return Math.round(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's';
+  }}
+
+  function renderRuns(data) {{
+    var runs = (data && data.runs) || [];
+    if (!runs.length) {{
+      _runsSection.classList.add('hidden');
+      _stopRunsPolling();
+      return;
+    }}
+    _runsSection.classList.remove('hidden');
+    var latest = runs[0];
+    _currentRunId = latest.id;
+    var isActive = !!ACTIVE_RUN_STATUSES[latest.status];
+    var isTerminal = !!TERMINAL_RUN_STATUSES[latest.status];
+
+    // Count badge
+    if (_runsCount) _runsCount.textContent = '(' + runs.length + ')';
+
+    // Run-now button — show when eligible and no active run
+    var eligible = currentData && currentData.automation_eligible;
+    if (_runNowBtn) {{
+      _runNowBtn.style.display = (eligible && !isActive) ? 'inline-flex' : 'none';
+    }}
+
+    // Latest card
+    _runLatestCard.style.display = 'block';
+    _runLatestPill.className = _runPillClass(latest.status);
+    _runLatestPill.textContent = _runPillLabel(latest.status);
+
+    var summaryText = latest.summary || (latest.error_message ? latest.error_message : '—');
+    _runLatestSumm.textContent = summaryText;
+    _runLatestSumm.title = summaryText;
+
+    _runLatestTime.textContent = latest.started_at ? timeAgo(latest.started_at) : '—';
+    _runLatestDur.textContent = latest.duration_ms ? '(' + _fmtDuration(latest.duration_ms) + ')' : (isActive ? '(running…)' : '');
+
+    if (latest.workspace_path) {{
+      _runLatestWs.href = 'file://' + _esc(latest.workspace_path);
+      _runLatestWs.textContent = latest.workspace_path;
+      _runLatestWs.title = latest.workspace_path;
+    }} else {{
+      _runLatestWs.href = '#';
+      _runLatestWs.textContent = '—';
+      _runLatestWs.removeAttribute('title');
+    }}
+
+    // Action buttons
+    _runStopBtn.style.display    = isActive    ? 'inline-flex' : 'none';
+    _runRetryBtn.style.display   = isTerminal  ? 'inline-flex' : 'none';
+    _runRetryFresh.style.display = isTerminal  ? 'inline-flex' : 'none';
+    _runDiscardBtn.style.display = isTerminal  ? 'inline-flex' : 'none';
+
+    // Kitchen M4: "File gap ticket" — only on red scenario runs (failed/stalled).
+    var canFileGap = (latest.runner_kind === 'scenario' &&
+                      (latest.status === 'failed' || latest.status === 'stalled'));
+    if (_runFileGapBtn) {{
+      _runFileGapBtn.style.display = canFileGap ? 'inline-flex' : 'none';
+      _runFileGapBtn.dataset.runId = latest.id;
+    }}
+
+    // Store run id on buttons for handlers
+    [_runStopBtn, _runRetryBtn, _runRetryFresh, _runDiscardBtn].forEach(function(b) {{
+      if (b) b.dataset.runId = latest.id;
+    }});
+
+    // needs_input panel
+    if (latest.status === 'needs_input' && _runNiPanel) {{
+      _runNiPanel.classList.remove('hidden');
+      if (_runNiPrompt) _runNiPrompt.textContent = latest.needs_input_prompt || 'The agent is waiting for your input.';
+      if (_runNiTextarea) {{ _runNiTextarea.value = ''; _runNiTextarea.dataset.runId = latest.id; }}
+      if (_runNiSend) {{ _runNiSend.disabled = true; _runNiSend.dataset.runId = latest.id; }}
+      if (_runNiCancel) _runNiCancel.dataset.runId = latest.id;
+    }} else {{
+      if (_runNiPanel) _runNiPanel.classList.add('hidden');
+    }}
+
+    // Recent history (skip latest = runs[0])
+    var older = runs.slice(1, 6);
+    if (_runHistToggle) _runHistToggle.style.display = older.length ? 'inline' : 'none';
+    if (_runHistList) {{
+      _runHistList.innerHTML = older.map(function(r) {{
+        return '<div class="run-history-row">' +
+          '<span class="' + _esc(_runPillClass(r.status)) + '">' + _esc(_runPillLabel(r.status)) + '</span>' +
+          '<span>' + _esc(r.summary || r.error_message || '—') + '</span>' +
+          '<span class="rh-time">' + _esc(r.started_at ? timeAgo(r.started_at) : '—') + '</span>' +
+          '</div>';
+      }}).join('');
+    }}
+
+    // Manage polling
+    if (isActive) {{
+      _startRunsPolling(currentTicketId);
+    }} else {{
+      _stopRunsPolling();
+    }}
+  }}
+
+  function loadRuns(ticketId) {{
+    if (!ticketId) return;
+    var url = EDIT_API + '/runs?ticket=' + encodeURIComponent(ticketId);
+    fetch(url).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      renderRuns(data);
+    }}).catch(function() {{
+      // Silently fail — runs API may not be deployed yet
+    }});
+  }}
+
+  function _startRunsPolling(ticketId) {{
+    if (_runsPollTimer) return;  // already polling
+    _runsPollTimer = setInterval(function() {{
+      if (overlay.classList.contains('hidden')) {{ _stopRunsPolling(); return; }}
+      loadRuns(ticketId);
+    }}, 2000);
+  }}
+
+  function _stopRunsPolling() {{
+    if (_runsPollTimer) {{ clearInterval(_runsPollTimer); _runsPollTimer = null; }}
+  }}
+
+  function postRunNow(ticketId) {{
+    if (!ticketId) return;
+    var btn = _runNowBtn;
+    if (btn) btn.disabled = true;
+    var url = EDIT_API + '/tickets/' + encodeURIComponent(ticketId) + '/run-now';
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+      .then(function(r) {{
+        if (r.status === 409) {{ showAppToast('A run is already active for this ticket.', 'error'); if(btn) btn.disabled=false; return null; }}
+        if (r.status === 422) {{ return r.json().then(function(d) {{ showAppToast('Not eligible: ' + ((d.reasons||[]).join('; ')||'unknown reason'), 'error'); if(btn) btn.disabled=false; return null; }}); }}
+        if (!r.ok) {{ showAppToast('Run failed to start.', 'error'); if(btn) btn.disabled=false; return null; }}
+        return r.json();
+      }})
+      .then(function(run) {{
+        if (!run) return;
+        showAppToast('Run started', 'success');
+        loadRuns(currentTicketId);
+      }})
+      .catch(function() {{ showAppToast('Network error starting run.', 'error'); if(btn) btn.disabled=false; }});
+  }}
+
+  function postRunAction(runId, action) {{
+    if (!runId) return;
+    var url = EDIT_API + '/runs/' + encodeURIComponent(runId) + '/' + action;
+    return fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(run) {{
+        showAppToast(action.charAt(0).toUpperCase() + action.slice(1).replace(/-/g,' ') + ' sent', 'success');
+        loadRuns(currentTicketId);
+        return run;
+      }})
+      .catch(function() {{ showAppToast('Network error.', 'error'); }});
+  }}
+
+  function postNeedsInputResponse(runId, text) {{
+    if (!runId || !text) return;
+    var url = EDIT_API + '/runs/' + encodeURIComponent(runId) + '/respond';
+    if (_runNiSend) _runNiSend.disabled = true;
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{response: text}})}})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(run) {{
+        showAppToast('Response sent', 'success');
+        if (_runNiTextarea) _runNiTextarea.value = '';
+        loadRuns(currentTicketId);
+      }})
+      .catch(function() {{ showAppToast('Network error sending response.', 'error'); if(_runNiSend) _runNiSend.disabled=false; }});
+  }}
+
+  // Run-now button in detail header
+  if (_runNowBtn) {{
+    _runNowBtn.addEventListener('click', function() {{
+      postRunNow(currentTicketId);
+    }});
+  }}
+
+  // Stop button
+  if (_runStopBtn) {{
+    _runStopBtn.addEventListener('click', function() {{
+      postRunAction(this.dataset.runId, 'stop');
+    }});
+  }}
+
+  // Retry button
+  if (_runRetryBtn) {{
+    _runRetryBtn.addEventListener('click', function() {{
+      postRunAction(this.dataset.runId, 'retry');
+    }});
+  }}
+
+  // Retry fresh button
+  if (_runRetryFresh) {{
+    _runRetryFresh.addEventListener('click', function() {{
+      postRunAction(this.dataset.runId, 'retry-fresh');
+    }});
+  }}
+
+  // Discard button — show inline confirm
+  if (_runDiscardBtn) {{
+    _runDiscardBtn.addEventListener('click', function() {{
+      _runDiscardConf.classList.remove('hidden');
+      _runDiscardBtn.style.display = 'none';
+    }});
+  }}
+  if (_runDiscardYes) {{
+    _runDiscardYes.addEventListener('click', function() {{
+      _runDiscardConf.classList.add('hidden');
+      if (_runDiscardBtn) _runDiscardBtn.style.display = 'none';
+      postRunAction(_currentRunId, 'discard');
+    }});
+  }}
+  if (_runDiscardNo) {{
+    _runDiscardNo.addEventListener('click', function() {{
+      _runDiscardConf.classList.add('hidden');
+      if (_runDiscardBtn && TERMINAL_RUN_STATUSES[_currentRunId]) _runDiscardBtn.style.display = 'inline-flex';
+      else if (_runDiscardBtn) _runDiscardBtn.style.display = 'inline-flex';
+    }});
+  }}
+
+  /* Kitchen M4: file gap ticket from a red scenario run. */
+  if (_runFileGapBtn) {{
+    _runFileGapBtn.addEventListener('click', function() {{
+      var runId = this.dataset.runId;
+      if (!runId) return;
+      _runFileGapBtn.disabled = true;
+      var url = EDIT_API + '/runs/' + encodeURIComponent(runId) + '/file-gap-ticket';
+      fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+        .then(function(r) {{ return r.json().then(function(j) {{ return [r.ok, j]; }}); }})
+        .then(function(arr) {{
+          var ok = arr[0], j = arr[1];
+          _runFileGapBtn.disabled = false;
+          if (!ok) {{
+            if (typeof showAppToast === 'function') showAppToast('File gap failed: ' + (j.error || 'unknown'), 'error');
+            return;
+          }}
+          var ticket = j.ticket || {{}};
+          var msg = 'Gap ticket filed: ' + (ticket.id || '?');
+          if (typeof showAppToast === 'function') showAppToast(msg, 'success');
+        }})
+        .catch(function(err) {{
+          _runFileGapBtn.disabled = false;
+          if (typeof showAppToast === 'function') showAppToast('File gap failed: ' + (err.message || err), 'error');
+        }});
+    }});
+  }}
+
+  // needs_input textarea — enable send when non-empty
+  if (_runNiTextarea) {{
+    _runNiTextarea.addEventListener('input', function() {{
+      if (_runNiSend) _runNiSend.disabled = !this.value.trim();
+    }});
+    _runNiTextarea.addEventListener('keydown', function(e) {{
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {{
+        e.preventDefault();
+        if (_runNiSend && !_runNiSend.disabled) _runNiSend.click();
+      }}
+    }});
+  }}
+  if (_runNiSend) {{
+    _runNiSend.addEventListener('click', function() {{
+      var tid = this.dataset.runId;
+      var txt = _runNiTextarea ? _runNiTextarea.value.trim() : '';
+      if (tid && txt) postNeedsInputResponse(tid, txt);
+    }});
+  }}
+  if (_runNiCancel) {{
+    _runNiCancel.addEventListener('click', function() {{
+      // Cancel = stop the run
+      postRunAction(this.dataset.runId || _currentRunId, 'stop');
+    }});
+  }}
+
+  // Recent runs toggle
+  if (_runHistToggle) {{
+    _runHistToggle.addEventListener('click', function() {{
+      var isVisible = _runHistList.classList.toggle('visible');
+      this.textContent = isVisible ? 'Hide recent runs' : 'Show recent runs';
+    }});
+  }}
+
+  var historyToggleBtn = overlay.querySelector('#history-toggle');
+  if (historyToggleBtn) {{
+    historyToggleBtn.addEventListener('click', function() {{
+      var listEl = overlay.querySelector('#history-list');
+      var isHidden = listEl.classList.toggle('hidden');
+      historyToggleBtn.textContent = isHidden ? 'Show' : 'Hide';
+      if (!isHidden && currentData && currentData.id) {{
+        loadHistory(currentData.id);
+      }}
+    }});
+  }}
 
   // Parent chip — click to edit inline
   overlay.querySelector('.meta-chip--parent').addEventListener('click', function() {{
@@ -5351,11 +6194,14 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
           history.pushState({{ ticket: true, id: tid, flag: scrollFlag }}, '', ticketHash);
         }}
       }}
+      // Load live run panel (M3)
+      loadRuns(tid);
     }});
   }}
 
   function closeOverlay() {{
     closeStatusDropdown();
+    _stopRunsPolling();
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
     currentTicketId = null; currentData = null;
@@ -7226,6 +8072,32 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     }}
   }});
 
+  // Per-card run-now buttons (delegated) — visible only when data-eligible="true" and no active run
+  document.addEventListener('click', function(e) {{
+    var btn = e.target.closest('.card-run-now-btn');
+    if (!btn) return;
+    e.stopPropagation();
+    var tid = btn.dataset.ticketId;
+    if (!tid) return;
+    btn.disabled = true;
+    var url = EDIT_API + '/tickets/' + encodeURIComponent(tid) + '/run-now';
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}})
+      .then(function(r) {{
+        if (r.status === 409) {{ showAppToast('A run is already active.', 'error'); btn.disabled=false; return null; }}
+        if (r.status === 422) {{ return r.json().then(function(d) {{ showAppToast('Not eligible: ' + ((d.reasons||[]).join('; ')||''), 'error'); btn.disabled=false; return null; }}); }}
+        if (!r.ok) {{ showAppToast('Run failed to start.', 'error'); btn.disabled=false; return null; }}
+        return r.json();
+      }})
+      .then(function(run) {{
+        if (!run) return;
+        showAppToast('Run started for ' + _esc(tid), 'success');
+        // Update card data attribute so button hides until next page refresh
+        var card = btn.closest('.card');
+        if (card) {{ card.dataset.runStatus = 'queued'; btn.style.display = 'none'; }}
+      }})
+      .catch(function() {{ showAppToast('Network error starting run.', 'error'); btn.disabled=false; }});
+  }});
+
   function _createRecordingPlaceholder(text) {{
     var row = document.createElement('div');
     row.className = 'attachment-row attachment-placeholder';
@@ -7944,6 +8816,34 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     att_count = getattr(t, 'attachment_count', 0)
     att_badge_html = f'<span class="attachment-count-badge" title="{att_count} attachment(s)">{att_count}</span>' if att_count > 0 else ""
 
+    # Kitchen badge (M1a). Latest run status takes precedence over mode-only states.
+    # Visible classes: kb-idle (auto, no run yet), kb-held, kb-queued/preparing/running/needs-input/failed/cancelled,
+    # plus "hidden" for manual mode with no run.
+    kb_class = ""
+    kb_title = ""
+    if t.latest_run_status in ("queued", "preparing"):
+        kb_class, kb_title = "kb-queued", "Queued for run"
+    elif t.latest_run_status == "running":
+        kb_class, kb_title = "kb-running", "Run in progress"
+    elif t.latest_run_status == "needs_input":
+        kb_class, kb_title = "kb-needs-input", "Run needs your input"
+    elif t.latest_run_status == "failed":
+        kb_class, kb_title = "kb-failed", "Last run failed"
+    elif t.latest_run_status == "cancelled":
+        kb_class, kb_title = "kb-cancelled", "Last run cancelled"
+    elif t.latest_run_status == "stalled":
+        kb_class, kb_title = "kb-failed", "Last run stalled"
+    elif t.automation_mode == "held":
+        kb_class, kb_title = "kb-held", "Automation held"
+    elif t.automation_mode == "auto":
+        kb_class, kb_title = "kb-idle", "Auto — eligible to run"
+    kb_html = (
+        f'<span class="kitchen-badge {kb_class}" title="{escape(kb_title)}" '
+        f'data-automation-mode="{escape(t.automation_mode)}" '
+        f'data-run-status="{escape(t.latest_run_status or "")}"></span>'
+        if kb_class else ""
+    )
+
     # Tags
     tags_list = getattr(t, 'tags', [])
     tags_attr = f' data-tags="{escape(" ".join(tags_list))}"' if tags_list else ''
@@ -7979,6 +8879,9 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
+        f' data-automation-mode="{escape(t.automation_mode)}"'
+        f'{" data-eligible=" + chr(34) + "true" + chr(34) if t.automation_eligible else ""}'
+        f'{" data-run-status=" + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ""}'
         f'{draft_attr}{tags_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'
@@ -7987,7 +8890,9 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{branches_html}'
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
+        f'{kb_html}'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
+        f'<button class="card-run-now-btn" data-testid="card-run-now-{id_esc}" data-ticket-id="{id_esc}" title="Run now" aria-label="Run now for {id_esc}">{_svg_icon("play", 12)}</button>'
         f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details" aria-label="Open {id_esc}">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
         f'{readiness_html}'
         f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'

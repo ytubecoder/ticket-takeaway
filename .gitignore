@@ -31,5 +31,5 @@ pics/
 *~
 .vscode/
 .idea/
-src/__pycache__/
+__pycache__/
 .worktrees/

@@ -5,8 +5,7 @@ Kitchen is the back-of-house: an execution layer that turns eligible work units
 into agent runs in isolated worktrees, with full audit trails and a live view
 of every cook on the line.*
 
-Plan version: **v4** (Codex sign-off conditional on M1a patches; this version
-incorporates all of them).
+Plan version: **v4 — shipped 2026-04-30 on `feat/kitchen` (24 commits, 456 tests, branch live, awaiting merge).**
 Branch: `feat/kitchen`
 Python: requires 3.11+ (for `tomllib` stdlib).
 
@@ -684,3 +683,66 @@ is throughput on standard orders, not personalisation.
   fire from internal side effects too; `run_cancelled`, `hook_started`,
   `hook_succeeded`, `hook_failed` added to spine; `criteria_added`,
   `criteria_removed`, `criteria_changed` added to M1b expansion.
+
+---
+
+## 18. Shipped (as built)
+
+Branch: `feat/kitchen` · 24 commits · 456 TDD tests passing · live demo on
+tailnet (`https://llm.rhino-balance.ts.net:9443/`).
+
+### Migration delta
+
+Plan called for migration #6. Shipped as **migration #8** because
+`origin/main` shipped #6 (`ticket_branches`) and #7 (`ticket_tags`) while the
+Kitchen branch was in flight. Sequence is now `1, 2, 3, 4, 5, 6, 7, 8` — the
+`_migrations` table is a set of versions, not a strict sequence, so gaps
+would have been harmless but the renumber avoided the version-key collision
+on existing DBs.
+
+### What shipped vs the plan
+
+| Milestone | Plan | Shipped |
+|---|---|---|
+| M1a | Schema + spine | 100% — 65 tests; `ActorContext` + `emit_event` + `eligibility` + `set_automation_mode` + `set_no_test_required` + spine events on every existing mutation including internal side-effects (`auto_promote_parents`, scheduled auto-accept) |
+| M1a UI | Auto toggle + no-tests + card badges | 100% — meta-strip chip with picker; checkbox + mandatory note; per-card kitchen-badge with idle / queued / running / needs-input / failed / held / cancelled variants |
+| M1b | Expanded vocab + history tab | 100% — every direct-write helper in `serve.py` routes through `emit_event` in same tx; 17 tests; collapsible History section in ticket detail with event-aware summaries; `discarded_run_id` flagged events render struck-through |
+| M2 | Kitchen view + filters + watched flag | 100% — `/` is now Kitchen, picker moved to `/projects`, `_aggregate_kitchen_state()` shared by HTML+JSON, watched-projects filter, board filter chips Auto/Held/Eligible/Needs-Input/Failed |
+| M3 | Workspaces + runners + orchestrator + live view + PR contract | 100% — `git worktree` per subject on `kitchen/{type}/{id}` branches; AgentRunner subprocess pipeline with hook contract per Symphony §9.4; orchestrator tick with BEGIN IMMEDIATE claim + per-project caps + stall reconciliation; live run panel + Stop/Discard/Retry/Retry-fresh/needs_input UI |
+| M3 policy file | WORKFLOW.toml + PROMPT.md | 100% — `src/workflow_config.py` with deep-merge defaults, no PyYAML dependency, scenario.base_url section added |
+| M4 | ScenarioRunner + GapAnalyzer + closed loop | 100% scenario+gap classifier; rule-based gap classification across 6 kinds (`missing_selector | missing_screen | missing_feature | ambiguous_goal | external_dependency | test_harness_gap`); journey cascade on ticket-Done; "File gap ticket" UI button + endpoint that creates linked draft tickets; LLM-backed classification deferred (rule-based works for M4) |
+| M5 | Evidence rotation pipeline | 100% — `src/evidence.py` with `rotate_evidence()` (live → summarised → pruned ladder, gzip transcripts, `summary.md` autogen, `index.txt`) and daily background daemon |
+| M6 | Pause-by-default + simulate mode | 100% — added during demo verification; orchestrator default state is paused; `kitchen.is_paused()` + `pause()`/`resume()` with persistence to `settings.kitchen.paused`; manual `trigger_run()` bypasses gate; reconciliation still runs while paused; pause/resume emit audit events on `_kitchen/investigation/lifecycle` subject |
+
+### Deferred (not in this branch)
+
+- **PR-merge detection** — `gh pr view --json mergedAt` polling in the
+  reconcile tick that auto-flips ticket → Done on PR merge and cascades the
+  linked journey. The cascade engine itself is shipped; only the
+  PR-merge-detection trigger is missing.
+- **needs_input → agent feedback channel** — human response flips the DB
+  row but doesn't yet feed into the running subprocess; agent-vendor specific.
+- **Investigations table + UI** — `subject_type` enum already accepts
+  `investigation`; the table itself is M1.5+ and was held since nobody hit
+  the use case during the build.
+- **Lowercase-ID normalization in `compile_to_manifest`** — journey IDs
+  must be lowercase to satisfy `validate_manifest`'s id pattern (already
+  the case for new journeys via the journeys page; mixed-case legacy IDs
+  would break ScenarioRunner). One-line fix in `journeys.py:349`, deferred
+  as polish.
+- **LLM-backed gap classification** — current is rule-based and covers all
+  6 plan kinds. An LLM pass over the failure context would catch edge cases
+  the heuristics miss but is M4+ polish.
+
+### Operational notes for future-me
+
+- **Pause-by-default is load-bearing.** Resume only after reviewing
+  Ready-To-Delegate. Choice persists to `settings.kitchen.paused`.
+- **Audit invariant:** every mutation emits in the same DB transaction as
+  the SQL write. Wrappers (`db_session()` in runners.py) enforce it for
+  thread-bound code.
+- **Cross-machine:** the live `tickets.db` lives on WSL; macOS sessions
+  read but don't write CLI state. Kitchen runs anywhere the code does.
+- **macOS `getfqdn` hang** on `serve.py` startup — wrapper monkey-patches
+  `HTTPServer.server_bind` to skip the reverse-DNS lookup. See
+  `/tmp/start-kitchen-demo.py` and CLAUDE.md gotchas.

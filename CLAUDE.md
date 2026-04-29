@@ -46,7 +46,14 @@ src/scenario_drafting.py — template-based draft generation from natural-langua
 src/journeys.py    — user journey CRUD, compilation to scenario manifests, inference engine
 src/seek.py        — project file discovery engine (scanners, dedup, draft ingestion)
 src/page_scraper.py — screen discovery for journey path builder
+src/kitchen.py     — Kitchen orchestrator (poll/claim/dispatch + pause/resume) — see docs/KITCHEN.md
+src/workspaces.py  — per-subject git worktree manager + lifecycle hooks (Kitchen)
+src/runners.py     — Runner ABC + AgentRunner + ScenarioRunner + classify_scenario_failure
+src/workflow_config.py — WORKFLOW.toml + PROMPT.md reader (Kitchen policy files)
+src/evidence.py    — Kitchen evidence rotation pipeline (live → summarised → pruned)
 ```
+
+**Kitchen** (M1a–M6, branch `feat/kitchen`): agentic work orchestrator layered on top of the kanban. Two paradigms — tickets (build something) and journeys (prove user can do something) — flow through one isolated-worktree execution layer with a closed loop (red journey → gap ticket → human triage → ticket Done → journey re-runs). See `docs/KITCHEN.md` for the full spec; key design rules below in Critical gotchas.
 
 **Workflow Bounce** (I-19): Multi-agent prompt routing system. Users define agents (name + CLI command + system prompt) and workflows (ordered steps, each with an agent + optional step instructions). Applying a workflow to a ticket bounces its content through the agent sequence. Primary agent (step 1) mediates disagreements.
 
@@ -326,3 +333,15 @@ Ticket Takeaway integrates with [feedbacks](https://github.com/ytubecoder/feedba
 **Settings keys:** `feedbacks.enabled`, `feedbacks.home`, `feedbacks.autostart` — stored in the `settings` table as string values ("true"/"false"). Detection reads `feedbacks.home` for install path, `feedbacks.enabled` for toggle state.
 
 **Security:** Install endpoint validates `install_dir` within home directory and `repo_url` against GitHub/GitLab HTTPS allowlist.
+
+## Critical gotchas
+
+- **Kitchen orchestrator is paused by default on every fresh server boot.** Eligible tickets will NOT auto-dispatch until the user clicks Resume in the Kitchen view (or POSTs `/api/kitchen/resume`). Persistence: choice is stored as `settings.kitchen.paused`. Manual "Run now" buttons bypass the pause — clicking one IS the explicit OK for that single ticket. If a future agent finds themselves debugging "why didn't my eligible ticket run", check `kitchen.is_paused()` first.
+
+- **Next migration must be #9, not #6 or #7.** `origin/main` shipped migrations 6 (`ticket_branches`) and 7 (`ticket_tags`). The Kitchen branch shipped migration 8 (`automation_subjects`, `runs`, `activity_events`). Sequence: `1, 2, 3, 4, 5, 6 (branches), 7 (tags), 8 (Kitchen)`. The `_migrations` table is a set of versions, not a strict sequence — gaps are harmless — but never reuse a number.
+
+- **macOS `socket.getfqdn(127.0.0.1)` hangs `serve.py` startup for 30s+.** Symptom: `Serving N project(s)` prints, then nothing (the `ThreadingHTTPServer.__init__` never returns). Fix: a 6-line wrapper that monkey-patches `HTTPServer.server_bind` to skip the reverse-DNS lookup before importing `serve.py`. Reference at `/tmp/start-kitchen-demo.py`. Doesn't affect WSL/Linux. Worth pulling into `serve.py` itself if it bites again.
+
+- **Cross-machine DB writes go through WSL.** `~/.claude/ticket-takeaway/tickets.db` and `~/.claude/ticket-takeaway/registry.json` are anchored to WSL where the production server runs. macOS sessions can read them but should not run `tickets-cli.py` writes or modify the registry — those go through WSL. Code edits + git push happen anywhere; CLI/dashboard writes belong on WSL.
+
+- **Same-transaction event emission is the M1a/M1b audit invariant.** Every mutation in `actions.py` (and the routed-through helpers in `serve.py`) MUST call `emit_event()` inside the same `conn` transaction as the SQL write. The wrapper `db_session()` in `runners.py` enforces this for runner code; ad-hoc helpers must do it explicitly. If you split mutation and event into two transactions, rollback can leave the audit log disagreeing with state.

@@ -58,11 +58,14 @@ src/evidence.py    — Kitchen evidence rotation pipeline (live → summarised �
 **Workflow Bounce** (I-19): Multi-agent prompt routing system. Users define agents (name + CLI command + system prompt) and workflows (ordered steps, each with an agent + optional step instructions). Applying a workflow to a ticket bounces its content through the agent sequence. Primary agent (step 1) mediates disagreements.
 
 - **DB tables:** `workflow_agents`, `workflows`, `workflow_runs` (migration 4)
-- **API:** `/api/workflow/agents`, `/api/workflow/workflows` (CRUD), `/api/tickets/{id}/workflow/run` (execution), `/api/workflow/runs/{id}` (status/polling)
+- **API:** `/api/workflow/agents`, `/api/workflow/workflows` (CRUD), `/api/tickets/{id}/workflow/run` (execution), `/api/workflow/runs/{id}` (status/polling), `/api/workflow/runs/active` (active runs across all tickets for kanban indicators)
 - **CLI:** `tickets-cli.py agent list/add/update/remove`, `workflow list/add/add-step/remove-step/remove`
-- **UI:** Full-page settings (gear icon → replaces kanban), agent editor with JSON args validation, workflow step builder with reorder. Ticket detail has workflow dropdown + Run button with instant placeholder and polling.
-- **Execution:** Background thread per run, `subprocess.run(["claude", "-p", ...])` per step, `--no-session-persistence` flag, 300s timeout. Disagreement detection via primary agent evaluation after each step.
+- **UI:** Agents and workflows are managed in a full-page "Workflows & Agents" view (zap icon in nav bar, `body.bounce-open`). Settings (Appearance, Feedbacks, Managed Files, Project metadata, Scenarios, Danger Zone) live in the right-hand drawer (gear icon). Ticket detail has workflow dropdown + Run button with instant placeholder and polling.
+- **Execution:** Background thread per run, `subprocess.run(["claude", "-p", ...])` per step, `--no-session-persistence` flag, 120s timeout (`WORKFLOW_AGENT_TIMEOUT`). Progress conversation entries flushed to DB before each subprocess call. Return code checked; stderr surfaced on failure. Disagreement detection via primary agent evaluation after each step.
+- **Resilience:** `_recover_stuck_workflow_runs()` on server startup marks orphaned "running" records as "failed". GET run handler detects dead threads (DB says running, no thread in memory) and auto-fails them. Agreement check errors logged to conversation instead of silently swallowed.
+- **Kanban indicators:** 3s poll to `/api/workflow/runs/active` shows pulsing `▶ workflow running` text on kanban cards while active. Static accent dot (`.card-wf-unread`) appears when run completes; cleared when user opens ticket detail overlay.
 - **Validation:** `_normalize_json_array` and `_normalize_workflow_steps` reject invalid args, `_project_*` agent IDs, and missing agents.
+- **API response format:** All workflow/journey list APIs return wrapped objects: `{"agents": [...]}`, `{"workflows": [...]}`, `{"runs": [...]}`. JS must always unwrap with `data.agents || data || []` — never iterate the response directly. This has caused bugs 5+ times.
 
 **Source of truth:** `~/.claude/ticket-takeaway/tickets.db` (SQLite). All writes go through `actions.py`.
 
@@ -79,10 +82,10 @@ src/evidence.py    — Kitchen evidence rotation pipeline (live → summarised �
 2. Loads tickets from SQLite (falls back to parsing PRODUCT_BACKLOG.md if no DB)
 3. Collects git/code stats via shell commands
 4. Renders a self-contained HTML file with inline CSS/JS (light/dark/system theming)
-5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved
+5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved. **Polling is skipped when `body.bounce-open` is set** to prevent form/editor destruction.
 6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
 
-Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
+Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content, tags) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
 
 **Three-layer hierarchy** (see `docs/LIFECYCLE.md` Section 3b):
 - **Section** = where the work is (Ideas → Backlog → WIP → Review → Done)
@@ -108,7 +111,7 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 
 Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
 
-**Multi-project support:** serve.py handles multiple projects simultaneously via project-scoped URL routing (`/{project-id}/api/...`). Root `/` serves a project picker page with a folder picker for adding projects (Browse button → server-side directory listing via `GET /api/browse`). Each project page has a **project switcher dropdown** in the header (replaces the static project name span). The server injects `projects-list` and `current-project` meta tags for the JS switcher. Project settings available at `/{project-id}/settings`. Background threads (markdown watcher, scheduled events) iterate all registered projects. CLI commands `register`/`unregister` manage the project registry.
+**Multi-project support:** serve.py handles multiple projects simultaneously via project-scoped URL routing (`/{project-id}/api/...`). Root `/` serves a project picker page with a folder picker for adding projects (Browse button → server-side directory listing via `GET /api/browse`). Each project page has a **project switcher dropdown** in the header (replaces the static project name span). The server injects `projects-list` and `current-project` meta tags for the JS switcher. The legacy `/{project-id}/settings` route redirects (302) to the dashboard — all settings now live in the drawer. Background threads (markdown watcher, scheduled events) iterate all registered projects. CLI commands `register`/`unregister` manage the project registry.
 
 **Project onboarding:** Registration auto-detects existing work. If `PRODUCT_BACKLOG.md` exists, `seed_project()` imports tickets into SQLite immediately. If not, `scaffold_project()` creates empty `PRODUCT_BACKLOG.md` (with section headers) and `PRODUCT_SPECIFICATION.md`. Both CLI (`register`) and API (`POST /api/projects`) paths call `regenerate_dashboard()` so the board loads immediately. Settings drawer has a "Managed Files" section (`GET /api/managed-files`) showing all files TT manages with existence indicators.
 
@@ -135,6 +138,12 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 - `src/actions.py` → `~/.claude/ticket-takeaway/actions.py`
 - `src/journeys.py` → `~/.claude/ticket-takeaway/journeys.py`
 
+**Ticket Tagging** (migration 6): Tags are stored in `ticket_tags` table (ticket_id, project_id, tag). Supports CLI (`--tag`, `--add-tag`, `--remove-tag`), API (`GET /api/tags`, add/remove/set on PATCH, `tags` array on POST), and dashboard UI (filter bar tag buttons, card tag pills, detail overlay add/remove, new ticket panel input). Tag logic flows through `actions.py` (`add_ticket(tags=...)`, `update_ticket(add_tags=..., remove_tags=...)`). Tags are round-tripped through markdown sync as `Tags: tag1, tag2` lines.
+
+**GitHub Branch Awareness** (migration 7): Branches are stored in `ticket_branches` table (ticket_id, project_id, branch_name, remote, pr_number, pr_status, pr_url, ahead, behind, auto_linked, last_synced). Three-tier discovery: manual link, naming convention scan (`git branch -r` matches branches starting with ticket IDs), PR enrichment (`gh pr list`). Supports CLI (`branches list/link/unlink/scan`, `--add-branch`/`--remove-branch` on update), API (`GET /api/branches`, `GET /api/branches/overview`, `POST /api/branches/scan`, `add_branch`/`remove_branch` on PUT), and dashboard UI (branch pills on cards color-coded by PR status, detail overlay branch strip with link/unlink/scan, header "Branches" dropdown panel showing all remote branches with grouped tickets and inline add/remove). Branch logic flows through `actions.py` (`link_branch()`, `unlink_branch()`, `scan_branches()`, `scan_prs()`). Branches are round-tripped through markdown sync as `Branch: branch1, branch2` lines. `gh` failures are graceful — git branch data always works offline, PR metadata is cached from last successful scan.
+
+**Deployment gotcha:** Source files in `src/` must be deployed to `~/.claude/ticket-takeaway/` for runtime use. The running `serve.py` and CLI read from the deployed copies, not from `src/`. After merging new features, always redeploy changed files (e.g., `cp src/actions.py ~/.claude/ticket-takeaway/actions.py`) and restart the server. Forgetting this step causes runtime errors where CLI/API references code that doesn't exist in the deployed copy.
+
 **DB recovery:** If `tickets.db` is lost, run `tickets-cli.py seed` to reconstruct from PRODUCT_BACKLOG.md.
 
 ## Ticket Format in PRODUCT_BACKLOG.md
@@ -144,6 +153,7 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 Priority: {priority} | Complexity: {complexity} | Status: {status}
 Parent: {parent-id}       (optional — for sub-tickets)
 Depends: {id1}, {id2}     (optional — inter-ticket dependencies)
+Tags: {tag1}, {tag2}      (optional — thematic/sprint tags, stored in ticket_tags table)
 Commit: {hash}            (optional — git commit hash, auto-captured on done/accept)
 {Description}
 - [ ] Acceptance criterion
@@ -187,6 +197,11 @@ python3 $CLI add <project> "Bug description" --section bugs --parent <parent-ID>
 
 # Update description, criteria, or metadata
 python3 $CLI update <project> <ID> --description "..." --add-criteria "..."
+
+# Tags — add when creating or update later
+python3 $CLI add <project> "Title" --tag ux --tag onboarding
+python3 $CLI update <project> <ID> --add-tag sprint-apr-25
+python3 $CLI update <project> <ID> --remove-tag old-tag
 
 # Watch for live dashboard updates (detects direct markdown edits too)
 python3 $CLI watch &
@@ -233,7 +248,18 @@ First-class entity for defining, validating, and documenting user flows. Journey
 
 **Module:** `src/journeys.py` — CRUD, compilation, inference, run result storage. Follows `actions.py` pattern (pure DB, no side effects).
 
-**Dashboard UI:** `/{pid}/journeys` page with list view, step editor, results timeline, and ticket linking. Rendered by `_render_journeys_page()` in `serve.py`.
+**Dashboard UI:** `/{pid}/journeys` page with list view + unified timeline detail. Each journey has its own URL: `/{pid}/journeys/{journey-id}` (direct-linkable, pushState navigation). Rendered by `_render_journeys_page()` in `serve.py`.
+
+**Timeline view** (unified — replaces separate Flow/Steps tabs):
+- Vertical spine with status dots, screenshots on left, step details on right
+- Steps grouped by URL — header row shows page URL when navigation changes
+- Capture steps show thumbnails (click to lightbox), action steps show compact detail cards
+- Human-readable descriptions on each card (e.g. "Click element: [data-testid=...]")
+- Inline edit on pencil click — fields for label, action, value, key, target with help text placeholders
+- "+ Add Step" button at bottom of timeline
+- Failed steps: red border, error text; skipped steps: faded opacity
+- Screenshots served from `.artifacts/journeys/{id}/{run-id}/` via API, backfilled to capture steps on run completion
+- Journey IDs shown as monospace subtitles in list cards and detail header
 
 **Two entry flows:**
 1. **Tickets-first:** "Infer from Tickets" button analyzes existing tickets, groups by lifecycle stage, suggests journeys
@@ -266,11 +292,17 @@ python3 -m pytest tests/test_scenarios.py -v --publish
 
 # Run a specific scenario and publish
 python3 -m pytest tests/test_scenarios.py -v --scenario-id full-tour-showcase --publish
+
+# Run against an already-running Chrome (CDP mode)
+# First start Chrome with: google-chrome --remote-debugging-port=9222
+python3 -m pytest tests/test_scenarios.py -v --backend=cdp
+python3 -m pytest tests/test_scenarios.py -v --backend=cdp --cdp-endpoint=http://localhost:9333
 ```
 
 **Architecture:**
 - `tests/scenarios/*.json` — checked-in scenario manifests (schema: id, title, tags, actors, seed, steps, optional theme/viewport)
-- `tests/scenario_runner.py` — Playwright execution engine (11 actions: open, reload, click, double_click, fill, select, press, wait_for, assert_visible, assert_text, capture)
+- `tests/scenario_backend.py` — Backend protocol + PlaywrightBackend (launched) + CDPBackend (connect_over_cdp). Target resolution lives here.
+- `tests/scenario_runner.py` — Execution engine: dispatches action steps through the Backend interface (12 actions: open, reload, click, double_click, fill, select, press, wait_for, assert_visible, assert_text, capture)
 - `tests/scenario_seed.py` — deterministic ticket seeding via API + cleanup
 - `tests/test_scenarios.py` — pytest parametrized entrypoint with `--scenario-id` and `--publish` options
 - `src/scenarios.py` — manifest discovery, validation, gallery publishing
@@ -283,6 +315,8 @@ python3 -m pytest tests/test_scenarios.py -v --scenario-id full-tour-showcase --
 **Theme support:** Manifests can specify `"theme": "dark"` or `"theme": "light"` to force a theme via localStorage before captures.
 
 **Settings page integration:** `GET /api/scenarios` lists manifests, `POST /api/scenarios/run` launches via subprocess, `GET /api/scenarios/runs/{id}` polls status. Draft endpoint: `POST /api/scenarios/draft` generates candidate manifests from a goal string.
+
+**Backend toggle:** Journey detail view has a PW/CDP dropdown next to the Run button. Sends `{backend: "playwright"|"cdp"}` in the POST body. Server appends `--backend={value}` to the pytest subprocess. Same manifests work with both backends — no duplication needed. `summary.json` records which backend was used.
 
 ## Generated Files
 

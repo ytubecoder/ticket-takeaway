@@ -4,8 +4,8 @@
 Usage:
     tickets-cli.py seed [--project ID]
     tickets-cli.py list [--project ID] [--section S] [--status S]
-    tickets-cli.py add <project> "title" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D]
-    tickets-cli.py update <project> <id> [--title T] [--priority P] [--complexity C] [--status S] [--description D] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID]
+    tickets-cli.py add <project> "title" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D] [--tag T]
+    tickets-cli.py update <project> <id> [--title T] [--priority P] [--complexity C] [--status S] [--description D] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID] [--add-tag T] [--remove-tag T]
     tickets-cli.py move <project> <id> <section>
     tickets-cli.py accept <project> <id>
     tickets-cli.py sync [--project ID]
@@ -37,6 +37,8 @@ from db import get_db, init_db
 from actions import (
     move_ticket, accept_ticket, add_ticket, update_ticket,
     capture_commit_hash,
+    link_branch, unlink_branch, get_ticket_branches, get_project_branches,
+    scan_branches, scan_prs,
 )
 
 
@@ -151,6 +153,7 @@ def parse_backlog(filepath: str) -> list[dict]:
                 "description": "",
                 "parent": None,
                 "depends": [],
+                "tags": [],
                 "acceptance_criteria": [],
                 "sort_order": sort_order,
                 "commit_hash": "",
@@ -183,6 +186,20 @@ def parse_backlog(filepath: str) -> list[dict]:
             val = line_stripped.split(":", 1)[1].strip()
             if val:
                 current_ticket["depends"] = [d.strip() for d in val.split(",") if d.strip()]
+            continue
+
+        # Tags
+        if current_ticket and line_stripped.startswith("Tags:"):
+            val = line_stripped.split(":", 1)[1].strip()
+            if val:
+                current_ticket["tags"] = [t.strip().lower() for t in val.split(",") if t.strip()]
+            continue
+
+        # Branches
+        if current_ticket and line_stripped.startswith("Branch:"):
+            val = line_stripped.split(":", 1)[1].strip()
+            if val:
+                current_ticket["branches"] = [b.strip() for b in val.split(",") if b.strip()]
             continue
 
         # Commit hash
@@ -379,6 +396,38 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                     (tid, project_id, dep_id)
                 )
 
+            # Replace tags
+            if "tags" in t:
+                conn.execute(
+                    "DELETE FROM ticket_tags WHERE ticket_id=? AND project_id=?",
+                    (tid, project_id)
+                )
+                for tag in t["tags"]:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?,?,?)",
+                        (tid, project_id, tag)
+                    )
+
+            # Replace branches (from markdown only — preserve metadata for existing links)
+            if "branches" in t:
+                existing = {r["branch_name"] for r in conn.execute(
+                    "SELECT branch_name FROM ticket_branches WHERE ticket_id=? AND project_id=?",
+                    (tid, project_id)
+                ).fetchall()}
+                md_branches = set(t["branches"])
+                # Remove branches no longer in markdown
+                for removed in existing - md_branches:
+                    conn.execute(
+                        "DELETE FROM ticket_branches WHERE ticket_id=? AND project_id=? AND branch_name=?",
+                        (tid, project_id, removed)
+                    )
+                # Add new branches from markdown
+                for added in md_branches - existing:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO ticket_branches (ticket_id, project_id, branch_name) VALUES (?,?,?)",
+                        (tid, project_id, added)
+                    )
+
             # Upsert readiness content from markdown
             for flag, content in t.get("readiness_content", {}).items():
                 if content:
@@ -415,6 +464,20 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                 conn.execute(
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
                     (tid, project_id, dep_id)
+                )
+
+            # Insert tags for new tickets
+            for tag in t.get("tags", []):
+                conn.execute(
+                    "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?,?,?)",
+                    (tid, project_id, tag)
+                )
+
+            # Insert branches for new tickets
+            for branch in t.get("branches", []):
+                conn.execute(
+                    "INSERT OR IGNORE INTO ticket_branches (ticket_id, project_id, branch_name) VALUES (?,?,?)",
+                    (tid, project_id, branch)
                 )
 
             # Insert readiness content for new tickets
@@ -494,6 +557,27 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             if deps:
                 dep_ids = ", ".join(d["depends_on_id"] for d in deps)
                 lines.append(f"Depends: {dep_ids}")
+
+            # Tags
+            tags = conn.execute(
+                "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
+                (t["id"], project_id)
+            ).fetchall()
+            if tags:
+                tag_names = ", ".join(tg["tag"] for tg in tags)
+                lines.append(f"Tags: {tag_names}")
+
+            # Branches
+            try:
+                branches = conn.execute(
+                    "SELECT branch_name FROM ticket_branches WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
+                    (t["id"], project_id)
+                ).fetchall()
+                if branches:
+                    branch_names = ", ".join(b["branch_name"] for b in branches)
+                    lines.append(f"Branch: {branch_names}")
+            except Exception:
+                pass
 
             # Commit hash and release tag
             if t["commit_hash"]:
@@ -775,6 +859,13 @@ def seed_project(conn: sqlite3.Connection, project: dict) -> int:
                 VALUES (?, ?, ?)
             """, (t["id"], project_id, dep_id))
 
+        # Tags
+        for tag in t.get("tags", []):
+            conn.execute("""
+                INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag)
+                VALUES (?, ?, ?)
+            """, (t["id"], project_id, tag))
+
         # Readiness content
         for flag, content in t.get("readiness_content", {}).items():
             if content:
@@ -906,6 +997,7 @@ def cmd_add(args):
         description=args.description or "",
         parent=args.parent,
         draft=args.draft,
+        tags=args.tag,
     )
     conn.commit()
 
@@ -962,6 +1054,14 @@ def cmd_update(args):
         kwargs["add_depends"] = args.add_depends
     if args.remove_depends:
         kwargs["remove_depends"] = args.remove_depends
+    if args.add_tag:
+        kwargs["add_tags"] = args.add_tag
+    if args.remove_tag:
+        kwargs["remove_tags"] = args.remove_tag
+    if args.add_branch:
+        kwargs["add_branches"] = args.add_branch
+    if args.remove_branch:
+        kwargs["remove_branches"] = args.remove_branch
 
     try:
         tid = update_ticket(conn, project_id, args.id, **kwargs)
@@ -1459,6 +1559,82 @@ def cmd_workflow(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: branches
+# ---------------------------------------------------------------------------
+
+def cmd_branches(args):
+    """Manage branch-ticket links."""
+    projects = load_registry()
+    proj = find_project(projects, args.project)
+    project_id = proj["id"]
+    project_path = os.path.expanduser(proj.get("path", ""))
+
+    conn = get_db()
+    init_db(conn)
+
+    if args.branches_command == "list":
+        if args.ticket:
+            rows = get_ticket_branches(conn, project_id, args.ticket)
+        else:
+            rows = get_project_branches(conn, project_id)
+        if not rows:
+            print("No branches linked.")
+        else:
+            print(f"{'Ticket':<12} {'Branch':<40} {'PR':<8} {'Status':<10} {'Ahead':<6} {'Behind':<6} {'Auto'}")
+            print("-" * 96)
+            for r in rows:
+                pr_str = f"#{r['pr_number']}" if r.get("pr_number") else ""
+                auto_str = "auto" if r.get("auto_linked") else ""
+                print(f"{r['ticket_id']:<12} {r['branch_name']:<40} {pr_str:<8} {r.get('pr_status', ''):<10} {r.get('ahead', 0):<6} {r.get('behind', 0):<6} {auto_str}")
+
+    elif args.branches_command == "link":
+        ingest_markdown(conn, proj)
+        try:
+            created = link_branch(conn, project_id, args.ticket_id, args.branch_name)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
+        if created:
+            print(f"Linked {args.branch_name} → {args.ticket_id}")
+        else:
+            print(f"Already linked.")
+
+    elif args.branches_command == "unlink":
+        ingest_markdown(conn, proj)
+        removed = unlink_branch(conn, project_id, args.ticket_id, args.branch_name)
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
+        if removed:
+            print(f"Unlinked {args.branch_name} from {args.ticket_id}")
+        else:
+            print(f"Link not found.")
+
+    elif args.branches_command == "scan":
+        ingest_markdown(conn, proj)
+        result = scan_branches(conn, project_id, project_path)
+        print(f"Scanned {result.get('total_remote', 0)} remote branches, auto-linked {result.get('linked', 0)} new.")
+        if result.get("error"):
+            print(f"  Warning: {result['error']}")
+
+        if not args.no_prs:
+            pr_result = scan_prs(conn, project_id, project_path)
+            print(f"PR enrichment: updated {pr_result.get('updated', 0)} branch links.")
+            if pr_result.get("error"):
+                print(f"  Warning: {pr_result['error']}")
+
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -1488,6 +1664,7 @@ def main():
     p_add.add_argument("--complexity", help="Complexity (S/M/L/XL)")
     p_add.add_argument("--parent", help="Parent ticket ID")
     p_add.add_argument("--description", help="Description text")
+    p_add.add_argument("--tag", action="append", help="Add tag (repeatable)")
     p_add.add_argument("--draft", action="store_true", help="Create as draft ticket")
 
     # update
@@ -1507,6 +1684,10 @@ def main():
     p_upd.add_argument("--remove-criteria", type=int, help="Remove Nth criterion (1-indexed)")
     p_upd.add_argument("--add-depends", action="append", help="Add dependency (repeatable)")
     p_upd.add_argument("--remove-depends", action="append", help="Remove dependency (repeatable)")
+    p_upd.add_argument("--add-tag", action="append", help="Add tag (repeatable)")
+    p_upd.add_argument("--remove-tag", action="append", help="Remove tag (repeatable)")
+    p_upd.add_argument("--add-branch", action="append", help="Link branch (repeatable)")
+    p_upd.add_argument("--remove-branch", action="append", help="Unlink branch (repeatable)")
     p_upd.add_argument("--confirm", action="store_true", help="Confirm a draft ticket (set draft=false)")
 
     # move
@@ -1601,6 +1782,26 @@ def main():
     p_wf_rm = wf_sub.add_parser("remove", help="Remove a workflow")
     p_wf_rm.add_argument("workflow_id", help="Workflow ID to remove")
 
+    # branches
+    p_br = sub.add_parser("branches", help="Manage branch-ticket links")
+    p_br.add_argument("project", help="Project ID")
+    br_sub = p_br.add_subparsers(dest="branches_command")
+    br_sub.required = True
+
+    p_br_list = br_sub.add_parser("list", help="List branch links")
+    p_br_list.add_argument("--ticket", help="Filter by ticket ID")
+
+    p_br_link = br_sub.add_parser("link", help="Link a branch to a ticket")
+    p_br_link.add_argument("ticket_id", help="Ticket ID")
+    p_br_link.add_argument("branch_name", help="Branch name")
+
+    p_br_unlink = br_sub.add_parser("unlink", help="Unlink a branch from a ticket")
+    p_br_unlink.add_argument("ticket_id", help="Ticket ID")
+    p_br_unlink.add_argument("branch_name", help="Branch name")
+
+    p_br_scan = br_sub.add_parser("scan", help="Scan remote branches and PRs")
+    p_br_scan.add_argument("--no-prs", action="store_true", help="Skip PR enrichment via gh")
+
     args = parser.parse_args()
 
     commands = {
@@ -1619,6 +1820,7 @@ def main():
         "unregister": cmd_unregister,
         "agent": cmd_agent,
         "workflow": cmd_workflow,
+        "branches": cmd_branches,
     }
 
     commands[args.command](args)

@@ -59,6 +59,8 @@ SVG_ICONS = {
     "square": '<rect width="18" height="18" x="3" y="3" rx="2"/>',
     "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     "send": '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+    "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
+    "git-branch": '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
 }
 
 
@@ -100,6 +102,8 @@ class Ticket:
     latest_run_status: Optional[str] = None  # None until M3 produces real runs
     # Kitchen (M2) — computed eligibility (auto ∧ all DCSTL gates clear).
     automation_eligible: bool = False
+    tags: list = field(default_factory=list)
+    branches: list = field(default_factory=list)  # list of dicts: name, pr_number, pr_status, ahead, behind
 
     @property
     def slug(self) -> str:
@@ -355,6 +359,33 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         except Exception:
             pass
 
+        # Tags
+        try:
+            tag_rows = conn.execute(
+                "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
+                (r["id"], project_id)
+            ).fetchall()
+            tags = [t["tag"] for t in tag_rows]
+        except Exception:
+            tags = []
+
+        # Branches
+        try:
+            branch_rows = conn.execute(
+                "SELECT branch_name, pr_number, pr_status, pr_url, ahead, behind, auto_linked "
+                "FROM ticket_branches WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
+                (r["id"], project_id)
+            ).fetchall()
+            branches = [
+                {"name": b["branch_name"], "pr_number": b["pr_number"],
+                 "pr_status": b["pr_status"], "pr_url": b["pr_url"] if "pr_url" in b.keys() else "",
+                 "ahead": b["ahead"], "behind": b["behind"],
+                 "auto_linked": bool(b["auto_linked"])}
+                for b in branch_rows
+            ]
+        except Exception:
+            branches = []
+
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -377,6 +408,8 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             automation_mode=automation_mode,
             latest_run_status=latest_run_status,
             automation_eligible=automation_eligible,
+            tags=tags,
+            branches=branches,
         ))
 
     conn.close()
@@ -655,6 +688,12 @@ def generate_html(project: Project) -> str:
     count_needs_input = sum(1 for t in all_visible if t.latest_run_status == "needs_input")
     count_failed = sum(1 for t in all_visible if t.latest_run_status in ("failed", "stalled"))
 
+    # Collect all unique tags with counts (for filter bar)
+    tag_counts: dict[str, int] = {}
+    for t in all_visible:
+        for tag in getattr(t, 'tags', []):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
     # Progress: done items / (done + remaining)
     total_all = count_total + count_wontdo + count_icebox
     progress_pct = round((count_done / total_all * 100)) if total_all > 0 else 0
@@ -678,6 +717,7 @@ def generate_html(project: Project) -> str:
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
     _icon_journeys = _svg_icon("route", 14)
+    _icon_bounce = _svg_icon("zap", 14)
     _icon_close = _svg_icon("x", 14)
     _icon_open = _svg_icon("arrow-up-right", 12)
     _dctrs_icons = ''.join([
@@ -687,6 +727,23 @@ def generate_html(project: Project) -> str:
         f'<button class="readiness-dot" data-flag="tests" title="Tests" aria-label="Tests">{_svg_icon("flask-conical", 12)}</button>',
         f'<button class="readiness-dot" data-flag="reviewed" title="Learnings" aria-label="Learnings">{_svg_icon("eye", 12)}</button>',
     ])
+
+    # Build tag filter buttons (only shown if tags exist)
+    _tag_filter_html = ""
+    if tag_counts:
+        tag_btns = []
+        for tag_name in sorted(tag_counts.keys()):
+            cnt = tag_counts[tag_name]
+            tag_btns.append(
+                f'<button class="filter-btn tag-filter-btn" data-filter="{escape(tag_name)}" data-group="tags">'
+                f'{escape(tag_name)} <span class="count">{cnt}</span></button>'
+            )
+        _tag_filter_html = (
+            '  <span class="filter-divider"></span>\n'
+            '  <span class="filter-group" data-group-name="tags" id="tagFilterGroup">\n'
+            '    ' + '\n    '.join(tag_btns) + '\n'
+            '  </span>\n'
+        )
 
     html = f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -913,6 +970,21 @@ a {{ color: var(--accent); text-decoration: none; }}
 .card-title {{ font-size: 12px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }}
 
 .card-meta {{ display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }}
+.card-tags {{ display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; padding: 0 2px; }}
+.tag-pill {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 500; background: rgba(139,92,246,0.15); color: #a78bfa; white-space: nowrap; }}
+[data-theme="light"] .tag-pill {{ background: rgba(139,92,246,0.1); color: #7c3aed; }}
+.card-branches {{ display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; padding: 0 2px; }}
+.branch-pill {{ font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 500; background: rgba(56,189,248,0.15); color: #38bdf8; white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }}
+.branch-pill svg {{ flex-shrink: 0; }}
+.branch-pill.pr-open {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.branch-pill.pr-draft {{ background: rgba(34,197,94,0.1); color: #22c55e; opacity: 0.7; }}
+.branch-pill.pr-merged {{ background: rgba(168,85,247,0.15); color: #a855f7; }}
+.branch-pill.pr-closed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+[data-theme="light"] .branch-pill {{ background: rgba(14,165,233,0.1); color: #0284c7; }}
+[data-theme="light"] .branch-pill.pr-open {{ background: rgba(22,163,74,0.1); color: #16a34a; }}
+[data-theme="light"] .branch-pill.pr-merged {{ background: rgba(147,51,234,0.1); color: #9333ea; }}
+[data-theme="light"] .branch-pill.pr-closed {{ background: rgba(220,38,38,0.1); color: #dc2626; }}
+.tag-filter-btn {{ font-size: 11px !important; }}
 .card-id {{ font-size: 10px; color: var(--accent); opacity: 0.6; font-family: var(--font-mono); font-weight: 600; flex-shrink: 0; }}
 
 /* Kitchen badge — small status dot indicating automation state. M1a only renders
@@ -1277,6 +1349,37 @@ a {{ color: var(--accent); text-decoration: none; }}
 .diff-discard:hover {{ color: var(--text-primary); border-color: var(--text-secondary); }}
 .diff-status {{ font-size: 11px; color: var(--text-tertiary); flex: 1; }}
 
+/* Learning candidate list */
+.learning-panel .diff-header span {{ color: var(--text-primary); }}
+.learning-summary {{
+  padding: 8px 12px; font-size: 12px; color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-default); background: rgba(59,130,246,0.04);
+}}
+.learning-items {{ padding: 8px 0; max-height: 360px; overflow-y: auto; }}
+.learning-item {{
+  padding: 8px 12px; display: flex; gap: 10px; align-items: flex-start;
+  border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.15s, opacity 0.15s;
+}}
+.learning-item:last-child {{ border-bottom: none; }}
+.learning-item.accepted {{ background: rgba(34,197,94,0.06); }}
+.learning-item.rejected {{ background: rgba(239,68,68,0.04); opacity: 0.62; }}
+.learning-item-main {{ flex: 1; min-width: 0; }}
+.learning-item-text {{
+  min-height: 28px; padding: 6px 8px; border-radius: 4px;
+  border: 1px solid transparent; background: rgba(255,255,255,0.03);
+  color: var(--text-primary); font-size: 12px; line-height: 1.45; white-space: pre-wrap;
+}}
+.learning-item-text[contenteditable="true"] {{ cursor: text; outline: none; }}
+.learning-item-text[contenteditable="true"]:focus {{
+  border-color: var(--accent); background: rgba(59,130,246,0.08);
+}}
+.learning-meta {{ display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }}
+.learning-chip {{
+  font-size: 10px; padding: 1px 6px; border-radius: 6px;
+  color: var(--text-tertiary); border: 1px solid var(--border-subtle);
+}}
+.learning-actions {{ display: flex; gap: 4px; flex-shrink: 0; padding-top: 2px; }}
+
 /* (Properties moved to meta-strip chips) */
 
 /* Assessment results area */
@@ -1471,6 +1574,101 @@ a {{ color: var(--accent); text-decoration: none; }}
 .meta-chip--parent .chip-label {{ color: var(--text-tertiary); }}
 .meta-chip--parent .chip-value {{ color: var(--accent); font-family: var(--font-mono); }}
 .meta-chip--parent input {{ width: 60px; font-size: 11px; background: var(--bg-card); border: 1px solid var(--accent); color: var(--text-primary); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); outline: none; }}
+.detail-tags-strip {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 20px; border-bottom: 1px solid var(--border-subtle); }}
+.detail-tags-label {{ font-size: 11px; color: var(--text-tertiary); font-weight: 600; font-family: var(--font-sans); }}
+.detail-tags-list {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }}
+.detail-tag {{ display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; background: rgba(139,92,246,0.15); color: #a78bfa; cursor: default; white-space: nowrap; font-family: var(--font-sans); }}
+[data-theme="light"] .detail-tag {{ background: rgba(139,92,246,0.1); color: #7c3aed; }}
+.detail-tag .tag-remove {{ cursor: pointer; opacity: 0.5; margin-left: 2px; font-size: 13px; line-height: 1; }}
+.detail-tag .tag-remove:hover {{ opacity: 1; }}
+.detail-tag-input {{ font-size: 11px; padding: 2px 6px; border-radius: 10px; border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-secondary); width: 80px; outline: none; font-family: var(--font-sans); }}
+.detail-tag-input:focus {{ border-color: var(--accent); width: 120px; }}
+.detail-tag-input::placeholder {{ color: var(--text-tertiary); }}
+.detail-branches-strip {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 20px; border-bottom: 1px solid var(--border-subtle); }}
+.detail-branches-label {{ font-size: 11px; color: var(--text-tertiary); font-weight: 600; font-family: var(--font-sans); }}
+.detail-branches-list {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }}
+.detail-branch {{ display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; background: rgba(56,189,248,0.15); color: #38bdf8; cursor: default; white-space: nowrap; font-family: var(--font-mono); }}
+.detail-branch.pr-open {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.detail-branch.pr-draft {{ background: rgba(34,197,94,0.1); color: #22c55e; opacity: 0.7; }}
+.detail-branch.pr-merged {{ background: rgba(168,85,247,0.15); color: #a855f7; }}
+.detail-branch.pr-closed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+[data-theme="light"] .detail-branch {{ background: rgba(14,165,233,0.1); color: #0284c7; }}
+[data-theme="light"] .detail-branch.pr-open {{ background: rgba(22,163,74,0.1); color: #16a34a; }}
+[data-theme="light"] .detail-branch.pr-merged {{ background: rgba(147,51,234,0.1); color: #9333ea; }}
+[data-theme="light"] .detail-branch.pr-closed {{ background: rgba(220,38,38,0.1); color: #dc2626; }}
+.detail-branch .branch-remove {{ cursor: pointer; font-weight: 700; margin-left: 2px; opacity: 0.6; }}
+.detail-branch .branch-remove:hover {{ opacity: 1; }}
+.detail-branch .branch-pr {{ font-weight: 600; margin-left: 2px; }}
+.detail-branch .branch-ahead-behind {{ font-size: 9px; opacity: 0.7; margin-left: 3px; }}
+.detail-branch-select {{ font-size: 11px; padding: 2px 6px; border-radius: 10px; border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-secondary); outline: none; font-family: var(--font-mono); cursor: pointer; max-width: 180px; }}
+.detail-branch-select:focus {{ border-color: var(--accent); }}
+.detail-branch-select option {{ background: var(--bg-card); color: var(--text-primary); }}
+.detail-branch-scan-btn {{ font-size: 10px; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); }}
+.detail-branch-scan-btn:hover {{ color: var(--accent); border-color: var(--accent); }}
+
+/* Branches dropdown panel */
+.branches-dropdown {{ position: relative; display: inline-flex; align-items: center; }}
+.branches-dropdown-btn {{
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
+  color: var(--text-tertiary); background: none; border: none; padding: 8px 12px;
+  border-radius: 6px; cursor: pointer; transition: all 0.15s; font-family: var(--font-sans);
+}}
+.branches-dropdown-btn:hover, .branches-dropdown-btn[aria-expanded="true"] {{ color: var(--text-primary); background: var(--bg-hover); }}
+.branches-dropdown-btn .branch-count {{ font-size: 9px; background: var(--accent); color: #fff; padding: 0 5px; border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center; }}
+.branches-panel {{
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 550;
+  width: 380px; max-height: 500px; overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none;
+}}
+.branches-panel.open {{ display: block; }}
+.branches-panel-header {{
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle); position: sticky; top: 0; background: var(--bg-card); z-index: 1;
+}}
+.branches-panel-title {{ font-size: 12px; font-weight: 700; color: var(--text-primary); font-family: var(--font-sans); }}
+.branches-panel-scan {{ font-size: 10px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); cursor: pointer; font-family: var(--font-sans); margin-left: auto; }}
+.branches-panel-scan:hover {{ color: var(--accent); border-color: var(--accent); }}
+.branch-group {{ border-bottom: 1px solid var(--border-subtle); }}
+.branch-group:last-child {{ border-bottom: none; }}
+.branch-group-header {{
+  display: flex; align-items: center; gap: 6px; padding: 8px 14px; cursor: pointer;
+  transition: background 0.1s; font-family: var(--font-mono);
+}}
+.branch-group-header:hover {{ background: var(--bg-hover); }}
+.branch-group-name {{ font-size: 12px; font-weight: 600; color: var(--text-primary); }}
+.branch-group-meta {{ font-size: 10px; color: var(--text-tertiary); margin-left: auto; display: flex; gap: 6px; align-items: center; }}
+.branch-group-pr {{ font-size: 9px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }}
+.branch-group-pr.pr-open {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+.branch-group-pr.pr-merged {{ background: rgba(168,85,247,0.15); color: #a855f7; }}
+.branch-group-pr.pr-closed {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+.branch-group-pr.pr-draft {{ background: rgba(34,197,94,0.1); color: #22c55e; opacity: 0.7; }}
+.branch-group-tickets {{ padding: 0 14px 8px 28px; }}
+.branch-group-tickets.collapsed {{ display: none; }}
+.branch-ticket-row {{
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px;
+  font-size: 11px; color: var(--text-secondary); transition: background 0.1s; cursor: default;
+}}
+.branch-ticket-row:hover {{ background: var(--bg-hover); }}
+.branch-ticket-row .ticket-id {{ font-family: var(--font-mono); color: var(--accent); font-weight: 600; font-size: 10px; }}
+.branch-ticket-row .ticket-title {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.branch-ticket-row .ticket-unlink {{ font-size: 12px; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity 0.1s; }}
+.branch-ticket-row:hover .ticket-unlink {{ opacity: 0.6; }}
+.branch-ticket-row .ticket-unlink:hover {{ opacity: 1; color: var(--red); }}
+.branch-add-ticket {{
+  display: flex; align-items: center; gap: 4px; padding: 4px 8px; margin-top: 2px;
+}}
+.branch-add-ticket input {{
+  flex: 1; font-size: 10px; padding: 3px 6px; border: 1px dashed var(--border-subtle);
+  background: transparent; color: var(--text-secondary); border-radius: 4px; outline: none;
+  font-family: var(--font-mono);
+}}
+.branch-add-ticket input:focus {{ border-color: var(--accent); }}
+.branch-add-ticket input::placeholder {{ color: var(--text-tertiary); }}
+.branch-no-tickets {{ font-size: 10px; color: var(--text-tertiary); padding: 2px 8px; font-style: italic; }}
+.branch-group-arrow {{ font-size: 8px; color: var(--text-tertiary); transition: transform 0.15s; }}
+.branch-group-header[aria-expanded="true"] .branch-group-arrow {{ transform: rotate(90deg); }}
+.branches-empty {{ padding: 20px 14px; text-align: center; color: var(--text-tertiary); font-size: 12px; }}
 /* Status dropdown for meta chip */
 .meta-status-dropdown {{ position: absolute; z-index: 1010; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); min-width: 140px; }}
 .meta-status-opt {{ display: block; width: 100%; text-align: left; font-size: 12px; padding: 6px 10px; border: none; background: none; color: var(--text-secondary); cursor: pointer; border-radius: 4px; font-family: var(--font-sans); }}
@@ -1803,6 +2001,103 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 9px; padding: 1px 5px; border-radius: 3px;
   background: var(--bg-badge); color: var(--text-tertiary);
 }}
+/* Drawer: Project / Scenarios / Draft / Danger */
+.project-form {{ display: flex; flex-direction: column; gap: 4px; }}
+.project-form label {{
+  font-size: 10px; font-weight: 600; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px;
+}}
+.project-form label .pf-ro {{ color: var(--text-tertiary); text-transform: none; font-weight: 400; }}
+.project-form input[type="text"], .project-form textarea {{
+  font-size: 11px; padding: 5px 8px; border-radius: 5px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: var(--font-mono); outline: none; width: 100%;
+}}
+.project-form input[type="text"]:focus, .project-form textarea:focus {{ border-color: var(--accent); }}
+.project-form input[readonly] {{ opacity: 0.6; cursor: not-allowed; }}
+.project-form textarea {{ resize: vertical; font-family: inherit; }}
+.project-form .pf-row {{ display: flex; align-items: center; gap: 10px; margin-top: 8px; }}
+.project-form .pf-save {{
+  margin-top: 10px; font-size: 11px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid var(--accent); background: rgba(59,130,246,0.12);
+  color: var(--accent); cursor: pointer; font-weight: 600; font-family: inherit;
+  align-self: flex-start;
+}}
+.project-form .pf-save:hover {{ background: rgba(59,130,246,0.22); }}
+.project-form .pf-msg {{ font-size: 10px; margin-left: 8px; }}
+.project-form .pf-msg.ok {{ color: #22c55e; }}
+.project-form .pf-msg.err {{ color: #ef4444; }}
+.scenarios-list {{ display: flex; flex-direction: column; gap: 4px; }}
+.scenario-row {{
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-card);
+  font-size: 11px;
+}}
+.scenario-row .sr-title {{ font-weight: 600; color: var(--text-primary); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.scenario-row .sr-status {{ font-size: 10px; min-width: 40px; text-align: right; }}
+.scenario-row .sr-status.passed {{ color: #22c55e; }}
+.scenario-row .sr-status.failed {{ color: #ef4444; }}
+.scenario-row .sr-btn {{
+  font-size: 9px; padding: 3px 7px; border-radius: 4px;
+  border: 1px solid var(--border-default); background: none; color: var(--text-secondary);
+  cursor: pointer; font-family: inherit;
+}}
+.scenario-row .sr-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
+.scenario-row .sr-btn.publish {{ color: var(--accent); border-color: rgba(59,130,246,0.4); }}
+.scenario-shots {{ display: flex; gap: 3px; margin-top: 4px; flex-wrap: wrap; }}
+.scenario-shots img {{
+  width: 48px; height: 32px; object-fit: cover; border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+}}
+.draft-goal {{
+  width: 100%; font-size: 11px; padding: 6px 8px; border-radius: 5px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: inherit; resize: vertical; outline: none;
+  margin-top: 6px;
+}}
+.draft-goal:focus {{ border-color: var(--accent); }}
+.draft-btn {{
+  margin-top: 6px; font-size: 11px; padding: 6px 12px; border-radius: 6px;
+  border: 1px solid var(--accent); background: rgba(59,130,246,0.12);
+  color: var(--accent); cursor: pointer; font-weight: 600; font-family: inherit;
+}}
+.draft-btn:hover {{ background: rgba(59,130,246,0.22); }}
+.draft-results {{ margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }}
+.draft-candidate {{
+  padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 6px;
+  background: var(--bg-card);
+}}
+.draft-candidate .dc-title-row {{ display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }}
+.draft-candidate .dc-title {{ font-size: 12px; font-weight: 600; color: var(--text-primary); flex: 1; }}
+.draft-candidate .dc-conf {{
+  font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 8px; text-transform: uppercase;
+}}
+.draft-candidate .dc-conf.high {{ background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }}
+.draft-candidate .dc-conf.medium {{ background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }}
+.draft-candidate .dc-conf.low {{ background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }}
+.draft-candidate .dc-summary {{ font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; }}
+.draft-candidate .dc-btn-row {{ display: flex; gap: 6px; align-items: center; margin-top: 6px; }}
+.draft-candidate .dc-btn {{
+  font-size: 10px; padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border-default); background: none; color: var(--text-secondary);
+  font-family: inherit;
+}}
+.draft-candidate .dc-btn.approve {{ color: #22c55e; border-color: rgba(34,197,94,0.4); }}
+.draft-candidate .dc-btn:hover {{ border-color: var(--text-tertiary); }}
+.draft-candidate .dc-msg {{ font-size: 10px; }}
+.draft-candidate .dc-msg.ok {{ color: #22c55e; }}
+.draft-candidate .dc-msg.err {{ color: #ef4444; }}
+.draft-candidate pre.dc-preview {{
+  display: none; margin-top: 6px; padding: 6px; border-radius: 4px;
+  background: var(--bg-page); font-size: 9px; color: var(--text-secondary);
+  overflow-x: auto; max-height: 180px;
+}}
+.danger-btn {{
+  font-size: 11px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid rgba(239,68,68,0.35); background: rgba(239,68,68,0.1);
+  color: #ef4444; cursor: pointer; font-weight: 600; font-family: inherit;
+}}
+.danger-btn:hover {{ background: rgba(239,68,68,0.2); }}
 
 /* Attachments section in detail overlay */
 .attachments-list {{
@@ -1960,6 +2255,11 @@ a {{ color: var(--accent); text-decoration: none; }}
   font-size: 8px; color: #3b82f6; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.3px; animation: wfPulse 1.5s ease-in-out infinite;
 }}
+.card-wf-unread {{
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); margin-left: 4px; vertical-align: middle;
+  flex-shrink: 0;
+}}
 .workflow-conversation {{ display: none; }}
 .workflow-run-block.expanded .workflow-conversation {{ display: block; }}
 .workflow-turn {{ padding: 8px 10px; border-top: 1px solid var(--border); }}
@@ -1973,33 +2273,32 @@ a {{ color: var(--accent); text-decoration: none; }}
   background: rgba(234,179,8,0.08); border-left: 3px solid rgba(234,179,8,0.4);
 }}
 
-/* ── Full-page settings ── */
-.settings-page {{
+/* ── Full-page Workflows & Agents ("bounce") view ── */
+.bounce-page {{
   display: none; position: fixed; inset: 0; z-index: 600;
   background: var(--bg-primary); overflow-y: auto; padding: 32px 48px;
 }}
-body.settings-open .settings-page {{ display: block; }}
-body.settings-open .kanban,
-body.settings-open .filter-bar,
-body.settings-open .bottom-section,
-body.settings-open #settings-drawer,
-body.settings-open .settings-toggle {{ display: none !important; }}
-body.settings-open .settings-back-btn {{ display: inline-flex; }}
-.settings-back-btn {{
+body.bounce-open .bounce-page {{ display: block; }}
+body.bounce-open .kanban,
+body.bounce-open .filter-bar,
+body.bounce-open .bottom-section,
+body.bounce-open #settings-drawer {{ display: none !important; }}
+body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
+.bounce-back-btn {{
   display: none; font-size: 12px; padding: 4px 10px; border-radius: 6px;
   border: 1px solid var(--border-default); background: var(--bg-card);
   color: var(--text-secondary); cursor: pointer; font-family: inherit;
   align-items: center; gap: 4px; margin-right: 8px;
 }}
-.settings-back-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
-.settings-page h2 {{
+.bounce-back-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
+.bounce-page h2 {{
   font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 24px;
 }}
-.settings-page .sp-section {{
+.bounce-page .sp-section {{
   margin-bottom: 32px; border: 1px solid var(--border-default);
   border-radius: 10px; padding: 20px; background: var(--bg-card);
 }}
-.settings-page .sp-section h3 {{
+.bounce-page .sp-section h3 {{
   font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 12px;
 }}
 
@@ -2083,7 +2382,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 </div>
 
 <div class="filter-bar" id="filterBar">
-  <button class="settings-back-btn" id="settingsBackBtn">&larr; Back to Board</button>
+  <button class="bounce-back-btn" id="bounceBackBtn">&larr; Back to Board</button>
   <button class="filter-btn active" data-filter="all" data-group="all">All <span class="count">{count_total}</span></button>
   <span class="filter-divider"></span>
   <span class="filter-group" data-group-name="status">
@@ -2111,15 +2410,28 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     <button class="filter-btn" data-filter="failed"      data-group="kitchen" title="Last run failed or stalled">Failed <span class="count">{count_failed}</span></button>
   </span>
   <span class="filter-divider"></span>
+{_tag_filter_html}  <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
   <input type="text" class="search-input" id="searchInput" placeholder="Search items...">
+  <div class="branches-dropdown" id="branchesDropdown">
+    <button class="branches-dropdown-btn" id="branchesDropdownBtn" title="Branches" aria-expanded="false" aria-haspopup="true">{_svg_icon("git-branch", 15)} Branches</button>
+    <div class="branches-panel" id="branchesPanel">
+      <div class="branches-panel-header">
+        <span class="branches-panel-title">Remote Branches</span>
+        <button class="branches-panel-scan" id="branchesPanelScan">Scan</button>
+      </div>
+      <div id="branchesPanelBody"></div>
+    </div>
+  </div>
   <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
+  <button class="settings-toggle" id="bounceToggleBtn" data-testid="bounce-toggle" title="Workflows &amp; Agents">{_icon_bounce}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
     <div class="new-ticket-quick">
       <input type="text" id="newTicketTitle" data-testid="new-ticket-title" placeholder="What needs to be done?" class="new-ticket-input" />
+      <input type="text" id="newTicketTags" placeholder="Tags (comma-separated)" class="new-ticket-input" style="width:140px;font-size:11px;" />
       <select id="newTicketSection" data-testid="new-ticket-section" class="new-ticket-select">
         <option value="ideas">Idea</option>
         <option value="backlog">Backlog</option>
@@ -2181,6 +2493,46 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       <div class="settings-section-title">Managed Files</div>
       <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
       <div id="managedFilesList" class="managed-files-list"></div>
+    </div>
+    <div class="settings-section" id="projectSection">
+      <div class="settings-section-title">Project</div>
+      <form id="projectForm" class="project-form">
+        <label>Name</label>
+        <input type="text" id="projectNameInput" />
+        <label>Path</label>
+        <input type="text" id="projectPathInput" />
+        <label>Description</label>
+        <textarea id="projectDescInput" rows="2"></textarea>
+        <label>ID <span class="pf-ro">(read-only)</span></label>
+        <input type="text" id="projectIdInput" readonly />
+        <div class="pf-row">
+          <label>Active</label>
+          <label class="settings-toggle-switch">
+            <input type="checkbox" id="projectActiveInput">
+            <span class="settings-toggle-slider"></span>
+          </label>
+        </div>
+        <button type="submit" class="pf-save">Save Project</button>
+        <span class="pf-msg" id="projectSaveMsg"></span>
+      </form>
+    </div>
+    <div class="settings-section" id="scenariosSection">
+      <div class="settings-section-title">Scenarios</div>
+      <div id="scenariosList" class="scenarios-list">
+        <div class="settings-hint">Loading scenarios&hellip;</div>
+      </div>
+    </div>
+    <div class="settings-section" id="draftSection">
+      <div class="settings-section-title">Generate Draft Scenario</div>
+      <div class="settings-hint">Describe what the scenario should demonstrate.</div>
+      <textarea id="draftGoalInput" rows="2" class="draft-goal" placeholder="e.g. user creates a ticket and moves it to WIP"></textarea>
+      <button id="draftGenerateBtn" class="draft-btn">Generate Drafts</button>
+      <div id="draftResults" class="draft-results"></div>
+    </div>
+    <div class="settings-section" id="dangerSection">
+      <div class="settings-section-title" style="color:#ef4444;">Danger Zone</div>
+      <button id="removeProjectBtn" class="danger-btn">Remove Project</button>
+      <div class="settings-hint">Removes from registry only. Files and tickets are not deleted.</div>
     </div>
   </div>
 </div>
@@ -2248,24 +2600,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
 </div>
 
-<!-- Full-page settings -->
-<div class="settings-page" id="settings-page">
-  <h2>Settings</h2>
-
-  <div class="sp-section">
-    <h3>Appearance</h3>
-    <div id="spThemeToggle"></div>
-  </div>
-
-  <div class="sp-section">
-    <h3>Feedbacks Integration</h3>
-    <p style="font-size:12px;color:var(--text-tertiary);">Managed via the settings drawer.</p>
-  </div>
-
-  <div class="sp-section">
-    <h3>Managed Files</h3>
-    <div id="spManagedFiles" style="font-size:12px;color:var(--text-tertiary);">Loading...</div>
-  </div>
+<!-- Full-page Workflows & Agents view -->
+<div class="bounce-page" id="bounce-page">
+  <h2>Workflows &amp; Agents</h2>
 
   <div class="sp-section">
     <h3>Agents</h3>
@@ -2419,6 +2756,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
               if (v === 'failed'      && (card.dataset.runStatus === 'failed' || card.dataset.runStatus === 'stalled')) {{ match = true; break; }}
             }}
           }}
+          else if (g === 'tags') {{ var ct = (card.dataset.tags || '').split(' '); match = vals.some(function(v){{ return ct.indexOf(v) !== -1; }}); }}
           if (!match) show = false;
         }});
         card.style.display = show ? '' : 'none';
@@ -2486,13 +2824,14 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     el._bound = true;
     el.addEventListener('click', function(e) {{
       e.stopPropagation(); // prevent bubbling to bottom-section-header
-      if (e.detail === 1) {{
+      if (e.detail === 1 && !window._justDragged) {{
         var self = this;
         this._clickTimer = setTimeout(function() {{ self.classList.toggle('expanded'); }}, 200);
       }}
     }});
     el.addEventListener('dblclick', function(e) {{
       e.stopPropagation();
+      if (window._justDragged) return;
       clearTimeout(this._clickTimer);
       var id = this.dataset.itemId;
       var title = this.dataset.title;
@@ -2638,10 +2977,58 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       if (oldPct && newPct && oldPct.textContent !== newPct.textContent) oldPct.textContent = newPct.textContent;
       var oldDate = document.querySelector('.header-date'), newDate = newDoc.querySelector('.header-date');
       if (oldDate && newDate && oldDate.textContent !== newDate.textContent) oldDate.textContent = newDate.textContent;
+      // Patch tag filter group (tags can appear/disappear)
+      var oldTagGroup = document.getElementById('tagFilterGroup');
+      var newTagGroup = newDoc.getElementById('tagFilterGroup');
+      if (oldTagGroup && newTagGroup) {{
+        if (oldTagGroup.innerHTML !== newTagGroup.innerHTML) {{
+          // Preserve active state
+          var activeTags = [];
+          oldTagGroup.querySelectorAll('.filter-btn.active').forEach(function(b) {{ activeTags.push(b.dataset.filter); }});
+          oldTagGroup.innerHTML = newTagGroup.innerHTML;
+          activeTags.forEach(function(t) {{
+            var btn = oldTagGroup.querySelector('.filter-btn[data-filter="'+t+'"]');
+            if (btn) btn.classList.add('active');
+          }});
+          // Rebind click handlers on new tag buttons
+          oldTagGroup.querySelectorAll('.filter-btn').forEach(function(btn) {{
+            btn.addEventListener('click', function() {{
+              btn.classList.toggle('active');
+              applyFilters();
+            }});
+          }});
+        }}
+      }} else if (!oldTagGroup && newTagGroup) {{
+        // Tag group appeared — insert before drafts divider
+        var sizeGroup = document.querySelector('.filter-group[data-group-name="size"]');
+        if (sizeGroup && sizeGroup.nextElementSibling) {{
+          var divider = document.createElement('span');
+          divider.className = 'filter-divider';
+          divider.id = 'tagFilterDivider';
+          var group = document.createElement('span');
+          group.className = 'filter-group';
+          group.dataset.groupName = 'tags';
+          group.id = 'tagFilterGroup';
+          group.innerHTML = newTagGroup.innerHTML;
+          sizeGroup.parentNode.insertBefore(divider, sizeGroup.nextElementSibling);
+          divider.parentNode.insertBefore(group, divider.nextSibling);
+          group.querySelectorAll('.filter-btn').forEach(function(btn) {{
+            btn.addEventListener('click', function() {{
+              btn.classList.toggle('active');
+              applyFilters();
+            }});
+          }});
+        }}
+      }} else if (oldTagGroup && !newTagGroup) {{
+        // Tag group removed
+        var prevDiv = oldTagGroup.previousElementSibling;
+        if (prevDiv && prevDiv.classList.contains('filter-divider')) prevDiv.remove();
+        oldTagGroup.remove();
+      }}
     }}
 
     setInterval(function() {{
-      if (document.body.classList.contains('settings-open')) return;
+      if (document.body.classList.contains('bounce-open')) return;
       fetch(url).then(function(r) {{ return r.text(); }}).then(function(html) {{
         var tsMatch = html.match(/<meta name="gen-ts" content="(\\d+)">/);
         if (!tsMatch || tsMatch[1] === currentTs) return;
@@ -2684,10 +3071,11 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         el._bound = true;
         el.addEventListener('click', function(e) {{
           e.stopPropagation();
-          if (e.detail === 1) {{ var self = this; this._clickTimer = setTimeout(function() {{ self.classList.toggle('expanded'); }}, 200); }}
+          if (e.detail === 1 && !window._justDragged) {{ var self = this; this._clickTimer = setTimeout(function() {{ self.classList.toggle('expanded'); }}, 200); }}
         }});
         el.addEventListener('dblclick', function(e) {{
           e.stopPropagation(); clearTimeout(this._clickTimer);
+          if (window._justDragged) return;
           var id = this.dataset.itemId, title = this.dataset.title, col = this.dataset.section, text;
           if (col === 'ideas') text = '/spec ' + id;
           else if (col === 'backlog') text = 'I want to spec out ' + id + ': ' + title + ' — write the description and acceptance criteria';
@@ -3313,19 +3701,25 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
       // --- Drag-to-move ---
       var dragId = null;
+      window.window._justDragged = false;
       document.addEventListener('dragstart', function(e) {{
         var card = e.target.closest('.card');
         if (!card || !card.dataset.itemId) return;
         dragId = card.dataset.itemId;
+        window._justDragged = true;
         card.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', dragId);
       }});
       document.addEventListener('dragend', function(e) {{
         var card = e.target.closest('.card');
-        if (card) card.classList.remove('dragging');
+        if (card) {{
+          card.classList.remove('dragging');
+          clearTimeout(card._clickTimer);
+        }}
         document.querySelectorAll('.drag-over').forEach(function(el) {{ el.classList.remove('drag-over'); }});
         dragId = null;
+        setTimeout(function() {{ window._justDragged = false; }}, 50);
       }});
       document.querySelectorAll('.column, .bottom-section').forEach(function(zone) {{
         zone.addEventListener('dragover', function(e) {{
@@ -3502,16 +3896,21 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         }});
       }}
 
+      var newTags = document.getElementById('newTicketTags');
       function submitNewTicket() {{
         var title = newTitle.value.trim();
         if (!title) return;
         newSubmit.disabled = true;
+        var tagsRaw = (newTags && newTags.value) ? newTags.value.split(',').map(function(s){{ return s.trim().toLowerCase(); }}).filter(Boolean) : [];
+        var payload = {{ title: title, section: newSection.value }};
+        if (tagsRaw.length) payload.tags = tagsRaw;
         fetch(EDIT_API + '/tickets', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ title: title, section: newSection.value }})
+          body: JSON.stringify(payload)
         }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
           newTitle.value = '';
+          if (newTags) newTags.value = '';
           newSubmit.disabled = false;
           newTitle.focus();
         }}).catch(function() {{ newSubmit.disabled = false; }});
@@ -3567,6 +3966,17 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       <span class="meta-chip meta-chip--automation" title="Automation mode" data-testid="detail-automation">
         <span class="chip-label">Auto:</span> <span class="chip-value">Manual</span>
       </span>
+    </div>
+    <div class="detail-tags-strip" id="detail-tags-strip">
+      <span class="detail-tags-label">Tags:</span>
+      <span class="detail-tags-list" id="detail-tags-list"></span>
+      <input type="text" class="detail-tag-input" id="detail-tag-input" placeholder="+ add tag" />
+    </div>
+    <div class="detail-branches-strip" id="detail-branches-strip">
+      <span class="detail-branches-label">{_svg_icon("git-branch", 12)} Branches:</span>
+      <span class="detail-branches-list" id="detail-branches-list"></span>
+      <select class="detail-branch-select" id="detail-branch-select"><option value="">+ link branch</option></select>
+      <button class="detail-branch-scan-btn" id="detail-branch-scan-btn" title="Scan for branches">Scan</button>
     </div>
     <div class="detail-body">
       <!-- Live run panel (M3) — hidden when no runs exist -->
@@ -3690,9 +4100,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       <div class="detail-section" data-section="reviewed" id="section-reviewed">
         <div class="detail-section-header">
           <h3><span class="section-flag" data-cat="R">L</span> Learnings / Sync</h3>
-          <button class="section-assess-btn" data-cat="R">Assess</button>
+          <button class="section-assess-btn learnings-generate-btn" data-cat="R" data-action="generate-learnings">Generate</button>
         </div>
-        <div class="detail-assess-loading hidden" data-cat-loading="R">Assessing review...</div>
+        <div class="detail-assess-loading hidden" data-cat-loading="R">Generating learnings...</div>
         <div class="detail-assessment hidden" data-cat-result="R"></div>
         <textarea class="detail-editor" data-field="reviewed" placeholder="Learnings, sync notes, and decisions captured along the way..."></textarea>
       </div>
@@ -3804,7 +4214,11 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       var sec = CAT_RMAP[cat];
       if (!sec) return;
       var hasContent = sec === 'description' ? !!(data.description) : sec === 'criteria' ? (data.acceptance_criteria || []).length > 0 : !!(fl[sec]);
-      btn.textContent = hasContent ? 'Re-assess' : 'Assess';
+      if (btn.dataset.action === 'generate-learnings') {{
+        btn.textContent = hasContent ? 'Generate More' : 'Generate';
+      }} else {{
+        btn.textContent = hasContent ? 'Re-assess' : 'Assess';
+      }}
     }});
   }}
 
@@ -4679,9 +5093,9 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     return lines;
   }}
 
-  function renderDiffUI(container, data, cat) {{
-    var existing = container.querySelector('.diff-panel');
-    if (existing) existing.parentNode.removeChild(existing);
+	  function renderDiffUI(container, data, cat) {{
+	    var existing = container.querySelector('.diff-panel');
+	    if (existing) existing.parentNode.removeChild(existing);
 
     var hunks = data.hunks || [];
     var original = data.original || '';
@@ -4850,11 +5264,281 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       panel.classList.add('hidden');
     }});
 
-    container.insertBefore(panel, container.firstChild);
-  }}
+	    container.insertBefore(panel, container.firstChild);
+	  }}
 
-  function runCategoryAssess(cat, action, onDone, forceRefresh) {{
-    var catCacheKey = currentTicketId + ':cat:' + cat;
+	  function normalizeLearningLine(text) {{
+	    return (text || '')
+	      .replace(/^\\s*[-*]\\s+/, '')
+	      .replace(/^\\s*\\[[^\\]]+\\]\\s*/, '')
+	      .replace(/^\\s*\\[[^\\]]+\\]\\s*/, '')
+	      .replace(/\\s+/g, ' ')
+	      .trim()
+	      .toLowerCase();
+	  }}
+
+	  function formatLearningItem(item) {{
+	    var scope = item.scope || 'ticket';
+	    var typ = item.type || '';
+	    var meta = typ ? '[' + scope + '/' + typ + ']' : '[' + scope + ']';
+	    return '- ' + meta + ' ' + (item.text || '').trim();
+	  }}
+
+	  function saveReadinessContent(field, val) {{
+	    return fetch(EDIT_API+'/tickets/'+currentTicketId+'/readiness/'+field, {{
+	      method:'PUT',
+	      headers:{{'Content-Type':'application/json'}},
+	      body:JSON.stringify({{content:val}})
+	    }}).then(function(r){{ return r.json(); }}).then(function(u){{
+	      if(u) currentData = u;
+	      refreshDCTRS(currentData);
+	      return u;
+	    }});
+	  }}
+
+	  function renderLearningCandidates(container, data) {{
+	    var existing = container.querySelector('.learning-panel');
+	    if (existing) existing.parentNode.removeChild(existing);
+	    var oldNotice = container.querySelector('.learning-empty-notice');
+	    if (oldNotice) oldNotice.parentNode.removeChild(oldNotice);
+
+	    var items = data.items || [];
+	    if (!items.length) {{
+	      var noItems = document.createElement('div');
+	      noItems.className = 'detail-assessment ok learning-empty-notice';
+	      noItems.style.marginBottom = '12px';
+	      var header = document.createElement('div');
+	      header.className = 'assessment-header';
+	      var badge = document.createElement('span');
+	      badge.className = 'assessment-status ok';
+	      badge.textContent = 'no candidates';
+	      var dismiss = document.createElement('button');
+	      dismiss.className = 'assessment-dismiss';
+	      dismiss.textContent = '\\u00d7';
+	      dismiss.addEventListener('click', function() {{ noItems.remove(); }});
+	      header.appendChild(badge);
+	      header.appendChild(dismiss);
+	      var summary = document.createElement('div');
+	      summary.className = 'assessment-summary';
+	      summary.textContent = data.summary || 'No useful learnings were found from the current ticket evidence.';
+	      noItems.appendChild(header);
+	      noItems.appendChild(summary);
+	      container.insertBefore(noItems, container.firstChild);
+	      return;
+	    }}
+
+	    var panel = document.createElement('div');
+	    panel.className = 'diff-panel learning-panel';
+
+	    var header = document.createElement('div');
+	    header.className = 'diff-header';
+	    var titleSpan = document.createElement('span');
+	    titleSpan.textContent = 'Candidate Learnings (' + items.length + ')';
+	    var acceptAll = document.createElement('button');
+	    acceptAll.className = 'diff-accept-all';
+	    acceptAll.textContent = 'Accept All';
+	    var rejectAll = document.createElement('button');
+	    rejectAll.className = 'diff-reject-all';
+	    rejectAll.textContent = 'Reject All';
+	    header.appendChild(titleSpan);
+	    header.appendChild(acceptAll);
+	    header.appendChild(rejectAll);
+	    panel.appendChild(header);
+
+	    if (data.summary) {{
+	      var summaryEl = document.createElement('div');
+	      summaryEl.className = 'learning-summary';
+	      summaryEl.textContent = data.summary;
+	      panel.appendChild(summaryEl);
+	    }}
+
+	    var states = items.map(function() {{ return 'pending'; }});
+	    var list = document.createElement('div');
+	    list.className = 'learning-items';
+	    var itemEls = items.map(function(item, i) {{
+	      var row = document.createElement('div');
+	      row.className = 'learning-item';
+	      row.dataset.index = i;
+
+	      var main = document.createElement('div');
+	      main.className = 'learning-item-main';
+	      var text = document.createElement('div');
+	      text.className = 'learning-item-text';
+	      text.contentEditable = 'true';
+	      text.spellcheck = true;
+	      text.textContent = item.text || '';
+	      text.addEventListener('input', function() {{ item.text = text.textContent.trim(); }});
+	      text.addEventListener('keydown', function(e) {{
+	        if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); text.blur(); }}
+	      }});
+	      main.appendChild(text);
+
+	      var meta = document.createElement('div');
+	      meta.className = 'learning-meta';
+	      ['scope', 'type', 'source', 'confidence'].forEach(function(key) {{
+	        if (!item[key]) return;
+	        var chip = document.createElement('span');
+	        chip.className = 'learning-chip';
+	        chip.textContent = key + ': ' + item[key];
+	        meta.appendChild(chip);
+	      }});
+	      main.appendChild(meta);
+
+	      var actions = document.createElement('div');
+	      actions.className = 'learning-actions';
+	      var acceptBtn = document.createElement('button');
+	      acceptBtn.className = 'diff-accept';
+	      acceptBtn.title = 'Accept learning';
+	      acceptBtn.textContent = '\\u2713';
+	      var rejectBtn = document.createElement('button');
+	      rejectBtn.className = 'diff-reject';
+	      rejectBtn.title = 'Reject learning';
+	      rejectBtn.textContent = '\\u00d7';
+	      actions.appendChild(acceptBtn);
+	      actions.appendChild(rejectBtn);
+
+	      row.appendChild(main);
+	      row.appendChild(actions);
+	      list.appendChild(row);
+
+	      ;(function(idx, rowEl) {{
+	        function setState(newState) {{
+	          if (states[idx] === newState) {{
+	            states[idx] = 'pending';
+	            rowEl.classList.remove('accepted', 'rejected');
+	          }} else {{
+	            states[idx] = newState;
+	            rowEl.classList.remove('accepted', 'rejected');
+	            if (newState !== 'pending') rowEl.classList.add(newState);
+	          }}
+	          updateStatus();
+	        }}
+	        acceptBtn.addEventListener('click', function() {{ setState('accepted'); }});
+	        rejectBtn.addEventListener('click', function() {{ setState('rejected'); }});
+	      }})(i, row);
+
+	      return row;
+	    }});
+	    panel.appendChild(list);
+
+	    var footer = document.createElement('div');
+	    footer.className = 'diff-footer';
+	    var statusEl = document.createElement('span');
+	    statusEl.className = 'diff-status';
+	    var discardBtn = document.createElement('button');
+	    discardBtn.className = 'diff-discard';
+	    discardBtn.textContent = 'Discard';
+	    var applyBtn = document.createElement('button');
+	    applyBtn.className = 'diff-apply';
+	    applyBtn.textContent = 'Apply Selected';
+	    applyBtn.disabled = true;
+	    footer.appendChild(statusEl);
+	    footer.appendChild(discardBtn);
+	    footer.appendChild(applyBtn);
+	    panel.appendChild(footer);
+
+	    function updateStatus() {{
+	      var accepted = states.filter(function(s) {{ return s === 'accepted'; }}).length;
+	      var rejected = states.filter(function(s) {{ return s === 'rejected'; }}).length;
+	      statusEl.textContent = accepted + ' accepted, ' + rejected + ' rejected, ' + (items.length - accepted - rejected) + ' pending';
+	      applyBtn.disabled = accepted === 0;
+	    }}
+	    updateStatus();
+
+	    acceptAll.addEventListener('click', function() {{
+	      for (var k = 0; k < states.length; k++) states[k] = 'accepted';
+	      itemEls.forEach(function(el) {{ el.classList.remove('rejected'); el.classList.add('accepted'); }});
+	      updateStatus();
+	    }});
+	    rejectAll.addEventListener('click', function() {{
+	      for (var k = 0; k < states.length; k++) states[k] = 'rejected';
+	      itemEls.forEach(function(el) {{ el.classList.remove('accepted'); el.classList.add('rejected'); }});
+	      updateStatus();
+	    }});
+
+	    discardBtn.addEventListener('click', function() {{ panel.remove(); }});
+
+	    applyBtn.addEventListener('click', function() {{
+	      var acceptedItems = [];
+	      states.forEach(function(state, idx) {{
+	        if (state === 'accepted' && items[idx] && items[idx].text && items[idx].text.trim()) {{
+	          acceptedItems.push(items[idx]);
+	        }}
+	      }});
+	      if (!acceptedItems.length) return;
+	      var editor = overlay.querySelector('[data-field="reviewed"]');
+	      if (!editor) return;
+	      var existing = editor.value.trim();
+	      var existingKeys = {{}};
+	      existing.split('\\n').forEach(function(line) {{
+	        var key = normalizeLearningLine(line);
+	        if (key) existingKeys[key] = true;
+	      }});
+	      var additions = [];
+	      acceptedItems.forEach(function(item) {{
+	        var key = normalizeLearningLine(item.text);
+	        if (!key || existingKeys[key]) return;
+	        existingKeys[key] = true;
+	        additions.push(formatLearningItem(item));
+	      }});
+	      if (!additions.length) {{
+	        toast('No new learnings to add');
+	        return;
+	      }}
+	      var merged = existing ? existing + '\\n' + additions.join('\\n') : additions.join('\\n');
+	      editor.value = merged;
+	      editor._origValue = merged;
+	      applyBtn.disabled = true;
+	      applyBtn.textContent = 'Saving...';
+	      saveReadinessContent('reviewed', merged).then(function() {{
+	        toast(additions.length + ' learning' + (additions.length === 1 ? '' : 's') + ' saved');
+	        panel.remove();
+	      }}).catch(function() {{
+	        applyBtn.disabled = false;
+	        applyBtn.textContent = 'Apply Selected';
+	        toast('Failed to save learnings');
+	      }});
+	    }});
+
+	    container.insertBefore(panel, container.firstChild);
+	  }}
+
+	  function runLearningGeneration(btn, onDone) {{
+	    var loading = overlay.querySelector('[data-cat-loading="R"]');
+	    var resultEl = overlay.querySelector('[data-cat-result="R"]');
+	    if (loading) {{ loading.classList.remove('hidden'); loading.textContent = 'Generating learnings...'; }}
+	    if (resultEl) resultEl.classList.add('hidden');
+	    var current = _getFieldContent('R');
+	    fetch(EDIT_API + '/tickets/' + currentTicketId + '/learnings/generate', {{
+	      method: 'POST',
+	      headers: {{ 'Content-Type': 'application/json' }},
+	      body: JSON.stringify({{ content: current }})
+	    }})
+	    .then(function(r) {{ return r.json().then(function(data) {{ return {{ ok: r.ok, data: data }}; }}); }})
+	    .then(function(res) {{
+	      if (loading) loading.classList.add('hidden');
+	      if (onDone) onDone();
+	      if (!res.ok || res.data.error) {{
+	        toast('Learning generation error: ' + (res.data.error || 'request failed'));
+	        return;
+	      }}
+	      var section = overlay.querySelector('[data-section="reviewed"]');
+	      if (section) {{
+	        renderLearningCandidates(section, res.data);
+	        section.classList.add('assess-complete');
+	        setTimeout(function() {{ section.classList.remove('assess-complete'); }}, 1500);
+	        section.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+	      }}
+	    }})
+	    .catch(function() {{
+	      if (loading) loading.classList.add('hidden');
+	      if (onDone) onDone();
+	      toast('Learning generation request failed');
+	    }});
+	  }}
+
+	  function runCategoryAssess(cat, action, onDone, forceRefresh) {{
+	    var catCacheKey = currentTicketId + ':cat:' + cat;
     var loading = overlay.querySelector('[data-cat-loading="'+cat+'"]');
     var resultEl = overlay.querySelector('[data-cat-result="'+cat+'"]');
 
@@ -5142,7 +5826,349 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     if(descEd) descEd._origValue = descEd.value;
     populateMetaChips(data);
     refreshDCTRS(data);
+    populateTags(data);
+    populateBranches(data);
   }}
+
+  /* --- Tags --- */
+  var tagsListEl = document.getElementById('detail-tags-list');
+  var tagInputEl = document.getElementById('detail-tag-input');
+
+  function populateTags(data) {{
+    if (!tagsListEl) return;
+    tagsListEl.innerHTML = '';
+    var tags = data.tags || [];
+    tags.forEach(function(tag) {{
+      var span = document.createElement('span');
+      span.className = 'detail-tag';
+      span.textContent = tag;
+      if (EDIT_API) {{
+        var x = document.createElement('span');
+        x.className = 'tag-remove';
+        x.textContent = '\u00d7';
+        x.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+            method:'PUT', headers:{{'Content-Type':'application/json'}},
+            body: JSON.stringify({{remove_tag: tag}})
+          }}).then(function(r){{return r.json();}}).then(function(d) {{
+            if (d) {{ currentData = d; populateTags(d); }}
+          }});
+        }});
+        span.appendChild(x);
+      }}
+      tagsListEl.appendChild(span);
+    }});
+  }}
+
+  if (tagInputEl && EDIT_API) {{
+    tagInputEl.addEventListener('keydown', function(e) {{
+      if (e.key !== 'Enter') return;
+      var val = tagInputEl.value.trim().toLowerCase();
+      if (!val || !currentTicketId) return;
+      tagInputEl.value = '';
+      fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+        method:'PUT', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{add_tag: val}})
+      }}).then(function(r){{return r.json();}}).then(function(d) {{
+        if (d) {{ currentData = d; populateTags(d); }}
+      }});
+    }});
+  }}
+  if (tagInputEl && !EDIT_API) {{
+    tagInputEl.style.display = 'none';
+  }}
+
+  /* --- Branches --- */
+  var branchesListEl = document.getElementById('detail-branches-list');
+  var branchSelectEl = document.getElementById('detail-branch-select');
+  var branchScanBtn = document.getElementById('detail-branch-scan-btn');
+  var _cachedRemoteBranches = null;
+
+  function populateBranches(data) {{
+    if (!branchesListEl) return;
+    branchesListEl.innerHTML = '';
+    var branches = data.branches || [];
+    if (!branches.length && !EDIT_API) {{
+      document.getElementById('detail-branches-strip').style.display = 'none';
+      return;
+    }}
+    document.getElementById('detail-branches-strip').style.display = '';
+    branches.forEach(function(br) {{
+      var span = document.createElement('span');
+      var cls = 'detail-branch';
+      if (br.pr_status === 'merged') cls += ' pr-merged';
+      else if (br.pr_status === 'open') cls += ' pr-open';
+      else if (br.pr_status === 'draft') cls += ' pr-draft';
+      else if (br.pr_status === 'closed') cls += ' pr-closed';
+      span.className = cls;
+      var nameText = br.name.length > 30 ? br.name.slice(0, 28) + '\u2026' : br.name;
+      span.title = br.name + (br.ahead || br.behind ? ' (+' + br.ahead + '/-' + br.behind + ')' : '');
+      var inner = nameText;
+      if (br.pr_number) inner += ' <span class="branch-pr">#' + br.pr_number + '</span>';
+      if (br.ahead || br.behind) inner += ' <span class="branch-ahead-behind">\u2191' + br.ahead + ' \u2193' + br.behind + '</span>';
+      span.innerHTML = inner;
+      if (EDIT_API) {{
+        var x = document.createElement('span');
+        x.className = 'branch-remove';
+        x.textContent = '\u00d7';
+        x.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+            method:'PUT', headers:{{'Content-Type':'application/json'}},
+            body: JSON.stringify({{remove_branch: br.name}})
+          }}).then(function(r){{return r.json();}}).then(function(d) {{
+            if (d) {{ currentData = d; populateBranches(d); refreshBranchSelect(d); }}
+          }});
+        }});
+        span.appendChild(x);
+      }}
+      branchesListEl.appendChild(span);
+    }});
+    // Refresh select options to exclude already-linked branches
+    if (EDIT_API) refreshBranchSelect(data);
+  }}
+
+  function refreshBranchSelect(ticketData) {{
+    if (!branchSelectEl || !EDIT_API) return;
+    var linked = (ticketData.branches || []).map(function(b) {{ return b.name; }});
+    function fillOptions(remoteBranches) {{
+      branchSelectEl.innerHTML = '<option value="">+ link branch</option>';
+      remoteBranches.forEach(function(br) {{
+        if (linked.indexOf(br.name) === -1) {{
+          var opt = document.createElement('option');
+          opt.value = br.name;
+          var label = br.name;
+          if (br.pr_number) label += ' (#' + br.pr_number + ')';
+          opt.textContent = label;
+          branchSelectEl.appendChild(opt);
+        }}
+      }});
+    }}
+    if (_cachedRemoteBranches) {{
+      fillOptions(_cachedRemoteBranches);
+    }} else {{
+      fetch(EDIT_API + '/branches/overview')
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+          _cachedRemoteBranches = data.branches || [];
+          fillOptions(_cachedRemoteBranches);
+        }});
+    }}
+  }}
+
+  if (branchSelectEl && EDIT_API) {{
+    branchSelectEl.addEventListener('change', function() {{
+      var val = branchSelectEl.value;
+      if (!val || !currentTicketId) return;
+      branchSelectEl.value = '';
+      fetch(EDIT_API+'/tickets/'+currentTicketId, {{
+        method:'PUT', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{add_branch: val}})
+      }}).then(function(r){{return r.json();}}).then(function(d) {{
+        if (d) {{ currentData = d; populateBranches(d); }}
+      }});
+    }});
+  }}
+  if (branchSelectEl && !EDIT_API) {{
+    branchSelectEl.style.display = 'none';
+  }}
+  if (branchScanBtn && !EDIT_API) {{
+    branchScanBtn.style.display = 'none';
+  }}
+  if (branchScanBtn && EDIT_API) {{
+    branchScanBtn.addEventListener('click', function() {{
+      branchScanBtn.textContent = 'Scanning\u2026';
+      branchScanBtn.disabled = true;
+      fetch(EDIT_API+'/branches/scan', {{
+        method:'POST', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{include_prs: true}})
+      }}).then(function(r){{return r.json();}}).then(function(result) {{
+        branchScanBtn.textContent = 'Scan';
+        branchScanBtn.disabled = false;
+        _cachedRemoteBranches = null; // invalidate cache after scan
+        // Refresh current ticket data to show newly linked branches
+        if (currentTicketId) {{
+          fetch(EDIT_API+'/tickets/'+currentTicketId).then(function(r){{return r.json();}}).then(function(d) {{
+            if (d) {{ currentData = d; populateBranches(d); }}
+          }});
+        }}
+        var msg = 'Linked ' + (result.linked||0) + ' branches';
+        if (result.pr_updated) msg += ', enriched ' + result.pr_updated + ' PRs';
+        showAppToast(msg, 'success');
+      }}).catch(function() {{
+        branchScanBtn.textContent = 'Scan';
+        branchScanBtn.disabled = false;
+      }});
+    }});
+  }}
+
+  /* --- Branches Dropdown Panel --- */
+  (function() {{
+    var btn = document.getElementById('branchesDropdownBtn');
+    var panel = document.getElementById('branchesPanel');
+    var body = document.getElementById('branchesPanelBody');
+    var scanBtn = document.getElementById('branchesPanelScan');
+    if (!btn || !panel || !EDIT_API) {{
+      if (btn && !EDIT_API) btn.style.display = 'none';
+      return;
+    }}
+
+    function togglePanel() {{
+      var isOpen = panel.classList.toggle('open');
+      btn.setAttribute('aria-expanded', isOpen);
+      if (isOpen) loadBranches();
+    }}
+
+    btn.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      togglePanel();
+    }});
+
+    document.addEventListener('click', function(e) {{
+      if (!panel.contains(e.target) && e.target !== btn) {{
+        panel.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }}
+    }});
+
+    panel.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+
+    function loadBranches() {{
+      fetch(EDIT_API + '/branches/overview')
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+          renderBranches(data.branches || []);
+        }})
+        .catch(function() {{ body.innerHTML = '<div class="branches-empty">Failed to load branches</div>'; }});
+    }}
+
+    function renderBranches(branches) {{
+      if (!branches.length) {{
+        body.innerHTML = '<div class="branches-empty">No remote branches found.<br>Push a branch or click Scan.</div>';
+        return;
+      }}
+      body.innerHTML = '';
+      branches.forEach(function(br) {{
+        var group = document.createElement('div');
+        group.className = 'branch-group';
+
+        // Header
+        var header = document.createElement('div');
+        header.className = 'branch-group-header';
+        header.setAttribute('aria-expanded', br.tickets.length > 0 ? 'true' : 'false');
+
+        var arrow = document.createElement('span');
+        arrow.className = 'branch-group-arrow';
+        arrow.textContent = '\u25b6';
+        header.appendChild(arrow);
+
+        var name = document.createElement('span');
+        name.className = 'branch-group-name';
+        name.textContent = br.name;
+        header.appendChild(name);
+
+        var meta = document.createElement('span');
+        meta.className = 'branch-group-meta';
+        if (br.pr_number) {{
+          var prBadge = document.createElement('span');
+          prBadge.className = 'branch-group-pr pr-' + (br.pr_status || 'open');
+          prBadge.textContent = '#' + br.pr_number + (br.pr_status ? ' ' + br.pr_status : '');
+          meta.appendChild(prBadge);
+        }}
+        if (br.ahead || br.behind) {{
+          var ab = document.createElement('span');
+          ab.textContent = '\u2191' + br.ahead + ' \u2193' + br.behind;
+          ab.style.fontSize = '10px';
+          meta.appendChild(ab);
+        }}
+        if (br.tickets.length) {{
+          var count = document.createElement('span');
+          count.textContent = br.tickets.length + ' ticket' + (br.tickets.length > 1 ? 's' : '');
+          count.style.fontSize = '10px';
+          meta.appendChild(count);
+        }}
+        header.appendChild(meta);
+
+        // Tickets body
+        var ticketsDiv = document.createElement('div');
+        ticketsDiv.className = 'branch-group-tickets' + (br.tickets.length > 0 ? '' : ' collapsed');
+
+        br.tickets.forEach(function(t) {{
+          var row = document.createElement('div');
+          row.className = 'branch-ticket-row';
+          row.innerHTML = '<span class="ticket-id">' + t.id + '</span>'
+            + '<span class="ticket-title">' + (t.title||'') + '</span>';
+          var unlink = document.createElement('span');
+          unlink.className = 'ticket-unlink';
+          unlink.textContent = '\u00d7';
+          unlink.title = 'Unlink from branch';
+          unlink.addEventListener('click', function() {{
+            fetch(EDIT_API + '/tickets/' + t.id, {{
+              method: 'PUT', headers: {{'Content-Type': 'application/json'}},
+              body: JSON.stringify({{remove_branch: br.name}})
+            }}).then(function() {{ loadBranches(); }});
+          }});
+          row.appendChild(unlink);
+          ticketsDiv.appendChild(row);
+        }});
+
+        // Add ticket input
+        var addRow = document.createElement('div');
+        addRow.className = 'branch-add-ticket';
+        var addInput = document.createElement('input');
+        addInput.type = 'text';
+        addInput.placeholder = '+ add ticket ID';
+        addInput.addEventListener('keydown', function(e) {{
+          if (e.key !== 'Enter') return;
+          var tid = addInput.value.trim().toUpperCase();
+          if (!tid) return;
+          addInput.value = '';
+          fetch(EDIT_API + '/tickets/' + tid, {{
+            method: 'PUT', headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{add_branch: br.name}})
+          }}).then(function(r) {{
+            if (r.ok) loadBranches();
+            else showAppToast('Ticket not found', 'error');
+          }});
+        }});
+        addRow.appendChild(addInput);
+        ticketsDiv.appendChild(addRow);
+
+        // Toggle expand/collapse
+        header.addEventListener('click', function() {{
+          var expanded = header.getAttribute('aria-expanded') === 'true';
+          header.setAttribute('aria-expanded', !expanded);
+          ticketsDiv.classList.toggle('collapsed', expanded);
+        }});
+
+        group.appendChild(header);
+        group.appendChild(ticketsDiv);
+        body.appendChild(group);
+      }});
+    }}
+
+    if (scanBtn) {{
+      scanBtn.addEventListener('click', function() {{
+        scanBtn.textContent = 'Scanning\u2026';
+        scanBtn.disabled = true;
+        fetch(EDIT_API + '/branches/scan', {{
+          method: 'POST', headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{include_prs: true}})
+        }}).then(function(r) {{ return r.json(); }}).then(function(result) {{
+          scanBtn.textContent = 'Scan';
+          scanBtn.disabled = false;
+          loadBranches();
+          var msg = 'Linked ' + (result.linked||0) + ' branches';
+          if (result.pr_updated) msg += ', enriched ' + result.pr_updated + ' PRs';
+          showAppToast(msg, 'success');
+        }}).catch(function() {{
+          scanBtn.textContent = 'Scan';
+          scanBtn.disabled = false;
+        }});
+      }});
+    }}
+  }})();
 
   function openOverlay(tid, section) {{
     currentTicketId = tid;
@@ -5215,33 +6241,38 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
       if (!cat) return;
       var sec = CAT_RMAP[cat];
       var fl = currentData.readiness_flags || {{}};
-      var hasContent = sec === 'description' ? !!(currentData.description) : sec === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[sec]);
-      var action = hasContent ? 'review' : 'create';
-      // Shift+click copies prompt to clipboard as fallback
-      if (e.shiftKey) {{
-        var t = currentData;
-        var prompts = {{
+	      var hasContent = sec === 'description' ? !!(currentData.description) : sec === 'criteria' ? (currentData.acceptance_criteria || []).length > 0 : !!(fl[sec]);
+	      var action = hasContent ? 'review' : 'create';
+	      var isLearningGenerate = btn.dataset.action === 'generate-learnings';
+	      // Shift+click copies prompt to clipboard as fallback
+	      if (e.shiftKey) {{
+	        var t = currentData;
+	        var prompts = {{
           D: {{ create: 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.',
                 review: 'Review the description for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)') }},
           C: {{ create: 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'),
                 review: 'Review acceptance criteria for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)') }},
           T: {{ create: 'Write test definitions for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
                 review: 'Review test definitions for ' + t.id + ': "' + t.title + '".' }},
-          R: {{ create: 'Perform a review for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)'),
-                review: 'Review the review notes for ' + t.id + ': "' + t.title + '".' }},
-          S: {{ create: 'Create a smoke test plan for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
-                review: 'Review smoke test results for ' + t.id + ': "' + t.title + '".' }}
-        }};
+	          R: {{ create: 'Generate candidate learnings for ' + t.id + ': "' + t.title + '". Return concise items the human can accept, edit, or reject.\\n\\nDescription:\\n' + (t.description || '(empty)'),
+	                review: 'Generate more candidate learnings for ' + t.id + ': "' + t.title + '". Avoid duplicating existing learnings.\\n\\nCurrent learnings:\\n' + (_getFieldContent('R') || '(empty)') }},
+	          S: {{ create: 'Create a smoke test plan for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
+	                review: 'Review smoke test results for ' + t.id + ': "' + t.title + '".' }}
+	        }};
         var p = prompts[cat] && prompts[cat][action];
-        if (p) navigator.clipboard.writeText(p).then(function(){{ toast('Prompt copied'); }});
-        return;
-      }}
-      btn.textContent = 'Assessing...'; btn.classList.add('loading');
-      var _origLabel = hasContent ? 'Re-assess' : 'Assess';
-      var _restore = function() {{ btn.textContent = _origLabel; btn.classList.remove('loading'); }};
-      runCategoryAssess(cat, action, _restore, true);  // force refresh — user explicitly clicked
-    }});
-  }});
+	        if (p) navigator.clipboard.writeText(p).then(function(){{ toast('Prompt copied'); }});
+	        return;
+	      }}
+	      btn.textContent = isLearningGenerate ? 'Generating...' : 'Assessing...'; btn.classList.add('loading');
+	      var _origLabel = isLearningGenerate ? (hasContent ? 'Generate More' : 'Generate') : (hasContent ? 'Re-assess' : 'Assess');
+	      var _restore = function() {{ btn.textContent = _origLabel; btn.classList.remove('loading'); }};
+	      if (isLearningGenerate) {{
+	        runLearningGeneration(btn, _restore);
+	      }} else {{
+	        runCategoryAssess(cat, action, _restore, true);  // force refresh — user explicitly clicked
+	      }}
+	    }});
+	  }});
 
   // Ctrl+S saves the focused textarea
   overlay.addEventListener('keydown', function(e) {{
@@ -5587,22 +6618,28 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
 
   if (!EDIT_API) return;
 
-  /* Full-page settings toggle */
-  var settingsPage = document.getElementById('settings-page');
-  var backBtn = document.getElementById('settingsBackBtn');
+  /* Full-page Workflows & Agents ("bounce") view toggle */
+  var bouncePage = document.getElementById('bounce-page');
+  var bounceBtn = document.getElementById('bounceToggleBtn');
+  var bounceBackBtn = document.getElementById('bounceBackBtn');
 
-  function openSettingsPage() {{
-    document.body.classList.add('settings-open');
+  function openBouncePage() {{
+    if (drawer && !drawer.classList.contains('hidden')) closeDrawer();
+    document.body.classList.add('bounce-open');
     if (typeof _spLoadAgents === 'function') _spLoadAgents();
     if (typeof _spLoadWorkflows === 'function') _spLoadWorkflows();
   }}
-  function closeSettingsPage() {{
-    document.body.classList.remove('settings-open');
+  function closeBouncePage() {{
+    document.body.classList.remove('bounce-open');
   }}
-  window.openSettingsPage = openSettingsPage;
-  window.closeSettingsPage = closeSettingsPage;
+  window.openBouncePage = openBouncePage;
+  window.closeBouncePage = closeBouncePage;
 
-  if (backBtn) backBtn.addEventListener('click', closeSettingsPage);
+  if (bounceBackBtn) bounceBackBtn.addEventListener('click', closeBouncePage);
+  if (bounceBtn) bounceBtn.addEventListener('click', function() {{
+    if (document.body.classList.contains('bounce-open')) closeBouncePage();
+    else openBouncePage();
+  }});
 
   var toggleBtn = document.getElementById('settingsToggleBtn');
   var drawer = document.getElementById('settings-drawer');
@@ -5621,6 +6658,8 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
     drawer.classList.remove('hidden');
     loadSettings().then(function() {{ checkFeedbacksStatus(); }});
     loadManagedFiles();
+    if (typeof loadProject === 'function') loadProject();
+    if (typeof loadScenarios === 'function') loadScenarios();
   }}
 
   function closeDrawer() {{
@@ -5628,15 +6667,7 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
   }}
 
   toggleBtn.addEventListener('click', function() {{
-    if (settingsPage) {{
-      if (document.body.classList.contains('settings-open')) {{
-        closeSettingsPage();
-      }} else {{
-        openSettingsPage();
-        openDrawer();
-      }}
-      return;
-    }}
+    if (document.body.classList.contains('bounce-open')) closeBouncePage();
     if (drawer.classList.contains('hidden')) {{
       openDrawer();
     }} else {{
@@ -5763,6 +6794,338 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
         hint.textContent = 'Could not load managed files.';
         container.appendChild(hint);
       }});
+  }}
+
+  /* ── Drawer: Project metadata ───────────────────── */
+  var currentPidMeta = document.querySelector('meta[name="current-project"]');
+  var currentPid = currentPidMeta ? currentPidMeta.content : null;
+  var projectSection = document.getElementById('projectSection');
+  var projectForm = document.getElementById('projectForm');
+  var projectNameInput = document.getElementById('projectNameInput');
+  var projectPathInput = document.getElementById('projectPathInput');
+  var projectDescInput = document.getElementById('projectDescInput');
+  var projectIdInput = document.getElementById('projectIdInput');
+  var projectActiveInput = document.getElementById('projectActiveInput');
+  var projectSaveMsg = document.getElementById('projectSaveMsg');
+
+  function loadProject() {{
+    if (!projectForm || !currentPid) {{ if (projectSection) projectSection.style.display = 'none'; return; }}
+    fetch('/api/projects')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var list = (data && data.projects) || data || [];
+        var proj = null;
+        for (var i = 0; i < list.length; i++) {{
+          if (list[i].id === currentPid) {{ proj = list[i]; break; }}
+        }}
+        if (!proj) return;
+        if (projectNameInput) projectNameInput.value = proj.name || '';
+        if (projectPathInput) projectPathInput.value = proj.path || '';
+        if (projectDescInput) projectDescInput.value = proj.description || '';
+        if (projectIdInput) projectIdInput.value = proj.id || '';
+        if (projectActiveInput) projectActiveInput.checked = proj.active !== false;
+      }})
+      .catch(function() {{}});
+  }}
+
+  if (projectForm) {{
+    projectForm.addEventListener('submit', function(e) {{
+      e.preventDefault();
+      if (!currentPid) return;
+      projectSaveMsg.textContent = '';
+      projectSaveMsg.className = 'pf-msg';
+      fetch('/api/projects/' + currentPid, {{
+        method: 'PUT',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          name: projectNameInput.value,
+          path: projectPathInput.value,
+          description: projectDescInput.value,
+          active: projectActiveInput.checked
+        }})
+      }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+      .then(function(res) {{
+        if (res.ok) {{ projectSaveMsg.textContent = 'Saved'; projectSaveMsg.className = 'pf-msg ok'; }}
+        else {{ projectSaveMsg.textContent = (res.data && res.data.error) || 'Failed'; projectSaveMsg.className = 'pf-msg err'; }}
+      }}).catch(function() {{
+        projectSaveMsg.textContent = 'Network error'; projectSaveMsg.className = 'pf-msg err';
+      }});
+    }});
+  }}
+
+  /* ── Drawer: Remove Project (Danger Zone) ───────── */
+  var removeBtn = document.getElementById('removeProjectBtn');
+  if (removeBtn) {{
+    removeBtn.addEventListener('click', function() {{
+      if (!currentPid || typeof window.showConfirmModal !== 'function') return;
+      window.showConfirmModal(
+        'Remove Project',
+        'Remove this project from the registry? Tickets and files will not be deleted.',
+        'Remove',
+        function() {{
+          fetch('/api/projects/' + currentPid, {{ method: 'DELETE' }})
+            .then(function(r) {{ return r.json(); }})
+            .then(function(data) {{
+              if (data && data.ok) window.location.href = '/';
+              else if (typeof window.showAppToast === 'function') {{
+                window.showAppToast((data && data.error) || 'Failed to remove', 'error');
+              }}
+            }});
+        }}
+      );
+    }});
+  }}
+
+  /* ── Drawer: Scenarios ──────────────────────────── */
+  function scenarioApi(path) {{ return '/' + currentPid + '/api/scenarios' + path; }}
+
+  function loadScenarios() {{
+    var list = document.getElementById('scenariosList');
+    if (!list || !currentPid) return;
+    fetch(scenarioApi(''))
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        while (list.firstChild) list.removeChild(list.firstChild);
+        var scenarios = (data && data.scenarios) || [];
+        if (!scenarios.length) {{
+          var hint = document.createElement('div');
+          hint.className = 'settings-hint';
+          hint.textContent = 'No scenario manifests found.';
+          list.appendChild(hint);
+          return;
+        }}
+        scenarios.forEach(function(s) {{ list.appendChild(buildScenarioRow(s)); }});
+      }})
+      .catch(function() {{
+        while (list.firstChild) list.removeChild(list.firstChild);
+        var err = document.createElement('div');
+        err.className = 'settings-hint';
+        err.textContent = 'Failed to load scenarios.';
+        list.appendChild(err);
+      }});
+  }}
+
+  function buildScenarioRow(s) {{
+    var wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '4px';
+
+    var row = document.createElement('div');
+    row.className = 'scenario-row';
+
+    var title = document.createElement('span');
+    title.className = 'sr-title';
+    title.textContent = s.title || s.id;
+    row.appendChild(title);
+
+    var status = document.createElement('span');
+    status.className = 'sr-status';
+    if (s.last_run && s.last_run.status) {{
+      status.classList.add(s.last_run.status);
+      status.textContent = s.last_run.status;
+    }}
+    row.appendChild(status);
+
+    var runBtn = document.createElement('button');
+    runBtn.type = 'button';
+    runBtn.className = 'sr-btn';
+    runBtn.textContent = 'Run';
+    runBtn.addEventListener('click', function() {{ runScenario(s.id, false, resultEl); }});
+    row.appendChild(runBtn);
+
+    var pubBtn = document.createElement('button');
+    pubBtn.type = 'button';
+    pubBtn.className = 'sr-btn publish';
+    pubBtn.textContent = 'Publish';
+    pubBtn.addEventListener('click', function() {{ runScenario(s.id, true, resultEl); }});
+    row.appendChild(pubBtn);
+
+    wrap.appendChild(row);
+
+    var resultEl = document.createElement('div');
+    resultEl.className = 'scenario-result';
+    resultEl.style.fontSize = '10px';
+    resultEl.style.color = 'var(--text-tertiary)';
+    resultEl.style.paddingLeft = '8px';
+    wrap.appendChild(resultEl);
+
+    return wrap;
+  }}
+
+  function runScenario(scenarioId, publish, resultEl) {{
+    if (!currentPid) return;
+    resultEl.textContent = 'Starting…';
+    fetch(scenarioApi('/run'), {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ scenario_id: scenarioId, publish: publish }})
+    }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      if (data.error) {{ resultEl.textContent = data.error; resultEl.style.color = '#ef4444'; return; }}
+      pollRun(data.run_id, resultEl);
+    }}).catch(function() {{ resultEl.textContent = 'Request failed'; resultEl.style.color = '#ef4444'; }});
+  }}
+
+  function pollRun(runId, resultEl) {{
+    var tick = setInterval(function() {{
+      fetch(scenarioApi('/runs/' + runId)).then(function(r) {{ return r.json(); }}).then(function(data) {{
+        if (data.status === 'running') {{ resultEl.textContent = 'Running…'; return; }}
+        clearInterval(tick);
+        while (resultEl.firstChild) resultEl.removeChild(resultEl.firstChild);
+        var label = document.createElement('span');
+        label.textContent = data.status || 'unknown';
+        label.style.color = data.status === 'passed' ? '#22c55e' : '#ef4444';
+        label.style.fontWeight = '600';
+        resultEl.appendChild(label);
+        if (data.summary && data.summary.screenshots && data.summary.screenshots.length) {{
+          var shots = document.createElement('div');
+          shots.className = 'scenario-shots';
+          data.summary.screenshots.forEach(function(p) {{
+            var fname = p.split('/').pop();
+            var img = document.createElement('img');
+            img.src = scenarioApi('/runs/' + runId + '/artifacts/' + fname);
+            img.title = fname;
+            shots.appendChild(img);
+          }});
+          resultEl.appendChild(shots);
+        }}
+      }}).catch(function() {{ clearInterval(tick); }});
+    }}, 2000);
+  }}
+
+  /* ── Drawer: Draft Scenario Generator ──────────── */
+  var draftGoalInput = document.getElementById('draftGoalInput');
+  var draftGenerateBtn = document.getElementById('draftGenerateBtn');
+  var draftResults = document.getElementById('draftResults');
+  var lastDraftCandidates = [];
+
+  function renderDraftCandidates(data) {{
+    while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+    if (data.warnings && data.warnings.length) {{
+      data.warnings.forEach(function(w) {{
+        var wEl = document.createElement('div');
+        wEl.className = 'settings-hint';
+        wEl.style.color = '#f59e0b';
+        wEl.textContent = 'Warning: ' + w;
+        draftResults.appendChild(wEl);
+      }});
+    }}
+    lastDraftCandidates = data.candidates || [];
+    if (!lastDraftCandidates.length) {{
+      var none = document.createElement('div');
+      none.className = 'settings-hint';
+      none.textContent = 'No candidates generated.';
+      draftResults.appendChild(none);
+      return;
+    }}
+    lastDraftCandidates.forEach(function(c, i) {{ draftResults.appendChild(buildDraftCard(c, i)); }});
+  }}
+
+  function buildDraftCard(c, i) {{
+    var card = document.createElement('div');
+    card.className = 'draft-candidate';
+
+    var titleRow = document.createElement('div');
+    titleRow.className = 'dc-title-row';
+    var title = document.createElement('span');
+    title.className = 'dc-title';
+    title.textContent = c.title || '(untitled)';
+    titleRow.appendChild(title);
+    var conf = document.createElement('span');
+    conf.className = 'dc-conf ' + (c.confidence || 'low');
+    conf.textContent = c.confidence || 'low';
+    titleRow.appendChild(conf);
+    card.appendChild(titleRow);
+
+    if (c.summary) {{
+      var summary = document.createElement('div');
+      summary.className = 'dc-summary';
+      summary.textContent = c.summary;
+      card.appendChild(summary);
+    }}
+
+    var btnRow = document.createElement('div');
+    btnRow.className = 'dc-btn-row';
+
+    var approveBtn = document.createElement('button');
+    approveBtn.type = 'button';
+    approveBtn.className = 'dc-btn approve';
+    approveBtn.textContent = 'Approve & Save';
+    var msg = document.createElement('span');
+    msg.className = 'dc-msg';
+    approveBtn.addEventListener('click', function() {{ approveDraft(i, msg); }});
+    btnRow.appendChild(approveBtn);
+
+    var previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'dc-btn';
+    previewBtn.textContent = 'Preview JSON';
+    var pre = document.createElement('pre');
+    pre.className = 'dc-preview';
+    previewBtn.addEventListener('click', function() {{
+      if (pre.style.display === 'none' || !pre.style.display) {{
+        pre.textContent = JSON.stringify(c.manifest || {{}}, null, 2);
+        pre.style.display = 'block';
+      }} else {{
+        pre.style.display = 'none';
+      }}
+    }});
+    btnRow.appendChild(previewBtn);
+    btnRow.appendChild(msg);
+    card.appendChild(btnRow);
+    card.appendChild(pre);
+    return card;
+  }}
+
+  function approveDraft(i, msgEl) {{
+    var c = lastDraftCandidates[i];
+    if (!c || !currentPid) return;
+    msgEl.className = 'dc-msg'; msgEl.textContent = 'Saving…';
+    fetch(scenarioApi('/drafts/approve'), {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ manifest: c.manifest, filename: (c.manifest && c.manifest.id ? c.manifest.id : 'draft') + '.json' }})
+    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+    .then(function(res) {{
+      if (res.ok) {{ msgEl.className = 'dc-msg ok'; msgEl.textContent = 'Saved as ' + (res.data.filename || '?'); loadScenarios(); }}
+      else {{ msgEl.className = 'dc-msg err'; msgEl.textContent = (res.data && res.data.error) || 'Failed'; }}
+    }}).catch(function() {{ msgEl.className = 'dc-msg err'; msgEl.textContent = 'Network error'; }});
+  }}
+
+  if (draftGenerateBtn) {{
+    draftGenerateBtn.addEventListener('click', function() {{
+      if (!currentPid) return;
+      var goal = (draftGoalInput.value || '').trim();
+      if (!goal) return;
+      while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+      var loading = document.createElement('div');
+      loading.className = 'settings-hint';
+      loading.textContent = 'Generating…';
+      draftResults.appendChild(loading);
+      fetch(scenarioApi('/draft'), {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ goal: goal }})
+      }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
+        if (data.error) {{
+          while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+          var err = document.createElement('div');
+          err.className = 'settings-hint';
+          err.style.color = '#ef4444';
+          err.textContent = data.error;
+          draftResults.appendChild(err);
+          return;
+        }}
+        renderDraftCandidates(data);
+      }}).catch(function() {{
+        while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
+        var err = document.createElement('div');
+        err.className = 'settings-hint';
+        err.style.color = '#ef4444';
+        err.textContent = 'Request failed';
+        draftResults.appendChild(err);
+      }});
+    }});
   }}
 
   if (enabledChk) {{
@@ -7096,11 +8459,75 @@ body.settings-open .settings-back-btn {{ display: inline-flex; }}
   window.openDetailOverlay = function(tid, section) {{
     if (_origOpenForWorkflow) _origOpenForWorkflow(tid, section);
     currentTicketId = tid;
+    // Clear unread indicator when user opens ticket
+    if (window.__wfUnread) window.__wfUnread.delete(tid);
+    setCardUnreadDot(tid, false);
     setTimeout(function() {{
       loadWorkflowOptions();
       loadWorkflowRuns(tid);
     }}, 200);
   }};
+
+  // ── Kanban workflow indicators (visible without opening ticket) ──
+  function setCardUnreadDot(ticketId, show) {{
+    var card = document.querySelector('.card[data-item-id="' + ticketId + '"]');
+    if (!card) return;
+    var existing = card.querySelector('.card-wf-unread');
+    if (show && !existing) {{
+      var dot = document.createElement('span');
+      dot.className = 'card-wf-unread';
+      dot.title = 'Workflow result (unread)';
+      var titleEl = card.querySelector('.card-title') || card.querySelector('.item-title');
+      if (titleEl) titleEl.parentNode.insertBefore(dot, titleEl.nextSibling);
+      else card.appendChild(dot);
+    }} else if (!show && existing) {{
+      existing.parentNode.removeChild(existing);
+    }}
+  }}
+
+  window.__wfUnread = window.__wfUnread || new Set();
+  var __wfPrevActive = new Set();
+
+  setInterval(function() {{
+    if (document.body.classList.contains('bounce-open')) return;
+    fetch(EDIT_API + '/workflow/runs/active')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var runs = (data && data.runs) || [];
+        var nowActive = new Set();
+        runs.forEach(function(r) {{ nowActive.add(r.ticket_id); }});
+
+        // Detect completed: was active last poll, no longer active → unread
+        __wfPrevActive.forEach(function(tid) {{
+          if (!nowActive.has(tid)) {{
+            window.__wfUnread.add(tid);
+            setCardWfIndicator(tid, false);
+            setCardUnreadDot(tid, true);
+          }}
+        }});
+
+        // Set running indicators
+        nowActive.forEach(function(tid) {{
+          setCardWfIndicator(tid, true);
+          setCardUnreadDot(tid, false); // running takes precedence
+        }});
+
+        // Remove running indicators for no-longer-active (already handled above but be safe)
+        __wfPrevActive.forEach(function(tid) {{
+          if (!nowActive.has(tid) && !window.__wfUnread.has(tid)) {{
+            setCardWfIndicator(tid, false);
+          }}
+        }});
+
+        // Re-apply unread dots (cards may have been re-rendered by dashboard refresh)
+        window.__wfUnread.forEach(function(tid) {{
+          if (!nowActive.has(tid)) setCardUnreadDot(tid, true);
+        }});
+
+        __wfPrevActive = nowActive;
+      }})
+      .catch(function() {{}});
+  }}, 3000);
 
   // Clear poll timers when overlay closes
   if (overlay) {{
@@ -7417,6 +8844,35 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         if kb_class else ""
     )
 
+    # Tags
+    tags_list = getattr(t, 'tags', [])
+    tags_attr = f' data-tags="{escape(" ".join(tags_list))}"' if tags_list else ''
+    tags_html = ""
+    if tags_list:
+        pills = "".join(f'<span class="tag-pill">{escape(tg)}</span>' for tg in tags_list)
+        tags_html = f'        <div class="card-tags">{pills}</div>\n'
+
+    # Branches
+    branches_list = getattr(t, 'branches', [])
+    branches_html = ""
+    if branches_list:
+        br_pills = []
+        for br in branches_list:
+            cls = "branch-pill"
+            if br.get("pr_status") == "merged": cls += " pr-merged"
+            elif br.get("pr_status") == "open": cls += " pr-open"
+            elif br.get("pr_status") == "draft": cls += " pr-draft"
+            elif br.get("pr_status") == "closed": cls += " pr-closed"
+            label = br["name"]
+            if len(label) > 20:
+                label = label[:18] + "\u2026"
+            pr_str = f' #{br["pr_number"]}' if br.get("pr_number") else ""
+            br_pills.append(
+                f'<span class="{cls}" title="{escape(br["name"])}">'
+                f'{_svg_icon("git-branch", 10)}{escape(label)}{pr_str}</span>'
+            )
+        branches_html = f'        <div class="card-branches">{"".join(br_pills)}</div>\n'
+
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
@@ -7426,10 +8882,12 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f' data-automation-mode="{escape(t.automation_mode)}"'
         f'{" data-eligible=" + chr(34) + "true" + chr(34) if t.automation_eligible else ""}'
         f'{" data-run-status=" + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ""}'
-        f'{draft_attr}>\n'
+        f'{draft_attr}{tags_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
+        f'{tags_html}'
+        f'{branches_html}'
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
         f'{kb_html}'
@@ -7535,12 +8993,14 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         readiness_html = _render_readiness_row(t)
         open_btn = f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button>'
 
+        list_tags_list = getattr(t, 'tags', [])
+        list_tags_attr = f' data-tags="{escape(" ".join(list_tags_list))}"' if list_tags_list else ''
         lines.append(
             f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
             f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
             f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
-            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}>\n'
+            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}{list_tags_attr}>\n'
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
             f'<span class="card-id">{id_esc}</span>'

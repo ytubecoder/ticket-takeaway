@@ -14,10 +14,9 @@ docs/features/
 # Feedbacks sessions (screenshots + transcripts from visual feedback capture)
 .feedbacks/
 
-# Scenario runner raw artifacts (rebuild with: pytest tests/test_scenarios.py)
+# Scenario and journey runner raw artifacts
 .artifacts/scenarios/
 .artifacts/journeys/
-
 # run_journey.py output
 pics/
 

@@ -228,3 +228,47 @@ def test_clean_analysis_cleans_categories():
     _clean_analysis(analysis)
     assert analysis["categories"]["D"]["current_summary"] == "Good"
     assert analysis["categories"]["C"]["add_criteria"] == ["New item", "Another"]
+
+
+def test_normalize_learning_items_filters_duplicates_and_invalid_metadata():
+    from serve import _normalize_learning_items
+
+    data = {
+        "items": [
+            {
+                "text": "- [ ] Avoid native confirm dialogs in dashboard flows",
+                "scope": "project",
+                "type": "procedure",
+                "source": "review",
+                "confidence": "high",
+            },
+            {
+                "text": "Avoid native confirm dialogs in dashboard flows",
+                "scope": "not-a-scope",
+                "type": "not-a-type",
+                "source": "not-a-source",
+                "confidence": "not-confidence",
+            },
+            "",
+        ]
+    }
+
+    items = _normalize_learning_items(data, "")
+    assert items == [
+        {
+            "text": "Avoid native confirm dialogs in dashboard flows",
+            "scope": "project",
+            "type": "procedure",
+            "source": "review",
+            "confidence": "high",
+        }
+    ]
+
+
+def test_normalize_learning_items_skips_existing_learnings():
+    from serve import _normalize_learning_items
+
+    existing = "- [project/procedure] Use the custom toast pattern"
+    data = {"items": [{"text": "Use the custom toast pattern", "scope": "project"}]}
+
+    assert _normalize_learning_items(data, existing) == []

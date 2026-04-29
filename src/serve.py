@@ -67,6 +67,13 @@ from actions import (
     auto_generate_id,
     execute_scheduled_event,
     emit_event as _kitchen_emit_event,
+    # Branch / PR (main)
+    link_branch as _actions_link_branch,
+    unlink_branch as _actions_unlink_branch,
+    get_ticket_branches as _actions_get_ticket_branches,
+    get_project_branches as _actions_get_project_branches,
+    scan_branches as _actions_scan_branches,
+    scan_prs as _actions_scan_prs,
     # Kitchen (M1a)
     ActorContext,
     eligibility as _kitchen_eligibility,
@@ -730,11 +737,14 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
         cli.ingest_markdown(conn, proj)
 
         draft = bool(body.get("draft", False))
+        tags_raw = body.get("tags", [])
+        tags = [t.strip().lower() for t in tags_raw if isinstance(t, str) and t.strip()] if isinstance(tags_raw, list) else []
         ticket_id = _actions_add_ticket(
             conn, project_id, title,
             section=section, priority=priority,
             complexity=complexity, description=description,
             draft=draft,
+            tags=tags or None,
         )
         # M1b: ticket_created event
         from actions import emit_event as _emit, ActorContext as _AC
@@ -1100,6 +1110,22 @@ def _update_workflow_run(run_id: str, **kwargs) -> dict | None:
     return _get_workflow_run(run_id)
 
 
+def _recover_stuck_workflow_runs() -> None:
+    """Mark any runs stuck in 'running' as 'failed' — their threads died with the previous server."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        stuck = conn.execute("SELECT COUNT(*) FROM workflow_runs WHERE status = 'running'").fetchone()[0]
+        if stuck:
+            conn.execute(
+                "UPDATE workflow_runs SET status = 'failed', completed_at = ? WHERE status = 'running'",
+                (datetime.utcnow().isoformat(),),
+            )
+            conn.commit()
+            print(f"  Recovered {stuck} stuck workflow run(s) → failed")
+        conn.close()
+
+
 def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow: dict, proj: dict) -> None:
     """Background thread that executes a workflow bounce.
 
@@ -1210,8 +1236,16 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             except (json.JSONDecodeError, TypeError):
                 agent_args = []
 
-            cmd = [agent.get("command", "claude")] + agent_args + ["-p", prompt, "--output-format", "json"]
+            cmd = [agent.get("command", "claude")] + agent_args + [
+                "-p", prompt, "--output-format", "json", "--no-session-persistence",
+            ]
 
+            # Progress entry so the UI shows which agent is running immediately
+            agent_label = agent.get("name", agent_id)
+            conversation.append({
+                "role": "system", "step": step_idx,
+                "content": f"Running agent '{agent_label}'…",
+            })
             _update_workflow_run(run_id, current_step=step_idx, conversation=conversation, status="running")
             with _workflow_runs_lock:
                 if run_id in _workflow_runs:
@@ -1226,6 +1260,23 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     timeout=WORKFLOW_AGENT_TIMEOUT,
                     cwd=os.path.expanduser(proj.get("path", ".")),
                 )
+
+                # Remove the "Running agent..." placeholder
+                conversation = [t for t in conversation
+                                if not (t.get("role") == "system"
+                                        and t.get("step") == step_idx
+                                        and "Running agent" in t.get("content", ""))]
+
+                # Check for non-zero exit code
+                if result.returncode != 0:
+                    err = (result.stderr or result.stdout or "").strip()[:2000] or f"Exit code {result.returncode}"
+                    conversation.append({
+                        "role": "system", "step": step_idx,
+                        "content": f"Agent '{agent_label}' failed:\n{err}",
+                    })
+                    _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                    continue
+
                 # Parse response — same pattern as gate-check
                 response_text = result.stdout.strip()
                 try:
@@ -1241,22 +1292,32 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
 
                 conversation.append({
                     "role": "agent",
-                    "agent": agent.get("name", agent_id),
+                    "agent": agent_label,
                     "agent_id": agent_id,
                     "step": step_idx,
                     "content": response_content,
                 })
             except subprocess.TimeoutExpired:
+                # Remove the "Running agent..." placeholder
+                conversation = [t for t in conversation
+                                if not (t.get("role") == "system"
+                                        and t.get("step") == step_idx
+                                        and "Running agent" in t.get("content", ""))]
                 conversation.append({
                     "role": "system",
                     "step": step_idx,
-                    "content": f"Agent '{agent.get('name', agent_id)}' timed out after {WORKFLOW_AGENT_TIMEOUT}s",
+                    "content": f"Agent '{agent_label}' timed out after {WORKFLOW_AGENT_TIMEOUT}s",
                 })
             except Exception as e:
+                # Remove the "Running agent..." placeholder
+                conversation = [t for t in conversation
+                                if not (t.get("role") == "system"
+                                        and t.get("step") == step_idx
+                                        and "Running agent" in t.get("content", ""))]
                 conversation.append({
                     "role": "system",
                     "step": step_idx,
-                    "content": f"Agent '{agent.get('name', agent_id)}' error: {e}",
+                    "content": f"Agent '{agent_label}' error: {e}",
                 })
 
             _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
@@ -1316,8 +1377,12 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                             with _workflow_runs_lock:
                                 if run_id in _workflow_runs:
                                     _workflow_runs[run_id]["status"] = "paused"
-                    except (subprocess.TimeoutExpired, Exception):
-                        pass  # agreement check failed, continue anyway
+                    except (subprocess.TimeoutExpired, Exception) as e:
+                        conversation.append({
+                            "role": "system", "step": step_idx,
+                            "content": f"Agreement check error: {e}",
+                        })
+                        _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
 
         # Completed — create attachment
         summary_parts = []
@@ -1719,6 +1784,215 @@ def _run_enrich(proj: dict, ticket_id: str, field: str, content: str, action: st
     }
 
 
+def _truncate_evidence(text: str, limit: int = 4000) -> str:
+    """Trim evidence blocks so learning prompts stay bounded."""
+    if not text:
+        return ""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n...[truncated]"
+
+
+def _collect_learning_evidence(proj: dict, ticket: dict) -> str:
+    """Collect local, source-linked evidence for learning extraction."""
+    project_path = Path(os.path.expanduser(proj.get("path", ".") or "."))
+    blocks: list[str] = []
+
+    feature_dir = project_path / "docs" / "features" / ticket["id"]
+    for name in ("PLAN.md", "NOTES.md", "BUGS.md", "TESTS.md", "REVIEW.md"):
+        path = feature_dir / name
+        if not path.is_file():
+            continue
+        try:
+            blocks.append(f"### docs/features/{ticket['id']}/{name}\n{_truncate_evidence(path.read_text(encoding='utf-8', errors='replace'), 3000)}")
+        except OSError:
+            continue
+
+    git_commands = [
+        ("git status --short", ["git", "status", "--short"]),
+        ("git diff --stat", ["git", "diff", "--stat"]),
+        ("git diff --name-only", ["git", "diff", "--name-only"]),
+    ]
+    for label, cmd in git_commands:
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        output = (result.stdout or "").strip()
+        if output:
+            blocks.append(f"### {label}\n{_truncate_evidence(output, 2000)}")
+
+    return "\n\n".join(blocks) if blocks else "(no extra local evidence found)"
+
+
+def _build_learnings_prompt(ticket: dict, current_content: str, evidence: str) -> str:
+    """Build a prompt that extracts candidate learning items for a ticket."""
+    criteria_lines = []
+    for c in ticket.get("acceptance_criteria", []):
+        mark = "[x]" if c["checked"] else "[ ]"
+        criteria_lines.append(f"- {mark} {c['text']}")
+    criteria_text = "\n".join(criteria_lines) if criteria_lines else "(none)"
+
+    flags = ticket.get("readiness_flags", {})
+    tests = flags.get("tests", "") if isinstance(flags, dict) else ""
+    smoke = flags.get("smoke", "") if isinstance(flags, dict) else ""
+    existing_learnings = current_content or (flags.get("reviewed", "") if isinstance(flags, dict) else "")
+
+    return f"""You are extracting candidate learnings from a Ticket Takeaway ticket.
+
+The human will review each item on the ticket. Suggest only useful, source-grounded learnings.
+Do not include generic progress updates, restatements of acceptance criteria, or vague advice.
+Prefer compact items that could help this ticket, this project, or the user's future work.
+
+TICKET: {ticket['id']} — {ticket['title']}
+Section: {ticket['section']} | Status: {ticket['status']} | Priority: {ticket['priority']} | Complexity: {ticket['complexity']}
+
+DESCRIPTION:
+{ticket.get('description') or '(empty)'}
+
+ACCEPTANCE CRITERIA:
+{criteria_text}
+
+TEST NOTES:
+{tests or '(empty)'}
+
+SMOKE NOTES:
+{smoke or '(empty)'}
+
+CURRENT LEARNINGS:
+{existing_learnings or '(empty)'}
+
+LOCAL EVIDENCE:
+{_truncate_evidence(evidence, 10000)}
+
+Return ONLY valid JSON with this schema:
+{{
+  "summary": "brief note about what evidence produced these candidates",
+  "items": [
+    {{
+      "text": "one actionable learning item",
+      "scope": "ticket" | "project" | "global" | "skill",
+      "type": "decision" | "procedure" | "bug" | "test" | "ux" | "architecture" | "preference" | "constraint",
+      "source": "ticket" | "diff" | "notes" | "tests" | "review" | "feedback",
+      "confidence": "low" | "medium" | "high"
+    }}
+  ]
+}}
+
+Rules:
+- Return at most 8 items.
+- Keep each text under 220 characters.
+- Use "ticket" scope for current-ticket-only discoveries.
+- Use "project" scope for repo conventions, architecture, recurring bugs, or file-specific gotchas.
+- Use "global" scope only for the human's reusable practice across projects.
+- Use "skill" scope only when the learning describes a repeatable workflow that should become a command/skill.
+- Do not duplicate CURRENT LEARNINGS.
+- If there is nothing worth saving, return an empty items array."""
+
+
+def _clean_learning_text(text: str) -> str:
+    """Normalize a learning item text without stripping meaningful content."""
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()
+    text = re.sub(r"^-\s*\[[ xX]?\]\s*", "", text)
+    text = re.sub(r"^[-*]\s+", "", text)
+    text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+    text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+    text = re.sub(r"^\d+\.\s+", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalize_learning_items(data: dict, existing_content: str = "") -> list[dict]:
+    """Validate and normalize generated learning candidate items."""
+    allowed_scopes = {"ticket", "project", "global", "skill"}
+    allowed_types = {"decision", "procedure", "bug", "test", "ux", "architecture", "preference", "constraint"}
+    allowed_sources = {"ticket", "diff", "notes", "tests", "review", "feedback"}
+    allowed_confidence = {"low", "medium", "high"}
+
+    existing_norm = {
+        _clean_learning_text(line).lower()
+        for line in (existing_content or "").splitlines()
+        if _clean_learning_text(line)
+    }
+
+    raw_items = data.get("items", []) if isinstance(data, dict) else []
+    if not isinstance(raw_items, list):
+        return []
+
+    items: list[dict] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        if isinstance(raw, str):
+            raw = {"text": raw}
+        if not isinstance(raw, dict):
+            continue
+        text = _clean_learning_text(raw.get("text", ""))
+        key = text.lower()
+        if not text or key in seen or key in existing_norm:
+            continue
+        seen.add(key)
+        scope = raw.get("scope", "ticket")
+        typ = raw.get("type", "decision")
+        source = raw.get("source", "ticket")
+        confidence = raw.get("confidence", "medium")
+        items.append({
+            "text": text,
+            "scope": scope if scope in allowed_scopes else "ticket",
+            "type": typ if typ in allowed_types else "decision",
+            "source": source if source in allowed_sources else "ticket",
+            "confidence": confidence if confidence in allowed_confidence else "medium",
+        })
+        if len(items) >= 8:
+            break
+    return items
+
+
+def _run_learning_generation(proj: dict, ticket_id: str, current_content: str = "") -> dict:
+    """Run Claude CLI to generate candidate learning items for a ticket."""
+    project_id = proj["id"]
+    ticket = _get_ticket_json(project_id, ticket_id)
+    if not ticket:
+        return {"error": "Ticket not found"}
+
+    existing = current_content or ticket.get("readiness_flags", {}).get("reviewed", "")
+    evidence = _collect_learning_evidence(proj, ticket)
+    prompt = _build_learnings_prompt(ticket, existing, evidence)
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--output-format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            cwd=os.path.expanduser(proj.get("path", "."))
+        )
+        outer = json.loads(result.stdout)
+        text = outer.get("result", result.stdout) if isinstance(outer, dict) else result.stdout
+        data = json.loads(text) if isinstance(text, str) else text
+    except subprocess.TimeoutExpired:
+        return {"error": "Learning generation timed out — try again."}
+    except OSError as e:
+        return {"error": f"Learning generation could not start: {e}"}
+    except (json.JSONDecodeError, KeyError) as e:
+        return {"error": f"Failed to parse learning response: {e}"}
+
+    summary = _clean_ai_text(data.get("summary", "")) if isinstance(data, dict) else ""
+    items = _normalize_learning_items(data, existing)
+    return {
+        "ticket_id": ticket_id,
+        "summary": summary,
+        "items": items,
+    }
+
+
 def _toggle_readiness(proj: dict, ticket_id: str, flag: str) -> bool:
     """Toggle a readiness flag. If set, clear it; if unset, set it."""
     project_id = proj["id"]
@@ -1908,6 +2182,39 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         eligible = False
         eligibility_reasons = ["eligibility check failed"]
 
+    # Tags
+    try:
+        tag_rows = conn.execute(
+            "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
+            (row["id"], project_id),
+        ).fetchall()
+        tags = [t["tag"] for t in tag_rows]
+    except Exception:
+        tags = []
+
+    # Branches
+    try:
+        branch_rows = conn.execute(
+            "SELECT branch_name, remote, pr_number, pr_status, pr_url, ahead, behind, auto_linked "
+            "FROM ticket_branches WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
+            (row["id"], project_id),
+        ).fetchall()
+        branches = [
+            {
+                "name": b["branch_name"],
+                "remote": b["remote"],
+                "pr_number": b["pr_number"],
+                "pr_status": b["pr_status"],
+                "pr_url": b["pr_url"],
+                "ahead": b["ahead"],
+                "behind": b["behind"],
+                "auto_linked": bool(b["auto_linked"]),
+            }
+            for b in branch_rows
+        ]
+    except Exception:
+        branches = []
+
     conn.close()
 
     # Build criteria text for clipboard prompts
@@ -1939,6 +2246,8 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "latest_run_status": latest_run_status,
         "automation_eligible": eligible,
         "automation_eligibility_reasons": eligibility_reasons,
+        "tags": tags,
+        "branches": branches,
     }
 
 
@@ -2190,10 +2499,18 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   <div id="detail-view" class="journey-detail" data-testid="journey-detail">
     <div class="detail-header">
       <button class="btn btn-ghost btn-sm" onclick="showList()" data-testid="detail-back">&larr;</button>
-      <input class="title-input" id="detail-title" data-testid="detail-title" placeholder="Journey title...">
+      <div style="flex:1;">
+        <input class="title-input" id="detail-title" data-testid="detail-title" placeholder="Journey title..." style="width:100%;">
+        <div id="detail-journey-id" style="font-size:10px;font-family:'SF Mono',Monaco,monospace;color:var(--text-tertiary);margin-top:1px;"></div>
+      </div>
       <span id="detail-badge" class="badge badge-draft" data-testid="detail-badge">draft</span>
-      <div style="margin-left:auto;display:flex;gap:6px;">
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
         <button class="btn btn-ghost btn-sm" onclick="validateJourney()" data-testid="validate-btn">Validate</button>
+        <select id="backend-select" data-testid="backend-select" title="Browser backend — Playwright launches its own browser, CDP connects to Chrome on port 9222"
+                style="font-size:11px;padding:4px 6px;border:1px solid var(--border-default);background:var(--bg-elevated);color:var(--text-primary);border-radius:4px;cursor:pointer;">
+          <option value="playwright">PW</option>
+          <option value="cdp">CDP</option>
+        </select>
         <button class="btn btn-success btn-sm" onclick="runJourney()" data-testid="run-btn">&#9654; Run</button>
         <button class="btn btn-danger btn-sm" onclick="deleteJourney()" data-testid="delete-btn">Delete</button>
       </div>
@@ -2532,6 +2849,10 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
         topRow.appendChild(titleSpan);
         topRow.appendChild(badge);
         card.appendChild(topRow);
+        var idRow = document.createElement('div');
+        idRow.style.cssText = 'font-size:10px;font-family:"SF Mono",Monaco,monospace;color:var(--text-tertiary);margin-top:2px;padding-left:20px;';
+        idRow.textContent = j.id;
+        card.appendChild(idRow);
         // Meta
         var meta = document.createElement('div');
         meta.className = 'meta';
@@ -2571,6 +2892,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       currentJourney = j;
       currentSteps = j.steps || [];
       document.getElementById('detail-title').value = j.title;
+      document.getElementById('detail-journey-id').textContent = j.id;
       document.getElementById('detail-persona').value = j.persona || '';
       document.getElementById('detail-description').value = j.description || '';
       var badge = document.getElementById('detail-badge');
@@ -2738,8 +3060,10 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     }});
   }};
   window.runJourney = function() {{
-    toast('Starting run...');
-    apiPost('/journeys/' + currentJourney.id + '/run', {{}}).then(function(r) {{
+    var backendSel = document.getElementById('backend-select');
+    var backend = backendSel ? backendSel.value : 'playwright';
+    toast('Starting run (' + backend + ')...');
+    apiPost('/journeys/' + currentJourney.id + '/run', {{backend: backend}}).then(function(r) {{
       if (r.data.error) {{ toast(r.data.error, 'error'); return; }}
       toast('Run started: ' + r.data.run_id);
       setTimeout(function() {{ openJourney(currentJourney.id); }}, 2000);
@@ -2998,492 +3322,6 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   }});
 }})();
 </script>
-</body>
-</html>'''
-
-
-def _render_project_settings(proj: dict, port: int) -> str:
-    """Render the settings page for a single project."""
-    pid = _safe_attr(proj["id"])
-    name = _safe_attr(proj.get("name", proj["id"]))
-    path = _safe_attr(proj.get("path", ""))
-    description = _safe_attr(proj.get("description", ""))
-    active = proj.get("active", True)
-
-    return f'''<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{name} — Settings</title>
-<script>
-(function(){{
-  var s=localStorage.getItem('tt-theme');
-  if(s==='light')document.documentElement.setAttribute('data-theme','light');
-  else if(s==='dark')document.documentElement.setAttribute('data-theme','dark');
-  else document.documentElement.setAttribute('data-theme',
-    window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');
-}})();
-</script>
-<style>
-:root, [data-theme="dark"] {{
-  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
-  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
-  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
-  --accent: #3b82f6;
-}}
-[data-theme="light"] {{
-  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
-  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
-  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
-  --accent: #2563eb;
-}}
-* {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; max-width: 600px; }}
-.back {{ color: var(--text-tertiary); text-decoration: none; font-size: 13px; }}
-.back:hover {{ color: var(--text-secondary); }}
-h1 {{ font-size: 18px; font-weight: 600; margin: 16px 0 24px; }}
-label {{ display: block; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; margin-top: 20px; }}
-input, textarea {{ width: 100%; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px; padding: 8px 12px; color: var(--text-primary); font-size: 14px; font-family: inherit; }}
-input:focus, textarea:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
-input[readonly] {{ background: var(--bg-page); color: var(--text-tertiary); border-color: var(--border-subtle); }}
-textarea {{ min-height: 60px; resize: vertical; }}
-.toggle-wrap {{ display: flex; align-items: center; gap: 10px; margin-top: 20px; }}
-.toggle {{ width: 36px; height: 20px; border-radius: 10px; cursor: pointer; position: relative; transition: background 0.15s; border: none; }}
-.toggle.on {{ background: #22c55e; }}
-.toggle.off {{ background: var(--border-default); }}
-.toggle::after {{ content: ''; position: absolute; width: 16px; height: 16px; background: white; border-radius: 50%; top: 2px; transition: left 0.15s; }}
-.toggle.on::after {{ left: 18px; }}
-.toggle.off::after {{ left: 2px; }}
-.btn {{ display: inline-block; margin-top: 24px; padding: 8px 20px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: var(--accent); border-radius: 6px; cursor: pointer; font-size: 13px; }}
-.btn:hover {{ background: rgba(59,130,246,0.25); }}
-.danger {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border-default); }}
-.danger h3 {{ color: #ef4444; font-size: 12px; font-weight: 600; margin-bottom: 12px; }}
-.danger .btn {{ background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: #ef4444; margin-top: 0; }}
-.danger .btn:hover {{ background: rgba(239,68,68,0.25); }}
-.danger p {{ color: var(--text-tertiary); font-size: 11px; margin-top: 6px; }}
-.msg {{ font-size: 12px; margin-top: 8px; display: none; }}
-.msg.ok {{ color: #22c55e; }}
-.msg.err {{ color: #ef4444; }}
-</style>
-</head>
-<body>
-<a href="/{pid}" class="back" data-testid="settings-back">&larr; Back to board</a>
-<h1>{name} Settings</h1>
-<form id="settings-form" data-testid="project-settings-form">
-  <label>Project Name</label>
-  <input name="name" value="{name}" data-testid="settings-name">
-  <label>Project Path</label>
-  <input name="path" value="{path}" style="font-family:monospace" data-testid="settings-path">
-  <label>Description</label>
-  <textarea name="description" data-testid="settings-description">{description}</textarea>
-  <label>Project ID <span style="color:var(--text-tertiary)">(read-only)</span></label>
-  <input name="id" value="{pid}" readonly data-testid="settings-id">
-  <div class="toggle-wrap">
-    <button type="button" class="toggle {'on' if active else 'off'}" id="active-toggle" data-testid="settings-active-toggle"></button>
-    <span style="font-size:13px">Active</span>
-  </div>
-  <button type="submit" class="btn" data-testid="settings-save">Save Changes</button>
-  <div class="msg" id="save-msg"></div>
-</form>
-<div style="margin-top:32px;padding-top:16px;border-top:1px solid var(--border-default);">
-  <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:12px;">Scenarios</h3>
-  <div id="scenarios-section">
-    <p style="color:var(--text-secondary);font-size:12px;">Loading scenarios...</p>
-  </div>
-</div>
-<div class="danger">
-  <h3>Danger Zone</h3>
-  <button class="btn" id="remove-btn" data-testid="settings-remove">Remove Project</button>
-  <p>Removes from registry only. Does not delete files, tickets, or database entries.</p>
-</div>
-<script>
-(function() {{
-  var activeOn = {'true' if active else 'false'};
-  var toggle = document.getElementById('active-toggle');
-  toggle.addEventListener('click', function() {{
-    activeOn = !activeOn;
-    toggle.className = 'toggle ' + (activeOn ? 'on' : 'off');
-  }});
-  var form = document.getElementById('settings-form');
-  var msg = document.getElementById('save-msg');
-  form.addEventListener('submit', function(e) {{
-    e.preventDefault();
-    msg.style.display = 'none';
-    fetch('/api/projects/{pid}', {{
-      method: 'PUT',
-      headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{
-        name: form.elements.name.value,
-        path: form.elements.path.value,
-        description: form.elements.description.value,
-        active: activeOn
-      }})
-    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
-    .then(function(res) {{
-      if (res.ok) {{ msg.textContent = 'Saved!'; msg.className = 'msg ok'; }}
-      else {{ msg.textContent = res.data.error || 'Failed'; msg.className = 'msg err'; }}
-      msg.style.display = 'block';
-    }});
-  }});
-  var modal = document.getElementById('confirm-modal');
-  var modalCancel = document.getElementById('modal-cancel');
-  var modalConfirm = document.getElementById('modal-confirm');
-  document.getElementById('remove-btn').addEventListener('click', function() {{
-    modal.style.display = 'flex';
-  }});
-  modalCancel.addEventListener('click', function() {{ modal.style.display = 'none'; }});
-  modal.addEventListener('click', function(e) {{ if (e.target === modal) modal.style.display = 'none'; }});
-  modalConfirm.addEventListener('click', function() {{
-    modal.style.display = 'none';
-    fetch('/api/projects/{pid}', {{ method: 'DELETE' }})
-    .then(function(r) {{ return r.json(); }})
-    .then(function(data) {{
-      if (data.ok) window.location.href = '/';
-      else {{ msg.textContent = data.error || 'Failed to remove'; msg.className = 'msg err'; msg.style.display = 'block'; }}
-    }});
-  }});
-}})();
-</script>
-<script>
-// Scenarios section
-(function() {{
-  var section = document.getElementById('scenarios-section');
-  if (!section) return;
-  var pid = '{pid}';
-
-  function renderScenarios(data) {{
-    if (!data.scenarios || data.scenarios.length === 0) {{
-      section.innerHTML = '<p style="color:var(--text-secondary);font-size:12px;">No scenario manifests found in tests/scenarios/</p>';
-      return;
-    }}
-    var html = '';
-    data.scenarios.forEach(function(s) {{
-      var tags = (s.tags || []).map(function(t) {{
-        return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--bg-hover);color:var(--text-secondary);margin-right:4px;">' + t + '</span>';
-      }}).join('');
-      var lastRun = s.last_run ? '<span style="font-size:11px;color:' + (s.last_run.status === 'passed' ? '#22c55e' : s.last_run.status === 'failed' ? '#ef4444' : 'var(--text-secondary)') + ';">' + s.last_run.status + '</span>' : '';
-      html += '<div class="scenario-row" data-scenario-id="' + s.id + '" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-default);">'
-        + '<div style="flex:1;"><div style="font-size:13px;font-weight:500;color:var(--text-primary);">' + s.title + '</div><div style="margin-top:2px;">' + tags + '</div></div>'
-        + '<div style="min-width:60px;text-align:right;">' + lastRun + '</div>'
-        + '<div id="run-result-' + s.id + '"></div>'
-        + '<button onclick="runScenario(\'' + s.id + '\', false)" style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border-default);background:none;color:var(--text-primary);cursor:pointer;">Run</button>'
-        + '<button onclick="runScenario(\'' + s.id + '\', true)" style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border-default);background:none;color:var(--accent);cursor:pointer;">Run + Publish</button>'
-        + '</div>';
-    }});
-    section.innerHTML = html;
-  }}
-
-  fetch('/' + pid + '/api/scenarios').then(function(r) {{ return r.json(); }}).then(renderScenarios).catch(function() {{
-    section.innerHTML = '<p style="color:var(--text-secondary);font-size:12px;">Failed to load scenarios</p>';
-  }});
-
-  window.runScenario = function(scenarioId, publish) {{
-    var resultEl = document.getElementById('run-result-' + scenarioId);
-    if (resultEl) resultEl.innerHTML = '<span style="font-size:11px;color:var(--text-secondary);">Starting...</span>';
-
-    fetch('/' + pid + '/api/scenarios/run', {{
-      method: 'POST',
-      headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{scenario_id: scenarioId, publish: publish}})
-    }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
-      if (data.error) {{
-        if (resultEl) resultEl.innerHTML = '<span style="font-size:11px;color:#ef4444;">' + data.error + '</span>';
-        return;
-      }}
-      pollRun(data.run_id, scenarioId);
-    }});
-  }};
-
-  function pollRun(runId, scenarioId) {{
-    var resultEl = document.getElementById('run-result-' + scenarioId);
-    var interval = setInterval(function() {{
-      fetch('/' + pid + '/api/scenarios/runs/' + runId).then(function(r) {{ return r.json(); }}).then(function(data) {{
-        if (data.status === 'running') {{
-          if (resultEl) resultEl.innerHTML = '<span style="font-size:11px;color:var(--text-secondary);">Running...</span>';
-          return;
-        }}
-        clearInterval(interval);
-        var color = data.status === 'passed' ? '#22c55e' : '#ef4444';
-        var html = '<span style="font-size:11px;color:' + color + ';font-weight:600;">' + data.status + '</span>';
-        if (data.summary && data.summary.screenshots && data.summary.screenshots.length > 0) {{
-          html += '<div style="display:flex;gap:4px;margin-top:4px;">';
-          data.summary.screenshots.forEach(function(spath) {{
-            var fname = spath.split('/').pop();
-            html += '<img src="/' + pid + '/api/scenarios/runs/' + runId + '/artifacts/' + fname + '" style="width:60px;height:40px;object-fit:cover;border-radius:4px;border:1px solid var(--border-default);" title="' + fname + '">';
-          }});
-          html += '</div>';
-        }}
-        if (resultEl) resultEl.innerHTML = html;
-      }});
-    }}, 2000);
-  }}
-}})();
-</script>
-<script>
-// Scenario Drafting section
-(function() {{
-  var pid = '{pid}';
-
-  function escHtml(s) {{
-    var d = document.createElement('div');
-    d.appendChild(document.createTextNode(String(s)));
-    return d.innerHTML;
-  }}
-
-  // Build and insert the drafting panel before the danger zone
-  var dangerZone = document.querySelector('.danger');
-  if (!dangerZone) return;
-
-  var draftSection = document.createElement('div');
-  draftSection.style.cssText = 'margin-top:32px;padding-top:16px;border-top:1px solid var(--border-default);';
-
-  var heading = document.createElement('h3');
-  heading.style.cssText = 'font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:12px;';
-  heading.textContent = 'Generate Draft Scenario';
-  draftSection.appendChild(heading);
-
-  var hint = document.createElement('p');
-  hint.style.cssText = 'color:var(--text-secondary);font-size:12px;margin-bottom:10px;';
-  hint.textContent = 'Describe what the scenario should demonstrate in plain language.';
-  draftSection.appendChild(hint);
-
-  var inputRow = document.createElement('div');
-  inputRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;';
-
-  var goalInput = document.createElement('textarea');
-  goalInput.id = 'draft-goal';
-  goalInput.rows = 2;
-  goalInput.placeholder = 'e.g. user creates a ticket and moves it to WIP';
-  goalInput.style.cssText = 'flex:1;resize:vertical;font-size:13px;';
-
-  var draftBtn = document.createElement('button');
-  draftBtn.id = 'draft-btn';
-  draftBtn.style.cssText = 'padding:8px 14px;font-size:13px;border-radius:6px;border:1px solid rgba(59,130,246,0.3);background:rgba(59,130,246,0.12);color:var(--accent);cursor:pointer;white-space:nowrap;font-family:inherit;';
-  draftBtn.textContent = 'Generate Drafts';
-
-  inputRow.appendChild(goalInput);
-  inputRow.appendChild(draftBtn);
-  draftSection.appendChild(inputRow);
-
-  var draftResults = document.createElement('div');
-  draftResults.id = 'draft-results';
-  draftResults.style.marginTop = '12px';
-  draftSection.appendChild(draftResults);
-
-  dangerZone.parentNode.insertBefore(draftSection, dangerZone);
-
-  function confidenceBadge(c) {{
-    var color = c === 'high' ? '#22c55e' : c === 'medium' ? '#f59e0b' : '#ef4444';
-    var span = document.createElement('span');
-    span.style.cssText = 'display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;';
-    span.textContent = c;
-    return span;
-  }}
-
-  var lastCandidates = [];
-
-  window.previewDraft = function(idx) {{
-    var pre = document.getElementById('draft-preview-' + idx);
-    if (!pre) return;
-    if (pre.style.display === 'none') {{
-      pre.textContent = JSON.stringify(lastCandidates[idx] && lastCandidates[idx].manifest, null, 2);
-      pre.style.display = 'block';
-    }} else {{
-      pre.style.display = 'none';
-    }}
-  }};
-
-  window.approveDraft = function(idx) {{
-    var c = lastCandidates[idx];
-    if (!c) return;
-    var msgEl = document.getElementById('draft-approve-msg-' + idx);
-    if (msgEl) {{ msgEl.style.color = 'var(--text-secondary)'; msgEl.textContent = 'Saving...'; }}
-    fetch('/' + pid + '/api/scenarios/drafts/approve', {{
-      method: 'POST',
-      headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{ manifest: c.manifest, filename: c.manifest.id + '.json' }})
-    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
-    .then(function(res) {{
-      if (!msgEl) return;
-      if (res.ok) {{
-        msgEl.style.color = '#22c55e';
-        msgEl.textContent = 'Saved as ' + (res.data.filename || '?');
-      }} else {{
-        msgEl.style.color = '#ef4444';
-        msgEl.textContent = res.data.error || 'Failed';
-      }}
-    }}).catch(function() {{
-      if (msgEl) {{ msgEl.style.color = '#ef4444'; msgEl.textContent = 'Network error'; }}
-    }});
-  }};
-
-  function buildCandidateCard(c, i) {{
-    var card = document.createElement('div');
-    card.id = 'draft-candidate-' + i;
-    card.style.cssText = 'margin-bottom:12px;padding:12px;border-radius:8px;border:1px solid var(--border-default);background:var(--bg-card);';
-
-    var titleRow = document.createElement('div');
-    titleRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px;';
-
-    var titleEl = document.createElement('span');
-    titleEl.style.cssText = 'font-size:13px;font-weight:600;color:var(--text-primary);flex:1;';
-    titleEl.textContent = c.title;
-    titleRow.appendChild(titleEl);
-    titleRow.appendChild(confidenceBadge(c.confidence));
-    card.appendChild(titleRow);
-
-    var summaryEl = document.createElement('div');
-    summaryEl.style.cssText = 'font-size:12px;color:var(--text-secondary);margin-bottom:6px;';
-    summaryEl.textContent = c.summary;
-    card.appendChild(summaryEl);
-
-    if (c.assumptions && c.assumptions.length) {{
-      var details = document.createElement('details');
-      details.style.marginBottom = '4px';
-      var summary = document.createElement('summary');
-      summary.style.cssText = 'font-size:11px;color:var(--text-tertiary);cursor:pointer;';
-      summary.textContent = 'Assumptions (' + c.assumptions.length + ')';
-      details.appendChild(summary);
-      var ul = document.createElement('ul');
-      ul.style.cssText = 'margin:4px 0 0 14px;font-size:11px;color:var(--text-secondary);';
-      c.assumptions.forEach(function(a) {{
-        var li = document.createElement('li');
-        li.textContent = a;
-        ul.appendChild(li);
-      }});
-      details.appendChild(ul);
-      card.appendChild(details);
-    }}
-
-    if (c.prerequisites && c.prerequisites.length) {{
-      var prereqBox = document.createElement('div');
-      prereqBox.style.cssText = 'margin-bottom:6px;padding:6px 10px;border-radius:4px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);';
-      var prereqHead = document.createElement('div');
-      prereqHead.style.cssText = 'font-size:10px;font-weight:600;color:#ef4444;margin-bottom:2px;';
-      prereqHead.textContent = 'Prerequisites / Blockers';
-      prereqBox.appendChild(prereqHead);
-      c.prerequisites.forEach(function(p) {{
-        var pEl = document.createElement('div');
-        pEl.style.cssText = 'font-size:11px;color:#ef4444cc;margin-top:1px;';
-        pEl.textContent = p;
-        prereqBox.appendChild(pEl);
-      }});
-      card.appendChild(prereqBox);
-    }}
-
-    var btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:8px;margin-top:8px;align-items:center;';
-
-    var approveBtn = document.createElement('button');
-    approveBtn.style.cssText = 'font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid rgba(34,197,94,0.35);background:rgba(34,197,94,0.08);color:#22c55e;cursor:pointer;';
-    approveBtn.textContent = 'Approve & Save';
-    approveBtn.addEventListener('click', function() {{ window.approveDraft(i); }});
-
-    var previewBtn = document.createElement('button');
-    previewBtn.style.cssText = 'font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border-default);background:none;color:var(--text-secondary);cursor:pointer;';
-    previewBtn.textContent = 'Preview JSON';
-    previewBtn.addEventListener('click', function() {{ window.previewDraft(i); }});
-
-    var approveMsg = document.createElement('span');
-    approveMsg.id = 'draft-approve-msg-' + i;
-    approveMsg.style.cssText = 'font-size:11px;';
-
-    btnRow.appendChild(approveBtn);
-    btnRow.appendChild(previewBtn);
-    btnRow.appendChild(approveMsg);
-    card.appendChild(btnRow);
-
-    var pre = document.createElement('pre');
-    pre.id = 'draft-preview-' + i;
-    pre.style.cssText = 'display:none;margin-top:8px;padding:8px;border-radius:4px;background:var(--bg-page);font-size:10px;color:var(--text-secondary);overflow-x:auto;max-height:200px;';
-    card.appendChild(pre);
-
-    return card;
-  }}
-
-  function renderDraftResults(data) {{
-    while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
-
-    if (data.warnings && data.warnings.length) {{
-      var warnBox = document.createElement('div');
-      warnBox.style.cssText = 'margin-bottom:10px;padding:8px 12px;border-radius:6px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);';
-      var warnHead = document.createElement('div');
-      warnHead.style.cssText = 'font-size:11px;font-weight:600;color:#f59e0b;margin-bottom:4px;';
-      warnHead.textContent = 'Warnings';
-      warnBox.appendChild(warnHead);
-      data.warnings.forEach(function(w) {{
-        var wEl = document.createElement('div');
-        wEl.style.cssText = 'font-size:12px;color:var(--text-secondary);margin-top:2px;';
-        wEl.textContent = w;
-        warnBox.appendChild(wEl);
-      }});
-      draftResults.appendChild(warnBox);
-    }}
-
-    if (data.intent_summary) {{
-      var intentEl = document.createElement('div');
-      intentEl.style.cssText = 'font-size:11px;color:var(--text-tertiary);margin-bottom:10px;';
-      intentEl.textContent = data.intent_summary;
-      draftResults.appendChild(intentEl);
-    }}
-
-    lastCandidates = data.candidates || [];
-    if (!lastCandidates.length) {{
-      var noResults = document.createElement('p');
-      noResults.style.cssText = 'color:var(--text-secondary);font-size:12px;';
-      noResults.textContent = 'No candidates generated.';
-      draftResults.appendChild(noResults);
-      return;
-    }}
-    lastCandidates.forEach(function(c, i) {{
-      draftResults.appendChild(buildCandidateCard(c, i));
-    }});
-  }}
-
-  draftBtn.addEventListener('click', function() {{
-    var goal = goalInput.value.trim();
-    if (!goal) return;
-    while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
-    var loading = document.createElement('p');
-    loading.style.cssText = 'color:var(--text-secondary);font-size:12px;';
-    loading.textContent = 'Generating...';
-    draftResults.appendChild(loading);
-
-    fetch('/' + pid + '/api/scenarios/draft', {{
-      method: 'POST',
-      headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{ goal: goal }})
-    }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
-      if (data.error) {{
-        while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
-        var errEl = document.createElement('p');
-        errEl.style.cssText = 'color:#ef4444;font-size:12px;';
-        errEl.textContent = data.error;
-        draftResults.appendChild(errEl);
-        return;
-      }}
-      renderDraftResults(data);
-    }}).catch(function() {{
-      while (draftResults.firstChild) draftResults.removeChild(draftResults.firstChild);
-      var errEl = document.createElement('p');
-      errEl.style.cssText = 'color:#ef4444;font-size:12px;';
-      errEl.textContent = 'Request failed';
-      draftResults.appendChild(errEl);
-    }});
-  }});
-}})();
-</script>
-<div id="confirm-modal\" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
-  <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
-    <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Remove Project</h3>
-    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Remove this project from the registry? Tickets and files will not be deleted.</p>
-    <div style="display:flex;gap:8px;justify-content:flex-end;">
-      <button id="modal-cancel" style="font-size:12px;padding:6px 16px;border-radius:6px;border:1px solid var(--border-default);background:none;color:var(--text-secondary);cursor:pointer;font-family:inherit;">Cancel</button>
-      <button id="modal-confirm" style="font-size:12px;padding:6px 16px;border-radius:6px;border:none;background:rgba(239,68,68,0.15);color:#ef4444;cursor:pointer;font-weight:600;font-family:inherit;">Remove</button>
-    </div>
-  </div>
-</div>
 </body>
 </html>'''
 
@@ -4272,10 +4110,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Project-scoped routes ────────────────────────────────────
 
-        # Project settings page
+        # Legacy /settings route — redirect to dashboard (settings now live in the drawer).
         if remainder == "/settings":
-            html = _render_project_settings(proj, SERVER_PORT)
-            self._send_html(html)
+            self.send_response(302)
+            self.send_header("Location", f"/{proj['id']}/")
+            self.end_headers()
             return
 
         # Journeys page
@@ -4339,6 +4178,107 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t)
             else:
                 self._send_json({"error": "Ticket not found"}, 404)
+            return
+
+        # All tags in this project (with counts)
+        if remainder == "/api/tags":
+            project_id = proj["id"]
+            conn = get_db()
+            init_db(conn)
+            rows = conn.execute(
+                "SELECT tag, COUNT(*) AS cnt FROM ticket_tags WHERE project_id = ? GROUP BY tag ORDER BY tag",
+                (project_id,)
+            ).fetchall()
+            conn.close()
+            self._send_json({"tags": [{"tag": r["tag"], "count": r["cnt"]} for r in rows]})
+            return
+
+        # Branch overview: all remote branches + linked tickets
+        if remainder == "/api/branches/overview":
+            project_id = proj["id"]
+            project_path = os.path.expanduser(proj.get("path", ""))
+            # Get remote branches
+            remote_branches = []
+            try:
+                result = subprocess.run(
+                    ["git", "branch", "-r", "--list", "origin/*"],
+                    cwd=project_path, capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().splitlines():
+                        name = line.strip()
+                        if " -> " in name or not name:
+                            continue
+                        short = name.replace("origin/", "", 1) if name.startswith("origin/") else name
+                        remote_branches.append(short)
+            except Exception:
+                pass
+
+            # Get all linked branches with their tickets
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                links = conn.execute(
+                    "SELECT tb.branch_name, tb.ticket_id, tb.pr_number, tb.pr_status, tb.pr_url, "
+                    "tb.ahead, tb.behind, t.title, t.status, t.priority, t.section "
+                    "FROM ticket_branches tb "
+                    "LEFT JOIN tickets t ON tb.ticket_id = t.id AND tb.project_id = t.project_id "
+                    "WHERE tb.project_id = ? ORDER BY tb.branch_name, t.sort_order",
+                    (project_id,),
+                ).fetchall()
+                conn.close()
+
+            # Build branch-centric view
+            branch_map = {}
+            for link in links:
+                bname = link["branch_name"]
+                if bname not in branch_map:
+                    branch_map[bname] = {
+                        "name": bname,
+                        "pr_number": link["pr_number"],
+                        "pr_status": link["pr_status"],
+                        "pr_url": link["pr_url"],
+                        "ahead": link["ahead"],
+                        "behind": link["behind"],
+                        "tickets": [],
+                    }
+                if link["ticket_id"]:
+                    branch_map[bname]["tickets"].append({
+                        "id": link["ticket_id"],
+                        "title": link["title"] or "",
+                        "status": link["status"] or "",
+                        "priority": link["priority"] or "medium",
+                        "section": link["section"] or "",
+                    })
+
+            # Add remote branches that have no links
+            for rb in remote_branches:
+                if rb not in branch_map:
+                    branch_map[rb] = {
+                        "name": rb,
+                        "pr_number": None, "pr_status": "", "pr_url": "",
+                        "ahead": 0, "behind": 0, "tickets": [],
+                    }
+
+            # Sort: branches with tickets first, then alphabetical
+            branches = sorted(branch_map.values(), key=lambda b: (len(b["tickets"]) == 0, b["name"]))
+            self._send_json({"branches": branches})
+            return
+
+        # Branch links for this project
+        if remainder == "/api/branches":
+            project_id = proj["id"]
+            params = parse_qs(urlparse(self.path).query)
+            ticket_filter = params.get("ticket_id", [None])[0]
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                if ticket_filter:
+                    rows = _actions_get_ticket_branches(conn, project_id, ticket_filter)
+                else:
+                    rows = _actions_get_project_branches(conn, project_id)
+                conn.close()
+            self._send_json({"branches": rows})
             return
 
         # Settings
@@ -4476,6 +4416,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"workflows": _list_workflows()})
             return
 
+        # Active workflow runs across all tickets (for kanban indicators)
+        if remainder == "/api/workflow/runs/active":
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                rows = conn.execute(
+                    "SELECT id, ticket_id, status FROM workflow_runs WHERE project_id = ? AND status IN ('running', 'paused')",
+                    (proj["id"],),
+                ).fetchall()
+                conn.close()
+            self._send_json({"runs": [dict(r) for r in rows]})
+            return
+
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/workflow/runs$", remainder)
         if m:
             runs = _list_workflow_runs(proj["id"], m.group(1))
@@ -4491,16 +4444,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_.-]+)$", remainder)
         if m:
-            run = _get_workflow_run(m.group(1))
+            run_id = m.group(1)
+            run = _get_workflow_run(run_id)
             if not run:
                 self._send_json({"error": "Run not found"}, 404)
                 return
             with _workflow_runs_lock:
-                mem = _workflow_runs.get(m.group(1))
+                mem = _workflow_runs.get(run_id)
             if mem:
                 run["status"] = mem.get("status", run["status"])
                 if "current_step" in mem:
                     run["current_step"] = mem["current_step"]
+            # Detect dead thread: DB says running but no thread in memory
+            if run.get("status") == "running" and not mem:
+                _update_workflow_run(run_id, status="failed",
+                                    completed_at=datetime.utcnow().isoformat())
+                run["status"] = "failed"
             self._send_json(run)
             return
 
@@ -4931,6 +4890,81 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Failed to update depends"}, 400)
             return
 
+        # Handle tag operations
+        if "add_tag" in body or "remove_tag" in body:
+            add_tag = body.get("add_tag")
+            remove_tag = body.get("remove_tag")
+            add_tags = [add_tag] if isinstance(add_tag, str) and add_tag.strip() else None
+            remove_tags = [remove_tag] if isinstance(remove_tag, str) and remove_tag.strip() else None
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                cli.ingest_markdown(conn, proj)
+                try:
+                    _actions_update_ticket(conn, project_id, ticket_id, add_tags=add_tags, remove_tags=remove_tags)
+                    conn.commit()
+                    cli.sync_to_markdown(conn, proj)
+                    cli.regenerate_dashboard(proj)
+                except (ValueError, IndexError):
+                    pass
+                conn.close()
+            t = _get_ticket_json(project_id, ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
+        # Handle set_tags (replace all tags)
+        if "set_tags" in body:
+            new_tags = body["set_tags"]
+            if isinstance(new_tags, list):
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    cli.ingest_markdown(conn, proj)
+                    row = conn.execute(
+                        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                        (ticket_id, project_id)
+                    ).fetchone()
+                    if row:
+                        tid = row["id"]
+                        conn.execute("DELETE FROM ticket_tags WHERE ticket_id = ? AND project_id = ?", (tid, project_id))
+                        for tag in new_tags:
+                            tag = tag.strip().lower() if isinstance(tag, str) else ""
+                            if tag:
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?, ?, ?)",
+                                    (tid, project_id, tag)
+                                )
+                        conn.commit()
+                        cli.sync_to_markdown(conn, proj)
+                        cli.regenerate_dashboard(proj)
+                    conn.close()
+                t = _get_ticket_json(project_id, ticket_id)
+                self._send_json(t or {"ok": True})
+                return
+
+        # Handle branch operations
+        if "add_branch" in body or "remove_branch" in body:
+            add_br = body.get("add_branch")
+            remove_br = body.get("remove_branch")
+            add_branches = [add_br] if isinstance(add_br, str) and add_br.strip() else None
+            remove_branches = [remove_br] if isinstance(remove_br, str) and remove_br.strip() else None
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                cli.ingest_markdown(conn, proj)
+                try:
+                    _actions_update_ticket(conn, project_id, ticket_id,
+                                          add_branches=add_branches, remove_branches=remove_branches)
+                    conn.commit()
+                    cli.sync_to_markdown(conn, proj)
+                    cli.regenerate_dashboard(proj)
+                except (ValueError, IndexError):
+                    pass
+                conn.close()
+            t = _get_ticket_json(project_id, ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
         # Update individual fields
         for field, value in body.items():
             if not _update_ticket_field(proj, ticket_id, field, value):
@@ -5001,6 +5035,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     cli.scaffold_project(conn, new_project)
                     result["scaffolded"] = True
                 conn.close()
+                cli.regenerate_dashboard(new_project)
                 self._send_json(result, 201)
                 return
 
@@ -5398,6 +5433,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(result)
             return
 
+        # AI-powered learning candidate generation
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/learnings/generate$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+
+            current_content = body.get("content", "")
+            result = _run_learning_generation(proj, ticket_id, current_content)
+            if "error" in result:
+                self._send_json(result, 400)
+            else:
+                self._send_json(result)
+            return
+
         # Gate check before column move
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/gate-check$", remainder)
         if m:
@@ -5484,6 +5537,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(result, 201)
             else:
                 self._send_json({"error": "Failed to create ticket"}, 400)
+            return
+
+        # Scan branches + PRs
+        if remainder == "/api/branches/scan":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            include_prs = body.get("include_prs", True)
+            project_id = proj["id"]
+            project_path = os.path.expanduser(proj.get("path", ""))
+
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                result = _actions_scan_branches(conn, project_id, project_path)
+                pr_result = {"updated": 0}
+                if include_prs:
+                    pr_result = _actions_scan_prs(conn, project_id, project_path)
+                conn.commit()
+                cli.sync_to_markdown(conn, proj)
+                conn.close()
+            cli.regenerate_dashboard(proj)
+            self._send_json({
+                "linked": result.get("linked", 0),
+                "total_remote": result.get("total_remote", 0),
+                "pr_updated": pr_result.get("updated", 0),
+                "error": result.get("error") or pr_result.get("error") or None,
+            })
             return
 
         if remainder == "/api/seek":
@@ -5695,6 +5777,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             journey_id = m.group(1)
             try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            backend = body.get("backend") if isinstance(body, dict) else None
+            if backend not in ("playwright", "cdp"):
+                backend = None
+            try:
                 with _db_lock:
                     conn = get_db()
                     init_db(conn)
@@ -5712,6 +5801,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
                 f.write("\n")
             cmd = [sys.executable, "-m", "pytest", "tests/test_scenarios.py", "-v", f"--scenario-id={scenario_id}"]
+            if backend:
+                cmd.append(f"--backend={backend}")
             env = {**os.environ, "TT_SCENARIO_BASE_URL": f"http://localhost:{SERVER_PORT}/{proj['id']}"}
             proc = subprocess.Popen(cmd, cwd=project_path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             with _scenario_runs_lock:
@@ -5796,6 +5887,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             scenario_id = body.get("scenario_id")
             publish = body.get("publish", False)
+            backend = body.get("backend")
+            if backend not in ("playwright", "cdp"):
+                backend = None
             if not scenario_id:
                 self._send_json({"error": "scenario_id required"}, 400)
                 return
@@ -5810,6 +5904,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ]
             if publish:
                 cmd.append("--publish")
+            if backend:
+                cmd.append(f"--backend={backend}")
 
             env = {**os.environ, "TT_SCENARIO_BASE_URL": f"http://localhost:{SERVER_PORT}/{proj['id']}"}
 
@@ -6476,6 +6572,9 @@ def main():
 
     project_names = [p.get("name", p["id"]) for p in _PROJECTS_CACHE.values()]
     print(f"Serving {len(project_names)} project(s): {', '.join(project_names)}")
+
+    # Recover workflow runs stuck in "running" from a previous server session
+    _recover_stuck_workflow_runs()
 
     # Start background threads
     _start_external_edit_watcher()

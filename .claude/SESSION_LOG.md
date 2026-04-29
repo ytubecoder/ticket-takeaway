@@ -31,6 +31,125 @@
 
 ---
 
+## 2026-04-20 — Project registration fix, DB recovery, ticket rubric
+
+### Summary
+- Fixed bug where adding a new project via the UI returned "Dashboard not generated yet" — POST `/api/projects` was missing `cli.regenerate_dashboard(new_project)` call after scaffold/seed
+- Recovered corrupted SQLite DB (WAL corruption from killed serve.py) by reseeding from PRODUCT_BACKLOG.md files across all projects
+- Established ticket tracking rubric in global `~/projects/CLAUDE.md`: what constitutes a ticket vs sub-ticket vs not-a-ticket, tag strategy (thematic + sprint/initiative), parent-child structure for epics
+
+### Lessons Learned
+- **Gotcha:** Killing serve.py while it's writing can corrupt the SQLite DB (WAL + SHM left in inconsistent state). Recovery: back up corrupted files, delete DB + WAL + SHM, reseed from markdown with `tickets-cli.py seed`
+- **Accepted:** DB recovery via reseed is safe — PRODUCT_BACKLOG.md is the durable source of truth for ticket content. Only ephemeral data (workflow runs, journey run history) is lost.
+- **Gotcha:** `ticket_tags` table didn't exist despite migration 6 code being present — the migration had never actually run against the live DB. Reseeding triggered `init_db()` which ran all migrations fresh.
+
+### Decisions
+- Ticket rubric: < 15 min single-file changes are not tickets; technical tasks are sub-tickets under feature parents; tags favor existing before creating new; sprint tags link epics in a batch
+- No startup-time dashboard regeneration added — the one project (flickki) that was affected was resolved by re-registering, which is a one-time occurrence
+
+## 2026-04-20 — Git sync, tag feature merge & deployment, feature parity audit
+
+### Summary
+- Synced local and remote: pushed 3 local commits, merged `origin/claude/add-ticket-tagging-filter-SodoZ` (ticket tagging feature) into main, pushed merge
+- Discovered deployed runtime files at `~/.claude/ticket-takeaway/` were stale — `actions.py` lacked tag support, causing CLI `--add-tag` to crash with `TypeError: unexpected keyword argument 'add_tags'`. Redeployed all source files.
+- Audited feature parity across CLI, API, actions.py, and SKILL.md. Found SKILL.md has zero mention of tags — agents can't discover the feature. Established memory rule for four-layer parity on all new features.
+
+### Lessons Learned
+- **Gotcha:** Merging a feature branch doesn't update the deployed runtime copies at `~/.claude/ticket-takeaway/`. The CLI and serve.py read from deployed copies, not `src/`. Must redeploy after every merge. [Promoted to CLAUDE.md]
+- **Gotcha:** The `dashboard` skill at `~/.claude/skills/dashboard/SKILL.md` is a stale older copy that doesn't know about SQLite, tags, or the current architecture. The canonical skill is `src/skills/ticket-takeaway/SKILL.md`.
+- **Accepted:** Feature parity checklist — every new feature must update: (1) actions.py, (2) tickets-cli.py, (3) serve.py API, (4) SKILL.md. Saved as memory rule.
+- **Rejected:** Assuming "code exists in src/" means "feature works" — deployment step is a hard requirement, not optional.
+
+### Decisions
+- All five core files redeployed: actions.py, db.py, generate.py, serve.py, tickets-cli.py
+- SKILL.md update for tags identified as needed but deferred to next session
+- Stale `~/.claude/skills/dashboard/SKILL.md` should be updated or deprecated in favor of `ticket-takeaway` skill
+
+## 2026-04-16 — Settings/bounce split + workflow execution reliability
+
+### Summary
+- Split settings into two surfaces: right-hand drawer (gear icon) for app settings, full-page "Workflows & Agents" view (zap icon) for bounce config. Deleted legacy `/settings` server route (`_render_project_settings`). Ported Project metadata, Scenarios, Draft Generator, Danger Zone into the drawer.
+- Fixed workflow bounce execution: progress entries before subprocess, returncode+stderr checking, `--no-session-persistence`, stuck run recovery on startup, dead-thread detection on poll, agreement check error logging.
+- Added kanban card indicators: pulsing text while workflow running (3s active-runs poll), static accent dot when complete (unread, cleared on overlay open).
+
+### Lessons Learned
+- **Accepted:** User redirected plan mid-stream — originally proposed merging everything into full-page view, user corrected to drawer for settings + separate full-page for bounce. Better separation of "config" vs "pipeline management."
+- **Gotcha:** `serve.py` reads from pre-generated `docs/sdlc-dashboard.html`, not from `generate.py` at request time. Must run `generate.py` to see changes. Tripped up verification initially (new elements missing from served HTML).
+- **Gotcha:** `subprocess.run()` returncode was never checked — if `claude` CLI exits non-zero, stdout is empty but no error raised. Silent empty conversation turns.
+- **Gotcha:** Daemon threads die on server restart but DB records stay `status="running"` forever. UI polls indefinitely seeing "running" with no progress. Fixed with startup recovery + dead-thread detection.
+- **Gotcha:** `setCardWfIndicator` was scoped to the workflow bounce IIFE — not accessible from other script blocks. Added the active-runs polling and unread tracking inside the same IIFE to share scope.
+
+### Decisions
+- Drawer gets all "settings" (Appearance, Feedbacks, Managed Files, Project metadata, Scenarios, Draft Generator, Danger Zone). Full-page view gets only Agents + Workflows. User explicitly chose this split.
+- Zap icon for bounce nav button (user chose from options).
+- Unread tracking is client-side/session-scoped (no DB changes). Will be replaced by global notification system later.
+- `.sp-*` CSS class names kept as-is (only page wrapper renamed to `.bounce-page`/`bounce-open`).
+- Progress entries ("Running agent X…") are removed and replaced by actual response — prevents clutter in completed conversation.
+
+## 2026-04-16 — Drag-drop fix, ticket cleanup, tagging rules
+
+### Summary
+- Fixed drag-and-drop triggering card click/expand on release (window._justDragged flag)
+- Cleaned up 15 junk/test tickets (moved to Won't Do), grouped technical sub-tickets under parents (B-10, B-32)
+- Tagged journey tickets (I-29, I-30) with "journeys" tag
+- Established memory rules: tag tickets thematically, tickets must describe user-facing value (technical fixes as sub-tickets)
+
+### Lessons Learned
+- **Gotcha:** Drag-end fires a click event on the card — `dragend` doesn't prevent subsequent `click`. Fixed with `window._justDragged` flag set on dragstart, cleared 50ms after dragend, checked in click handlers
+- **Gotcha:** `var` in one IIFE isn't accessible from another — `_justDragged` needed to be on `window` since drag handlers and click handlers are in different script blocks
+- **Gotcha:** Migration 6 (ticket_tags) was recorded in `_migrations` but table wasn't created — `executescript` with FK constraint silently failed. Had to create table manually without FK.
+
+### Decisions
+- Junk tickets moved to Won't Do (not deleted) — preserves history
+- Technical tickets grouped under parent tickets that describe user-facing value
+- All new tickets must be tagged with thematic tags aligned to existing tag vocabulary
+
+## 2026-04-11→16 — Dual-backend scenario runner (B-42) + feedbacks screenshots
+
+### Summary
+- Built Backend protocol abstraction for scenario runner — `PlaywrightBackend` (launches browser) and `CDPBackend` (connects to existing Chrome via `connect_over_cdp()`). 10-task plan via subagent-driven development.
+- Added `--backend=playwright|cdp` and `--cdp-endpoint` CLI flags to pytest. PW/CDP toggle on journey Run button in UI.
+- Created standalone Playwright screenshot script for feedbacks project (`~/projects/feedbacks/docs/screenshots/capture.py`).
+- Ticket B-42 accepted to Done.
+
+### Lessons Learned
+- **Accepted:** CDPBackend as thin subclass of PlaywrightBackend (`pass` body) — both get a Playwright `Page`, just acquired differently. No logic duplication.
+- **Accepted:** Subagent-driven development with haiku for mechanical tasks, sonnet for integration — fast, good quality.
+- **Gotcha:** Chrome flags `--use-fake-ui-for-media-stream` auto-accept screen share dialogs — essential for automating feedbacks screenshots.
+- **Gotcha:** Running server process doesn't pick up code changes — must restart after merging.
+- **Gotcha:** `/api/scenarios/runs/{id}` iterates `.artifacts/scenarios/` and grabs first `summary.json`, not the one matching run_id. Pre-existing bug — stale summaries in API.
+
+### Decisions
+- CDPBackend creates fresh BrowserContext per actor (not reusing existing tabs) — intentional for test isolation
+- Backend selection is per-run (dropdown, not persisted globally)
+- Same manifests/journeys work with both backends — no duplication needed
+
+## 2026-04-12→16 — Journey timeline view, workflow step builder fix, full-page settings
+
+### Summary
+- Built unified timeline view for journeys: vertical spine with screenshots left, step details right, URL grouping, inline edit, lightbox
+- Fixed workflow "Add Step" disappearing bug (root cause: dashboard live-update polling + window.prompt)
+- Added per-journey URLs (`/journeys/{id}`), journey ID display, full run history
+- Consultant-reviewed workflow bounce phase 2 plan (3 rounds of feedback incorporated)
+- Full-page bounce/agents settings view with project form and scenarios section
+
+### Lessons Learned
+- **Gotcha:** Dashboard 2s live-update polling rebuilds DOM via `patchCards()` — any open form/editor gets destroyed. Fix: skip polling when `body.settings-open` is set. This same pattern applies to any future inline editor on the dashboard page.
+- **Gotcha:** `window.prompt()` blocks the UI thread and causes event timing issues when the form re-renders — replaced with inline DOM controls (dropdowns + textareas) for step builder
+- **Gotcha:** `renderTimeline()` called from `updateField`/`updateTarget` on blur destroys the edit form the user is currently in — removed re-render on save, just update local data silently
+- **Gotcha:** Screenshot `run_id` and artifact directory basename differ (generated at different `time.time()` calls) — screenshot serving must use `artifact_dir` from DB, not construct path from `run_id`
+- **Gotcha:** Screenshot backfill must map to capture steps specifically (by action type), not sequentially to all steps — 4 screenshots across 11 steps were being assigned to steps 0-3 instead of steps 2,5,7,10
+- **Gotcha:** API returns `{"workflows": [...]}` but JS code wrote `workflows.forEach` — this response unwrapping bug recurred again in new code written by agents [Promoted to CLAUDE.md]
+- **Accepted:** Unified timeline (screenshots + details in one view) better than separate Flow/Steps tabs — user confirmed this is the right layout
+- **Accepted:** Two-tier rendering (large thumbnail boxes for captures, compact cards for actions) gives good visual hierarchy without wasting space on non-visual steps
+
+### Decisions
+- Merged Flow + Steps into single unified timeline view rather than keeping as separate tabs
+- Journey IDs (slugs) shown alongside titles — users can reference journeys by ID in URLs
+- Per-journey URLs via pushState + popstate — shareable, bookmarkable, browser back works
+- "+ Add Step" placed at bottom of timeline as final node, not in header
+- Edit form fields save on blur silently (no re-render) to prevent form collapse
+
 ## 2026-04-08→13 — Workflow Bounce (I-19): full implementation across multiple sessions
 
 ### Summary

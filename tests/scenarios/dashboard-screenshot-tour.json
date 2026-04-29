@@ -89,14 +89,6 @@
       "capture": {
         "name": "04-journeys-page"
       }
-    },
-    {
-      "actor": "user",
-      "action": "click"
-    },
-    {
-      "actor": "user",
-      "action": "click"
     }
   ]
 }

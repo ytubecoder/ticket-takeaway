@@ -712,6 +712,36 @@ def generate_html(project: Project) -> str:
     icebox_cards = _render_list_rows(list(reversed(by_section["Icebox"])), "icebox", child_tickets, dep_state)
     bugs_cards = _render_list_rows(list(reversed(by_section["Bugs"])), "bugs", child_tickets, dep_state)
 
+    # Kitchen board — alternate kanban sliced by automation lifecycle.
+    # Each ticket lands in at most one bucket; manual+never-run tickets disappear.
+    # Order matters: run-status wins over mode (running > starting > attention > held > ready).
+    kb_held, kb_ready, kb_starting, kb_running, kb_attention = [], [], [], [], []
+    for _t in all_tickets:
+        if _t.parent or _t.archived:
+            continue
+        _run = _t.latest_run_status
+        if _run == "running":
+            kb_running.append(_t)
+        elif _run in ("queued", "preparing"):
+            kb_starting.append(_t)
+        elif _run in ("needs_input", "failed", "stalled"):
+            kb_attention.append(_t)
+        elif _t.automation_mode == "held":
+            kb_held.append(_t)
+        elif _t.automation_mode == "auto" and _t.automation_eligible:
+            kb_ready.append(_t)
+        # else: not on the Kitchen board
+    held_cards      = _render_cards(kb_held,      "kb-held",      child_tickets, dep_state)
+    ready_cards     = _render_cards(kb_ready,     "kb-ready",     child_tickets, dep_state)
+    starting_cards  = _render_cards(kb_starting,  "kb-starting",  child_tickets, dep_state)
+    running_cards   = _render_cards(kb_running,   "kb-running",   child_tickets, dep_state)
+    attention_cards = _render_cards(kb_attention, "kb-attention", child_tickets, dep_state)
+    count_kb_held      = len(kb_held)
+    count_kb_ready     = len(kb_ready)
+    count_kb_starting  = len(kb_starting)
+    count_kb_running   = len(kb_running)
+    count_kb_attention = len(kb_attention)
+
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
 
     # Pre-computed SVG icons for use inside the HTML f-string
@@ -2284,6 +2314,17 @@ body.bounce-open .filter-bar,
 body.bounce-open .bottom-section,
 body.bounce-open #settings-drawer {{ display: none !important; }}
 body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
+
+/* Kitchen board toggle — alternate kanban sliced by automation lifecycle. */
+.kitchen-kanban {{ display: none; }}
+body.kitchen-board #kanban {{ display: none; }}
+body.kitchen-board .bottom-section {{ display: none !important; }}
+body.kitchen-board .kitchen-kanban {{ display: flex; }}
+body.kitchen-board #kitchenBoardToggleBtn {{
+  background: var(--accent); color: white; border-color: var(--accent);
+}}
+body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
+.kb-col .column-header {{ font-size: 11px; }}
 .bounce-back-btn {{
   display: none; font-size: 12px; padding: 4px 10px; border-radius: 6px;
   border: 1px solid var(--border-default); background: var(--bg-card);
@@ -2424,6 +2465,7 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
       <div id="branchesPanelBody"></div>
     </div>
   </div>
+  <button class="settings-toggle" id="kitchenBoardToggleBtn" data-testid="kitchen-board-toggle" title="Kitchen board — workflows by stage">{_svg_icon("route", 14)}</button>
   <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
   <button class="settings-toggle" id="bounceToggleBtn" data-testid="bounce-toggle" title="Workflows &amp; Agents">{_icon_bounce}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
@@ -2597,6 +2639,66 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
     </div>
   </div>
 
+
+</div>
+
+<!-- Kitchen board — alternate kanban sliced by automation lifecycle (toggled by body.kitchen-board) -->
+<div class="kanban kitchen-kanban" id="kitchen-kanban" data-testid="kitchen-board-root">
+
+  <div class="column kb-col" data-col="kb-held" id="col-kb-held" data-testid="column-kb-held">
+    <div class="column-header">
+      <div class="column-dot" style="background:#f59e0b"></div>
+      <span class="column-name">Held</span>
+      <span class="column-count">{count_kb_held}</span>
+    </div>
+    <div class="column-body">
+{held_cards}
+    </div>
+  </div>
+
+  <div class="column kb-col" data-col="kb-ready" id="col-kb-ready" data-testid="column-kb-ready">
+    <div class="column-header">
+      <div class="column-dot" style="background:#22c55e"></div>
+      <span class="column-name">Ready</span>
+      <span class="column-count">{count_kb_ready}</span>
+    </div>
+    <div class="column-body">
+{ready_cards}
+    </div>
+  </div>
+
+  <div class="column kb-col" data-col="kb-starting" id="col-kb-starting" data-testid="column-kb-starting">
+    <div class="column-header">
+      <div class="column-dot" style="background:#60a5fa"></div>
+      <span class="column-name">Starting</span>
+      <span class="column-count">{count_kb_starting}</span>
+    </div>
+    <div class="column-body">
+{starting_cards}
+    </div>
+  </div>
+
+  <div class="column kb-col" data-col="kb-running" id="col-kb-running" data-testid="column-kb-running">
+    <div class="column-header">
+      <div class="column-dot" style="background:#3b82f6"></div>
+      <span class="column-name">Running</span>
+      <span class="column-count">{count_kb_running}</span>
+    </div>
+    <div class="column-body">
+{running_cards}
+    </div>
+  </div>
+
+  <div class="column kb-col" data-col="kb-attention" id="col-kb-attention" data-testid="column-kb-attention">
+    <div class="column-header">
+      <div class="column-dot" style="background:#ef4444"></div>
+      <span class="column-name">Needs Attention</span>
+      <span class="column-count">{count_kb_attention}</span>
+    </div>
+    <div class="column-body">
+{attention_cards}
+    </div>
+  </div>
 
 </div>
 
@@ -6639,6 +6741,19 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
   if (bounceBtn) bounceBtn.addEventListener('click', function() {{
     if (document.body.classList.contains('bounce-open')) closeBouncePage();
     else openBouncePage();
+  }});
+
+  /* Kitchen board toggle — alternate kanban sliced by automation lifecycle. */
+  var kitchenBoardBtn = document.getElementById('kitchenBoardToggleBtn');
+  var KITCHEN_BOARD_KEY = 'tt-kitchen-board';
+  function setKitchenBoard(on) {{
+    document.body.classList.toggle('kitchen-board', !!on);
+    try {{ localStorage.setItem(KITCHEN_BOARD_KEY, on ? '1' : '0'); }} catch (e) {{}}
+  }}
+  // Restore preference on load
+  try {{ if (localStorage.getItem(KITCHEN_BOARD_KEY) === '1') setKitchenBoard(true); }} catch (e) {{}}
+  if (kitchenBoardBtn) kitchenBoardBtn.addEventListener('click', function() {{
+    setKitchenBoard(!document.body.classList.contains('kitchen-board'));
   }});
 
   var toggleBtn = document.getElementById('settingsToggleBtn');

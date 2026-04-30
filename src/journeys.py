@@ -13,7 +13,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from actions import NotFoundError
 from scenarios import VALID_ACTIONS, validate_manifest
+
+
+class JourneyNotFoundError(NotFoundError):
+    code = "journey_not_found"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -35,13 +40,13 @@ def _slugify(text: str) -> str:
 
 
 def _find_journey(conn: sqlite3.Connection, project_id: str, journey_id: str) -> sqlite3.Row:
-    """Locate a journey by ID.  Raises ValueError if not found."""
+    """Locate a journey by ID. Raises JourneyNotFoundError if not found."""
     row = conn.execute(
         "SELECT * FROM journeys WHERE id = ? AND project_id = ?",
         (journey_id, project_id),
     ).fetchone()
     if not row:
-        raise ValueError(f"Journey '{journey_id}' not found in project '{project_id}'.")
+        raise JourneyNotFoundError(f"Journey '{journey_id}' not found in project '{project_id}'.")
     return row
 
 

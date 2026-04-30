@@ -79,6 +79,8 @@ from actions import (
     eligibility as _kitchen_eligibility,
     set_automation_mode as _kitchen_set_mode,
     set_no_test_required as _kitchen_set_ntr,
+    # Typed errors (paired with DashboardHandler._send_typed_error below)
+    AppError,
 )
 import kitchen as _kitchen
 from workspaces import wipe_for_retry_fresh as _kitchen_wipe_fresh
@@ -3998,6 +4000,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_typed_error(self, exc: Exception) -> None:
+        """Map a typed AppError to its HTTP status; fall back to 500 otherwise.
+
+        Use this in handlers wrapping an actions.py call that may raise
+        TicketNotFoundError, ValidationError, ConflictError, etc. The body
+        always includes both ``code`` and ``error`` fields so JS callers can
+        branch on the code rather than parse messages.
+        """
+        if isinstance(exc, AppError):
+            self._send_json({"code": exc.code, "error": str(exc) or exc.code}, status=exc.http_status)
+        else:
+            self._send_json({"code": "internal_error", "error": str(exc) or "Internal error"}, status=500)
+
     def _read_body(self) -> dict:
         length = min(int(self.headers.get("Content-Length", 0)), 1_048_576)  # 1 MB cap
         if length == 0:
@@ -4573,7 +4588,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     conn.close()
                 self._send_json(journey)
             except ValueError as e:
-                self._send_json({"error": str(e)}, 404)
+                self._send_typed_error(e)
             return
 
         # Journey API: get run details

@@ -43,6 +43,8 @@ def install_system_files():
     copy_file(REPO_DIR / "src" / "actions.py", INSTALL_DIR / "actions.py", "Actions")
     copy_file(REPO_DIR / "src" / "constants.py", INSTALL_DIR / "constants.py", "Constants")
     copy_file(REPO_DIR / "src" / "db.py", INSTALL_DIR / "db.py", "Database")
+    copy_file(REPO_DIR / "src" / "conditions.py", INSTALL_DIR / "conditions.py", "Conditions")
+    copy_file(REPO_DIR / "src" / "workflows_seed.py", INSTALL_DIR / "workflows_seed.py", "Workflows seeder")
 
     # Dashboard copy (needs DASHBOARD_DIR path fix)
     dashboard_gen = DASHBOARD_DIR / "generate.py"
@@ -160,6 +162,21 @@ def main():
             print()
             project_id = args.id or os.path.basename(args.path or os.getcwd()).lower().replace(" ", "-")
             seed_project(project_id)
+
+        # Seed default system workflows (idempotent)
+        try:
+            sys.path.insert(0, str(INSTALL_DIR))
+            from db import get_db, init_db  # type: ignore[import]
+            from workflows_seed import seed_default_workflows  # type: ignore[import]
+            _conn = get_db()
+            init_db(_conn)
+            _pid = args.id or os.path.basename(args.path or os.getcwd()).lower().replace(" ", "-")
+            _res = seed_default_workflows(_conn, _pid)
+            _conn.close()
+            if _res["inserted"]:
+                print(f"  Seeded {_res['inserted']} default workflow(s) for project {_pid!r}")
+        except Exception as _e:
+            print(f"  Warning: could not seed default workflows: {_e}")
 
     print()
     print("Done. Run /dashboard to generate the board.")

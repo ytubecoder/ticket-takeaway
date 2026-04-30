@@ -459,3 +459,20 @@ def init_db(conn: sqlite3.Connection):
         """)
         conn.execute("INSERT INTO _migrations (version) VALUES (8)")
         conn.commit()
+
+    # Migration 9: Unified workflow triggers — add columns to workflows table
+    # so system workflows can carry declarative trigger/outcome JSON.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 9").fetchone():
+        for col, decl in [
+            ("system",          "INTEGER DEFAULT 0"),
+            ("enabled",         "INTEGER DEFAULT 1"),
+            ("trigger_json",    "TEXT"),
+            ("on_success_json", "TEXT"),
+            ("subject_type",    "TEXT DEFAULT 'ticket'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE workflows ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+        conn.execute("INSERT INTO _migrations (version) VALUES (9)")
+        conn.commit()

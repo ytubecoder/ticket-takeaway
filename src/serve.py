@@ -93,6 +93,7 @@ from journeys import (
 )
 from page_scraper import scan_all_screens, scans_to_json
 from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN_TESTIDS
+from workflows_seed import seed_default_workflows as _seed_default_workflows
 
 import html as _html
 
@@ -6575,6 +6576,18 @@ def main():
 
     # Recover workflow runs stuck in "running" from a previous server session
     _recover_stuck_workflow_runs()
+
+    # Seed default system workflows for every registered project (idempotent)
+    for _proj in list(_PROJECTS_CACHE.values()):
+        try:
+            _wf_db = get_db()
+            _result = _seed_default_workflows(_wf_db, _proj["id"])
+            _wf_db.close()
+            if _result["inserted"]:
+                print(f"  Seeded {_result['inserted']} default workflow(s) for project {_proj['id']!r}")
+        except Exception as _e:
+            print(f"  Warning: could not seed default workflows for {_proj.get('id')!r}: {_e}",
+                  file=__import__("sys").stderr)
 
     # Start background threads
     _start_external_edit_watcher()

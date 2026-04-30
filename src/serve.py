@@ -93,7 +93,10 @@ from journeys import (
 )
 from page_scraper import scan_all_screens, scans_to_json
 from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN_TESTIDS
-from workflows_seed import seed_default_workflows as _seed_default_workflows
+from workflows_seed import (
+    seed_default_workflows as _seed_default_workflows,
+    seed_default_agents as _seed_default_agents,
+)
 import conditions as _conditions
 
 import html as _html
@@ -7108,6 +7111,18 @@ def main():
 
     # Recover workflow runs stuck in "running" from a previous server session
     _recover_stuck_workflow_runs()
+
+    # Seed default global agents (idempotent, runs once regardless of projects)
+    try:
+        _ag_db = get_db()
+        _ag_result = _seed_default_agents(_ag_db)
+        _ag_db.close()
+        if _ag_result["inserted"]:
+            print(f"  Seeded {_ag_result['inserted']} default agent(s)")
+        if _ag_result["migrated"]:
+            print(f"  Migrated {_ag_result['migrated']} agent(s) (agent_planchk → agent_consultant)")
+    except Exception as _e:
+        print(f"  Warning: could not seed default agents: {_e}", file=__import__("sys").stderr)
 
     # Seed default system workflows for every registered project (idempotent)
     for _proj in list(_PROJECTS_CACHE.values()):

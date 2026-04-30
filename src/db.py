@@ -493,3 +493,20 @@ def init_db(conn: sqlite3.Connection):
         conn.execute("CREATE INDEX IF NOT EXISTS workflows_project ON workflows (project_id)")
         conn.execute("INSERT INTO _migrations (version) VALUES (10)")
         conn.commit()
+
+    # Migration 11: Plan Check — persist_session on agents, session_ids on runs.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 11").fetchone():
+        try:
+            conn.execute(
+                "ALTER TABLE workflow_agents ADD COLUMN persist_session INTEGER DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE workflow_runs ADD COLUMN session_ids TEXT DEFAULT '{}'"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        conn.execute("INSERT INTO _migrations (version) VALUES (11)")
+        conn.commit()

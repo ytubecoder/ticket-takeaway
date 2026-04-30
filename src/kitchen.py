@@ -559,6 +559,9 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
                 for wf in workflows:
                     try:
                         trigger_raw = wf["trigger_json"]
+                        # Workflows with null trigger_json are manual-only — skip.
+                        if trigger_raw is None or trigger_raw == "null":
+                            continue
                         trigger = (
                             _json.loads(trigger_raw) if isinstance(trigger_raw, str)
                             else trigger_raw

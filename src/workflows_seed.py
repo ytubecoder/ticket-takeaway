@@ -1,6 +1,8 @@
-"""Seeds 5 default system=1 workflows that replicate current Kitchen behaviour.
+"""Seeds 5 default system=1 workflows that replicate current Kitchen behaviour,
+plus the Consultant agent and Plan Check workflow.
 
-Call ``seed_default_workflows(db, project_id)`` at server startup (idempotent).
+Call ``seed_default_agents(db)`` once at server startup (idempotent, global).
+Call ``seed_default_workflows(db, project_id)`` per-project at startup (idempotent).
 """
 
 from __future__ import annotations
@@ -20,6 +22,65 @@ def _ticket_prompt(action: str) -> str:
         "{{ticket.description}}\n\n"
         "Acceptance criteria:\n{{ticket.acceptance_criteria}}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Default agents (global — no project_id)
+# ---------------------------------------------------------------------------
+
+DEFAULT_AGENTS: list[dict] = [
+    {
+        "id": "agent_consultant",
+        "name": "Consultant",
+        "command": "codex",
+        "args": "exec",
+        "system_prompt": "",   # plan-check sets none — prompt template carries instructions
+        "persist_session": 1,
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Plan Check prompt templates
+# ---------------------------------------------------------------------------
+
+ROUND_1_REVIEW_TEMPLATE = """\
+Review the following plan files for completeness, risks, and feasibility.
+
+For each file, assess:
+- Missing requirements or edge cases
+- Technical risks or blockers
+- Dependencies that aren't accounted for
+- Sequencing issues
+- Performance or operational concerns
+- Anything ambiguous or underspecified
+
+Be specific — reference sections by name.
+Flag severity: critical (blocks implementation), warning (likely problem), or note (suggestion).
+
+Plan files:
+
+# Ticket {{ticket.id}}: {{ticket.title}}
+
+{{ticket.description}}
+
+## Acceptance criteria
+{{ticket.acceptance_criteria}}\
+"""
+
+ROUND_2_FOLLOWUP_TEMPLATE = """\
+This is round 2 of 2.
+
+Prior round findings:
+{{conversation.last_agent_response}}
+
+Focus this round on:
+- Anything from prior round still ambiguous
+- New issues that surface given the prior findings
+- A final verdict: Ready / Needs revision
+
+Re-flag severity for any remaining items.\
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +227,151 @@ DEFAULT_WORKFLOWS: list[dict] = [
             }
         ],
     },
+    # 6. Plan Check: iterative second-opinion review via Codex (manual only)
+    {
+        "name": "Plan Check",
+        "description": (
+            "Iterative second-opinion review modelled on /plan-check. "
+            "Codex reviews the ticket across 2 rounds; warm session resumed between rounds. "
+            "Manual run only."
+        ),
+        "system": 1,
+        "enabled": 1,
+        "subject_type": "ticket",
+        "trigger_json": None,          # no auto-fire — manual trigger only
+        "on_success_json": {},         # surfacing IS the value, no auto move/status
+        "steps": [
+            {
+                "agent_id": "agent_consultant",
+                "agent_name": "Consultant",
+                "prompt_template": ROUND_1_REVIEW_TEMPLATE,
+                "on_failure": "pause",
+                "timeout_ms": 300000,
+            },
+            {
+                "agent_id": "agent_consultant",
+                "agent_name": "Consultant",
+                "prompt_template": ROUND_2_FOLLOWUP_TEMPLATE,
+                "on_failure": "pause",
+                "timeout_ms": 300000,
+                "use_resume": True,    # consumed in Phase 2 runner change
+            },
+        ],
+    },
 ]
 
 
 # ---------------------------------------------------------------------------
-# Seeder
+# Seeder — agents (global, run once at startup)
+# ---------------------------------------------------------------------------
+
+def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
+    """Insert or migrate default global agents.  Idempotent.
+
+    - Inserts each DEFAULT_AGENTS row if missing (matched by id).
+    - Migrates any existing ``agent_planchk`` row to ``agent_consultant``:
+      renames the row in place and rewrites steps JSON in all workflows that
+      reference the old id.
+
+    Returns {"inserted": N, "existing": M, "migrated": K}.
+    """
+    inserted = 0
+    existing = 0
+    migrated = 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    # --- migrate old agent_planchk → agent_consultant ---
+    old_id = "agent_planchk"
+    new_id = "agent_consultant"
+    old_row = db.execute(
+        "SELECT id FROM workflow_agents WHERE id = ?", (old_id,)
+    ).fetchone()
+    if old_row:
+        # Only rename if the target id doesn't already exist
+        target_exists = db.execute(
+            "SELECT 1 FROM workflow_agents WHERE id = ?", (new_id,)
+        ).fetchone()
+        if not target_exists:
+            db.execute(
+                "UPDATE workflow_agents "
+                "SET id = ?, name = ?, command = ?, args = ?, persist_session = 1 "
+                "WHERE id = ?",
+                (new_id, "Consultant", "codex", "exec", old_id),
+            )
+            migrated += 1
+        else:
+            # Target already exists — just delete the old orphaned row
+            db.execute("DELETE FROM workflow_agents WHERE id = ?", (old_id,))
+            migrated += 1
+
+        # Rewrite steps JSON in all workflows referencing the old agent_id
+        wf_rows = db.execute(
+            "SELECT id, steps FROM workflows WHERE steps LIKE ?",
+            (f'%"{old_id}"%',),
+        ).fetchall()
+        for wf_row in wf_rows:
+            try:
+                steps = json.loads(wf_row["steps"])
+                changed = False
+                for step in steps:
+                    if step.get("agent_id") == old_id:
+                        step["agent_id"] = new_id
+                        changed = True
+                if changed:
+                    db.execute(
+                        "UPDATE workflows SET steps = ? WHERE id = ?",
+                        (json.dumps(steps, ensure_ascii=False), wf_row["id"]),
+                    )
+            except (json.JSONDecodeError, TypeError):
+                pass  # Malformed steps — leave untouched
+
+    # --- insert or sync missing agents ---
+    for agent in DEFAULT_AGENTS:
+        row = db.execute(
+            "SELECT id FROM workflow_agents WHERE id = ?", (agent["id"],)
+        ).fetchone()
+        if row:
+            # Ensure canonical fields (like persist_session) stay in sync with
+            # the DEFAULT_AGENTS definition — handles rows landed via migration.
+            db.execute(
+                "UPDATE workflow_agents "
+                "SET name = ?, command = ?, args = ?, persist_session = ? "
+                "WHERE id = ?",
+                (
+                    agent["name"],
+                    agent["command"],
+                    agent["args"],
+                    agent.get("persist_session", 0),
+                    agent["id"],
+                ),
+            )
+            existing += 1
+            continue
+
+        db.execute(
+            """
+            INSERT INTO workflow_agents
+                (id, name, command, args, system_prompt, persist_session, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                agent["id"],
+                agent["name"],
+                agent["command"],
+                agent["args"],
+                agent["system_prompt"],
+                agent.get("persist_session", 0),
+                now,
+            ),
+        )
+        inserted += 1
+
+    db.commit()
+    return {"inserted": inserted, "existing": existing, "migrated": migrated}
+
+
+# ---------------------------------------------------------------------------
+# Seeder — workflows (per-project)
 # ---------------------------------------------------------------------------
 
 def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str, int]:

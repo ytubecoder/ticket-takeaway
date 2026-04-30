@@ -66,8 +66,8 @@ class TestMigration9:
 # ---------------------------------------------------------------------------
 
 class TestDefaultWorkflowsManifest:
-    def test_exactly_five_workflows(self):
-        assert len(DEFAULT_WORKFLOWS) == 5
+    def test_exactly_six_workflows(self):
+        assert len(DEFAULT_WORKFLOWS) == 6
 
     def test_all_have_name(self):
         for wf in DEFAULT_WORKFLOWS:
@@ -77,9 +77,13 @@ class TestDefaultWorkflowsManifest:
         for wf in DEFAULT_WORKFLOWS:
             assert wf["system"] == 1
 
-    def test_all_have_trigger_json(self):
+    def test_auto_fire_workflows_have_trigger_json(self):
+        """Plan Check is manual-only (trigger_json=None); all others must have one."""
         for wf in DEFAULT_WORKFLOWS:
-            assert wf.get("trigger_json"), f"{wf['name']!r} missing trigger_json"
+            if wf["name"] == "Plan Check":
+                assert wf["trigger_json"] is None
+            else:
+                assert wf.get("trigger_json"), f"{wf['name']!r} missing trigger_json"
 
     def test_all_have_steps(self):
         for wf in DEFAULT_WORKFLOWS:
@@ -111,14 +115,14 @@ class TestDefaultWorkflowsManifest:
 # ---------------------------------------------------------------------------
 
 class TestSeedDefaultWorkflows:
-    def test_inserts_five_system_workflows(self, conn):
+    def test_inserts_six_system_workflows(self, conn):
         result = seed_default_workflows(conn, PROJECT_ID)
-        assert result["inserted"] == 5
+        assert result["inserted"] == 6
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE ?",
             (f"{PROJECT_ID}::%",),
         ).fetchone()[0]
-        assert count == 5
+        assert count == 6
 
     def test_existing_is_zero_on_first_run(self, conn):
         result = seed_default_workflows(conn, PROJECT_ID)
@@ -127,17 +131,17 @@ class TestSeedDefaultWorkflows:
     def test_idempotent_second_run(self, conn):
         first = seed_default_workflows(conn, PROJECT_ID)
         second = seed_default_workflows(conn, PROJECT_ID)
-        assert first["inserted"] == 5
+        assert first["inserted"] == 6
         assert second["inserted"] == 0
-        assert second["existing"] == 5
+        assert second["existing"] == 6
 
-    def test_idempotent_count_stays_at_five(self, conn):
+    def test_idempotent_count_stays_at_six(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         seed_default_workflows(conn, PROJECT_ID)
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1",
         ).fetchone()[0]
-        assert count == 5
+        assert count == 6
 
     def test_different_projects_get_independent_workflows(self, conn):
         seed_default_workflows(conn, "project-a")
@@ -148,10 +152,11 @@ class TestSeedDefaultWorkflows:
         count_b = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE 'project-b::%'"
         ).fetchone()[0]
-        assert count_a == 5
-        assert count_b == 5
+        assert count_a == 6
+        assert count_b == 6
 
     def test_stored_trigger_json_is_valid_json(self, conn):
+        """Auto-fire workflows must be dicts; Plan Check stores JSON null."""
         seed_default_workflows(conn, PROJECT_ID)
         rows = conn.execute(
             "SELECT trigger_json FROM workflows WHERE system = 1 AND id LIKE ?",
@@ -159,7 +164,7 @@ class TestSeedDefaultWorkflows:
         ).fetchall()
         for row in rows:
             parsed = json.loads(row["trigger_json"])
-            assert isinstance(parsed, dict)
+            assert isinstance(parsed, dict) or parsed is None
 
     def test_stored_steps_is_valid_json_list(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
@@ -198,12 +203,15 @@ class TestSeedDefaultWorkflows:
             assert row["subject_type"] == "ticket"
 
     def test_trigger_json_has_all_of_or_any_of(self, conn):
+        """Auto-fire workflows must have all_of/any_of; Plan Check is exempt (null)."""
         seed_default_workflows(conn, PROJECT_ID)
         rows = conn.execute(
-            "SELECT trigger_json FROM workflows WHERE system = 1 AND id LIKE ?",
+            "SELECT name, trigger_json FROM workflows WHERE system = 1 AND id LIKE ?",
             (f"{PROJECT_ID}::%",),
         ).fetchall()
         for row in rows:
+            if row["trigger_json"] == "null":
+                continue  # Plan Check is manual-only
             parsed = json.loads(row["trigger_json"])
             assert "all_of" in parsed or "any_of" in parsed
 

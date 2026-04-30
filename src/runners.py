@@ -229,7 +229,14 @@ class AgentRunner(Runner):
                               conn_factory, started, "missing_command",
                               "WORKFLOW.toml [agent].command is empty")
 
-        prompt = self._render_prompt(prompt_template, subject_id)
+        # For DB-workflow path: render ticket fields into the prompt template.
+        workflow_meta = config.get("_workflow_meta")
+        if workflow_meta and subject_type == "ticket":
+            prompt = self._render_prompt_with_ticket(
+                prompt_template, subject_id, project_id, conn_factory
+            )
+        else:
+            prompt = self._render_prompt(prompt_template, subject_id)
 
         with db_session(conn_factory) as conn:
             _set_run_status(conn, run_id, "running")
@@ -281,6 +288,13 @@ class AgentRunner(Runner):
                 conn.commit()
             self._maybe_after_run(workspace, hooks_cfg, hook_timeout_ms, run_id,
                                   project_id, subject_type, subject_id, actor, conn_factory)
+            # Apply on_success actions for DB-workflow path (Phase 2: single-step only).
+            # TODO(phase-3): multi-step chaining — after step_index completes, advance
+            # to step_index+1 and dispatch a follow-on run instead of applying on_success.
+            if workflow_meta and subject_type == "ticket":
+                self._apply_on_success(
+                    workflow_meta, project_id, subject_id, actor, conn_factory
+                )
             return RunOutcome(run_id=run_id, final_status="succeeded",
                               duration_ms=elapsed_ms, summary=summary)
 
@@ -298,6 +312,95 @@ class AgentRunner(Runner):
         if not template:
             return ""
         return template.replace("{{subject.id}}", subject_id)
+
+    @staticmethod
+    def _render_prompt_with_ticket(
+        template: str,
+        ticket_id: str,
+        project_id: str,
+        conn_factory: Callable[[], sqlite3.Connection],
+    ) -> str:
+        """Render workflow prompt_template substituting ticket field placeholders.
+
+        Supported tokens:
+          {{ticket.id}}                   — ticket ID
+          {{ticket.title}}                — ticket title
+          {{ticket.description}}          — ticket description
+          {{ticket.acceptance_criteria}}  — criteria joined as bullet list
+        """
+        if not template:
+            return ""
+        try:
+            conn = conn_factory()
+            try:
+                trow = conn.execute(
+                    "SELECT id, title, description FROM tickets "
+                    "WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, project_id),
+                ).fetchone()
+                if not trow:
+                    # Fallback: just substitute subject.id and leave other tokens.
+                    return template.replace("{{subject.id}}", ticket_id)
+                criteria_rows = conn.execute(
+                    "SELECT text FROM acceptance_criteria "
+                    "WHERE ticket_id = ? AND project_id = ? ORDER BY id",
+                    (ticket_id, project_id),
+                ).fetchall()
+            finally:
+                conn.close()
+
+            criteria_text = "\n".join(
+                f"- {r['text']}" for r in criteria_rows
+            ) if criteria_rows else "(none)"
+
+            result = template
+            result = result.replace("{{ticket.id}}", trow["id"] or "")
+            result = result.replace("{{ticket.title}}", trow["title"] or "")
+            result = result.replace("{{ticket.description}}", trow["description"] or "")
+            result = result.replace("{{ticket.acceptance_criteria}}", criteria_text)
+            # Also keep legacy {{subject.id}} working.
+            result = result.replace("{{subject.id}}", ticket_id)
+            return result
+        except Exception:
+            # Fallback: don't break the run if ticket lookup fails.
+            return template.replace("{{subject.id}}", ticket_id)
+
+    @staticmethod
+    def _apply_on_success(
+        workflow_meta: dict,
+        project_id: str,
+        ticket_id: str,
+        actor,
+        conn_factory: Callable[[], sqlite3.Connection],
+    ) -> None:
+        """Apply on_success_json actions from a DB workflow after a successful run.
+
+        Supported actions:
+          move_to:    move ticket to the named section
+          set_status: set ticket status
+        """
+        on_success = workflow_meta.get("on_success") or {}
+        if not on_success:
+            return
+        try:
+            from actions import move_ticket, update_ticket  # type: ignore[import]
+            conn = conn_factory()
+            try:
+                move_to = on_success.get("move_to")
+                set_status = on_success.get("set_status")
+                if move_to:
+                    move_ticket(conn, project_id, ticket_id, move_to, actor=actor)
+                if set_status:
+                    update_ticket(conn, project_id, ticket_id, status=set_status, actor=actor)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "on_success actions failed for workflow %r ticket %r",
+                workflow_meta.get("workflow_id"), ticket_id,
+            )
 
     @staticmethod
     def _tail(text: str, max_chars: int = 1000) -> str:

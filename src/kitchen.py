@@ -38,6 +38,9 @@ from runners import AgentRunner, RunOutcome, Runner, ScenarioRunner
 from workspaces import WorkspaceInfo, create_or_reuse, run_hook, workspace_path_for
 from workflow_config import load_workflow_config, load_prompt_template
 
+# Feature flag key stored in the settings table.
+_USE_DB_WORKFLOWS_KEY = "kitchen.use_db_workflows"
+
 logger = logging.getLogger(__name__)
 
 # Stall threshold — if a run has no heartbeat for this long, expire it.
@@ -402,8 +405,36 @@ def _count_active_for_project(conn: sqlite3.Connection, project_id: str) -> int:
     return row["n"] if row else 0
 
 
+def get_use_db_workflows(conn: sqlite3.Connection) -> bool:
+    """Read the kitchen.use_db_workflows feature flag from settings.
+
+    Default is False (legacy path) per the Phase 2 spec.
+    Memory: "Settings boolean strings — SQLite stores strings, explicit comparison needed".
+    """
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?", (_USE_DB_WORKFLOWS_KEY,)
+    ).fetchone()
+    if row is None:
+        return False
+    return str(row[0]).lower() == "true"
+
+
 def _dispatch_eligible(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
-    """Find every eligible ticket across all projects, claim until slots run out."""
+    """Route to the DB-workflow path or legacy path based on feature flag."""
+    conn = get_db()
+    try:
+        use_db = get_use_db_workflows(conn)
+    finally:
+        conn.close()
+
+    if use_db:
+        _dispatch_via_workflows(get_db, settings)
+    else:
+        _dispatch_via_legacy(get_db, settings)
+
+
+def _dispatch_via_legacy(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
+    """Legacy dispatch path: evaluates tickets using _ticket_eligibility hardcoded predicate."""
     from actions import eligibility as _eligibility
 
     conn = get_db()
@@ -454,6 +485,132 @@ def _dispatch_eligible(get_db: Callable[[], sqlite3.Connection], settings: dict)
         conn.close()
 
 
+def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
+    """DB-workflow dispatch path: evaluates tickets against enabled workflow triggers.
+
+    Loops over enabled workflows (system workflows first) and for each subject
+    in automation_mode='auto', evaluates the trigger.  First matching workflow
+    wins (one workflow per dispatch tick per subject).
+    """
+    import json as _json
+    from conditions import build_subject_context, evaluate_trigger
+    from actions import _has_active_run  # type: ignore[import]
+
+    conn = get_db()
+    try:
+        projects = _list_project_ids(conn)
+        if not projects:
+            return
+
+        global_cap = int(settings.get("max_concurrent_runs", 3))
+        per_project_cap = int(settings.get("max_concurrent_per_project", 1))
+
+        active_total = _count_active_consuming_slots(conn)
+        slots = max(0, global_cap - active_total)
+        if slots <= 0:
+            return
+
+        for project_id in projects:
+            if slots <= 0:
+                break
+            active_for_proj = _count_active_for_project(conn, project_id)
+            project_slots = max(0, per_project_cap - active_for_proj)
+            if project_slots <= 0:
+                continue
+
+            # Load enabled workflows for this project. System workflows come first
+            # so user-defined workflows can shadow them by being evaluated later
+            # (first workflow match wins per subject).
+            workflows = conn.execute(
+                "SELECT id, name, trigger_json, on_success_json, steps, system "
+                "FROM workflows "
+                "WHERE enabled = 1 AND (id LIKE ? OR id NOT LIKE '%::%') "
+                "ORDER BY system DESC, id ASC",
+                (f"{project_id}::%",),
+            ).fetchall()
+
+            if not workflows:
+                continue
+
+            # Find candidate subjects: tickets in auto mode, not draft/archived.
+            # Wider section scope than legacy — each workflow specifies its own
+            # section filter via trigger_json.
+            subjects = conn.execute(
+                "SELECT t.id FROM tickets t "
+                "JOIN automation_subjects s ON s.subject_id = t.id "
+                "  AND s.project_id = t.project_id AND s.subject_type = 'ticket' "
+                "WHERE t.project_id = ? AND t.archived = 0 AND t.draft = 0 "
+                "  AND s.automation_mode = 'auto' "
+                "ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+                "         WHEN 'low' THEN 2 ELSE 3 END, t.created_at ASC, t.id ASC",
+                (project_id,),
+            ).fetchall()
+
+            for srow in subjects:
+                if slots <= 0 or project_slots <= 0:
+                    break
+                ticket_id = srow["id"]
+
+                # Skip if already has an active run.
+                if _has_active_run(conn, project_id, "ticket", ticket_id):
+                    continue
+
+                # Try each workflow in order — first match dispatches.
+                for wf in workflows:
+                    try:
+                        trigger_raw = wf["trigger_json"]
+                        trigger = (
+                            _json.loads(trigger_raw) if isinstance(trigger_raw, str)
+                            else trigger_raw
+                        )
+                        ctx = build_subject_context(conn, project_id, ticket_id)
+                        passed, reasons = evaluate_trigger(trigger, ctx)
+                    except Exception:
+                        logger.exception(
+                            "workflow trigger evaluation failed for workflow %r ticket %r",
+                            wf["id"], ticket_id,
+                        )
+                        continue
+
+                    if not passed:
+                        continue
+
+                    # Parse workflow metadata to pass into the run.
+                    try:
+                        steps = _json.loads(wf["steps"]) if isinstance(wf["steps"], str) else wf["steps"]
+                    except Exception:
+                        steps = []
+                    on_success = None
+                    try:
+                        on_success_raw = wf["on_success_json"]
+                        on_success = (
+                            _json.loads(on_success_raw)
+                            if isinstance(on_success_raw, str) and on_success_raw
+                            else (on_success_raw or {})
+                        )
+                    except Exception:
+                        on_success = {}
+
+                    workflow_meta = {
+                        "workflow_id": wf["id"],
+                        "workflow_name": wf["name"],
+                        "step_index": 0,
+                        "step_count": len(steps),
+                        "on_success": on_success,
+                        "steps": steps,
+                    }
+
+                    if _try_claim_and_dispatch(
+                        get_db, project_id, "ticket", ticket_id, settings,
+                        workflow_meta=workflow_meta,
+                    ):
+                        slots -= 1
+                        project_slots -= 1
+                    break  # One workflow per subject per tick regardless of claim success.
+    finally:
+        conn.close()
+
+
 def _list_project_ids(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
         "SELECT DISTINCT project_id FROM tickets ORDER BY project_id"
@@ -467,11 +624,17 @@ def _try_claim_and_dispatch(
     subject_type: str,
     subject_id: str,
     settings: dict,
+    workflow_meta: Optional[dict] = None,
 ) -> bool:
     """Atomic claim using BEGIN IMMEDIATE + the partial unique index.
 
     Returns True on successful dispatch, False if already-active or other race.
+
+    workflow_meta: if provided (DB-workflow path), stored in metadata_json and used
+    to render the workflow's prompt_template instead of PROMPT.md.
     """
+    import json as _json
+
     project_path = _resolve_project_path(project_id)
     if project_path is None:
         logger.warning("dispatch skipped: no project path for %s", project_id)
@@ -480,10 +643,23 @@ def _try_claim_and_dispatch(
     config["_prompt_template"] = load_prompt_template(project_path)
     base_ref = (config.get("agent", {}) or {}).get("base_ref", "origin/main")
 
+    # When a workflow is specified, override the prompt template with the
+    # workflow step's prompt_template (substitution happens in the runner).
+    if workflow_meta:
+        steps = workflow_meta.get("steps", [])
+        step_index = workflow_meta.get("step_index", 0)
+        if steps and step_index < len(steps):
+            step_template = steps[step_index].get("prompt_template", "")
+            if step_template:
+                config["_prompt_template"] = step_template
+        # Also store workflow context in config so the runner can apply on_success.
+        config["_workflow_meta"] = workflow_meta
+
     # Insert the queued row inside a BEGIN IMMEDIATE tx so a concurrent tick
     # would block; the partial unique index makes the race safe regardless.
     claim_owner = _INSTANCE_OWNER
     runner_kind = _runner_kind_for(subject_type)
+    metadata = _json.dumps(workflow_meta) if workflow_meta else "{}"
     conn = get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -491,10 +667,11 @@ def _try_claim_and_dispatch(
             cur = conn.execute(
                 "INSERT INTO runs "
                 "(project_id, subject_type, subject_id, runner_kind, status, "
-                " claimed_at, claim_owner, heartbeat_at, started_at, triggered_by) "
-                "VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, 'scheduled')",
+                " claimed_at, claim_owner, heartbeat_at, started_at, triggered_by, "
+                " metadata_json) "
+                "VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, 'scheduled', ?)",
                 (project_id, subject_type, subject_id, runner_kind,
-                 utcnow_iso(), claim_owner, utcnow_iso(), utcnow_iso()),
+                 utcnow_iso(), claim_owner, utcnow_iso(), utcnow_iso(), metadata),
             )
             run_id = cur.lastrowid
             emit_event(conn, project_id, subject_type, subject_id, "run_started",

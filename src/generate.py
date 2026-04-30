@@ -688,6 +688,20 @@ def generate_html(project: Project) -> str:
     count_needs_input = sum(1 for t in all_visible if t.latest_run_status == "needs_input")
     count_failed = sum(1 for t in all_visible if t.latest_run_status in ("failed", "stalled"))
 
+    # Branch / PR filter counts — derived from each ticket's linked branches.
+    # `has-branch` is "any branch linked"; pr-* counts the worst (most active) PR
+    # state across linked branches so a ticket with [merged, open] counts as open.
+    def _ticket_pr_state(t) -> str:
+        states = {b.get("pr_status") or "" for b in (getattr(t, 'branches', []) or [])}
+        for s in ("open", "draft", "merged", "closed"):
+            if s in states:
+                return s
+        return ""
+    count_has_branch = sum(1 for t in all_visible if getattr(t, 'branches', []))
+    count_pr_open    = sum(1 for t in all_visible if _ticket_pr_state(t) in ("open", "draft"))
+    count_pr_merged  = sum(1 for t in all_visible if _ticket_pr_state(t) == "merged")
+    count_no_branch  = sum(1 for t in all_visible if not getattr(t, 'branches', []))
+
     # Collect all unique tags with counts (for filter bar)
     tag_counts: dict[str, int] = {}
     for t in all_visible:
@@ -792,6 +806,21 @@ def generate_html(project: Project) -> str:
   else document.documentElement.setAttribute('data-theme',
     window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');
 }})();
+// Tolerant list unwrapper. APIs may return either a bare array or a wrapped
+// object like {{"agents": [...]}} or {{"items": [...]}}; this normalizes both
+// forms so callers don't have to repeat `data.X || data || []` everywhere.
+// Returns [] when the response shape is unrecognized.
+window.unwrapList = function(data, primaryKey) {{
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {{
+    if (primaryKey && Array.isArray(data[primaryKey])) return data[primaryKey];
+    var fallbackKeys = ['items', 'data', 'results', 'records', 'rows'];
+    for (var i = 0; i < fallbackKeys.length; i++) {{
+      if (Array.isArray(data[fallbackKeys[i]])) return data[fallbackKeys[i]];
+    }}
+  }}
+  return [];
+}};
 </script>
 <style>
 :root, [data-theme="dark"] {{
@@ -2451,6 +2480,14 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     <button class="filter-btn" data-filter="failed"      data-group="kitchen" title="Last run failed or stalled">Failed <span class="count">{count_failed}</span></button>
   </span>
   <span class="filter-divider"></span>
+  <!-- Branch / PR filters — surface GitHub state on the kanban -->
+  <span class="filter-group" data-group-name="branch">
+    <button class="filter-btn" data-filter="has-branch" data-group="branch" title="Tickets with at least one branch linked">Has Branch <span class="count">{count_has_branch}</span></button>
+    <button class="filter-btn" data-filter="pr-open"    data-group="branch" title="At least one branch with an open or draft PR">PR Open <span class="count">{count_pr_open}</span></button>
+    <button class="filter-btn" data-filter="pr-merged"  data-group="branch" title="Latest PR merged (no open PRs)">PR Merged <span class="count">{count_pr_merged}</span></button>
+    <button class="filter-btn" data-filter="no-branch"  data-group="branch" title="No branches linked">No Branch <span class="count">{count_no_branch}</span></button>
+  </span>
+  <span class="filter-divider"></span>
 {_tag_filter_html}  <span class="filter-divider"></span>
   <button class="filter-btn" id="draftsToggleBtn" data-filter="draft" data-group="draft">Drafts</button>
   <button class="filter-btn" id="seekBtn" data-testid="seek-btn" title="Scan project files for ticket-like items">Seek</button>
@@ -2859,6 +2896,18 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
             }}
           }}
           else if (g === 'tags') {{ var ct = (card.dataset.tags || '').split(' '); match = vals.some(function(v){{ return ct.indexOf(v) !== -1; }}); }}
+          else if (g === 'branch') {{
+            // Multi-select within group is OR.
+            for (var bi = 0; bi < vals.length; bi++) {{
+              var bv = vals[bi];
+              var prs = card.dataset.prStatus || '';
+              var hasBr = card.dataset.hasBranch === 'true';
+              if (bv === 'has-branch' && hasBr) {{ match = true; break; }}
+              if (bv === 'pr-open'    && (prs === 'open' || prs === 'draft')) {{ match = true; break; }}
+              if (bv === 'pr-merged'  && prs === 'merged') {{ match = true; break; }}
+              if (bv === 'no-branch'  && !hasBr) {{ match = true; break; }}
+            }}
+          }}
           if (!match) show = false;
         }});
         card.style.display = show ? '' : 'none';
@@ -7351,7 +7400,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     fetch(EDIT_API + '/workflow/agents')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var agents = data.agents || data || [];
+        var agents = window.unwrapList(data, 'agents');
         while (agentsList.firstChild) agentsList.removeChild(agentsList.firstChild);
         agents.forEach(function(a) {{
           var row = document.createElement('div');
@@ -7468,7 +7517,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     fetch(EDIT_API + '/workflow/workflows')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var workflows = data.workflows || data || [];
+        var workflows = window.unwrapList(data, 'workflows');
         while (workflowsList.firstChild) workflowsList.removeChild(workflowsList.firstChild);
         workflows.forEach(function(wf) {{
           var row = document.createElement('div');
@@ -7641,7 +7690,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     fetch(EDIT_API + '/workflow/agents')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var agents = data.agents || data || [];
+        var agents = window.unwrapList(data, 'agents');
         while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
         if (agents.length === 0) {{
           var empty = document.createElement('div');
@@ -7771,7 +7820,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     return fetch(EDIT_API + '/workflow/agents')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        _cachedAgents = (data.agents || data || []).filter(function(a) {{ return a.source !== 'project'; }});
+        _cachedAgents = window.unwrapList(data, 'agents').filter(function(a) {{ return a.source !== 'project'; }});
       }})
       .catch(function() {{}});
   }}
@@ -7853,7 +7902,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     fetch(EDIT_API + '/workflow/workflows')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var workflows = data.workflows || data || [];
+        var workflows = window.unwrapList(data, 'workflows');
         while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
         if (workflows.length === 0) {{
           var empty = document.createElement('div');
@@ -7980,8 +8029,8 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     fetch(EDIT_API + '/tickets/' + ticketId + '/attachments')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var items = data.attachments || data || [];
-        if (!Array.isArray(items) || items.length === 0) {{
+        var items = window.unwrapList(data, 'attachments');
+        if (items.length === 0) {{
           if (placeholder) return; // Keep showing placeholder, don't show "empty"
           var empty = document.createElement('div');
           empty.className = 'attachments-empty';
@@ -8299,7 +8348,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     fetch(EDIT_API + '/workflow/workflows')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var workflows = data.workflows || data || [];
+        var workflows = window.unwrapList(data, 'workflows');
         // Clear existing options except the placeholder
         while (workflowSelect.options.length > 1) {{
           workflowSelect.removeChild(workflowSelect.options[1]);
@@ -8324,8 +8373,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     fetch(EDIT_API + '/tickets/' + encodeURIComponent(ticketId) + '/workflow/runs')
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{
-        var runs = data.runs || data || [];
-        if (!Array.isArray(runs)) return;
+        var runs = window.unwrapList(data, 'runs');
         // Clear stale poll timers
         Object.keys(pollTimers).forEach(function(k) {{
           clearInterval(pollTimers[k]);
@@ -8970,6 +9018,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     # Branches
     branches_list = getattr(t, 'branches', [])
     branches_html = ""
+    pr_state = ""
     if branches_list:
         br_pills = []
         for br in branches_list:
@@ -8987,6 +9036,15 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
                 f'{_svg_icon("git-branch", 10)}{escape(label)}{pr_str}</span>'
             )
         branches_html = f'        <div class="card-branches">{"".join(br_pills)}</div>\n'
+        # Worst-state-wins for the data-pr-status attribute used by filter pills.
+        states = {b.get("pr_status") or "" for b in branches_list}
+        for s in ("open", "draft", "merged", "closed"):
+            if s in states:
+                pr_state = s
+                break
+
+    branch_attr = ' data-has-branch="true"' if branches_list else ""
+    pr_attr = f' data-pr-status="{escape(pr_state)}"' if pr_state else ""
 
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
@@ -8997,7 +9055,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f' data-automation-mode="{escape(t.automation_mode)}"'
         f'{" data-eligible=" + chr(34) + "true" + chr(34) if t.automation_eligible else ""}'
         f'{" data-run-status=" + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ""}'
-        f'{draft_attr}{tags_attr}>\n'
+        f'{draft_attr}{tags_attr}{branch_attr}{pr_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'
         f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
@@ -9110,12 +9168,22 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
 
         list_tags_list = getattr(t, 'tags', [])
         list_tags_attr = f' data-tags="{escape(" ".join(list_tags_list))}"' if list_tags_list else ''
+        list_branches = getattr(t, 'branches', [])
+        list_branch_attr = ' data-has-branch="true"' if list_branches else ''
+        list_pr_state = ""
+        if list_branches:
+            states = {b.get("pr_status") or "" for b in list_branches}
+            for s in ("open", "draft", "merged", "closed"):
+                if s in states:
+                    list_pr_state = s
+                    break
+        list_pr_attr = f' data-pr-status="{escape(list_pr_state)}"' if list_pr_state else ''
         lines.append(
             f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
             f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
             f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
-            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}{list_tags_attr}>\n'
+            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}{list_tags_attr}{list_branch_attr}{list_pr_attr}>\n'
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
             f'<span class="card-id">{id_esc}</span>'

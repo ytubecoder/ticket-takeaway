@@ -110,6 +110,14 @@ class Ticket:
     def slug(self) -> str:
         return SECTION_SLUGS.get(self.section, "backlog")
 
+    @property
+    def automation_for_review(self) -> bool:
+        """True when latest run succeeded AND tests readiness flag is set."""
+        return (
+            self.latest_run_status == "succeeded"
+            and "tests" in self.readiness_flags
+        )
+
 
 @dataclass
 class CodeStats:
@@ -682,12 +690,21 @@ def generate_html(project: Project) -> str:
     count_size_m = sum(1 for t in all_visible if t.complexity == "M")
     count_size_l = sum(1 for t in all_visible if t.complexity == "L")
 
-    # Kitchen filter counts (M2)
-    count_auto = sum(1 for t in all_visible if t.automation_mode == "auto")
-    count_held = sum(1 for t in all_visible if t.automation_mode == "held")
-    count_eligible = sum(1 for t in all_visible if t.automation_eligible)
-    count_needs_input = sum(1 for t in all_visible if t.latest_run_status == "needs_input")
-    count_failed = sum(1 for t in all_visible if t.latest_run_status in ("failed", "stalled"))
+    # Rationalised automation filter counts
+    _ACTIVE_RUN_STATUSES = {"queued", "preparing", "running"}
+    count_auto = sum(1 for t in all_visible if t.automation_mode in ("auto", "held"))
+    count_ready = sum(
+        1 for t in all_visible
+        if t.automation_mode in ("auto", "held")
+        and t.automation_eligible
+        and t.latest_run_status not in _ACTIVE_RUN_STATUSES
+    )
+    count_running = sum(1 for t in all_visible if t.latest_run_status in _ACTIVE_RUN_STATUSES)
+    count_needs_attention = sum(
+        1 for t in all_visible
+        if t.latest_run_status in ("needs_input", "failed", "stalled", "cancelled")
+    )
+    count_for_review_auto = sum(1 for t in all_visible if t.automation_for_review)
 
     # Collect all unique tags with counts (for filter bar)
     tag_counts: dict[str, int] = {}
@@ -712,36 +729,6 @@ def generate_html(project: Project) -> str:
     done_cards = _render_list_rows(list(reversed(by_section["Done"])), "done", child_tickets, dep_state)
     icebox_cards = _render_list_rows(list(reversed(by_section["Icebox"])), "icebox", child_tickets, dep_state)
     bugs_cards = _render_list_rows(list(reversed(by_section["Bugs"])), "bugs", child_tickets, dep_state)
-
-    # Kitchen board — alternate kanban sliced by automation lifecycle.
-    # Each ticket lands in at most one bucket; manual+never-run tickets disappear.
-    # Order matters: run-status wins over mode (running > starting > attention > held > ready).
-    kb_held, kb_ready, kb_starting, kb_running, kb_attention = [], [], [], [], []
-    for _t in all_tickets:
-        if _t.parent or _t.archived:
-            continue
-        _run = _t.latest_run_status
-        if _run == "running":
-            kb_running.append(_t)
-        elif _run in ("queued", "preparing"):
-            kb_starting.append(_t)
-        elif _run in ("needs_input", "failed", "stalled"):
-            kb_attention.append(_t)
-        elif _t.automation_mode == "held":
-            kb_held.append(_t)
-        elif _t.automation_mode == "auto" and _t.automation_eligible:
-            kb_ready.append(_t)
-        # else: not on the Kitchen board
-    held_cards      = _render_cards(kb_held,      "kb-held",      child_tickets, dep_state)
-    ready_cards     = _render_cards(kb_ready,     "kb-ready",     child_tickets, dep_state)
-    starting_cards  = _render_cards(kb_starting,  "kb-starting",  child_tickets, dep_state)
-    running_cards   = _render_cards(kb_running,   "kb-running",   child_tickets, dep_state)
-    attention_cards = _render_cards(kb_attention, "kb-attention", child_tickets, dep_state)
-    count_kb_held      = len(kb_held)
-    count_kb_ready     = len(kb_ready)
-    count_kb_starting  = len(kb_starting)
-    count_kb_running   = len(kb_running)
-    count_kb_attention = len(kb_attention)
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
 
@@ -931,6 +918,16 @@ a {{ color: var(--accent); text-decoration: none; }}
 .filter-btn .count {{ font-size: 10px; opacity: 0.7; margin-left: 3px; font-family: var(--font-mono); }}
 .filter-group {{ display: inline-flex; gap: 4px; align-items: center; }}
 .filter-divider {{ width: 1px; height: 18px; background: var(--border-default); margin: 0 4px; opacity: 0.5; }}
+/* Needs Attention chip + chevron pairing */
+.filter-btn-wrap {{ gap: 0 !important; }}
+.filter-btn-wrap .filter-btn {{ border-radius: 6px 0 0 6px; }}
+.filter-btn-chevron {{
+  font-size: 10px; padding: 4px 6px; border-radius: 0 6px 6px 0;
+  border: 1px solid var(--border-default); border-left: none;
+  background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
+  font-family: var(--font-sans); transition: all 0.15s; line-height: 1;
+}}
+.filter-btn-chevron:hover {{ border-color: var(--border-strong); color: var(--text-primary); }}
 .search-input {{
   margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 6px;
   border: 1px solid var(--border-default); background: var(--bg-card); color: var(--text-primary);
@@ -2317,16 +2314,6 @@ body.bounce-open .bottom-section,
 body.bounce-open #settings-drawer {{ display: none !important; }}
 body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
 
-/* Kitchen board toggle — alternate kanban sliced by automation lifecycle. */
-.kitchen-kanban {{ display: none; }}
-body.kitchen-board #kanban {{ display: none; }}
-body.kitchen-board .bottom-section {{ display: none !important; }}
-body.kitchen-board .kitchen-kanban {{ display: flex; }}
-body.kitchen-board #kitchenBoardToggleBtn {{
-  background: var(--accent); color: white; border-color: var(--accent);
-}}
-body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
-.kb-col .column-header {{ font-size: 11px; }}
 .bounce-back-btn {{
   display: none; font-size: 12px; padding: 4px 10px; border-radius: 6px;
   border: 1px solid var(--border-default); background: var(--bg-card);
@@ -2444,6 +2431,11 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   box-shadow: 0 4px 16px rgba(0,0,0,0.15); padding: 10px; min-width: 260px; max-width: 340px;
 }}
 .kw-cond-popover.hidden {{ display: none; }}
+
+/* Native dropdown popup — without this, dark theme shows white-on-white. */
+select option {{ background: var(--bg-card); color: var(--text-primary); }}
+select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
+
 .kw-cond-popover select, .kw-cond-popover input {{
   width: 100%; padding: 5px 8px; font-size: 12px; border: 1px solid var(--border-default);
   border-radius: 5px; background: var(--bg-primary); color: var(--text-primary); font-family: inherit;
@@ -2508,6 +2500,50 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   color: var(--text-secondary); cursor: pointer; font-family: inherit;
 }}
 .kw-clone-btn:hover {{ color: var(--text-primary); }}
+
+/* ── Nested trigger group builder ── */
+.kw-trigger-group {{
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  background: var(--bg-card);
+}}
+.kw-trigger-group-header {{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}}
+.kw-trigger-group-header select {{
+  font-weight: 600;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  padding: 2px 6px;
+  border-radius: 4px;
+}}
+.kw-trigger-group-header span {{
+  color: var(--text-secondary);
+}}
+.kw-trigger-group-children {{ padding-left: 8px; border-left: 2px solid var(--border-subtle); }}
+.kw-trigger-group-children > * {{ margin-bottom: 4px; }}
+.kw-trigger-group-actions {{ margin-top: 8px; display: flex; gap: 8px; }}
+.kw-trigger-group-actions button {{
+  font-size: 11px; padding: 3px 8px;
+  border: 1px solid var(--border-default); border-radius: 4px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+}}
+.kw-trigger-group-remove {{ margin-left: auto; font-size: 11px; opacity: 0.6; cursor: pointer; background: transparent; border: none; color: var(--text-secondary); }}
+.kw-trigger-group-remove:hover {{ opacity: 1; color: #ef4444; }}
+
+/* ── Tag chip input (on-success add/remove tags) ── */
+.kw-tag-chip-input {{ display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border: 1px solid var(--border-default); border-radius: 4px; min-height: 28px; align-items: center; background: transparent; }}
+.kw-tag-chip {{ background: rgba(96,165,250,0.18); color: var(--text-primary); padding: 2px 8px; border-radius: 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }}
+.kw-tag-chip button {{ background: transparent; border: 0; color: inherit; cursor: pointer; padding: 0 2px; opacity: 0.6; }}
+.kw-tag-chip button:hover {{ opacity: 1; }}
+.kw-tag-chip-input input {{ flex: 1; min-width: 80px; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 11px; }}
 
 /* ── Live tab ── */
 .live-topbar {{
@@ -2707,13 +2743,21 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     <button class="filter-btn" data-filter="L" data-group="size">L <span class="count">{count_size_l}</span></button>
   </span>
   <span class="filter-divider"></span>
-  <!-- Kitchen filters (M2) — automation lens on the existing kanban -->
+  <!-- Automation filters — automation lens on the existing kanban -->
   <span class="filter-group" data-group-name="kitchen">
-    <button class="filter-btn" data-filter="auto"        data-group="kitchen" title="Tickets with automation_mode=auto">Auto <span class="count">{count_auto}</span></button>
-    <button class="filter-btn" data-filter="held"        data-group="kitchen" title="Paused with reason">Held <span class="count">{count_held}</span></button>
-    <button class="filter-btn" data-filter="eligible"    data-group="kitchen" title="Auto AND all eligibility gates clear">Eligible <span class="count">{count_eligible}</span></button>
-    <button class="filter-btn" data-filter="needs_input" data-group="kitchen" title="Run paused awaiting human input">Needs Input <span class="count">{count_needs_input}</span></button>
-    <button class="filter-btn" data-filter="failed"      data-group="kitchen" title="Last run failed or stalled">Failed <span class="count">{count_failed}</span></button>
+    <button class="filter-btn" data-filter="auto"             data-group="kitchen" title="Tickets with automation enabled (auto or held)">Auto <span class="count">{count_auto}</span></button>
+    <button class="filter-btn" data-filter="ready"            data-group="kitchen" title="Auto/held, meets all dispatch conditions, no active run">Ready <span class="count">{count_ready}</span></button>
+    <button class="filter-btn" data-filter="running"          data-group="kitchen" title="Has an active run (queued, preparing, or running)">Running <span class="count">{count_running}</span></button>
+    <span class="filter-btn-wrap" id="needsAttentionWrap" style="position:relative;display:inline-flex;align-items:center;">
+      <button class="filter-btn" data-filter="needs-attention" data-group="kitchen" data-testid="needs-attention-chip" title="Run needs input, failed, stalled, or cancelled">Needs Attention <span class="count">{count_needs_attention}</span></button><button class="filter-btn-chevron" id="needsAttentionChevron" data-testid="needs-attention-chevron" title="Refine Needs Attention filter" aria-label="Refine Needs Attention sub-filters" style="border-left:none;border-radius:0 5px 5px 0;padding:4px 6px;font-size:10px;line-height:1;">&#9660;</button>
+      <div class="needs-attention-popover" id="needsAttentionPopover" style="display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:200;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:8px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:160px;white-space:nowrap;">
+        <label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;margin-bottom:6px;"><input type="checkbox" data-na-sub="needs_input" checked> Needs input</label>
+        <label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;margin-bottom:6px;"><input type="checkbox" data-na-sub="failed" checked> Failed</label>
+        <label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;margin-bottom:6px;"><input type="checkbox" data-na-sub="stalled" checked> Stalled</label>
+        <label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;"><input type="checkbox" data-na-sub="cancelled" checked> Cancelled</label>
+      </div>
+    </span>
+    <button class="filter-btn" data-filter="for-review-auto"  data-group="kitchen" data-testid="for-review-auto-chip" title="Latest run succeeded and tests flag set">For Review (auto) <span class="count">{count_for_review_auto}</span></button>
   </span>
   <span class="filter-divider"></span>
 {_tag_filter_html}  <span class="filter-divider"></span>
@@ -2730,7 +2774,6 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
       <div id="branchesPanelBody"></div>
     </div>
   </div>
-  <button class="settings-toggle" id="kitchenBoardToggleBtn" data-testid="kitchen-board-toggle" title="Kitchen board — workflows by stage">{_svg_icon("route", 14)}</button>
   <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
   <button class="settings-toggle" id="bounceToggleBtn" data-testid="bounce-toggle" title="Workflows &amp; Agents">{_icon_bounce}</button>
   <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
@@ -2904,66 +2947,6 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     </div>
   </div>
 
-
-</div>
-
-<!-- Kitchen board — alternate kanban sliced by automation lifecycle (toggled by body.kitchen-board) -->
-<div class="kanban kitchen-kanban" id="kitchen-kanban" data-testid="kitchen-board-root">
-
-  <div class="column kb-col" data-col="kb-held" id="col-kb-held" data-testid="column-kb-held">
-    <div class="column-header">
-      <div class="column-dot" style="background:#f59e0b"></div>
-      <span class="column-name">Held</span>
-      <span class="column-count">{count_kb_held}</span>
-    </div>
-    <div class="column-body">
-{held_cards}
-    </div>
-  </div>
-
-  <div class="column kb-col" data-col="kb-ready" id="col-kb-ready" data-testid="column-kb-ready">
-    <div class="column-header">
-      <div class="column-dot" style="background:#22c55e"></div>
-      <span class="column-name">Ready</span>
-      <span class="column-count">{count_kb_ready}</span>
-    </div>
-    <div class="column-body">
-{ready_cards}
-    </div>
-  </div>
-
-  <div class="column kb-col" data-col="kb-starting" id="col-kb-starting" data-testid="column-kb-starting">
-    <div class="column-header">
-      <div class="column-dot" style="background:#60a5fa"></div>
-      <span class="column-name">Starting</span>
-      <span class="column-count">{count_kb_starting}</span>
-    </div>
-    <div class="column-body">
-{starting_cards}
-    </div>
-  </div>
-
-  <div class="column kb-col" data-col="kb-running" id="col-kb-running" data-testid="column-kb-running">
-    <div class="column-header">
-      <div class="column-dot" style="background:#3b82f6"></div>
-      <span class="column-name">Running</span>
-      <span class="column-count">{count_kb_running}</span>
-    </div>
-    <div class="column-body">
-{running_cards}
-    </div>
-  </div>
-
-  <div class="column kb-col" data-col="kb-attention" id="col-kb-attention" data-testid="column-kb-attention">
-    <div class="column-header">
-      <div class="column-dot" style="background:#ef4444"></div>
-      <span class="column-name">Needs Attention</span>
-      <span class="column-count">{count_kb_attention}</span>
-    </div>
-    <div class="column-body">
-{attention_cards}
-    </div>
-  </div>
 
 </div>
 
@@ -3169,6 +3152,54 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   var allBtn = document.querySelector('.filter-btn[data-filter="all"]');
   var searchInput = document.getElementById('searchInput');
 
+  // Active run statuses (for "running" chip predicate — excludes needs_input)
+  var ACTIVE_RUN_STATUSES = {{'queued': 1, 'preparing': 1, 'running': 1}};
+  // Needs Attention sub-toggle state (persisted in localStorage)
+  var NA_STORAGE_KEY = 'tt-needs-attention-toggles';
+  var NA_ALL_SUBS = ['needs_input', 'failed', 'stalled', 'cancelled'];
+  var naEnabledSubs = (function() {{
+    try {{
+      var stored = JSON.parse(localStorage.getItem(NA_STORAGE_KEY));
+      if (Array.isArray(stored) && stored.length > 0) return stored;
+    }} catch (e) {{}}
+    return NA_ALL_SUBS.slice();
+  }})();
+
+  // Sync checkboxes to current naEnabledSubs state
+  function syncNaCheckboxes() {{
+    document.querySelectorAll('[data-na-sub]').forEach(function(chk) {{
+      chk.checked = naEnabledSubs.indexOf(chk.dataset.naSub) !== -1;
+    }});
+  }}
+  syncNaCheckboxes();
+
+  // Needs Attention popover toggle
+  var naChevron = document.getElementById('needsAttentionChevron');
+  var naPopover = document.getElementById('needsAttentionPopover');
+  if (naChevron && naPopover) {{
+    naChevron.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      var open = naPopover.style.display !== 'none';
+      naPopover.style.display = open ? 'none' : 'block';
+    }});
+    naPopover.querySelectorAll('[data-na-sub]').forEach(function(chk) {{
+      chk.addEventListener('change', function() {{
+        if (this.checked) {{
+          if (naEnabledSubs.indexOf(this.dataset.naSub) === -1) naEnabledSubs.push(this.dataset.naSub);
+        }} else {{
+          naEnabledSubs = naEnabledSubs.filter(function(s) {{ return s !== chk.dataset.naSub; }});
+        }}
+        try {{ localStorage.setItem(NA_STORAGE_KEY, JSON.stringify(naEnabledSubs)); }} catch (e) {{}}
+        applyFilters();
+      }});
+    }});
+    document.addEventListener('click', function(e) {{
+      if (naPopover.style.display !== 'none' && !naPopover.contains(e.target) && e.target !== naChevron) {{
+        naPopover.style.display = 'none';
+      }}
+    }});
+  }}
+
   function applyFilters() {{
     var activeByGroup = {{}};
     filterBtns.forEach(function(btn) {{
@@ -3195,13 +3226,15 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
           else if (g === 'size') {{ match = vals.indexOf(card.dataset.complexity) !== -1; }}
           else if (g === 'kitchen') {{
             // Multi-select within group is OR. A card matches if ANY chip applies.
+            var mode = card.dataset.automationMode;
+            var rs = card.dataset.runStatus || '';
             for (var i = 0; i < vals.length; i++) {{
               var v = vals[i];
-              if (v === 'auto'        && card.dataset.automationMode === 'auto')   {{ match = true; break; }}
-              if (v === 'held'        && card.dataset.automationMode === 'held')   {{ match = true; break; }}
-              if (v === 'eligible'    && card.dataset.eligible === 'true')         {{ match = true; break; }}
-              if (v === 'needs_input' && card.dataset.runStatus === 'needs_input') {{ match = true; break; }}
-              if (v === 'failed'      && (card.dataset.runStatus === 'failed' || card.dataset.runStatus === 'stalled')) {{ match = true; break; }}
+              if (v === 'auto'             && (mode === 'auto' || mode === 'held'))   {{ match = true; break; }}
+              if (v === 'ready'            && (mode === 'auto' || mode === 'held') && card.dataset.eligible === 'true' && !ACTIVE_RUN_STATUSES[rs]) {{ match = true; break; }}
+              if (v === 'running'          && ACTIVE_RUN_STATUSES[rs])             {{ match = true; break; }}
+              if (v === 'needs-attention'  && naEnabledSubs.indexOf(rs) !== -1)     {{ match = true; break; }}
+              if (v === 'for-review-auto'  && card.dataset.automationForReview === '1') {{ match = true; break; }}
             }}
           }}
           else if (g === 'tags') {{ var ct = (card.dataset.tags || '').split(' '); match = vals.some(function(v){{ return ct.indexOf(v) !== -1; }}); }}
@@ -7128,19 +7161,6 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     else openBouncePage();
   }});
 
-  /* Kitchen board toggle — alternate kanban sliced by automation lifecycle. */
-  var kitchenBoardBtn = document.getElementById('kitchenBoardToggleBtn');
-  var KITCHEN_BOARD_KEY = 'tt-kitchen-board';
-  function setKitchenBoard(on) {{
-    document.body.classList.toggle('kitchen-board', !!on);
-    try {{ localStorage.setItem(KITCHEN_BOARD_KEY, on ? '1' : '0'); }} catch (e) {{}}
-  }}
-  // Restore preference on load
-  try {{ if (localStorage.getItem(KITCHEN_BOARD_KEY) === '1') setKitchenBoard(true); }} catch (e) {{}}
-  if (kitchenBoardBtn) kitchenBoardBtn.addEventListener('click', function() {{
-    setKitchenBoard(!document.body.classList.contains('kitchen-board'));
-  }});
-
   var toggleBtn = document.getElementById('settingsToggleBtn');
   var drawer = document.getElementById('settings-drawer');
   var closeBtn = document.getElementById('settingsDrawerClose');
@@ -8366,9 +8386,9 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   var _condCatalog = [];
   var _kitchenTickets = []; // for test-against picker
   var _currentWf = null; // workflow being edited in detail
-  var _detailTriggerConds = []; // {{kind, params_obj}}
+  var _detailTriggerRoot = null; // {{all_of: [...] }} or {{any_of: [...] }} — nested group tree
   var _detailSteps = [];
-  var _detailOnSuccess = {{}}; // {{section, status}}
+  var _detailOnSuccess = {{}}; // {{section, status, add_tags, remove_tags}}
 
   // ── Kitchen settings (DB dispatch toggle) ──
   function loadKitchenSettings() {{
@@ -8392,14 +8412,23 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   }}
 
   // ── Workflow list ──
+  function _collectLeafKinds(node, out) {{
+    if (!node) return;
+    var children = node.all_of || node.any_of || node.conditions || [];
+    children.forEach(function(c) {{
+      if (c.all_of || c.any_of) {{ _collectLeafKinds(c, out); }}
+      else if (c.kind) {{ out.push(c.kind); }}
+    }});
+  }}
   function _triggerSummary(wf) {{
     var tj = wf.trigger_json;
     if (!tj) return '—';
     if (typeof tj === 'string') {{ try {{ tj = JSON.parse(tj); }} catch(e) {{ return '—'; }} }}
-    var conds = (tj.conditions || tj.all_of || []);
-    if (!conds.length) return '—';
-    var parts = conds.slice(0, 3).map(function(c) {{ return c.kind || '?'; }});
-    var extra = conds.length > 3 ? ' +' + (conds.length - 3) : '';
+    var leaves = [];
+    _collectLeafKinds(tj, leaves);
+    if (!leaves.length) return '—';
+    var parts = leaves.slice(0, 3);
+    var extra = leaves.length > 3 ? ' +' + (leaves.length - 3) : '';
     return parts.join(' ∧ ') + extra;
   }}
 
@@ -8512,12 +8541,25 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     _currentWf = null;
   }}
 
+  function _parseTriggerRoot(tj) {{
+    // Returns a group node {{all_of:[...]}} or {{any_of:[...]}}
+    if (!tj) return {{ all_of: [] }};
+    if (typeof tj === 'string') {{ try {{ tj = JSON.parse(tj); }} catch(e) {{ return {{ all_of: [] }}; }} }}
+    // Already a group node
+    if (tj.all_of !== undefined) return {{ all_of: tj.all_of.slice() }};
+    if (tj.any_of !== undefined) return {{ any_of: tj.any_of.slice() }};
+    // Legacy flat format: {{conditions: [...]}}
+    if (tj.conditions) return {{ all_of: tj.conditions.slice() }};
+    // Single leaf — wrap it
+    if (tj.kind) return {{ all_of: [tj] }};
+    return {{ all_of: [] }};
+  }}
+
   function openWorkflowDetail(wf) {{
     _currentWf = wf;
-    // Parse trigger conditions
+    // Parse trigger into nested group root
     var tj = wf ? wf.trigger_json : null;
-    if (tj && typeof tj === 'string') {{ try {{ tj = JSON.parse(tj); }} catch(e) {{ tj = null; }} }}
-    _detailTriggerConds = (tj && (tj.conditions || tj.all_of)) ? (tj.conditions || tj.all_of).slice() : [];
+    _detailTriggerRoot = _parseTriggerRoot(tj);
     // Parse steps
     var rawSteps = wf ? (wf.steps || []) : [];
     if (typeof rawSteps === 'string') {{ try {{ rawSteps = JSON.parse(rawSteps); }} catch(e) {{ rawSteps = []; }} }}
@@ -8590,69 +8632,42 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     descSection.appendChild(descInput);
     detailDiv.appendChild(descSection);
 
-    // Trigger section
+    // Trigger section — nested group builder
     var trigSection = document.createElement('div');
     trigSection.className = 'kw-section';
     var trigTitle = document.createElement('div');
     trigTitle.className = 'kw-section-title';
-    trigTitle.textContent = 'When ALL of these are true:';
+    trigTitle.textContent = 'Trigger conditions';
     trigSection.appendChild(trigTitle);
 
-    var chipsWrap = document.createElement('div');
-    chipsWrap.className = 'kw-condition-chips';
-    chipsWrap.id = 'kwCondChips';
-    trigSection.appendChild(chipsWrap);
-
-    // Condition popover (positioned relative)
-    var popoverWrap = document.createElement('div');
-    popoverWrap.style.cssText = 'position:relative;display:inline-block;';
-    var addCondBtn = document.createElement('button');
-    addCondBtn.className = 'kw-add-cond-btn';
-    addCondBtn.textContent = '+ Add condition';
-    if (isSys) addCondBtn.disabled = true;
-    popoverWrap.appendChild(addCondBtn);
-
-    var popover = document.createElement('div');
-    popover.className = 'kw-cond-popover hidden';
-    popover.id = 'kwCondPopover';
-    popoverWrap.appendChild(popover);
-    trigSection.appendChild(popoverWrap);
+    var trigGroupContainer = document.createElement('div');
+    trigGroupContainer.id = 'kwTriggerGroupRoot';
+    trigSection.appendChild(trigGroupContainer);
     detailDiv.appendChild(trigSection);
 
-    function renderCondChips() {{
-      while (chipsWrap.firstChild) chipsWrap.removeChild(chipsWrap.firstChild);
-      _detailTriggerConds.forEach(function(cond, i) {{
-        var chip = document.createElement('span');
-        chip.className = 'kw-cond-chip';
-        var label = cond.kind;
-        var pkeys = Object.keys(cond.params || {{}});
-        if (pkeys.length) label += ':' + pkeys.map(function(k) {{ return cond.params[k]; }}).join(',');
-        chip.appendChild(document.createTextNode(label + ' '));
-        if (!isSys) {{
-          var delBtn = document.createElement('button');
-          delBtn.className = 'kw-cond-chip-del';
-          delBtn.textContent = '×';
-          delBtn.title = 'Remove condition';
-          delBtn.addEventListener('click', function() {{
-            _detailTriggerConds.splice(i, 1);
-            renderCondChips();
-          }});
-          chip.appendChild(delBtn);
-        }}
-        chipsWrap.appendChild(chip);
-      }});
+    // ── Singleton catalog popover ──
+    var _popoverTargetGroup = null; // the group node to append to
+    var _popoverRenderFn = null;    // callback to re-render after append
+
+    var popoverEl = document.createElement('div');
+    popoverEl.className = 'kw-cond-popover hidden';
+    popoverEl.id = 'kwCondPopover';
+    popoverEl.style.cssText = 'position:fixed;z-index:9999;';
+    document.body.appendChild(popoverEl);
+
+    function _openPopoverAt(anchorEl, targetGroup, afterAddFn) {{
+      _popoverTargetGroup = targetGroup;
+      _popoverRenderFn = afterAddFn;
+      _buildPopover();
+      popoverEl.classList.remove('hidden');
+      // Position near anchor
+      var rect = anchorEl.getBoundingClientRect();
+      popoverEl.style.left = rect.left + 'px';
+      popoverEl.style.top = (rect.bottom + 4) + 'px';
     }}
-    renderCondChips();
 
-    // Condition popover logic
-    addCondBtn.addEventListener('click', function(e) {{
-      e.stopPropagation();
-      popover.classList.toggle('hidden');
-      if (!popover.classList.contains('hidden')) buildPopover();
-    }});
-
-    function buildPopover() {{
-      while (popover.firstChild) popover.removeChild(popover.firstChild);
+    function _buildPopover() {{
+      while (popoverEl.firstChild) popoverEl.removeChild(popoverEl.firstChild);
       var kindSel = document.createElement('select');
       var emptyOpt = document.createElement('option');
       emptyOpt.value = '';
@@ -8664,11 +8679,11 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
         opt.textContent = c.label || c.kind;
         kindSel.appendChild(opt);
       }});
-      popover.appendChild(kindSel);
+      popoverEl.appendChild(kindSel);
 
       var paramsDiv = document.createElement('div');
       paramsDiv.id = 'kwCondParams';
-      popover.appendChild(paramsDiv);
+      popoverEl.appendChild(paramsDiv);
 
       var addBtn2 = document.createElement('button');
       addBtn2.className = 'sp-btn primary';
@@ -8678,12 +8693,35 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
         if (!kindSel.value) return;
         var paramInputs = paramsDiv.querySelectorAll('[data-param-key]');
         var params = {{}};
-        paramInputs.forEach(function(inp) {{ if (inp.value.trim()) params[inp.dataset.paramKey] = inp.value.trim(); }});
-        _detailTriggerConds.push({{ kind: kindSel.value, params: params }});
-        renderCondChips();
-        popover.classList.add('hidden');
+        paramInputs.forEach(function(inp) {{
+          if (inp.dataset.paramMulti === '1') {{
+            var values = [];
+            inp.querySelectorAll('input[type="checkbox"]:checked').forEach(function(cb) {{
+              values.push(cb.value);
+            }});
+            if (values.length) params[inp.dataset.paramKey] = values;
+            return;
+          }}
+          var v = (inp.value || '').toString().trim();
+          if (v === '') return;
+          // Coerce number inputs to actual numbers
+          if (inp.type === 'number') {{
+            var n = Number(v);
+            if (!isNaN(n)) params[inp.dataset.paramKey] = n;
+          }} else {{
+            params[inp.dataset.paramKey] = v;
+          }}
+        }});
+        var leaf = {{ kind: kindSel.value }};
+        Object.keys(params).forEach(function(k) {{ leaf[k] = params[k]; }});
+        if (_popoverTargetGroup) {{
+          var arr = _popoverTargetGroup.all_of || _popoverTargetGroup.any_of;
+          if (arr) arr.push(leaf);
+        }}
+        popoverEl.classList.add('hidden');
+        if (_popoverRenderFn) _popoverRenderFn();
       }});
-      popover.appendChild(addBtn2);
+      popoverEl.appendChild(addBtn2);
 
       kindSel.addEventListener('change', function() {{
         while (paramsDiv.firstChild) paramsDiv.removeChild(paramsDiv.firstChild);
@@ -8694,11 +8732,55 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
           row.className = 'kw-cond-param-row';
           var lbl = document.createElement('label');
           lbl.textContent = p.name || p.key;
-          var inp = document.createElement('input');
-          inp.type = 'text';
-          inp.placeholder = p.description || p.key;
-          inp.dataset.paramKey = p.key || p.name;
           row.appendChild(lbl);
+
+          var pType = p.type || 'text';
+          var paramKey = p.key || p.name;
+          var inp;
+
+          if (Array.isArray(p.options) && pType.indexOf('multi_select') !== -1) {{
+            inp = document.createElement('div');
+            inp.className = 'kw-cond-multi';
+            inp.dataset.paramKey = paramKey;
+            inp.dataset.paramMulti = '1';
+            inp.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px 12px;padding:4px;border:1px solid var(--border-default);border-radius:5px;background:var(--bg-primary);';
+            p.options.forEach(function(opt) {{
+              var lab = document.createElement('label');
+              lab.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;color:var(--text-primary);';
+              var cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.value = opt;
+              cb.dataset.optValue = opt;
+              lab.appendChild(cb);
+              lab.appendChild(document.createTextNode(opt));
+              inp.appendChild(lab);
+            }});
+          }} else if (Array.isArray(p.options)) {{
+            inp = document.createElement('select');
+            inp.dataset.paramKey = paramKey;
+            var blank = document.createElement('option');
+            blank.value = '';
+            blank.textContent = '— select —';
+            inp.appendChild(blank);
+            p.options.forEach(function(opt) {{
+              var o = document.createElement('option');
+              o.value = opt;
+              o.textContent = opt;
+              inp.appendChild(o);
+            }});
+          }} else if (pType === 'number') {{
+            inp = document.createElement('input');
+            inp.type = 'number';
+            if (p.min !== undefined) inp.min = p.min;
+            if (p.max !== undefined) inp.max = p.max;
+            inp.placeholder = p.description || paramKey;
+            inp.dataset.paramKey = paramKey;
+          }} else {{
+            inp = document.createElement('input');
+            inp.type = 'text';
+            inp.placeholder = p.description || paramKey;
+            inp.dataset.paramKey = paramKey;
+          }}
           row.appendChild(inp);
           paramsDiv.appendChild(row);
         }});
@@ -8706,10 +8788,156 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     }}
 
     document.addEventListener('click', function hidePop(e) {{
-      if (!popover.contains(e.target) && e.target !== addCondBtn) {{
-        popover.classList.add('hidden');
+      if (!popoverEl.contains(e.target) && !e.target.classList.contains('kw-tg-add-cond')) {{
+        popoverEl.classList.add('hidden');
       }}
     }});
+
+    // ── Recursive group renderer ──
+    function _renderGroup(group, container, isRoot) {{
+      while (container.firstChild) container.removeChild(container.firstChild);
+
+      var groupKey = group.all_of !== undefined ? 'all_of' : 'any_of';
+      var children = group[groupKey];
+
+      var groupDiv = document.createElement('div');
+      groupDiv.className = 'kw-trigger-group';
+      groupDiv.setAttribute('data-tg-group', '1');
+
+      // Header: [ALL/ANY ▾] of these are true  [Remove ✕ — subgroups only]
+      var hdr = document.createElement('div');
+      hdr.className = 'kw-trigger-group-header';
+
+      if (!isSys) {{
+        var keySel = document.createElement('select');
+        var allOpt = document.createElement('option');
+        allOpt.value = 'all_of';
+        allOpt.textContent = 'ALL';
+        var anyOpt = document.createElement('option');
+        anyOpt.value = 'any_of';
+        anyOpt.textContent = 'ANY';
+        keySel.appendChild(allOpt);
+        keySel.appendChild(anyOpt);
+        keySel.value = groupKey;
+        keySel.addEventListener('change', function() {{
+          var newKey = keySel.value;
+          var oldKey = newKey === 'all_of' ? 'any_of' : 'all_of';
+          var cur = group[oldKey] || group[newKey] || [];
+          delete group[oldKey];
+          group[newKey] = cur;
+          _renderGroup(group, container, isRoot);
+        }});
+        hdr.appendChild(keySel);
+      }} else {{
+        var keyLabel = document.createElement('strong');
+        keyLabel.textContent = groupKey === 'all_of' ? 'ALL' : 'ANY';
+        hdr.appendChild(keyLabel);
+      }}
+
+      var ofSpan = document.createElement('span');
+      ofSpan.textContent = 'of these are true:';
+      hdr.appendChild(ofSpan);
+
+      if (!isRoot && !isSys) {{
+        var removeBtn = document.createElement('button');
+        removeBtn.className = 'kw-trigger-group-remove';
+        removeBtn.textContent = 'Remove group';
+        removeBtn.addEventListener('click', function() {{
+          // Find this group in the parent and remove it.
+          // We bubble up by searching from root.
+          function removeFromParent(node) {{
+            var arr = node.all_of || node.any_of || [];
+            var idx = arr.indexOf(group);
+            if (idx !== -1) {{
+              if (children.length > 0) {{
+                showAppToast('Group removed (children deleted)', 'success', 2500);
+              }}
+              arr.splice(idx, 1);
+              renderTriggerRoot();
+              return true;
+            }}
+            for (var i = 0; i < arr.length; i++) {{
+              if (arr[i].all_of !== undefined || arr[i].any_of !== undefined) {{
+                if (removeFromParent(arr[i])) return true;
+              }}
+            }}
+            return false;
+          }}
+          removeFromParent(_detailTriggerRoot);
+        }});
+        hdr.appendChild(removeBtn);
+      }}
+      groupDiv.appendChild(hdr);
+
+      // Children area
+      var childrenDiv = document.createElement('div');
+      childrenDiv.className = 'kw-trigger-group-children';
+      children.forEach(function(child, ci) {{
+        if (child.all_of !== undefined || child.any_of !== undefined) {{
+          // Nested group
+          var subContainer = document.createElement('div');
+          _renderGroup(child, subContainer, false);
+          childrenDiv.appendChild(subContainer);
+        }} else {{
+          // Leaf condition chip
+          var chip = document.createElement('span');
+          chip.className = 'kw-cond-chip';
+          chip.style.display = 'inline-flex';
+          var label = child.kind || '?';
+          // Show params (all non-kind keys)
+          var pkeys = Object.keys(child).filter(function(k) {{ return k !== 'kind'; }});
+          if (pkeys.length) label += ':' + pkeys.map(function(k) {{ return child[k]; }}).join(',');
+          chip.appendChild(document.createTextNode(label + ' '));
+          if (!isSys) {{
+            var delBtn = document.createElement('button');
+            delBtn.className = 'kw-cond-chip-del';
+            delBtn.textContent = '×';
+            delBtn.title = 'Remove condition';
+            delBtn.addEventListener('click', (function(idx) {{
+              return function() {{
+                children.splice(idx, 1);
+                renderTriggerRoot();
+              }};
+            }})(ci));
+            chip.appendChild(delBtn);
+          }}
+          childrenDiv.appendChild(chip);
+        }}
+      }});
+      groupDiv.appendChild(childrenDiv);
+
+      // Actions footer (only for editable workflows)
+      if (!isSys) {{
+        var actFoot = document.createElement('div');
+        actFoot.className = 'kw-trigger-group-actions';
+
+        var addCondBtn = document.createElement('button');
+        addCondBtn.className = 'kw-tg-add-cond';
+        addCondBtn.textContent = '+ Add condition';
+        addCondBtn.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          _openPopoverAt(addCondBtn, group, renderTriggerRoot);
+        }});
+        actFoot.appendChild(addCondBtn);
+
+        var addGrpBtn = document.createElement('button');
+        addGrpBtn.textContent = '+ Add group';
+        addGrpBtn.addEventListener('click', function() {{
+          children.push({{ all_of: [] }});
+          renderTriggerRoot();
+        }});
+        actFoot.appendChild(addGrpBtn);
+
+        groupDiv.appendChild(actFoot);
+      }}
+
+      container.appendChild(groupDiv);
+    }}
+
+    function renderTriggerRoot() {{
+      _renderGroup(_detailTriggerRoot, trigGroupContainer, true);
+    }}
+    renderTriggerRoot();
 
     // Steps section
     var stepsSection = document.createElement('div');
@@ -8891,6 +9119,88 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     osRow.appendChild(osStatusField);
 
     osSection.appendChild(osRow);
+
+    // Tag chip inputs — add_tags and remove_tags
+    function _makeTagChipInput(labelText, initialTags, disabled, onChangeFn) {{
+      var wrap = document.createElement('div');
+      wrap.className = 'kw-on-success-field';
+      wrap.style.flex = '2';
+      var lbl = document.createElement('label');
+      lbl.textContent = labelText;
+      wrap.appendChild(lbl);
+
+      var chipWrap = document.createElement('div');
+      chipWrap.className = 'kw-tag-chip-input';
+      var tags = initialTags ? initialTags.slice() : [];
+
+      function refreshChips() {{
+        while (chipWrap.firstChild && chipWrap.firstChild.tagName !== 'INPUT') {{
+          chipWrap.removeChild(chipWrap.firstChild);
+        }}
+        // Remove all non-input children first
+        var inp = chipWrap.querySelector('input');
+        while (chipWrap.firstChild) chipWrap.removeChild(chipWrap.firstChild);
+        tags.forEach(function(tag, ti) {{
+          var chip = document.createElement('span');
+          chip.className = 'kw-tag-chip';
+          chip.textContent = tag;
+          if (!disabled) {{
+            var x = document.createElement('button');
+            x.textContent = '×';
+            x.type = 'button';
+            x.addEventListener('click', function() {{
+              tags.splice(ti, 1);
+              refreshChips();
+              onChangeFn(tags);
+            }});
+            chip.appendChild(x);
+          }}
+          chipWrap.appendChild(chip);
+        }});
+        if (!disabled) chipWrap.appendChild(tagInput);
+      }}
+
+      var tagInput = document.createElement('input');
+      tagInput.type = 'text';
+      tagInput.placeholder = 'tag, Enter to add';
+      tagInput.addEventListener('keydown', function(e) {{
+        if (e.key === 'Enter' || e.key === ',') {{
+          e.preventDefault();
+          var val = tagInput.value.trim().replace(/,$/, '');
+          if (val && tags.indexOf(val) === -1) {{
+            tags.push(val);
+            tagInput.value = '';
+            refreshChips();
+            onChangeFn(tags);
+          }}
+        }}
+      }});
+      chipWrap.appendChild(tagInput);
+      refreshChips();
+      wrap.appendChild(chipWrap);
+      return wrap;
+    }}
+
+    var osTagsRow = document.createElement('div');
+    osTagsRow.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;';
+
+    var addTagsField = _makeTagChipInput(
+      'Add tags on success',
+      _detailOnSuccess.add_tags || [],
+      isSys,
+      function(tags) {{ _detailOnSuccess.add_tags = tags.length ? tags : undefined; }}
+    );
+    osTagsRow.appendChild(addTagsField);
+
+    var removeTagsField = _makeTagChipInput(
+      'Remove tags on success',
+      _detailOnSuccess.remove_tags || [],
+      isSys,
+      function(tags) {{ _detailOnSuccess.remove_tags = tags.length ? tags : undefined; }}
+    );
+    osTagsRow.appendChild(removeTagsField);
+
+    osSection.appendChild(osTagsRow);
     detailDiv.appendChild(osSection);
 
     // Test against ticket
@@ -8989,10 +9299,30 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
       saveBtn.addEventListener('click', function() {{
         var name = nameInput.value.trim();
         if (!name) {{ showAppToast('Workflow name is required', 'error'); return; }}
-        var triggerJson = {{ conditions: _detailTriggerConds }};
+        // Validate nested trigger tree
+        function _validateGroup(node) {{
+          var children = node.all_of || node.any_of || [];
+          if (children.length === 0) return 'Empty group found — add at least one condition or remove the group.';
+          for (var i = 0; i < children.length; i++) {{
+            var c = children[i];
+            if (c.all_of !== undefined || c.any_of !== undefined) {{
+              var err = _validateGroup(c);
+              if (err) return err;
+            }}
+          }}
+          return null;
+        }}
+        var rootChildren = _detailTriggerRoot.all_of || _detailTriggerRoot.any_of || [];
+        if (rootChildren.length === 0) {{ showAppToast('Trigger needs at least one condition', 'error'); return; }}
+        var groupErr = _validateGroup(_detailTriggerRoot);
+        if (groupErr) {{ showAppToast(groupErr, 'error'); return; }}
+        // Serialize trigger — send the nested object directly
+        var triggerJson = _detailTriggerRoot;
         var onSuccessJson = {{}};
         if (osSectionSel.value) onSuccessJson.section = osSectionSel.value;
         if (osStatusSel.value) onSuccessJson.status = osStatusSel.value;
+        if (_detailOnSuccess.add_tags && _detailOnSuccess.add_tags.length) onSuccessJson.add_tags = _detailOnSuccess.add_tags;
+        if (_detailOnSuccess.remove_tags && _detailOnSuccess.remove_tags.length) onSuccessJson.remove_tags = _detailOnSuccess.remove_tags;
         var payload = {{
           name: name,
           description: descInput.value,
@@ -10527,6 +10857,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f' data-automation-mode="{escape(t.automation_mode)}"'
         f'{" data-eligible=" + chr(34) + "true" + chr(34) if t.automation_eligible else ""}'
         f'{" data-run-status=" + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ""}'
+        f'{" data-automation-for-review=" + chr(34) + "1" + chr(34) if t.automation_for_review else ""}'
         f'{draft_attr}{tags_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'

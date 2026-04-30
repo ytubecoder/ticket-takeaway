@@ -1171,7 +1171,7 @@ def _get_workflow_run(run_id: str, project_id: "str | None" = None) -> dict | No
 
 def _update_workflow_run(run_id: str, **kwargs) -> dict | None:
     """Update a workflow run. Auto-serializes conversation to JSON."""
-    allowed = {"status", "current_step", "conversation", "completed_at"}
+    allowed = {"status", "current_step", "conversation", "completed_at", "session_ids"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return _get_workflow_run(run_id)
@@ -1546,6 +1546,108 @@ def _get_run_evidence(project_id: str, run_id: int) -> list[dict] | None:
 # End Phase 3A helpers
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Phase 2: Streaming subprocess + session persistence helpers
+# ---------------------------------------------------------------------------
+
+def _apply_resume_args(command: str, args: list, session_id: str) -> list:
+    """Inject explicit-session-id resume flags into a CLI invocation.
+
+    codex: replace ``exec`` token with ``exec resume <session_id>`` in the
+    args list (the codex CLI accepts an explicit session id positionally).
+    claude: append ``--resume <session_id>`` (idempotent — replaces existing).
+    Other commands: append ``--resume <session_id>`` as a best-effort fallback.
+    Returns a NEW list — does not mutate args.
+    """
+    out = list(args or [])
+    cmd = (command or "").lower()
+    if cmd == "codex":
+        for i, t in enumerate(out):
+            if t == "exec":
+                # If "resume" already follows "exec", replace/insert session_id only
+                if i + 1 < len(out) and out[i + 1] == "resume":
+                    if i + 2 < len(out) and not out[i + 2].startswith("-"):
+                        out[i + 2] = session_id
+                    else:
+                        out.insert(i + 2, session_id)
+                else:
+                    out.insert(i + 1, "resume")
+                    out.insert(i + 2, session_id)
+                return out
+        # No `exec` token found — append exec resume <session_id>
+        return out + ["exec", "resume", session_id]
+    # Generic / claude path: --resume <session_id>
+    if "--resume" in out:
+        idx = out.index("--resume")
+        if idx + 1 < len(out):
+            out[idx + 1] = session_id
+        else:
+            out.append(session_id)
+        return out
+    return out + ["--resume", session_id]
+
+
+def _extract_session_id(command: str, stdout: str, stderr: str, started_before: float) -> "str | None":
+    """Extract the CLI's session id from process output.
+
+    Best-effort — returns None on failure; callers proceed without persistence.
+
+    codex: looks for a ``Session: <uuid>`` line on stderr (or stdout). Falls
+    back to scanning ~/.codex/sessions/ for the most-recently-modified file
+    with mtime >= started_before.
+
+    claude: looks for JSON output containing "session_id" or a line matching
+    ``session_id: <uuid>``. Falls back to scanning ~/.claude/projects/ similarly.
+    """
+    import glob as _glob
+    cmd = (command or "").lower()
+    UUID_RE = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
+    blob = (stdout or "") + "\n" + (stderr or "")
+    if cmd == "codex":
+        for pat in (
+            r"Session(?:\s*ID)?\s*[:=]\s*(" + UUID_RE + ")",
+            r'"session_id"\s*[:=]\s*"(' + UUID_RE + ')"?',
+            r'session[_\-]?id["\s:=]+(' + UUID_RE + ')',
+        ):
+            m = re.search(pat, blob, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        # Filesystem fallback: find most-recently-modified session file
+        sessions_dir = os.path.expanduser("~/.codex/sessions")
+        if os.path.isdir(sessions_dir):
+            candidates = []
+            for p in _glob.glob(os.path.join(sessions_dir, "*.json")):
+                try:
+                    mt = os.path.getmtime(p)
+                    if mt >= started_before - 1:
+                        candidates.append((mt, p))
+                except OSError:
+                    continue
+            if candidates:
+                candidates.sort(reverse=True)
+                fname = os.path.basename(candidates[0][1])
+                m = re.search(UUID_RE, fname)
+                if m:
+                    return m.group(0)
+        return None
+    if cmd == "claude":
+        for pat in (
+            r'"session_id"\s*:\s*"(' + UUID_RE + ')"',
+            r'session_id\s*[:=]\s*(' + UUID_RE + ')',
+        ):
+            m = re.search(pat, blob, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        return None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# End Phase 2 helpers
+# ---------------------------------------------------------------------------
+
+
 def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow: dict, proj: dict) -> None:
     """Background thread that executes a workflow bounce.
 
@@ -1653,12 +1755,32 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             # Run agent CLI
             try:
                 agent_args = json.loads(agent.get("args", "[]")) if isinstance(agent.get("args"), str) else agent.get("args", [])
+                if isinstance(agent_args, str):
+                    agent_args = [agent_args]
             except (json.JSONDecodeError, TypeError):
                 agent_args = []
 
-            cmd = [agent.get("command", "claude")] + agent_args + [
-                "-p", prompt, "--output-format", "json", "--no-session-persistence",
-            ]
+            # Read the freshest session_ids from DB (another handler may have updated it)
+            fresh_run = _get_workflow_run(run_id)
+            session_ids: dict = {}
+            if fresh_run:
+                try:
+                    session_ids = json.loads(fresh_run.get("session_ids") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    session_ids = {}
+            prior_sid = session_ids.get(agent_id)
+
+            # Build the command — persist_session agents get session resume, others get --no-session-persistence
+            if agent.get("persist_session"):
+                if prior_sid:
+                    agent_args = _apply_resume_args(agent.get("command", "claude"), agent_args, prior_sid)
+                # else: first call for this agent in this run — fresh session, no resume flag
+            else:
+                if "--no-session-persistence" not in agent_args:
+                    agent_args = agent_args + ["--no-session-persistence"]
+
+            command_name = agent.get("command", "claude")
+            cmd = [command_name] + agent_args + ["-p", prompt, "--output-format", "json"]
 
             # Progress entry so the UI shows which agent is running immediately
             agent_label = agent.get("name", agent_id)
@@ -1672,73 +1794,120 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     _workflow_runs[run_id]["status"] = "running"
                     _workflow_runs[run_id]["current_step"] = step_idx
 
+            # Streaming subprocess — read stdout line by line, flush to DB periodically
+            deadline = time.time() + WORKFLOW_AGENT_TIMEOUT
+            started_at = time.time()
+            timed_out = False
+            exit_code = None
+            all_output_lines: list = []
+            turn: dict = {
+                "role": "streaming",
+                "agent": agent_label,
+                "agent_id": agent_id,
+                "step": step_idx,
+                "streaming": True,
+                "content": "",
+                "ts": datetime.utcnow().isoformat(),
+            }
+            conversation.append(turn)
+            last_flush = time.time()
+            line_count = 0
+
             try:
-                result = subprocess.run(
+                proc = subprocess.Popen(
                     cmd,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    timeout=WORKFLOW_AGENT_TIMEOUT,
                     cwd=os.path.expanduser(proj.get("path", ".")),
                 )
-
-                # Remove the "Running agent..." placeholder
-                conversation = [t for t in conversation
-                                if not (t.get("role") == "system"
-                                        and t.get("step") == step_idx
-                                        and "Running agent" in t.get("content", ""))]
-
-                # Check for non-zero exit code
-                if result.returncode != 0:
-                    err = (result.stderr or result.stdout or "").strip()[:2000] or f"Exit code {result.returncode}"
-                    conversation.append({
-                        "role": "system", "step": step_idx,
-                        "content": f"Agent '{agent_label}' failed:\n{err}",
-                    })
-                    _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
-                    continue
-
-                # Parse response — same pattern as gate-check
-                response_text = result.stdout.strip()
-                try:
-                    response_json = json.loads(response_text)
-                    if isinstance(response_json, dict) and "result" in response_json:
-                        response_content = response_json["result"]
-                    elif isinstance(response_json, dict) and "content" in response_json:
-                        response_content = response_json["content"]
-                    else:
-                        response_content = response_text
-                except json.JSONDecodeError:
-                    response_content = response_text
-
+                while True:
+                    if time.time() > deadline:
+                        proc.kill()
+                        timed_out = True
+                        break
+                    line = proc.stdout.readline()
+                    if line == "" and proc.poll() is not None:
+                        break
+                    if line:
+                        all_output_lines.append(line)
+                        turn["content"] += line
+                        line_count += 1
+                        now = time.time()
+                        if (now - last_flush >= 1.0) or (line_count % 16 == 0):
+                            _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                            last_flush = now
+                exit_code = proc.poll()
+            except Exception as _popen_err:
+                turn["streaming"] = False
+                turn["content"] = f"Subprocess error: {_popen_err}"
                 conversation.append({
-                    "role": "agent",
-                    "agent": agent_label,
-                    "agent_id": agent_id,
-                    "step": step_idx,
-                    "content": response_content,
+                    "role": "system", "step": step_idx,
+                    "content": f"step failed: {_popen_err}",
+                    "ts": datetime.utcnow().isoformat(),
                 })
-            except subprocess.TimeoutExpired:
-                # Remove the "Running agent..." placeholder
-                conversation = [t for t in conversation
-                                if not (t.get("role") == "system"
-                                        and t.get("step") == step_idx
-                                        and "Running agent" in t.get("content", ""))]
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
+
+            turn["streaming"] = False
+            turn["exit_code"] = exit_code
+
+            # Remove the "Running agent..." placeholder (added before streaming turn)
+            conversation = [t for t in conversation
+                            if not (t.get("role") == "system"
+                                    and t.get("step") == step_idx
+                                    and "Running agent" in t.get("content", ""))]
+
+            if timed_out:
+                turn["content"] += "\n[timeout]"
                 conversation.append({
-                    "role": "system",
-                    "step": step_idx,
+                    "role": "system", "step": step_idx,
                     "content": f"Agent '{agent_label}' timed out after {WORKFLOW_AGENT_TIMEOUT}s",
+                    "ts": datetime.utcnow().isoformat(),
                 })
-            except Exception as e:
-                # Remove the "Running agent..." placeholder
-                conversation = [t for t in conversation
-                                if not (t.get("role") == "system"
-                                        and t.get("step") == step_idx
-                                        and "Running agent" in t.get("content", ""))]
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
+
+            # Capture session id for persist_session agents
+            if agent.get("persist_session"):
+                full_output = "".join(all_output_lines)
+                new_sid = _extract_session_id(command_name, full_output, "", started_at)
+                if new_sid and new_sid != prior_sid:
+                    session_ids[agent_id] = new_sid
+                    _update_workflow_run(run_id, session_ids=json.dumps(session_ids))
+
+            # Check for non-zero exit code
+            if exit_code != 0:
+                err = turn["content"].strip()[:2000] or f"Exit code {exit_code}"
                 conversation.append({
-                    "role": "system",
-                    "step": step_idx,
-                    "content": f"Agent '{agent_label}' error: {e}",
+                    "role": "system", "step": step_idx,
+                    "content": f"Agent '{agent_label}' failed:\n{err}",
+                    "ts": datetime.utcnow().isoformat(),
                 })
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
+
+            # Parse response from accumulated output — same pattern as gate-check
+            response_text = turn["content"].strip()
+            try:
+                response_json = json.loads(response_text)
+                if isinstance(response_json, dict) and "result" in response_json:
+                    response_content = response_json["result"]
+                elif isinstance(response_json, dict) and "content" in response_json:
+                    response_content = response_json["content"]
+                else:
+                    response_content = response_text
+            except json.JSONDecodeError:
+                response_content = response_text
+
+            conversation.append({
+                "role": "agent",
+                "agent": agent_label,
+                "agent_id": agent_id,
+                "step": step_idx,
+                "content": response_content,
+                "ts": datetime.utcnow().isoformat(),
+            })
 
             _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
 
@@ -6734,6 +6903,54 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     mem["status"] = "running"
             _update_workflow_run(run_id, status="running")
             self._send_json({"ok": True, "run_id": run_id, "status": "running"})
+            return
+
+        # Respond to a needs_input workflow run — appends user turn then flips to paused
+        # so the spin-loop in _run_workflow_thread picks it up and resumes.
+        m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_-]+)/respond$", remainder)
+        if m:
+            run_id = m.group(1)
+            run = _get_workflow_run(run_id, project_id=proj["id"])
+            if not run:
+                self._send_json({"error": "Run not found"}, 404)
+                return
+            if run.get("status") != "needs_input":
+                self._send_json({"error": "Run is not awaiting input"}, 409)
+                return
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            response_text = (body.get("response") or "").strip()
+            if not response_text:
+                self._send_json({"error": "response is required"}, 400)
+                return
+            # Append a user turn to conversation so the next subprocess call sees it
+            current_step = run.get("current_step", 0)
+            try:
+                conversation = json.loads(run.get("conversation") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                conversation = []
+            conversation.append({
+                "role": "user",
+                "step": current_step,
+                "content": response_text,
+                "ts": datetime.utcnow().isoformat(),
+            })
+            # Flip to paused (spin-loop condition: st != "paused" → break) so the
+            # orchestrator exits the spin-loop and resumes execution.
+            _update_workflow_run(
+                run_id,
+                conversation=conversation,
+                status="paused",
+            )
+            with _workflow_runs_lock:
+                mem = _workflow_runs.get(run_id)
+                if mem:
+                    mem["status"] = "paused"
+            updated = _get_workflow_run(run_id)
+            self._send_json(updated or {"ok": True, "run_id": run_id})
             return
 
         self._send_json({"error": "Not found"}, 404)

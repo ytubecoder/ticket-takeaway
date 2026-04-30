@@ -60,6 +60,7 @@ SVG_ICONS = {
     "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     "send": '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
     "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
+    "ladle": '<path d="M5 12a7 7 0 0 0 14 0z"/><path d="M12 12V5"/><path d="M9 5h6"/>',
     "git-branch": '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
 }
 
@@ -747,7 +748,7 @@ def generate_html(project: Project) -> str:
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
     _icon_journeys = _svg_icon("route", 14)
-    _icon_bounce = _svg_icon("zap", 14)
+    _icon_bounce = _svg_icon("ladle", 14)
     _icon_close = _svg_icon("x", 14)
     _icon_open = _svg_icon("arrow-up-right", 12)
     _dctrs_icons = ''.join([
@@ -2303,12 +2304,13 @@ a {{ color: var(--accent); text-decoration: none; }}
   background: rgba(234,179,8,0.08); border-left: 3px solid rgba(234,179,8,0.4);
 }}
 
-/* ── Full-page Workflows & Agents ("bounce") view ── */
+/* ── Full-page Kitchen UI ("bounce") view ── */
 .bounce-page {{
   display: none; position: fixed; inset: 0; z-index: 600;
-  background: var(--bg-primary); overflow-y: auto; padding: 32px 48px;
+  background: var(--bg-primary); overflow-y: auto;
+  flex-direction: column;
 }}
-body.bounce-open .bounce-page {{ display: block; }}
+body.bounce-open .bounce-page {{ display: flex; }}
 body.bounce-open .kanban,
 body.bounce-open .filter-bar,
 body.bounce-open .bottom-section,
@@ -2332,9 +2334,32 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   align-items: center; gap: 4px; margin-right: 8px;
 }}
 .bounce-back-btn:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
-.bounce-page h2 {{
-  font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 24px;
+
+/* Bounce page header */
+.bounce-header {{
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 24px; border-bottom: 1px solid var(--border-default);
+  background: var(--bg-card); flex-shrink: 0; position: sticky; top: 0; z-index: 10;
 }}
+.bounce-header h2 {{
+  font-size: 15px; font-weight: 700; color: var(--text-primary); margin: 0; flex: 1;
+}}
+.bounce-tabs {{
+  display: flex; gap: 2px; background: var(--bg-primary);
+  border: 1px solid var(--border-default); border-radius: 7px; padding: 2px;
+}}
+.bounce-tab {{
+  font-size: 12px; font-weight: 500; padding: 5px 14px; border-radius: 5px;
+  border: none; background: none; color: var(--text-secondary); cursor: pointer;
+  font-family: inherit; transition: all 0.15s;
+}}
+.bounce-tab:hover {{ color: var(--text-primary); }}
+.bounce-tab.active {{ background: var(--bg-card); color: var(--text-primary); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }}
+.bounce-tab-panel {{
+  flex: 1; overflow-y: auto; padding: 24px 32px;
+}}
+
+/* Bounce page legacy section style */
 .bounce-page .sp-section {{
   margin-bottom: 32px; border: 1px solid var(--border-default);
   border-radius: 10px; padding: 20px; background: var(--bg-card);
@@ -2342,6 +2367,246 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
 .bounce-page .sp-section h3 {{
   font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 12px;
 }}
+
+/* ── Kitchen Workflows tab ── */
+.kw-header-bar {{
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+}}
+.kw-header-bar h3 {{
+  font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0; flex: 1;
+}}
+.kw-toggle-wrap {{
+  display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary);
+}}
+.kw-toggle-wrap input[type=checkbox] {{ cursor: pointer; }}
+.kw-table {{
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}}
+.kw-table th {{
+  text-align: left; padding: 7px 10px; font-size: 10px; font-weight: 700;
+  color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-default);
+}}
+.kw-table td {{ padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }}
+.kw-table tr:hover td {{ background: var(--bg-hover); cursor: pointer; }}
+.kw-sys-badge {{
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 1px 6px; border-radius: 4px; background: rgba(139,92,246,0.12); color: #8b5cf6;
+  border: 1px solid rgba(139,92,246,0.25); margin-left: 6px;
+}}
+.kw-trigger-summary {{ color: var(--text-tertiary); font-size: 11px; font-family: var(--font-mono); }}
+.kw-enabled-toggle {{ cursor: pointer; }}
+
+/* ── Workflow detail ── */
+.kw-detail {{ display: flex; flex-direction: column; gap: 20px; }}
+.kw-detail-header {{ display: flex; align-items: center; gap: 10px; }}
+.kw-back-btn {{
+  font-size: 11px; padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer; font-family: inherit;
+}}
+.kw-back-btn:hover {{ color: var(--text-primary); }}
+.kw-detail-name {{
+  font-size: 15px; font-weight: 700; color: var(--text-primary); flex: 1;
+  border: none; background: none; font-family: inherit; padding: 2px 4px;
+  border-radius: 4px;
+}}
+.kw-detail-name:focus {{ outline: 1px solid var(--accent); background: var(--bg-card); }}
+.kw-detail-name[readonly] {{ cursor: default; color: var(--text-secondary); }}
+.kw-section {{
+  border: 1px solid var(--border-default); border-radius: 10px;
+  padding: 16px; background: var(--bg-card);
+}}
+.kw-section-title {{
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-tertiary); margin: 0 0 12px;
+}}
+.kw-condition-chips {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }}
+.kw-cond-chip {{
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
+  padding: 3px 8px 3px 10px; border-radius: 12px;
+  background: rgba(59,130,246,0.10); border: 1px solid rgba(59,130,246,0.25); color: var(--accent);
+  font-family: var(--font-mono);
+}}
+.kw-cond-chip-del {{
+  border: none; background: none; cursor: pointer; color: var(--text-tertiary); padding: 0; font-size: 13px; line-height: 1;
+}}
+.kw-cond-chip-del:hover {{ color: #ef4444; }}
+.kw-add-cond-btn {{
+  font-size: 11px; padding: 4px 12px; border-radius: 6px;
+  border: 1px dashed var(--border-default); background: none;
+  color: var(--text-tertiary); cursor: pointer; font-family: inherit;
+}}
+.kw-add-cond-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+.kw-cond-popover {{
+  position: absolute; z-index: 50; background: var(--bg-card);
+  border: 1px solid var(--border-default); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15); padding: 10px; min-width: 260px; max-width: 340px;
+}}
+.kw-cond-popover.hidden {{ display: none; }}
+.kw-cond-popover select, .kw-cond-popover input {{
+  width: 100%; padding: 5px 8px; font-size: 12px; border: 1px solid var(--border-default);
+  border-radius: 5px; background: var(--bg-primary); color: var(--text-primary); font-family: inherit;
+  box-sizing: border-box; margin-top: 4px;
+}}
+.kw-cond-param-row {{ margin-top: 8px; font-size: 11px; color: var(--text-secondary); }}
+.kw-cond-param-row label {{ display: block; margin-bottom: 2px; font-weight: 600; }}
+.kw-step-card {{
+  border: 1px solid var(--border-default); border-radius: 8px; padding: 12px; margin-bottom: 8px;
+  background: var(--bg-primary);
+}}
+.kw-step-header {{ display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }}
+.kw-step-num {{ font-size: 10px; font-weight: 700; color: var(--text-tertiary); min-width: 55px; }}
+.kw-step-del {{
+  margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  border: 1px solid var(--border-default); background: none; color: var(--text-tertiary);
+  cursor: pointer; font-family: inherit;
+}}
+.kw-step-del:hover {{ color: #ef4444; border-color: rgba(239,68,68,0.4); }}
+.kw-step-select, .kw-step-textarea, .kw-step-select-sm {{
+  width: 100%; padding: 5px 8px; font-size: 12px; border: 1px solid var(--border-default);
+  border-radius: 5px; background: var(--bg-card); color: var(--text-primary); font-family: inherit;
+  box-sizing: border-box;
+}}
+.kw-step-textarea {{ font-family: var(--font-mono); resize: vertical; min-height: 40px; font-size: 11px; }}
+.kw-step-row {{ margin-top: 6px; font-size: 11px; color: var(--text-secondary); }}
+.kw-step-row label {{ display: block; margin-bottom: 2px; font-weight: 600; color: var(--text-tertiary); }}
+.kw-on-success-row {{ display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }}
+.kw-on-success-field {{ display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 120px; }}
+.kw-on-success-field label {{ font-size: 11px; font-weight: 600; color: var(--text-tertiary); }}
+.kw-on-success-field select {{
+  padding: 5px 8px; font-size: 12px; border: 1px solid var(--border-default);
+  border-radius: 5px; background: var(--bg-card); color: var(--text-primary); font-family: inherit;
+}}
+.kw-test-row {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+.kw-test-row select {{
+  padding: 4px 8px; font-size: 12px; border: 1px solid var(--border-default);
+  border-radius: 5px; background: var(--bg-card); color: var(--text-primary); font-family: inherit;
+}}
+.kw-test-result {{ margin-top: 10px; }}
+.kw-insp-wf-block {{ border: 1px solid var(--border-default); border-radius: 7px; padding: 10px; margin-bottom: 8px; }}
+.kw-insp-pass {{ color: #22c55e; font-weight: 700; }}
+.kw-insp-fail {{ color: #ef4444; font-weight: 700; }}
+.kw-insp-cond {{ display: flex; align-items: flex-start; gap: 6px; font-size: 11px; padding: 2px 0; color: var(--text-secondary); }}
+.kw-insp-cond-icon {{ flex-shrink: 0; margin-top: 1px; }}
+.kw-insp-reason {{ color: var(--text-tertiary); font-size: 10px; margin-left: 18px; }}
+.kw-detail-actions {{ display: flex; gap: 8px; margin-top: 4px; }}
+.kw-save-btn {{
+  font-size: 12px; padding: 6px 18px; border-radius: 6px;
+  border: none; background: var(--accent); color: #fff; cursor: pointer; font-family: inherit;
+}}
+.kw-save-btn:hover {{ opacity: 0.9; }}
+.kw-del-btn {{
+  font-size: 12px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid rgba(239,68,68,0.4); background: none; color: #ef4444;
+  cursor: pointer; font-family: inherit;
+}}
+.kw-del-btn:hover {{ background: rgba(239,68,68,0.08); }}
+.kw-clone-btn {{
+  font-size: 12px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer; font-family: inherit;
+}}
+.kw-clone-btn:hover {{ color: var(--text-primary); }}
+
+/* ── Live tab ── */
+.live-topbar {{
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;
+}}
+.live-pause-btn {{
+  font-size: 12px; padding: 5px 14px; border-radius: 6px;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer; font-family: inherit;
+}}
+.live-pause-btn:hover {{ color: var(--text-primary); }}
+.live-pause-btn.paused {{ border-color: #f59e0b; color: #f59e0b; }}
+.live-heartbeat {{ font-size: 11px; color: var(--text-tertiary); margin-left: auto; }}
+.live-lanes {{
+  display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px;
+}}
+.live-lane {{
+  flex: 0 0 220px; border: 1px solid var(--border-default); border-radius: 10px;
+  background: var(--bg-card); padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}}
+.live-lane-title {{
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-tertiary); margin-bottom: 4px;
+}}
+.live-run-card {{
+  border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px; cursor: pointer;
+  background: var(--bg-primary); transition: border-color 0.15s;
+}}
+.live-run-card:hover {{ border-color: var(--accent); }}
+.live-run-subject {{ font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.live-run-wf {{ font-size: 10px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.live-run-elapsed {{ font-size: 10px; color: var(--text-tertiary); margin-top: 4px; display: flex; align-items: center; gap: 6px; }}
+.live-empty {{ font-size: 11px; color: var(--text-tertiary); padding: 8px 0; }}
+.live-detail-panel {{
+  position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 90vw;
+  background: var(--bg-card); border-left: 1px solid var(--border-default);
+  z-index: 700; display: flex; flex-direction: column; box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+}}
+.live-detail-panel.hidden {{ display: none; }}
+.live-detail-header {{
+  display: flex; align-items: center; gap: 8px; padding: 14px 16px;
+  border-bottom: 1px solid var(--border-default); flex-shrink: 0;
+}}
+.live-detail-header h3 {{ font-size: 13px; font-weight: 700; margin: 0; flex: 1; color: var(--text-primary); }}
+.live-detail-close {{
+  border: none; background: none; cursor: pointer; font-size: 18px; color: var(--text-tertiary); padding: 0 4px;
+}}
+.live-detail-close:hover {{ color: var(--text-primary); }}
+.live-detail-body {{ flex: 1; overflow-y: auto; padding: 14px 16px; }}
+.live-meta-grid {{
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11px; margin-bottom: 14px;
+}}
+.live-meta-key {{ color: var(--text-tertiary); font-weight: 600; }}
+.live-meta-val {{ color: var(--text-primary); font-family: var(--font-mono); word-break: break-all; }}
+.live-event-list {{ display: flex; flex-direction: column; gap: 6px; }}
+.live-event {{ border-left: 2px solid var(--border-default); padding: 4px 8px; font-size: 11px; }}
+.live-event-kind {{ font-weight: 700; color: var(--text-secondary); text-transform: uppercase; font-size: 9px; letter-spacing: 0.4px; }}
+.live-event-actor {{ color: var(--accent); }}
+.live-event-ts {{ color: var(--text-tertiary); }}
+.live-evidence-list {{ display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }}
+.live-evidence-file {{ font-size: 11px; color: var(--accent); word-break: break-all; }}
+
+/* ── Eligibility Inspector modal ── */
+.insp-overlay {{
+  position: fixed; inset: 0; z-index: 900; background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+}}
+.insp-overlay.hidden {{ display: none; }}
+.insp-modal {{
+  background: var(--bg-card); border: 1px solid var(--border-default);
+  border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  width: 580px; max-width: 92vw; max-height: 80vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}}
+.insp-modal-header {{
+  display: flex; align-items: center; gap: 10px; padding: 16px 20px;
+  border-bottom: 1px solid var(--border-default); flex-shrink: 0;
+}}
+.insp-modal-header h3 {{ font-size: 14px; font-weight: 700; margin: 0; flex: 1; color: var(--text-primary); }}
+.insp-modal-close {{
+  border: none; background: none; cursor: pointer; font-size: 20px; color: var(--text-tertiary); padding: 0 4px;
+}}
+.insp-modal-close:hover {{ color: var(--text-primary); }}
+.insp-modal-body {{ flex: 1; overflow-y: auto; padding: 16px 20px; }}
+.insp-ctx-grid {{
+  display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 11px; margin-bottom: 16px;
+  padding: 10px; background: var(--bg-primary); border-radius: 7px;
+}}
+.insp-ctx-key {{ color: var(--text-tertiary); font-weight: 600; }}
+.insp-ctx-val {{ color: var(--text-primary); }}
+.insp-wf-block {{ border: 1px solid var(--border-default); border-radius: 8px; padding: 12px; margin-bottom: 10px; }}
+.insp-wf-title {{ display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; font-weight: 600; }}
+.insp-pass-pill {{ font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 8px; background: rgba(34,197,94,0.12); color: #22c55e; }}
+.insp-fail-pill {{ font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 8px; background: rgba(239,68,68,0.12); color: #ef4444; }}
+.insp-cond-row {{ display: flex; align-items: flex-start; gap: 6px; font-size: 11px; padding: 3px 0; }}
+.insp-cond-icon {{ flex-shrink: 0; margin-top: 1px; font-size: 12px; }}
+.insp-cond-label {{ color: var(--text-secondary); flex: 1; }}
+.insp-cond-reason {{ color: var(--text-tertiary); font-size: 10px; margin-left: 22px; }}
+.insp-loading {{ font-size: 12px; color: var(--text-tertiary); text-align: center; padding: 24px 0; }}
 
 /* Agent editor */
 .sp-agent-item {{
@@ -2702,46 +2967,127 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
 
 </div>
 
-<!-- Full-page Workflows & Agents view -->
+<!-- Full-page Kitchen UI (three-tab: Workflows / Agents / Live) -->
 <div class="bounce-page" id="bounce-page">
-  <h2>Workflows &amp; Agents</h2>
+  <header class="bounce-header">
+    <h2><span id="bounce-tab-title">Kitchen</span></h2>
+    <div class="bounce-tabs">
+      <button class="bounce-tab active" data-tab="workflows" id="bounceTabWorkflows">Workflows</button>
+      <button class="bounce-tab" data-tab="agents" id="bounceTabAgents">Agents</button>
+      <button class="bounce-tab" data-tab="live" id="bounceTabLive">Live</button>
+    </div>
+    <button class="bounce-back-btn" id="bounceCloseBtn">&larr; Back</button>
+  </header>
 
-  <div class="sp-section">
-    <h3>Agents</h3>
-    <div id="spAgentList"></div>
-    <button class="sp-btn" id="spAgentAddBtn" style="margin-top:8px;font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">+ Add Agent</button>
-    <div id="spAgentForm" class="sp-agent-form" style="display:none;margin-top:12px;border:1px solid var(--border-default);border-radius:8px;padding:14px;background:var(--bg-primary);">
-      <input type="hidden" id="spAgentId" />
-      <label for="spAgentNameInput">Name</label>
-      <input type="text" id="spAgentNameInput" placeholder="e.g. reviewer" />
-      <label for="spAgentModelInput">Model</label>
-      <input type="text" id="spAgentModelInput" placeholder="e.g. claude-sonnet-4-20250514" />
-      <label for="spAgentRoleInput">Role / System Prompt</label>
-      <textarea id="spAgentRoleInput" placeholder="What this agent does..."></textarea>
-      <label for="spAgentTempInput">Temperature</label>
-      <input type="number" id="spAgentTempInput" min="0" max="2" step="0.1" value="0.3" style="width:80px;" />
-      <div class="sp-btn-row">
-        <button class="sp-btn primary" id="spAgentSaveBtn">Save</button>
-        <button class="sp-btn" id="spAgentCancelBtn">Cancel</button>
+  <!-- Workflows tab -->
+  <div class="bounce-tab-panel" data-tab="workflows" id="bounceTabPanelWorkflows">
+    <div class="kw-header-bar">
+      <div class="kw-toggle-wrap">
+        <input type="checkbox" id="kwDbDispatch" title="When on, Kitchen routes via these workflows. Default off." />
+        <label for="kwDbDispatch" style="cursor:pointer;" title="When on, Kitchen routes via these workflows. Default off.">DB-driven dispatch</label>
+      </div>
+      <h3>Workflows</h3>
+      <button class="sp-btn" id="kwNewWfBtn" style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;font-family:inherit;">+ New workflow</button>
+    </div>
+    <!-- Workflow list (visible by default) -->
+    <div id="kwWorkflowList">
+      <table class="kw-table">
+        <thead><tr>
+          <th>Name</th><th>Trigger</th><th>Steps</th><th>Enabled</th>
+        </tr></thead>
+        <tbody id="kwWorkflowTbody"></tbody>
+      </table>
+    </div>
+    <!-- Workflow detail (hidden by default) -->
+    <div id="kwWorkflowDetail" class="kw-detail" style="display:none;"></div>
+  </div>
+
+  <!-- Agents tab -->
+  <div class="bounce-tab-panel" data-tab="agents" id="bounceTabPanelAgents" hidden>
+    <div class="sp-section">
+      <h3>Agents</h3>
+      <div id="spAgentList"></div>
+      <button class="sp-btn" id="spAgentAddBtn" style="margin-top:8px;font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">+ Add Agent</button>
+      <div id="spAgentForm" class="sp-agent-form" style="display:none;margin-top:12px;border:1px solid var(--border-default);border-radius:8px;padding:14px;background:var(--bg-primary);">
+        <input type="hidden" id="spAgentId" />
+        <label for="spAgentNameInput">Name</label>
+        <input type="text" id="spAgentNameInput" placeholder="e.g. reviewer" />
+        <label for="spAgentModelInput">Model</label>
+        <input type="text" id="spAgentModelInput" placeholder="e.g. claude-sonnet-4-20250514" />
+        <label for="spAgentRoleInput">Role / System Prompt</label>
+        <textarea id="spAgentRoleInput" placeholder="What this agent does..."></textarea>
+        <label for="spAgentTempInput">Temperature</label>
+        <input type="number" id="spAgentTempInput" min="0" max="2" step="0.1" value="0.3" style="width:80px;" />
+        <div class="sp-btn-row">
+          <button class="sp-btn primary" id="spAgentSaveBtn">Save</button>
+          <button class="sp-btn" id="spAgentCancelBtn">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <!-- Legacy bounce-page workflow step builder (kept for backward compat) -->
+    <div class="sp-section">
+      <h3>Workflow Steps (Legacy)</h3>
+      <div id="spWfList"></div>
+      <button class="sp-btn" id="spWfAddBtn" style="margin-top:8px;font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">+ Add Workflow</button>
+      <div id="spWfForm" style="display:none;margin-top:12px;border:1px solid var(--border-default);border-radius:8px;padding:14px;background:var(--bg-primary);">
+        <input type="hidden" id="spWfId" />
+        <label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:3px;">Name</label>
+        <input type="text" id="spWfNameInput" placeholder="e.g. review-and-merge" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);" />
+        <label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:3px;margin-top:10px;">Steps</label>
+        <div id="spStepList"></div>
+        <button class="sp-btn" id="spStepAddBtn" style="margin-top:6px;font-size:10px;padding:4px 10px;">+ Add Step</button>
+        <div class="sp-btn-row" style="display:flex;gap:6px;margin-top:12px;">
+          <button class="sp-btn primary" id="spWfSaveBtn">Save Workflow</button>
+          <button class="sp-btn" id="spWfCancelBtn">Cancel</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="sp-section">
-    <h3>Workflows</h3>
-    <div id="spWfList"></div>
-    <button class="sp-btn" id="spWfAddBtn" style="margin-top:8px;font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">+ Add Workflow</button>
-    <div id="spWfForm" style="display:none;margin-top:12px;border:1px solid var(--border-default);border-radius:8px;padding:14px;background:var(--bg-primary);">
-      <input type="hidden" id="spWfId" />
-      <label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:3px;">Name</label>
-      <input type="text" id="spWfNameInput" placeholder="e.g. review-and-merge" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);" />
-      <label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:3px;margin-top:10px;">Steps</label>
-      <div id="spStepList"></div>
-      <button class="sp-btn" id="spStepAddBtn" style="margin-top:6px;font-size:10px;padding:4px 10px;">+ Add Step</button>
-      <div class="sp-btn-row" style="display:flex;gap:6px;margin-top:12px;">
-        <button class="sp-btn primary" id="spWfSaveBtn">Save Workflow</button>
-        <button class="sp-btn" id="spWfCancelBtn">Cancel</button>
+  <!-- Live tab -->
+  <div class="bounce-tab-panel" data-tab="live" id="bounceTabPanelLive" hidden>
+    <div class="live-topbar">
+      <button class="live-pause-btn" id="livePauseBtn">Pause Kitchen</button>
+      <span class="live-heartbeat" id="liveHeartbeat">Last refreshed: —</span>
+    </div>
+    <div class="live-lanes">
+      <div class="live-lane" id="liveLaneQueued">
+        <div class="live-lane-title">Queued</div>
+        <div class="live-empty" id="liveEmptyQueued">No queued runs</div>
       </div>
+      <div class="live-lane" id="liveLaneRunning">
+        <div class="live-lane-title">Running</div>
+        <div class="live-empty" id="liveEmptyRunning">No running runs</div>
+      </div>
+      <div class="live-lane" id="liveLaneInput">
+        <div class="live-lane-title">Needs Input</div>
+        <div class="live-empty" id="liveEmptyInput">None waiting</div>
+      </div>
+      <div class="live-lane" id="liveLaneRecent">
+        <div class="live-lane-title">Recent (24h)</div>
+        <div class="live-empty" id="liveEmptyRecent">No recent runs</div>
+      </div>
+    </div>
+    <!-- Run detail side panel -->
+    <div class="live-detail-panel hidden" id="liveDetailPanel">
+      <div class="live-detail-header">
+        <h3 id="liveDetailTitle">Run detail</h3>
+        <button class="live-detail-close" id="liveDetailClose" title="Close">&times;</button>
+      </div>
+      <div class="live-detail-body" id="liveDetailBody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Eligibility Inspector modal -->
+<div class="insp-overlay hidden" id="inspOverlay" role="dialog" aria-modal="true">
+  <div class="insp-modal">
+    <div class="insp-modal-header">
+      <h3 id="inspModalTitle">Eligibility Inspector</h3>
+      <button class="insp-modal-close" id="inspModalClose" title="Close">&times;</button>
+    </div>
+    <div class="insp-modal-body" id="inspModalBody">
+      <div class="insp-loading">Loading...</div>
     </div>
   </div>
 </div>
@@ -6720,24 +7066,63 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
 
   if (!EDIT_API) return;
 
-  /* Full-page Workflows & Agents ("bounce") view toggle */
+  /* Full-page Kitchen UI ("bounce") view toggle + tab switching */
   var bouncePage = document.getElementById('bounce-page');
   var bounceBtn = document.getElementById('bounceToggleBtn');
   var bounceBackBtn = document.getElementById('bounceBackBtn');
+  var bounceCloseBtn = document.getElementById('bounceCloseBtn');
+  var BOUNCE_TAB_KEY = 'tt-bounce-tab';
 
-  function openBouncePage() {{
+  function switchBounceTab(tabName) {{
+    var panels = document.querySelectorAll('.bounce-tab-panel');
+    var tabs = document.querySelectorAll('.bounce-tab');
+    panels.forEach(function(p) {{
+      if (p.dataset.tab === tabName) {{
+        p.hidden = false;
+      }} else {{
+        p.hidden = true;
+      }}
+    }});
+    tabs.forEach(function(t) {{
+      if (t.dataset.tab === tabName) t.classList.add('active');
+      else t.classList.remove('active');
+    }});
+    var titleEl = document.getElementById('bounce-tab-title');
+    var titles = {{ workflows: 'Kitchen — Workflows', agents: 'Kitchen — Agents', live: 'Kitchen — Live' }};
+    if (titleEl) titleEl.textContent = titles[tabName] || 'Kitchen';
+    try {{ localStorage.setItem(BOUNCE_TAB_KEY, tabName); }} catch(e) {{}}
+    // Load tab-specific content
+    if (tabName === 'workflows' && typeof _kwLoadWorkflows === 'function') _kwLoadWorkflows();
+    if (tabName === 'agents') {{
+      if (typeof _spLoadAgents === 'function') _spLoadAgents();
+      if (typeof _spLoadWorkflows === 'function') _spLoadWorkflows();
+    }}
+    if (tabName === 'live' && typeof _liveRefresh === 'function') _liveRefresh();
+  }}
+
+  // Wire up tab buttons
+  document.querySelectorAll('.bounce-tab').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{ switchBounceTab(btn.dataset.tab); }});
+  }});
+
+  function openBouncePage(tab) {{
     if (drawer && !drawer.classList.contains('hidden')) closeDrawer();
     document.body.classList.add('bounce-open');
-    if (typeof _spLoadAgents === 'function') _spLoadAgents();
-    if (typeof _spLoadWorkflows === 'function') _spLoadWorkflows();
+    // Restore last-active tab, or use the provided one
+    var activeTab = tab || (function() {{
+      try {{ return localStorage.getItem(BOUNCE_TAB_KEY) || 'workflows'; }} catch(e) {{ return 'workflows'; }}
+    }})();
+    switchBounceTab(activeTab);
   }}
   function closeBouncePage() {{
     document.body.classList.remove('bounce-open');
+    if (typeof _liveStopPolling === 'function') _liveStopPolling();
   }}
   window.openBouncePage = openBouncePage;
   window.closeBouncePage = closeBouncePage;
 
   if (bounceBackBtn) bounceBackBtn.addEventListener('click', closeBouncePage);
+  if (bounceCloseBtn) bounceCloseBtn.addEventListener('click', closeBouncePage);
   if (bounceBtn) bounceBtn.addEventListener('click', function() {{
     if (document.body.classList.contains('bounce-open')) closeBouncePage();
     else openBouncePage();
@@ -7953,6 +8338,1151 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   }});
 
   window._spLoadWorkflows = loadWorkflows;
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Phase 3B: Kitchen Workflows tab (new unified UI)
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var currentPidMeta = document.querySelector('meta[name="current-project"]');
+  var PID = currentPidMeta ? currentPidMeta.content : null;
+  if (!PID) return;
+
+  var tbody = document.getElementById('kwWorkflowTbody');
+  var listDiv = document.getElementById('kwWorkflowList');
+  var detailDiv = document.getElementById('kwWorkflowDetail');
+  var newWfBtn = document.getElementById('kwNewWfBtn');
+  var dbDispatchChk = document.getElementById('kwDbDispatch');
+
+  // Cached data
+  var _workflows = [];
+  var _agents = [];
+  var _condCatalog = [];
+  var _kitchenTickets = []; // for test-against picker
+  var _currentWf = null; // workflow being edited in detail
+  var _detailTriggerConds = []; // {{kind, params_obj}}
+  var _detailSteps = [];
+  var _detailOnSuccess = {{}}; // {{section, status}}
+
+  // ── Kitchen settings (DB dispatch toggle) ──
+  function loadKitchenSettings() {{
+    fetch(EDIT_API + '/settings/kitchen')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var s = data.settings || data || {{}};
+        if (dbDispatchChk) dbDispatchChk.checked = !!(s.use_db_workflows === true || s.use_db_workflows === 'true' || s.use_db_workflows === 1);
+      }})
+      .catch(function() {{}});
+  }}
+
+  if (dbDispatchChk) {{
+    dbDispatchChk.addEventListener('change', function() {{
+      fetch(EDIT_API + '/settings/kitchen', {{
+        method: 'PUT',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ use_db_workflows: dbDispatchChk.checked }})
+      }}).catch(function() {{}});
+    }});
+  }}
+
+  // ── Workflow list ──
+  function _triggerSummary(wf) {{
+    var tj = wf.trigger_json;
+    if (!tj) return '—';
+    if (typeof tj === 'string') {{ try {{ tj = JSON.parse(tj); }} catch(e) {{ return '—'; }} }}
+    var conds = (tj.conditions || tj.all_of || []);
+    if (!conds.length) return '—';
+    var parts = conds.slice(0, 3).map(function(c) {{ return c.kind || '?'; }});
+    var extra = conds.length > 3 ? ' +' + (conds.length - 3) : '';
+    return parts.join(' ∧ ') + extra;
+  }}
+
+  function loadWorkflows() {{
+    if (!tbody) return;
+    loadKitchenSettings();
+    // Also load agents + catalog in background for detail view
+    _loadAgentsCache();
+    _loadCondCatalog();
+    _loadTicketsCache();
+
+    fetch(EDIT_API + '/workflows')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        _workflows = data.workflows || data || [];
+        while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+        if (_workflows.length === 0) {{
+          var tr = document.createElement('tr');
+          var td = document.createElement('td');
+          td.colSpan = 4;
+          td.style.cssText = 'color:var(--text-tertiary);font-size:12px;padding:12px 10px;';
+          td.textContent = 'No workflows yet.';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }}
+        _workflows.forEach(function(wf) {{
+          var tr = document.createElement('tr');
+          tr.style.cursor = 'pointer';
+
+          // Name + system badge
+          var tdName = document.createElement('td');
+          var nameSpan = document.createElement('span');
+          nameSpan.textContent = wf.name || wf.id;
+          tdName.appendChild(nameSpan);
+          if (wf.system) {{
+            var badge = document.createElement('span');
+            badge.className = 'kw-sys-badge';
+            badge.textContent = 'System';
+            tdName.appendChild(badge);
+          }}
+          tr.appendChild(tdName);
+
+          // Trigger summary
+          var tdTrig = document.createElement('td');
+          tdTrig.className = 'kw-trigger-summary';
+          tdTrig.textContent = _triggerSummary(wf);
+          tr.appendChild(tdTrig);
+
+          // Step count
+          var tdSteps = document.createElement('td');
+          var parsedSteps = [];
+          try {{ parsedSteps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []); }} catch(e) {{}}
+          tdSteps.textContent = parsedSteps.length;
+          tr.appendChild(tdSteps);
+
+          // Enabled toggle
+          var tdEnabled = document.createElement('td');
+          var chk = document.createElement('input');
+          chk.type = 'checkbox';
+          chk.className = 'kw-enabled-toggle';
+          chk.checked = !!(wf.enabled === true || wf.enabled === 1 || wf.enabled === 'true');
+          chk.addEventListener('click', function(e) {{
+            e.stopPropagation();
+            var newVal = chk.checked;
+            fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(wf.id), {{
+              method: 'PUT',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify({{ enabled: newVal }})
+            }}).catch(function() {{ chk.checked = !newVal; }});
+          }});
+          tdEnabled.appendChild(chk);
+          tr.appendChild(tdEnabled);
+
+          tr.addEventListener('click', function() {{ openWorkflowDetail(wf); }});
+          tbody.appendChild(tr);
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  // ── Agents cache ──
+  function _loadAgentsCache() {{
+    fetch(EDIT_API + '/workflow/agents')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{ _agents = d.agents || d || []; }})
+      .catch(function() {{}});
+  }}
+
+  // ── Condition catalog ──
+  function _loadCondCatalog() {{
+    fetch('/api/workflow-conditions/catalog')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{ _condCatalog = d.conditions || d || []; }})
+      .catch(function() {{}});
+  }}
+
+  // ── Ticket cache (for test picker) ──
+  function _loadTicketsCache() {{
+    fetch(EDIT_API + '/tickets')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{ _kitchenTickets = d.tickets || d || []; }})
+      .catch(function() {{}});
+  }}
+
+  // ── Workflow detail view ──
+  function showList() {{
+    if (listDiv) listDiv.style.display = '';
+    if (detailDiv) detailDiv.style.display = 'none';
+    _currentWf = null;
+  }}
+
+  function openWorkflowDetail(wf) {{
+    _currentWf = wf;
+    // Parse trigger conditions
+    var tj = wf ? wf.trigger_json : null;
+    if (tj && typeof tj === 'string') {{ try {{ tj = JSON.parse(tj); }} catch(e) {{ tj = null; }} }}
+    _detailTriggerConds = (tj && (tj.conditions || tj.all_of)) ? (tj.conditions || tj.all_of).slice() : [];
+    // Parse steps
+    var rawSteps = wf ? (wf.steps || []) : [];
+    if (typeof rawSteps === 'string') {{ try {{ rawSteps = JSON.parse(rawSteps); }} catch(e) {{ rawSteps = []; }} }}
+    _detailSteps = rawSteps.map(function(s) {{ return Object.assign({{}}, s); }});
+    // Parse on_success
+    var osj = wf ? wf.on_success_json : null;
+    if (osj && typeof osj === 'string') {{ try {{ osj = JSON.parse(osj); }} catch(e) {{ osj = null; }} }}
+    _detailOnSuccess = osj || {{}};
+
+    if (listDiv) listDiv.style.display = 'none';
+    if (detailDiv) {{ detailDiv.style.display = ''; renderDetail(wf); }}
+  }}
+
+  function openNewWorkflowForm(prefill) {{
+    openWorkflowDetail(prefill || null);
+  }}
+
+  function renderDetail(wf) {{
+    if (!detailDiv) return;
+    var isNew = !wf;
+    var isSys = wf && wf.system;
+    while (detailDiv.firstChild) detailDiv.removeChild(detailDiv.firstChild);
+
+    // Header
+    var hdr = document.createElement('div');
+    hdr.className = 'kw-detail-header';
+
+    var backBtn = document.createElement('button');
+    backBtn.className = 'kw-back-btn';
+    backBtn.textContent = '← All workflows';
+    backBtn.addEventListener('click', function() {{ showList(); loadWorkflows(); }});
+    hdr.appendChild(backBtn);
+
+    var nameInput = document.createElement('input');
+    nameInput.className = 'kw-detail-name';
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Workflow name...';
+    nameInput.value = wf ? (wf.name || '') : '';
+    if (isSys) nameInput.readOnly = true;
+    hdr.appendChild(nameInput);
+
+    if (isSys) {{
+      var sysBadge = document.createElement('span');
+      sysBadge.className = 'kw-sys-badge';
+      sysBadge.textContent = 'System';
+      hdr.appendChild(sysBadge);
+
+      var cloneBtn = document.createElement('button');
+      cloneBtn.className = 'kw-clone-btn';
+      cloneBtn.textContent = 'Clone to customize';
+      cloneBtn.addEventListener('click', function() {{
+        openNewWorkflowForm({{ name: 'Copy of ' + (wf.name || ''), trigger_json: wf.trigger_json, on_success_json: wf.on_success_json, steps: wf.steps }});
+      }});
+      hdr.appendChild(cloneBtn);
+    }}
+    detailDiv.appendChild(hdr);
+
+    // Description
+    var descSection = document.createElement('div');
+    descSection.className = 'kw-section';
+    var descLabel = document.createElement('div');
+    descLabel.className = 'kw-section-title';
+    descLabel.textContent = 'Description';
+    descSection.appendChild(descLabel);
+    var descInput = document.createElement('textarea');
+    descInput.style.cssText = 'width:100%;box-sizing:border-box;padding:6px 8px;font-size:12px;font-family:inherit;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);resize:vertical;min-height:40px;';
+    descInput.placeholder = 'What does this workflow do?';
+    descInput.value = wf ? (wf.description || '') : '';
+    if (isSys) descInput.readOnly = true;
+    descSection.appendChild(descInput);
+    detailDiv.appendChild(descSection);
+
+    // Trigger section
+    var trigSection = document.createElement('div');
+    trigSection.className = 'kw-section';
+    var trigTitle = document.createElement('div');
+    trigTitle.className = 'kw-section-title';
+    trigTitle.textContent = 'When ALL of these are true:';
+    trigSection.appendChild(trigTitle);
+
+    var chipsWrap = document.createElement('div');
+    chipsWrap.className = 'kw-condition-chips';
+    chipsWrap.id = 'kwCondChips';
+    trigSection.appendChild(chipsWrap);
+
+    // Condition popover (positioned relative)
+    var popoverWrap = document.createElement('div');
+    popoverWrap.style.cssText = 'position:relative;display:inline-block;';
+    var addCondBtn = document.createElement('button');
+    addCondBtn.className = 'kw-add-cond-btn';
+    addCondBtn.textContent = '+ Add condition';
+    if (isSys) addCondBtn.disabled = true;
+    popoverWrap.appendChild(addCondBtn);
+
+    var popover = document.createElement('div');
+    popover.className = 'kw-cond-popover hidden';
+    popover.id = 'kwCondPopover';
+    popoverWrap.appendChild(popover);
+    trigSection.appendChild(popoverWrap);
+    detailDiv.appendChild(trigSection);
+
+    function renderCondChips() {{
+      while (chipsWrap.firstChild) chipsWrap.removeChild(chipsWrap.firstChild);
+      _detailTriggerConds.forEach(function(cond, i) {{
+        var chip = document.createElement('span');
+        chip.className = 'kw-cond-chip';
+        var label = cond.kind;
+        var pkeys = Object.keys(cond.params || {{}});
+        if (pkeys.length) label += ':' + pkeys.map(function(k) {{ return cond.params[k]; }}).join(',');
+        chip.appendChild(document.createTextNode(label + ' '));
+        if (!isSys) {{
+          var delBtn = document.createElement('button');
+          delBtn.className = 'kw-cond-chip-del';
+          delBtn.textContent = '×';
+          delBtn.title = 'Remove condition';
+          delBtn.addEventListener('click', function() {{
+            _detailTriggerConds.splice(i, 1);
+            renderCondChips();
+          }});
+          chip.appendChild(delBtn);
+        }}
+        chipsWrap.appendChild(chip);
+      }});
+    }}
+    renderCondChips();
+
+    // Condition popover logic
+    addCondBtn.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      popover.classList.toggle('hidden');
+      if (!popover.classList.contains('hidden')) buildPopover();
+    }});
+
+    function buildPopover() {{
+      while (popover.firstChild) popover.removeChild(popover.firstChild);
+      var kindSel = document.createElement('select');
+      var emptyOpt = document.createElement('option');
+      emptyOpt.value = '';
+      emptyOpt.textContent = 'Choose condition kind...';
+      kindSel.appendChild(emptyOpt);
+      _condCatalog.forEach(function(c) {{
+        var opt = document.createElement('option');
+        opt.value = c.kind;
+        opt.textContent = c.label || c.kind;
+        kindSel.appendChild(opt);
+      }});
+      popover.appendChild(kindSel);
+
+      var paramsDiv = document.createElement('div');
+      paramsDiv.id = 'kwCondParams';
+      popover.appendChild(paramsDiv);
+
+      var addBtn2 = document.createElement('button');
+      addBtn2.className = 'sp-btn primary';
+      addBtn2.style.cssText = 'font-size:11px;padding:4px 12px;margin-top:8px;border:none;border-radius:5px;background:var(--accent);color:#fff;cursor:pointer;';
+      addBtn2.textContent = 'Add';
+      addBtn2.addEventListener('click', function() {{
+        if (!kindSel.value) return;
+        var paramInputs = paramsDiv.querySelectorAll('[data-param-key]');
+        var params = {{}};
+        paramInputs.forEach(function(inp) {{ if (inp.value.trim()) params[inp.dataset.paramKey] = inp.value.trim(); }});
+        _detailTriggerConds.push({{ kind: kindSel.value, params: params }});
+        renderCondChips();
+        popover.classList.add('hidden');
+      }});
+      popover.appendChild(addBtn2);
+
+      kindSel.addEventListener('change', function() {{
+        while (paramsDiv.firstChild) paramsDiv.removeChild(paramsDiv.firstChild);
+        var chosen = _condCatalog.find(function(c) {{ return c.kind === kindSel.value; }});
+        if (!chosen || !chosen.params || !chosen.params.length) return;
+        chosen.params.forEach(function(p) {{
+          var row = document.createElement('div');
+          row.className = 'kw-cond-param-row';
+          var lbl = document.createElement('label');
+          lbl.textContent = p.name || p.key;
+          var inp = document.createElement('input');
+          inp.type = 'text';
+          inp.placeholder = p.description || p.key;
+          inp.dataset.paramKey = p.key || p.name;
+          row.appendChild(lbl);
+          row.appendChild(inp);
+          paramsDiv.appendChild(row);
+        }});
+      }});
+    }}
+
+    document.addEventListener('click', function hidePop(e) {{
+      if (!popover.contains(e.target) && e.target !== addCondBtn) {{
+        popover.classList.add('hidden');
+      }}
+    }});
+
+    // Steps section
+    var stepsSection = document.createElement('div');
+    stepsSection.className = 'kw-section';
+    var stepsTitle = document.createElement('div');
+    stepsTitle.className = 'kw-section-title';
+    stepsTitle.textContent = 'Steps';
+    stepsSection.appendChild(stepsTitle);
+    var stepsContainer = document.createElement('div');
+    stepsContainer.id = 'kwDetailSteps';
+    stepsSection.appendChild(stepsContainer);
+    if (!isSys) {{
+      var addStepBtn = document.createElement('button');
+      addStepBtn.className = 'kw-add-cond-btn';
+      addStepBtn.textContent = '+ Add step';
+      addStepBtn.style.marginTop = '6px';
+      addStepBtn.addEventListener('click', function() {{
+        _detailSteps.push({{ agent_id: '', prompt_modifier: '', on_failure: 'pause', timeout_ms: 120000 }});
+        renderDetailSteps();
+      }});
+      stepsSection.appendChild(addStepBtn);
+    }}
+    detailDiv.appendChild(stepsSection);
+
+    var SECTION_OPTS = ['', 'Ideas', 'Backlog', 'WIP', 'For Review', 'Done', 'Icebox'];
+    var STATUS_OPTS = ['', 'proposed', 'in-progress', 'for-review', 'blocked', 'rework', 'done'];
+    var ON_FAIL_OPTS = ['pause', 'retry', 'fail'];
+
+    function renderDetailSteps() {{
+      while (stepsContainer.firstChild) stepsContainer.removeChild(stepsContainer.firstChild);
+      _detailSteps.forEach(function(step, idx) {{
+        var card = document.createElement('div');
+        card.className = 'kw-step-card';
+
+        var sh = document.createElement('div');
+        sh.className = 'kw-step-header';
+        var num = document.createElement('span');
+        num.className = 'kw-step-num';
+        num.textContent = 'Step ' + (idx + 1) + (idx === 0 ? ' (Primary)' : '');
+        sh.appendChild(num);
+
+        // Agent select
+        var agSel = document.createElement('select');
+        agSel.className = 'kw-step-select';
+        agSel.style.flex = '1';
+        var emptyAgOpt = document.createElement('option');
+        emptyAgOpt.value = '';
+        emptyAgOpt.textContent = 'Select agent...';
+        agSel.appendChild(emptyAgOpt);
+        _agents.filter(function(a) {{ return a.source !== 'project'; }}).forEach(function(a) {{
+          var opt = document.createElement('option');
+          opt.value = a.id;
+          opt.textContent = a.name || a.id;
+          if (a.id === step.agent_id) opt.selected = true;
+          agSel.appendChild(opt);
+        }});
+        agSel.addEventListener('change', function() {{ _detailSteps[idx].agent_id = agSel.value; }});
+        if (isSys) agSel.disabled = true;
+        sh.appendChild(agSel);
+
+        if (!isSys) {{
+          var delBtn = document.createElement('button');
+          delBtn.className = 'kw-step-del';
+          delBtn.textContent = 'Remove';
+          delBtn.addEventListener('click', function() {{ _detailSteps.splice(idx, 1); renderDetailSteps(); }});
+          sh.appendChild(delBtn);
+        }}
+        card.appendChild(sh);
+
+        // Prompt template
+        var pRow = document.createElement('div');
+        pRow.className = 'kw-step-row';
+        var pLbl = document.createElement('label');
+        pLbl.textContent = 'Prompt template';
+        var pHelp = document.createElement('span');
+        pHelp.style.cssText = 'font-weight:400;color:var(--text-tertiary);margin-left:6px;';
+        pHelp.textContent = '({{ticket.id}}, {{ticket.title}}, {{ticket.description}}, {{ticket.acceptance_criteria}})';
+        pLbl.appendChild(pHelp);
+        var pTa = document.createElement('textarea');
+        pTa.className = 'kw-step-textarea';
+        pTa.placeholder = 'Step instructions or prompt template...';
+        pTa.rows = 2;
+        pTa.value = step.prompt_modifier || step.prompt || '';
+        if (isSys) pTa.readOnly = true;
+        pTa.addEventListener('input', function() {{ _detailSteps[idx].prompt_modifier = pTa.value; }});
+        pRow.appendChild(pLbl);
+        pRow.appendChild(pTa);
+        card.appendChild(pRow);
+
+        // On failure + timeout
+        var metaRow = document.createElement('div');
+        metaRow.style.cssText = 'display:flex;gap:10px;margin-top:6px;';
+
+        var failWrap = document.createElement('div');
+        failWrap.className = 'kw-step-row';
+        failWrap.style.flex = '1';
+        var failLbl = document.createElement('label');
+        failLbl.textContent = 'On failure';
+        var failSel = document.createElement('select');
+        failSel.className = 'kw-step-select-sm';
+        ON_FAIL_OPTS.forEach(function(v) {{
+          var opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          if (v === (step.on_failure || 'pause')) opt.selected = true;
+          failSel.appendChild(opt);
+        }});
+        if (isSys) failSel.disabled = true;
+        failSel.addEventListener('change', function() {{ _detailSteps[idx].on_failure = failSel.value; }});
+        failWrap.appendChild(failLbl);
+        failWrap.appendChild(failSel);
+        metaRow.appendChild(failWrap);
+
+        var toWrap = document.createElement('div');
+        toWrap.className = 'kw-step-row';
+        toWrap.style.flex = '1';
+        var toLbl = document.createElement('label');
+        toLbl.textContent = 'Timeout (ms)';
+        var toInp = document.createElement('input');
+        toInp.type = 'number';
+        toInp.className = 'kw-step-select-sm';
+        toInp.min = '1000';
+        toInp.step = '1000';
+        toInp.value = step.timeout_ms || 120000;
+        if (isSys) toInp.readOnly = true;
+        toInp.addEventListener('change', function() {{ _detailSteps[idx].timeout_ms = parseInt(toInp.value) || 120000; }});
+        toWrap.appendChild(toLbl);
+        toWrap.appendChild(toInp);
+        metaRow.appendChild(toWrap);
+
+        card.appendChild(metaRow);
+        stepsContainer.appendChild(card);
+      }});
+    }}
+    renderDetailSteps();
+
+    // On success section
+    var osSection = document.createElement('div');
+    osSection.className = 'kw-section';
+    var osTitle = document.createElement('div');
+    osTitle.className = 'kw-section-title';
+    osTitle.textContent = 'On success';
+    osSection.appendChild(osTitle);
+    var osRow = document.createElement('div');
+    osRow.className = 'kw-on-success-row';
+
+    var osSectionField = document.createElement('div');
+    osSectionField.className = 'kw-on-success-field';
+    var osSectionLbl = document.createElement('label');
+    osSectionLbl.textContent = 'Move to section';
+    var osSectionSel = document.createElement('select');
+    SECTION_OPTS.forEach(function(v) {{
+      var opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v || '(no change)';
+      if (v === (_detailOnSuccess.section || '')) opt.selected = true;
+      osSectionSel.appendChild(opt);
+    }});
+    if (isSys) osSectionSel.disabled = true;
+    osSectionField.appendChild(osSectionLbl);
+    osSectionField.appendChild(osSectionSel);
+    osRow.appendChild(osSectionField);
+
+    var osStatusField = document.createElement('div');
+    osStatusField.className = 'kw-on-success-field';
+    var osStatusLbl = document.createElement('label');
+    osStatusLbl.textContent = 'Set status';
+    var osStatusSel = document.createElement('select');
+    STATUS_OPTS.forEach(function(v) {{
+      var opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v || '(no change)';
+      if (v === (_detailOnSuccess.status || '')) opt.selected = true;
+      osStatusSel.appendChild(opt);
+    }});
+    if (isSys) osStatusSel.disabled = true;
+    osStatusField.appendChild(osStatusLbl);
+    osStatusField.appendChild(osStatusSel);
+    osRow.appendChild(osStatusField);
+
+    osSection.appendChild(osRow);
+    detailDiv.appendChild(osSection);
+
+    // Test against ticket
+    var testSection = document.createElement('div');
+    testSection.className = 'kw-section';
+    var testTitle = document.createElement('div');
+    testTitle.className = 'kw-section-title';
+    testTitle.textContent = 'Test against ticket';
+    testSection.appendChild(testTitle);
+    var testRow = document.createElement('div');
+    testRow.className = 'kw-test-row';
+    var testSel = document.createElement('select');
+    testSel.id = 'kwTestTicketSel';
+    var emptyTestOpt = document.createElement('option');
+    emptyTestOpt.value = '';
+    emptyTestOpt.textContent = 'Pick a ticket...';
+    testSel.appendChild(emptyTestOpt);
+    _kitchenTickets.forEach(function(t) {{
+      var opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.id + ' — ' + (t.title || '').substring(0, 40);
+      testSel.appendChild(opt);
+    }});
+    testRow.appendChild(testSel);
+
+    var testBtn = document.createElement('button');
+    testBtn.className = 'sp-btn';
+    testBtn.textContent = 'Run inspect';
+    testBtn.style.cssText = 'font-size:11px;padding:5px 12px;';
+    testBtn.addEventListener('click', function() {{
+      if (!testSel.value || !wf) return;
+      var testResult = document.getElementById('kwTestResult');
+      if (testResult) testResult.innerHTML = '<span style="color:var(--text-tertiary);font-size:12px;">Running...</span>';
+      fetch(EDIT_API + '/workflows/inspect', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ ticket_id: testSel.value }})
+      }})
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+          var wfResult = (data.workflows || []).find(function(w) {{ return w.workflow_id === wf.id; }});
+          if (!testResult) return;
+          if (!wfResult) {{ testResult.textContent = 'Workflow not in inspect results.'; return; }}
+          renderInspectResult(testResult, wfResult);
+        }})
+        .catch(function() {{
+          if (testResult) testResult.textContent = 'Inspect failed.';
+        }});
+    }});
+    testRow.appendChild(testBtn);
+    testSection.appendChild(testRow);
+    var testResultDiv = document.createElement('div');
+    testResultDiv.className = 'kw-test-result';
+    testResultDiv.id = 'kwTestResult';
+    testSection.appendChild(testResultDiv);
+    detailDiv.appendChild(testSection);
+
+    function renderInspectResult(container, wfResult) {{
+      while (container.firstChild) container.removeChild(container.firstChild);
+      var block = document.createElement('div');
+      block.className = 'kw-insp-wf-block';
+      var statusEl = document.createElement('span');
+      statusEl.className = wfResult.passed ? 'kw-insp-pass' : 'kw-insp-fail';
+      statusEl.textContent = wfResult.passed ? 'PASS' : 'FAIL';
+      block.appendChild(statusEl);
+      (wfResult.conditions || []).forEach(function(c) {{
+        var row = document.createElement('div');
+        row.className = 'kw-insp-cond';
+        var icon = document.createElement('span');
+        icon.className = 'kw-insp-cond-icon';
+        icon.textContent = c.passed ? '✓' : '×';
+        icon.style.color = c.passed ? '#22c55e' : '#ef4444';
+        var label = document.createElement('span');
+        label.textContent = c.kind + (c.params ? ' ' + JSON.stringify(c.params) : '');
+        row.appendChild(icon);
+        row.appendChild(label);
+        block.appendChild(row);
+        if (!c.passed && c.reason) {{
+          var reason = document.createElement('div');
+          reason.className = 'kw-insp-reason';
+          reason.textContent = c.reason;
+          block.appendChild(reason);
+        }}
+      }});
+      container.appendChild(block);
+    }}
+
+    // Action buttons (save / delete)
+    var actionsDiv = document.createElement('div');
+    actionsDiv.className = 'kw-detail-actions';
+
+    if (!isSys) {{
+      var saveBtn = document.createElement('button');
+      saveBtn.className = 'kw-save-btn';
+      saveBtn.textContent = isNew ? 'Create workflow' : 'Save changes';
+      saveBtn.addEventListener('click', function() {{
+        var name = nameInput.value.trim();
+        if (!name) {{ showAppToast('Workflow name is required', 'error'); return; }}
+        var triggerJson = {{ conditions: _detailTriggerConds }};
+        var onSuccessJson = {{}};
+        if (osSectionSel.value) onSuccessJson.section = osSectionSel.value;
+        if (osStatusSel.value) onSuccessJson.status = osStatusSel.value;
+        var payload = {{
+          name: name,
+          description: descInput.value,
+          trigger_json: triggerJson,
+          on_success_json: onSuccessJson,
+          steps: _detailSteps
+        }};
+        var method, url;
+        if (isNew) {{
+          method = 'POST';
+          url = EDIT_API + '/workflows';
+        }} else {{
+          method = 'PUT';
+          url = EDIT_API + '/workflow/workflows/' + encodeURIComponent(wf.id);
+        }}
+        fetch(url, {{
+          method: method,
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(payload)
+        }})
+          .then(function(r) {{ return r.json().then(function(d) {{ return {{ ok: r.ok, data: d }}; }}); }})
+          .then(function(res) {{
+            if (res.ok) {{
+              showAppToast('Workflow saved', 'success');
+              showList();
+              loadWorkflows();
+            }} else {{
+              showAppToast((res.data && res.data.error) || 'Failed to save', 'error');
+            }}
+          }})
+          .catch(function() {{ showAppToast('Failed to save workflow', 'error'); }});
+      }});
+      actionsDiv.appendChild(saveBtn);
+
+      if (!isNew) {{
+        var delBtn = document.createElement('button');
+        delBtn.className = 'kw-del-btn';
+        delBtn.textContent = 'Delete workflow';
+        delBtn.addEventListener('click', function() {{
+          if (typeof window.showConfirmModal === 'function') {{
+            window.showConfirmModal('Delete Workflow', 'Delete "' + (wf.name || wf.id) + '"? This cannot be undone.', 'Delete', function() {{
+              fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(wf.id), {{ method: 'DELETE' }})
+                .then(function() {{ showList(); loadWorkflows(); }})
+                .catch(function() {{ showAppToast('Delete failed', 'error'); }});
+            }});
+          }} else {{
+            fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(wf.id), {{ method: 'DELETE' }})
+              .then(function() {{ showList(); loadWorkflows(); }})
+              .catch(function() {{ showAppToast('Delete failed', 'error'); }});
+          }}
+        }});
+        actionsDiv.appendChild(delBtn);
+      }}
+    }}
+
+    detailDiv.appendChild(actionsDiv);
+  }}
+
+  if (newWfBtn) {{
+    newWfBtn.addEventListener('click', function() {{ openNewWorkflowForm(null); }});
+  }}
+
+  window._kwLoadWorkflows = loadWorkflows;
+  window._kwOpenWorkflowDetail = openWorkflowDetail;
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Phase 3B: Live tab + polling
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+  if (!EDIT_API) return;
+
+  var currentPidMeta = document.querySelector('meta[name="current-project"]');
+  var PID = currentPidMeta ? currentPidMeta.content : null;
+  if (!PID) return;
+
+  var livePauseBtn = document.getElementById('livePauseBtn');
+  var liveHeartbeat = document.getElementById('liveHeartbeat');
+  var liveDetailPanel = document.getElementById('liveDetailPanel');
+  var liveDetailTitle = document.getElementById('liveDetailTitle');
+  var liveDetailBody = document.getElementById('liveDetailBody');
+  var liveDetailClose = document.getElementById('liveDetailClose');
+
+  var _pollInterval = null;
+  var _liveTabVisible = false;
+
+  function _laneEl(id) {{ return document.getElementById(id); }}
+  function _emptyEl(id) {{ return document.getElementById(id); }}
+
+  function _statusLabel(s) {{
+    var m = {{ queued: 'Queued', preparing: 'Preparing', running: 'Running', needs_input: 'Needs Input', succeeded: 'Succeeded', failed: 'Failed', cancelled: 'Cancelled', stalled: 'Stalled' }};
+    return m[s] || s || '?';
+  }}
+
+  function _elapsed(startedAt) {{
+    if (!startedAt) return '';
+    var ms = Date.now() - new Date(startedAt).getTime();
+    if (ms < 0) return '';
+    var s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  }}
+
+  function _buildRunCard(run) {{
+    var card = document.createElement('div');
+    card.className = 'live-run-card';
+
+    var subj = document.createElement('div');
+    subj.className = 'live-run-subject';
+    var subjectLabel = run.subject_id || 'unknown';
+    if (run.ticket_title) subjectLabel += ' — ' + run.ticket_title.substring(0, 30);
+    subj.textContent = subjectLabel;
+    card.appendChild(subj);
+
+    var wfName = (run.workflow_meta && run.workflow_meta.workflow_name) ? run.workflow_meta.workflow_name : '(legacy)';
+    var wfEl = document.createElement('div');
+    wfEl.className = 'live-run-wf';
+    wfEl.textContent = wfName;
+    card.appendChild(wfEl);
+
+    var elapsed = document.createElement('div');
+    elapsed.className = 'live-run-elapsed';
+    var pill = document.createElement('span');
+    pill.className = 'run-pill run-pill-' + (run.status || 'queued').replace(/_/g, '_');
+    pill.textContent = _statusLabel(run.status);
+    elapsed.appendChild(pill);
+    if (run.started_at) {{
+      var et = document.createElement('span');
+      et.textContent = _elapsed(run.started_at);
+      elapsed.appendChild(et);
+    }}
+    card.appendChild(elapsed);
+
+    card.addEventListener('click', function() {{ openRunDetail(run.id); }});
+    return card;
+  }}
+
+  function _setLane(laneId, emptyId, runs) {{
+    var lane = _laneEl(laneId);
+    var emptyEl = _emptyEl(emptyId);
+    if (!lane) return;
+    // Remove existing cards (not the title or empty placeholder)
+    Array.from(lane.children).forEach(function(child) {{
+      if (!child.classList.contains('live-lane-title') && !child.classList.contains('live-empty')) {{
+        lane.removeChild(child);
+      }}
+    }});
+    if (runs.length === 0) {{
+      if (emptyEl) emptyEl.style.display = '';
+    }} else {{
+      if (emptyEl) emptyEl.style.display = 'none';
+      runs.forEach(function(run) {{
+        lane.appendChild(_buildRunCard(run));
+      }});
+    }}
+  }}
+
+  function refreshLiveData() {{
+    // Active runs
+    fetch(EDIT_API + '/runs/active')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var runs = data.runs || data || [];
+        var queued = runs.filter(function(r) {{ return r.status === 'queued' || r.status === 'preparing'; }});
+        var running = runs.filter(function(r) {{ return r.status === 'running'; }});
+        var needsInput = runs.filter(function(r) {{ return r.status === 'needs_input'; }});
+        _setLane('liveLaneQueued', 'liveEmptyQueued', queued);
+        _setLane('liveLaneRunning', 'liveEmptyRunning', running);
+        _setLane('liveLaneInput', 'liveEmptyInput', needsInput);
+        if (liveHeartbeat) liveHeartbeat.textContent = 'Last refreshed: ' + new Date().toLocaleTimeString();
+      }})
+      .catch(function() {{}});
+
+    // Recent runs
+    fetch(EDIT_API + '/runs/recent?limit=20')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var recent = (data.runs || data || []).filter(function(r) {{
+          return r.status === 'succeeded' || r.status === 'failed' || r.status === 'cancelled' || r.status === 'stalled';
+        }});
+        _setLane('liveLaneRecent', 'liveEmptyRecent', recent);
+      }})
+      .catch(function() {{}});
+  }}
+
+  function startLivePolling() {{
+    if (_pollInterval) return;
+    refreshLiveData();
+    _pollInterval = setInterval(refreshLiveData, 4000);
+  }}
+
+  function stopLivePolling() {{
+    if (_pollInterval) {{ clearInterval(_pollInterval); _pollInterval = null; }}
+  }}
+
+  window._liveRefresh = function() {{
+    _liveTabVisible = true;
+    startLivePolling();
+  }};
+  window._liveStopPolling = function() {{
+    _liveTabVisible = false;
+    stopLivePolling();
+  }};
+
+  // Pause/resume kitchen
+  var _kitchenPaused = false;
+  function loadKitchenPausedState() {{
+    fetch(EDIT_API + '/settings/kitchen')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var s = data.settings || data || {{}};
+        _kitchenPaused = !!(s.paused === true || s.paused === 'true' || s.paused === 1);
+        _updatePauseBtn();
+      }})
+      .catch(function() {{}});
+  }}
+
+  function _updatePauseBtn() {{
+    if (!livePauseBtn) return;
+    if (_kitchenPaused) {{
+      livePauseBtn.textContent = 'Resume Kitchen';
+      livePauseBtn.classList.add('paused');
+    }} else {{
+      livePauseBtn.textContent = 'Pause Kitchen';
+      livePauseBtn.classList.remove('paused');
+    }}
+  }}
+
+  if (livePauseBtn) {{
+    livePauseBtn.addEventListener('click', function() {{
+      _kitchenPaused = !_kitchenPaused;
+      _updatePauseBtn();
+      fetch(EDIT_API + '/settings/kitchen', {{
+        method: 'PUT',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ paused: _kitchenPaused }})
+      }}).catch(function() {{ _kitchenPaused = !_kitchenPaused; _updatePauseBtn(); }});
+    }});
+    loadKitchenPausedState();
+  }}
+
+  // Run detail panel
+  function openRunDetail(runId) {{
+    if (!liveDetailPanel || !liveDetailBody) return;
+    liveDetailPanel.classList.remove('hidden');
+    liveDetailBody.innerHTML = '<div class="insp-loading">Loading...</div>';
+    if (liveDetailTitle) liveDetailTitle.textContent = 'Run ' + runId;
+
+    Promise.all([
+      fetch(EDIT_API + '/runs/' + runId).then(function(r) {{ return r.json(); }}),
+      fetch(EDIT_API + '/runs/' + runId + '/evidence').then(function(r) {{ return r.json(); }})
+    ]).then(function(results) {{
+      var runData = results[0];
+      var evidenceData = results[1];
+      var run = runData.run || runData;
+      var events = runData.events || [];
+      var files = evidenceData.files || [];
+
+      while (liveDetailBody.firstChild) liveDetailBody.removeChild(liveDetailBody.firstChild);
+
+      // Meta grid
+      var grid = document.createElement('div');
+      grid.className = 'live-meta-grid';
+      var metaFields = [
+        ['Status', run.status || '—'],
+        ['Subject', (run.subject_type || '') + ' ' + (run.subject_id || '—')],
+        ['Started', run.started_at ? new Date(run.started_at).toLocaleString() : '—'],
+        ['Claimed', run.claimed_at ? new Date(run.claimed_at).toLocaleString() : '—'],
+        ['Attempt', run.attempt || 1],
+      ];
+      if (run.error_message) metaFields.push(['Error', run.error_message]);
+      metaFields.forEach(function(pair) {{
+        var k = document.createElement('span');
+        k.className = 'live-meta-key';
+        k.textContent = pair[0];
+        var v = document.createElement('span');
+        v.className = 'live-meta-val';
+        v.textContent = pair[1];
+        grid.appendChild(k);
+        grid.appendChild(v);
+      }});
+      liveDetailBody.appendChild(grid);
+
+      // Events
+      if (events.length > 0) {{
+        var evTitle = document.createElement('div');
+        evTitle.style.cssText = 'font-size:11px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;';
+        evTitle.textContent = 'Activity';
+        liveDetailBody.appendChild(evTitle);
+
+        var evList = document.createElement('div');
+        evList.className = 'live-event-list';
+        events.forEach(function(ev) {{
+          var evEl = document.createElement('div');
+          evEl.className = 'live-event';
+          var kindEl = document.createElement('span');
+          kindEl.className = 'live-event-kind';
+          kindEl.textContent = ev.kind || '?';
+          evEl.appendChild(kindEl);
+          if (ev.actor) {{
+            evEl.appendChild(document.createTextNode(' '));
+            var actorEl = document.createElement('span');
+            actorEl.className = 'live-event-actor';
+            actorEl.textContent = ev.actor;
+            evEl.appendChild(actorEl);
+          }}
+          if (ev.timestamp) {{
+            evEl.appendChild(document.createTextNode(' '));
+            var tsEl = document.createElement('span');
+            tsEl.className = 'live-event-ts';
+            tsEl.textContent = new Date(ev.timestamp).toLocaleTimeString();
+            evEl.appendChild(tsEl);
+          }}
+          evList.appendChild(evEl);
+        }});
+        liveDetailBody.appendChild(evList);
+      }}
+
+      // Evidence files
+      if (files.length > 0) {{
+        var evTitle2 = document.createElement('div');
+        evTitle2.style.cssText = 'font-size:11px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.5px;margin:10px 0 6px;';
+        evTitle2.textContent = 'Evidence';
+        liveDetailBody.appendChild(evTitle2);
+
+        var fileList = document.createElement('div');
+        fileList.className = 'live-evidence-list';
+        files.forEach(function(f) {{
+          var link = document.createElement('a');
+          link.className = 'live-evidence-file';
+          link.textContent = f.path || f.name || f;
+          link.href = '#';
+          link.target = '_blank';
+          fileList.appendChild(link);
+        }});
+        liveDetailBody.appendChild(fileList);
+      }}
+    }}).catch(function() {{
+      if (liveDetailBody) liveDetailBody.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:12px 0;">Failed to load run detail.</div>';
+    }});
+  }}
+
+  if (liveDetailClose) {{
+    liveDetailClose.addEventListener('click', function() {{
+      if (liveDetailPanel) liveDetailPanel.classList.add('hidden');
+    }});
+  }}
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Phase 3B: Eligibility Inspector (global function)
+   ========================================================= */
+(function() {{
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+
+  var overlay = document.getElementById('inspOverlay');
+  var modalTitle = document.getElementById('inspModalTitle');
+  var modalBody = document.getElementById('inspModalBody');
+  var closeBtn = document.getElementById('inspModalClose');
+
+  function closeInspector() {{
+    if (overlay) overlay.classList.add('hidden');
+  }}
+
+  if (closeBtn) closeBtn.addEventListener('click', closeInspector);
+  if (overlay) {{
+    overlay.addEventListener('click', function(e) {{
+      if (e.target === overlay) closeInspector();
+    }});
+  }}
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape' && overlay && !overlay.classList.contains('hidden')) closeInspector();
+  }});
+
+  window.openEligibilityInspector = function(ticketId) {{
+    if (!overlay || !EDIT_API) return;
+    overlay.classList.remove('hidden');
+    if (modalTitle) modalTitle.textContent = 'Why is ' + ticketId + ' (not) ready?';
+    if (modalBody) modalBody.innerHTML = '<div class="insp-loading">Loading eligibility data...</div>';
+
+    fetch(EDIT_API + '/workflows/inspect', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ ticket_id: ticketId }})
+    }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        if (!modalBody) return;
+        while (modalBody.firstChild) modalBody.removeChild(modalBody.firstChild);
+
+        // Subject context summary
+        var ctx = data.subject_context_summary || {{}};
+        var ctxKeys = Object.keys(ctx);
+        if (ctxKeys.length > 0) {{
+          var ctxTitle = document.createElement('div');
+          ctxTitle.style.cssText = 'font-size:11px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;';
+          ctxTitle.textContent = 'Ticket context';
+          modalBody.appendChild(ctxTitle);
+
+          var ctxGrid = document.createElement('div');
+          ctxGrid.className = 'insp-ctx-grid';
+          ctxKeys.forEach(function(k) {{
+            var key = document.createElement('span');
+            key.className = 'insp-ctx-key';
+            key.textContent = k;
+            var val = document.createElement('span');
+            val.className = 'insp-ctx-val';
+            val.textContent = String(ctx[k]);
+            ctxGrid.appendChild(key);
+            ctxGrid.appendChild(val);
+          }});
+          modalBody.appendChild(ctxGrid);
+        }}
+
+        var workflows = data.workflows || [];
+        if (workflows.length === 0) {{
+          var noWf = document.createElement('div');
+          noWf.style.cssText = 'color:var(--text-tertiary);font-size:12px;padding:12px 0;';
+          noWf.textContent = 'No workflows to evaluate.';
+          modalBody.appendChild(noWf);
+          return;
+        }}
+
+        var wfTitle = document.createElement('div');
+        wfTitle.style.cssText = 'font-size:11px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;';
+        wfTitle.textContent = 'Workflow eligibility';
+        modalBody.appendChild(wfTitle);
+
+        workflows.forEach(function(wf) {{
+          var block = document.createElement('div');
+          block.className = 'insp-wf-block';
+
+          var wfTitleEl = document.createElement('div');
+          wfTitleEl.className = 'insp-wf-title';
+          var wfName = document.createElement('span');
+          wfName.textContent = wf.name || wf.workflow_id;
+          wfTitleEl.appendChild(wfName);
+          if (wf.system) {{
+            var sysBadge = document.createElement('span');
+            sysBadge.className = 'kw-sys-badge';
+            sysBadge.textContent = 'System';
+            wfTitleEl.appendChild(sysBadge);
+          }}
+          var statusPill = document.createElement('span');
+          statusPill.className = wf.passed ? 'insp-pass-pill' : 'insp-fail-pill';
+          statusPill.textContent = wf.passed ? 'PASS' : 'FAIL';
+          if (!wf.enabled) {{
+            var disabledNote = document.createElement('span');
+            disabledNote.style.cssText = 'font-size:10px;color:var(--text-tertiary);';
+            disabledNote.textContent = '(disabled)';
+            wfTitleEl.appendChild(disabledNote);
+          }}
+          wfTitleEl.appendChild(statusPill);
+          block.appendChild(wfTitleEl);
+
+          (wf.conditions || []).forEach(function(cond) {{
+            var row = document.createElement('div');
+            row.className = 'insp-cond-row';
+            var icon = document.createElement('span');
+            icon.className = 'insp-cond-icon';
+            icon.textContent = cond.passed ? '✓' : '×';
+            icon.style.color = cond.passed ? '#22c55e' : '#ef4444';
+            var label = document.createElement('span');
+            label.className = 'insp-cond-label';
+            label.textContent = cond.kind + (cond.params ? ' ' + JSON.stringify(cond.params) : '');
+            row.appendChild(icon);
+            row.appendChild(label);
+            block.appendChild(row);
+            if (!cond.passed && cond.reason) {{
+              var reason = document.createElement('div');
+              reason.className = 'insp-cond-reason';
+              reason.textContent = cond.reason;
+              block.appendChild(reason);
+            }}
+          }});
+
+          modalBody.appendChild(block);
+        }});
+      }})
+      .catch(function() {{
+        if (modalBody) modalBody.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:12px 0;">Failed to load eligibility data.</div>';
+      }});
+  }};
 }})();
 </script>
 

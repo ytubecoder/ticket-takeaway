@@ -524,9 +524,9 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
             workflows = conn.execute(
                 "SELECT id, name, trigger_json, on_success_json, steps, system "
                 "FROM workflows "
-                "WHERE enabled = 1 AND (id LIKE ? OR id NOT LIKE '%::%') "
+                "WHERE enabled = 1 AND project_id = ? "
                 "ORDER BY system DESC, id ASC",
-                (f"{project_id}::%",),
+                (project_id,),
             ).fetchall()
 
             if not workflows:

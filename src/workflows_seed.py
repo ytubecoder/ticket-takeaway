@@ -208,8 +208,8 @@ def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str,
             """
             INSERT INTO workflows
                 (id, name, description, steps, created_at, updated_at,
-                 system, enabled, trigger_json, on_success_json, subject_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 system, enabled, trigger_json, on_success_json, subject_type, project_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 wf_id,
@@ -223,6 +223,7 @@ def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str,
                 json.dumps(wf["trigger_json"], ensure_ascii=False),
                 json.dumps(wf.get("on_success_json", {}), ensure_ascii=False),
                 wf["subject_type"],
+                project_id,
             ),
         )
         inserted += 1

@@ -1760,6 +1760,77 @@ a {{ color: var(--accent); text-decoration: none; }}
 .run-pill-succeeded {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
 .run-pill-failed, .run-pill-stalled {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
 .run-pill-cancelled {{ background: rgba(107,114,128,0.15); color: #9ca3af; }}
+/* ── Workflow Conversation Feed (Phase 3C) ── */
+.wf-feed-header {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }}
+.wf-feed-header h3 {{ margin:0; font-size:13px; color:var(--text-secondary); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; }}
+.wf-feed-controls {{ display:flex; gap:4px; }}
+.wf-feed-toggle {{
+  font-size:11px; padding:3px 10px; border-radius:4px; cursor:pointer;
+  border:1px solid var(--border-default); background:transparent; color:var(--text-secondary);
+}}
+.wf-feed-toggle.active {{ background: var(--accent); color:#fff; border-color: var(--accent); }}
+.wf-feed-turns {{ display:flex; flex-direction:column; gap:6px; }}
+.wf-feed-turn {{
+  border:1px solid var(--border-subtle, var(--border-default));
+  border-radius:6px; padding:8px 10px; background: var(--bg-card);
+}}
+.wf-feed-turn-meta {{
+  display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-secondary); margin-bottom:4px;
+}}
+.wf-feed-turn-role {{
+  display:inline-block; padding:1px 6px; border-radius:3px; font-weight:600; font-size:10px;
+  text-transform:uppercase; letter-spacing:0.4px;
+}}
+.wf-feed-turn-role.role-system {{ background: rgba(96,165,250,0.18); color: #60a5fa; }}
+.wf-feed-turn-role.role-agent  {{ background: rgba(168,85,247,0.18); color: #a855f7; }}
+.wf-feed-turn-role.role-user   {{ background: rgba(34,197,94,0.18);  color: #22c55e; }}
+.wf-feed-turn-role.role-arbiter {{ background: rgba(245,158,11,0.18); color: #f59e0b; }}
+.wf-feed-turn-content {{
+  font-family: var(--font-mono, monospace); font-size: 11px;
+  white-space: pre-wrap; word-break: break-word; color: var(--text-primary);
+  line-height: 1.45;
+}}
+.wf-feed-turn-content.compact {{ max-height: 2.9em; overflow: hidden; position: relative; }}
+.wf-feed-turn-content.compact::after {{
+  content: ""; position: absolute; bottom: 0; left: 0; right: 0; height: 1.4em;
+  background: linear-gradient(transparent, var(--bg-card));
+  pointer-events: none;
+}}
+.wf-feed-turn-expand {{
+  font-size: 10px; color: var(--text-secondary); cursor: pointer;
+  background: transparent; border: 0; padding: 2px 4px; margin-top: 4px;
+}}
+.wf-feed-turn-expand:hover {{ color: var(--accent); }}
+.wf-feed-tool-chip {{
+  display: inline-block; padding: 1px 6px; margin: 1px 2px;
+  border-radius: 3px; font-size: 10px; font-family: var(--font-mono, monospace);
+  background: rgba(148,163,184,0.18); color: var(--text-secondary);
+}}
+.wf-feed-streaming-dot {{
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: #60a5fa; margin-right: 4px; animation: kitchen-pulse 1.4s ease-in-out infinite;
+}}
+.wf-feed-streaming-label {{
+  font-size: 10px; color: #60a5fa;
+}}
+.wf-feed-needs-input {{
+  margin-top: 10px; padding: 10px; border: 1px solid #f59e0b;
+  border-radius: 6px; background: rgba(245,158,11,0.06);
+}}
+.wf-feed-ni-prompt {{ font-size: 12px; color: var(--text-primary); margin-bottom: 6px; }}
+.wf-feed-ni-prompt::before {{ content: "Awaiting your input: "; color: #f59e0b; font-weight: 600; }}
+#wfFeedNiTextarea {{
+  width: 100%; resize: vertical; padding: 6px 8px; border: 1px solid var(--border-default);
+  border-radius: 4px; background: var(--bg-primary); color: var(--text-primary);
+  font: inherit; min-height: 50px; box-sizing: border-box;
+}}
+.wf-feed-ni-actions {{ display:flex; gap:6px; margin-top: 6px; }}
+.wf-feed-empty {{
+  padding: 12px; font-size: 12px; color: var(--text-secondary);
+  background: var(--bg-card); border: 1px dashed var(--border-default); border-radius: 6px;
+  text-align: center;
+}}
+/* end Workflow Conversation Feed */
 .run-summary {{ font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .run-meta {{ font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; font-variant-numeric: tabular-nums; }}
 .run-ws-link {{ font-size: 11px; color: var(--accent); text-decoration: none; word-break: break-all; }}
@@ -4507,6 +4578,29 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           <div class="run-history-list" id="run-history-list"></div>
         </div>
       </div>
+
+      <!-- Workflow Conversation Feed (Phase 3C) — hidden until runs exist -->
+      <section id="section-workflow-feed" class="hidden">
+        <div class="wf-feed-header">
+          <h3>Workflow Conversation</h3>
+          <div class="wf-feed-controls">
+            <button id="wfFeedToggleCompact" class="wf-feed-toggle" data-mode="compact" title="Compact view: hide tool calls, truncate long turns">Compact</button>
+            <button id="wfFeedToggleFull"    class="wf-feed-toggle" data-mode="full"    title="Full view: show every line">Full</button>
+          </div>
+        </div>
+        <div id="wfFeedTurns" class="wf-feed-turns"></div>
+        <div id="wfFeedNeedsInput" class="wf-feed-needs-input hidden">
+          <div class="wf-feed-ni-prompt"></div>
+          <textarea id="wfFeedNiTextarea" placeholder="Your reply..." rows="3"></textarea>
+          <div class="wf-feed-ni-actions">
+            <button id="wfFeedNiSend"   class="sp-btn primary" disabled>Send</button>
+            <button id="wfFeedNiCancel" class="sp-btn">Cancel</button>
+          </div>
+        </div>
+        <div id="wfFeedEmpty" class="wf-feed-empty hidden">
+          No workflow runs yet. Click <strong>Run</strong> in the Runs section above to start one.
+        </div>
+      </section>
 
       <!-- Gate banner (shown during column moves) -->
       <div class="detail-gate-banner hidden" id="detail-gate-banner">
@@ -10199,6 +10293,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
             startPolling(run.id);
           }}
         }});
+        // Phase 3C: update workflow conversation feed
+        if (typeof window.__renderWorkflowFeed === 'function') {{
+          window.__renderWorkflowFeed(runs);
+        }}
       }})
       .catch(function() {{}});
   }}
@@ -10524,6 +10622,265 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     }});
     observer.observe(overlay, {{ attributes: true }});
   }}
+}})();
+</script>
+
+<script>
+/* =========================================================
+   Phase 3C: Workflow Conversation Feed controller
+   ========================================================= */
+(function() {{
+  var feedSection  = document.getElementById('section-workflow-feed');
+  var feedTurns    = document.getElementById('wfFeedTurns');
+  var feedNi       = document.getElementById('wfFeedNeedsInput');
+  var feedNiPrompt = feedNi && feedNi.querySelector('.wf-feed-ni-prompt');
+  var feedNiText   = document.getElementById('wfFeedNiTextarea');
+  var feedNiSend   = document.getElementById('wfFeedNiSend');
+  var feedNiCancel = document.getElementById('wfFeedNiCancel');
+  var feedEmpty    = document.getElementById('wfFeedEmpty');
+  var btnCompact   = document.getElementById('wfFeedToggleCompact');
+  var btnFull      = document.getElementById('wfFeedToggleFull');
+
+  if (!feedSection) return;
+
+  var editApiMeta = document.querySelector('meta[name="edit-api"]');
+  var EDIT_API = editApiMeta ? editApiMeta.content : null;
+
+  var FEED_MODE_KEY = 'tt-workflow-feed-mode';
+  var TOOL_CALL_HIDE_PATTERNS = [
+    /^\s*<\/?(?:tool|function_calls|invoke)/i,
+    /^\s*<parameter\s/i,
+    /^\s*<tool_use_id\s/i,
+    /^\s*```(?:json|tool|tool_use)/,
+    /^\s*Tool:\s/,
+    /^\s*{{"tool"/,
+    /^\s*{{"name"\s*:\s*"[A-Z]/
+  ];
+
+  function getMode() {{
+    try {{ return localStorage.getItem(FEED_MODE_KEY) || 'compact'; }}
+    catch (e) {{ return 'compact'; }}
+  }}
+  function setMode(mode) {{
+    try {{ localStorage.setItem(FEED_MODE_KEY, mode); }} catch(e){{}}
+    if (btnCompact) btnCompact.classList.toggle('active', mode === 'compact');
+    if (btnFull)    btnFull.classList.toggle('active', mode === 'full');
+    rerenderFromCache();
+  }}
+
+  if (btnCompact) btnCompact.addEventListener('click', function() {{ setMode('compact'); }});
+  if (btnFull)    btnFull.addEventListener('click', function() {{ setMode('full'); }});
+
+  function isToolCallLine(line) {{
+    for (var i = 0; i < TOOL_CALL_HIDE_PATTERNS.length; i++) {{
+      if (TOOL_CALL_HIDE_PATTERNS[i].test(line)) return true;
+    }}
+    return false;
+  }}
+
+  function processCompactContent(raw) {{
+    var lines = (raw || '').split('\\n');
+    var visibleLines = [];
+    var hiddenCount = 0;
+    var inToolBlock = false;
+    for (var i = 0; i < lines.length; i++) {{
+      var ln = lines[i];
+      if (isToolCallLine(ln)) {{
+        hiddenCount++;
+        inToolBlock = /<\s*(tool|function_calls|invoke|parameter)[>\s/]/i.test(ln);
+        continue;
+      }}
+      if (inToolBlock) {{
+        hiddenCount++;
+        if (/<\s*\/(tool|function_calls|invoke|parameter)\s*>/i.test(ln)) inToolBlock = false;
+        continue;
+      }}
+      visibleLines.push(ln);
+    }}
+    return {{ text: visibleLines.join('\\n'), hidden: hiddenCount }};
+  }}
+
+  function fmtRelTime(ts) {{
+    if (!ts) return '';
+    var t = Date.parse(ts);
+    if (!t) return '';
+    var s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+    if (s < 60)  return s + 's ago';
+    if (s < 3600) return Math.floor(s/60) + 'm ago';
+    if (s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  }}
+
+  var _lastTurnsCache = [];
+
+  function rerenderFromCache() {{
+    renderTurns(_lastTurnsCache);
+  }}
+
+  function renderTurns(turns) {{
+    _lastTurnsCache = turns;
+    var mode = getMode();
+    feedTurns.innerHTML = '';
+    if (!turns.length) {{
+      feedTurns.style.display = 'none';
+      if (feedEmpty) feedEmpty.classList.remove('hidden');
+      return;
+    }}
+    feedTurns.style.display = '';
+    if (feedEmpty) feedEmpty.classList.add('hidden');
+    turns.forEach(function(t, idx) {{
+      feedTurns.appendChild(buildTurnEl(t, idx, mode));
+    }});
+  }}
+
+  function buildTurnEl(turn, idx, mode) {{
+    var box = document.createElement('div');
+    box.className = 'wf-feed-turn';
+    box.dataset.role = turn.role || 'system';
+
+    var meta = document.createElement('div');
+    meta.className = 'wf-feed-turn-meta';
+    var role = document.createElement('span');
+    role.className = 'wf-feed-turn-role role-' + (turn.role || 'system');
+    role.textContent = (turn.role || 'system').toUpperCase();
+    meta.appendChild(role);
+
+    var label = document.createElement('span');
+    var labelText = '';
+    if (turn.agent) labelText += turn.agent + ' ';
+    if (typeof turn.step !== 'undefined' && turn.step !== null) labelText += 'Step ' + (turn.step + 1) + ' ';
+    if (turn.run_id) labelText += '· run ' + turn.run_id;
+    label.textContent = labelText.trim();
+    meta.appendChild(label);
+
+    if (turn.streaming) {{
+      var dot = document.createElement('span'); dot.className = 'wf-feed-streaming-dot';
+      var stLabel = document.createElement('span'); stLabel.className = 'wf-feed-streaming-label'; stLabel.textContent = 'streaming';
+      meta.appendChild(dot); meta.appendChild(stLabel);
+    }} else if (typeof turn.exit_code !== 'undefined' && turn.exit_code !== 0 && turn.role === 'agent') {{
+      var ex = document.createElement('span'); ex.style.color = '#ef4444'; ex.style.fontSize = '10px';
+      ex.textContent = 'exit ' + turn.exit_code;
+      meta.appendChild(ex);
+    }}
+
+    var ts = document.createElement('span'); ts.style.marginLeft = 'auto'; ts.style.opacity = '0.6';
+    ts.textContent = fmtRelTime(turn.ts);
+    meta.appendChild(ts);
+
+    box.appendChild(meta);
+
+    var content = document.createElement('div');
+    content.className = 'wf-feed-turn-content';
+    var raw = turn.content || '';
+    var processed = (mode === 'compact') ? processCompactContent(raw) : {{ text: raw, hidden: 0 }};
+    content.textContent = processed.text;
+    if (mode === 'compact') content.classList.add('compact');
+    box.appendChild(content);
+
+    if (mode === 'compact' && processed.hidden > 0) {{
+      var chip = document.createElement('span');
+      chip.className = 'wf-feed-tool-chip';
+      chip.textContent = processed.hidden + ' tool-call line' + (processed.hidden === 1 ? '' : 's') + ' hidden';
+      box.appendChild(chip);
+    }}
+
+    if (mode === 'compact') {{
+      var expand = document.createElement('button');
+      expand.className = 'wf-feed-turn-expand';
+      expand.textContent = '+ expand';
+      expand.addEventListener('click', function() {{
+        if (content.classList.contains('compact')) {{
+          content.classList.remove('compact');
+          content.textContent = raw;
+          expand.textContent = '− collapse';
+        }} else {{
+          content.classList.add('compact');
+          content.textContent = processed.text;
+          expand.textContent = '+ expand';
+        }}
+      }});
+      box.appendChild(expand);
+    }}
+
+    return box;
+  }}
+
+  window.__renderWorkflowFeed = function(runs) {{
+    if (!runs || !runs.length) {{
+      feedSection.classList.add('hidden');
+      _lastTurnsCache = [];
+      renderTurns([]);
+      return;
+    }}
+    feedSection.classList.remove('hidden');
+    var allTurns = [];
+    runs.slice().sort(function(a, b) {{
+      return (a.started_at || '').localeCompare(b.started_at || '');
+    }}).forEach(function(r) {{
+      var conv = r.conversation || [];
+      conv.forEach(function(t) {{
+        var stamped = Object.assign({{}}, t);
+        stamped.run_id = r.id;
+        allTurns.push(stamped);
+      }});
+    }});
+    renderTurns(allTurns);
+
+    // needs_input panel
+    var latest = runs[runs.length - 1];
+    if (latest && latest.status === 'needs_input') {{
+      var promptText = latest.needs_input_prompt ||
+        (latest.conversation && latest.conversation.length
+          ? latest.conversation[latest.conversation.length - 1].content.split('\\n')[0]
+          : 'Awaiting input.');
+      if (feedNi) feedNi.classList.remove('hidden');
+      if (feedNiPrompt) feedNiPrompt.textContent = promptText;
+      if (feedNiSend) feedNiSend.dataset.runId = latest.id;
+      if (feedNiCancel) feedNiCancel.dataset.runId = latest.id;
+    }} else {{
+      if (feedNi) feedNi.classList.add('hidden');
+    }}
+  }};
+
+  // textarea enables Send button
+  if (feedNiText && feedNiSend) {{
+    feedNiText.addEventListener('input', function() {{
+      feedNiSend.disabled = !this.value.trim();
+    }});
+    feedNiText.addEventListener('keydown', function(e) {{
+      if (e.ctrlKey && e.key === 'Enter' && !feedNiSend.disabled) feedNiSend.click();
+    }});
+  }}
+
+  if (feedNiSend && EDIT_API) {{
+    feedNiSend.addEventListener('click', function() {{
+      var rid = this.dataset.runId;
+      var txt = feedNiText ? feedNiText.value.trim() : '';
+      if (!rid || !txt) return;
+      feedNiSend.disabled = true;
+      fetch(EDIT_API + '/workflow/runs/' + encodeURIComponent(rid) + '/respond',
+        {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify({{ response: txt }}) }})
+        .then(function(r) {{ return r.json(); }})
+        .then(function() {{
+          if (feedNiText) feedNiText.value = '';
+          if (typeof showAppToast === 'function') showAppToast('Response sent', 'success');
+        }})
+        .catch(function() {{
+          if (typeof showAppToast === 'function') showAppToast('Failed to send response', 'error');
+          feedNiSend.disabled = false;
+        }});
+    }});
+  }}
+
+  if (feedNiCancel) {{
+    feedNiCancel.addEventListener('click', function() {{
+      if (feedNiText) feedNiText.value = '';
+      if (feedNi) feedNi.classList.add('hidden');
+    }});
+  }}
+
+  // Apply initial mode
+  setMode(getMode());
 }})();
 </script>
 

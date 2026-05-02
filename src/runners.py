@@ -376,8 +376,10 @@ class AgentRunner(Runner):
         """Apply on_success_json actions from a DB workflow after a successful run.
 
         Supported actions:
-          move_to:    move ticket to the named section
-          set_status: set ticket status
+          move_to:     move ticket to the named section
+          set_status:  set ticket status
+          add_tags:    list[str] — tags to add (creates if missing)
+          remove_tags: list[str] — tags to remove
         """
         on_success = workflow_meta.get("on_success") or {}
         if not on_success:
@@ -388,10 +390,19 @@ class AgentRunner(Runner):
             try:
                 move_to = on_success.get("move_to")
                 set_status = on_success.get("set_status")
+                add_tags = on_success.get("add_tags") or []
+                remove_tags = on_success.get("remove_tags") or []
                 if move_to:
                     move_ticket(conn, project_id, ticket_id, move_to, actor=actor)
+                update_kwargs = {}
                 if set_status:
-                    update_ticket(conn, project_id, ticket_id, status=set_status, actor=actor)
+                    update_kwargs["status"] = set_status
+                if add_tags:
+                    update_kwargs["add_tags"] = list(add_tags) if not isinstance(add_tags, list) else add_tags
+                if remove_tags:
+                    update_kwargs["remove_tags"] = list(remove_tags) if not isinstance(remove_tags, list) else remove_tags
+                if update_kwargs:
+                    update_ticket(conn, project_id, ticket_id, actor=actor, **update_kwargs)
                 conn.commit()
             finally:
                 conn.close()

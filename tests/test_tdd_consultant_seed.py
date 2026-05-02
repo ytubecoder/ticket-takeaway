@@ -20,8 +20,9 @@ from workflows_seed import (
     seed_default_workflows,
     DEFAULT_AGENTS,
     DEFAULT_WORKFLOWS,
-    ROUND_1_REVIEW_TEMPLATE,
-    ROUND_2_FOLLOWUP_TEMPLATE,
+    INITIAL_PLAN_TEMPLATE,
+    CONSULTANT_REVIEW_TEMPLATE,
+    MEDIATION_SYNTHESIS_TEMPLATE,
 )
 
 
@@ -88,17 +89,18 @@ class TestMigration11:
 # ---------------------------------------------------------------------------
 
 class TestSeedDefaultAgents:
-    def test_inserts_consultant_on_first_call(self, conn):
+    def test_inserts_default_agents_on_first_call(self, conn):
         result = seed_default_agents(conn)
-        assert result["inserted"] == 1
+        assert result["inserted"] == len(DEFAULT_AGENTS)
         assert result["existing"] == 0
 
     def test_idempotent_second_call(self, conn):
         first = seed_default_agents(conn)
         second = seed_default_agents(conn)
-        assert first["inserted"] == 1
+        # 2 default agents now: Planner + Consultant
+        assert first["inserted"] == len(DEFAULT_AGENTS)
         assert second["inserted"] == 0
-        assert second["existing"] == 1
+        assert second["existing"] == len(DEFAULT_AGENTS)
 
     def test_consultant_row_values(self, conn):
         seed_default_agents(conn)
@@ -109,7 +111,21 @@ class TestSeedDefaultAgents:
         assert row is not None
         assert row["name"] == "Consultant"
         assert row["command"] == "codex"
-        assert row["args"] == "exec"
+        # Sandboxed read-only mirrors `/plan-check`
+        assert row["args"] == "exec -s read-only"
+        assert row["system_prompt"] == ""
+        assert row["persist_session"] == 1
+
+    def test_planner_row_values(self, conn):
+        seed_default_agents(conn)
+        row = conn.execute(
+            "SELECT id, name, command, args, system_prompt, persist_session "
+            "FROM workflow_agents WHERE id = 'agent_planner'"
+        ).fetchone()
+        assert row is not None
+        assert row["name"] == "Planner"
+        assert row["command"] == "claude"
+        assert row["args"] == "-p"
         assert row["system_prompt"] == ""
         assert row["persist_session"] == 1
 
@@ -118,6 +134,14 @@ class TestSeedDefaultAgents:
         seed_default_agents(conn)
         count = conn.execute(
             "SELECT COUNT(*) FROM workflow_agents WHERE id = 'agent_consultant'"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_only_one_planner_after_two_calls(self, conn):
+        seed_default_agents(conn)
+        seed_default_agents(conn)
+        count = conn.execute(
+            "SELECT COUNT(*) FROM workflow_agents WHERE id = 'agent_planner'"
         ).fetchone()[0]
         assert count == 1
 
@@ -233,44 +257,55 @@ class TestPlanCheckWorkflowManifest:
         wf = self._plan_check()
         assert wf["on_success_json"] == {}
 
-    def test_plan_check_has_two_steps(self):
+    def test_plan_check_has_three_steps(self):
         wf = self._plan_check()
-        assert len(wf["steps"]) == 2
+        assert len(wf["steps"]) == 3
 
-    def test_plan_check_step1_agent_is_consultant(self):
+    def test_plan_check_step1_agent_is_planner(self):
         wf = self._plan_check()
-        assert wf["steps"][0]["agent_id"] == "agent_consultant"
+        assert wf["steps"][0]["agent_id"] == "agent_planner"
 
     def test_plan_check_step2_agent_is_consultant(self):
         wf = self._plan_check()
         assert wf["steps"][1]["agent_id"] == "agent_consultant"
 
-    def test_plan_check_step2_has_use_resume_true(self):
+    def test_plan_check_step3_agent_is_planner(self):
         wf = self._plan_check()
-        assert wf["steps"][1].get("use_resume") is True
+        assert wf["steps"][2]["agent_id"] == "agent_planner"
 
-    def test_plan_check_step1_uses_round1_template(self):
+    def test_plan_check_step3_has_use_resume_true(self):
         wf = self._plan_check()
-        assert wf["steps"][0]["prompt_template"] == ROUND_1_REVIEW_TEMPLATE
+        assert wf["steps"][2].get("use_resume") is True
 
-    def test_plan_check_step2_uses_round2_template(self):
+    def test_plan_check_step1_uses_initial_plan_template(self):
         wf = self._plan_check()
-        assert wf["steps"][1]["prompt_template"] == ROUND_2_FOLLOWUP_TEMPLATE
+        assert wf["steps"][0]["prompt_template"] == INITIAL_PLAN_TEMPLATE
 
-    def test_round1_template_contains_ticket_placeholders(self):
-        assert "{{ticket.id}}" in ROUND_1_REVIEW_TEMPLATE
-        assert "{{ticket.title}}" in ROUND_1_REVIEW_TEMPLATE
-        assert "{{ticket.description}}" in ROUND_1_REVIEW_TEMPLATE
-        assert "{{ticket.acceptance_criteria}}" in ROUND_1_REVIEW_TEMPLATE
+    def test_plan_check_step2_uses_consultant_review_template(self):
+        wf = self._plan_check()
+        assert wf["steps"][1]["prompt_template"] == CONSULTANT_REVIEW_TEMPLATE
 
-    def test_round2_template_contains_last_agent_response_placeholder(self):
-        assert "{{conversation.last_agent_response}}" in ROUND_2_FOLLOWUP_TEMPLATE
+    def test_plan_check_step3_uses_mediation_template(self):
+        wf = self._plan_check()
+        assert wf["steps"][2]["prompt_template"] == MEDIATION_SYNTHESIS_TEMPLATE
 
-    def test_round1_template_mentions_severity(self):
-        assert "severity" in ROUND_1_REVIEW_TEMPLATE
+    def test_initial_plan_template_contains_ticket_placeholders(self):
+        assert "{{ticket.id}}" in INITIAL_PLAN_TEMPLATE
+        assert "{{ticket.title}}" in INITIAL_PLAN_TEMPLATE
+        assert "{{ticket.description}}" in INITIAL_PLAN_TEMPLATE
+        assert "{{ticket.acceptance_criteria}}" in INITIAL_PLAN_TEMPLATE
 
-    def test_round2_template_mentions_final_verdict(self):
-        assert "verdict" in ROUND_2_FOLLOWUP_TEMPLATE.lower()
+    def test_consultant_template_references_prior_agent_response(self):
+        assert "{{conversation.last_agent_response}}" in CONSULTANT_REVIEW_TEMPLATE
+
+    def test_mediation_template_references_prior_agent_response(self):
+        assert "{{conversation.last_agent_response}}" in MEDIATION_SYNTHESIS_TEMPLATE
+
+    def test_consultant_template_mentions_severity(self):
+        assert "severity" in CONSULTANT_REVIEW_TEMPLATE.lower()
+
+    def test_mediation_template_mentions_final_verdict(self):
+        assert "verdict" in MEDIATION_SYNTHESIS_TEMPLATE.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -314,15 +349,15 @@ class TestSeedDefaultWorkflowsWithPlanCheck:
         assert row is not None
         assert json.loads(row["on_success_json"]) == {}
 
-    def test_plan_check_step2_use_resume_in_stored_steps(self, conn):
+    def test_plan_check_step3_use_resume_in_stored_steps(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         row = conn.execute(
             "SELECT steps FROM workflows WHERE name = 'Plan Check' AND id LIKE ?",
             (f"{PROJECT_ID}::%",),
         ).fetchone()
         steps = json.loads(row["steps"])
-        assert len(steps) == 2
-        assert steps[1].get("use_resume") is True
+        assert len(steps) == 3
+        assert steps[2].get("use_resume") is True
 
     def test_idempotent_second_run_still_six(self, conn):
         seed_default_workflows(conn, PROJECT_ID)

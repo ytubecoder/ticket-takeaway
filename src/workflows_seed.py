@@ -29,12 +29,24 @@ def _ticket_prompt(action: str) -> str:
 # ---------------------------------------------------------------------------
 
 DEFAULT_AGENTS: list[dict] = [
+    # Planner: Claude. Drafts the plan in step 1, mediates Codex in step 3.
+    # persist_session lets step 3 resume step 1's session — Planner remembers
+    # its own plan when synthesizing the Consultant's review.
+    {
+        "id": "agent_planner",
+        "name": "Planner",
+        "command": "claude",
+        "args": "-p",
+        "system_prompt": "",   # /plan-check sets none — templates carry the instructions
+        "persist_session": 1,
+    },
+    # Consultant: Codex, sandboxed read-only (mirrors `/plan-check` exactly).
     {
         "id": "agent_consultant",
         "name": "Consultant",
         "command": "codex",
-        "args": "exec",
-        "system_prompt": "",   # plan-check sets none — prompt template carries instructions
+        "args": "exec -s read-only",
+        "system_prompt": "",
         "persist_session": 1,
     },
 ]
@@ -44,10 +56,33 @@ DEFAULT_AGENTS: list[dict] = [
 # Plan Check prompt templates
 # ---------------------------------------------------------------------------
 
-ROUND_1_REVIEW_TEMPLATE = """\
-Review the following plan files for completeness, risks, and feasibility.
+# Step 1 — Planner (Claude) drafts an implementation plan from ticket context.
+# This mirrors `/plan-check`'s assumed precondition: a plan already exists in
+# Claude's context. Here we make Claude produce one, with the ticket as input,
+# so the Planner is never cold when it later mediates the Consultant's review.
+INITIAL_PLAN_TEMPLATE = """\
+You are the Planner for ticket {{ticket.id}}. Draft a concrete implementation
+plan that another reviewer can critique. Cover: approach, sequencing, risks,
+dependencies, edge cases, and how each acceptance criterion will be satisfied.
 
-For each file, assess:
+# Ticket {{ticket.id}}: {{ticket.title}}
+
+{{ticket.description}}
+
+## Acceptance criteria
+{{ticket.acceptance_criteria}}
+
+After this plan, a Consultant will review it for completeness and risks. You
+will then mediate their feedback. Write the plan as if you'll defend it.\
+"""
+
+# Step 2 — Consultant (Codex, read-only) reviews the Planner's plan.
+# Verbatim from `/plan-check` Round 1, but $PLAN_CONTENTS is the Planner's
+# previous turn (not raw ticket fields).
+CONSULTANT_REVIEW_TEMPLATE = """\
+Review the following plan for completeness, risks, and feasibility.
+
+Assess:
 - Missing requirements or edge cases
 - Technical risks or blockers
 - Dependencies that aren't accounted for
@@ -58,28 +93,34 @@ For each file, assess:
 Be specific — reference sections by name.
 Flag severity: critical (blocks implementation), warning (likely problem), or note (suggestion).
 
-Plan files:
+Plan to review:
 
-# Ticket {{ticket.id}}: {{ticket.title}}
-
-{{ticket.description}}
-
-## Acceptance criteria
-{{ticket.acceptance_criteria}}\
+{{conversation.last_agent_response}}\
 """
 
-ROUND_2_FOLLOWUP_TEMPLATE = """\
-This is round 2 of 2.
+# Step 3 — Planner (Claude, RESUMED from step 1) synthesizes the Consultant's
+# findings against its own plan. This is the mediator step `/plan-check`
+# describes ("Claude does NOT just pass the output through — Claude acts as an
+# informed mediator"). Because session is resumed, the Planner remembers its
+# original plan and can compare against it.
+MEDIATION_SYNTHESIS_TEMPLATE = """\
+The Consultant has reviewed your plan. Synthesize their feedback against what
+you originally proposed.
 
-Prior round findings:
-{{conversation.last_agent_response}}
+For each finding, classify it:
+- AGREE — the point is valid, plan should change. State what changes.
+- PARTIAL — there's merit but severity is off, or it's mitigated. Explain.
+- DISAGREE — Consultant is wrong, misunderstood, or over-cautious. Push back
+  with reasons drawn from your context.
 
-Focus this round on:
-- Anything from prior round still ambiguous
-- New issues that surface given the prior findings
-- A final verdict: Ready / Needs revision
+Then produce:
+- An updated plan reflecting accepted changes
+- A list of unresolved items the user must decide on
+- A final verdict: READY / NEEDS REVISION / NEEDS USER INPUT
 
-Re-flag severity for any remaining items.\
+Consultant's review:
+
+{{conversation.last_agent_response}}\
 """
 
 
@@ -227,34 +268,46 @@ DEFAULT_WORKFLOWS: list[dict] = [
             }
         ],
     },
-    # 6. Plan Check: iterative second-opinion review via Codex (manual only)
+    # 6. Plan Check: Planner → Consultant → Planner (mediator), modelled on /plan-check.
+    #    Step 1 starts Claude warm with ticket context; step 3 resumes Claude's session
+    #    so it remembers its own plan when synthesizing the Consultant's review.
+    #    Manual trigger only (trigger_json: null).
     {
         "name": "Plan Check",
         "description": (
-            "Iterative second-opinion review modelled on /plan-check. "
-            "Codex reviews the ticket across 2 rounds; warm session resumed between rounds. "
+            "Plan-check pattern modelled on /plan-check. "
+            "Step 1: Planner (Claude) drafts a plan from the ticket. "
+            "Step 2: Consultant (Codex, read-only) reviews the plan. "
+            "Step 3: Planner mediates Codex's findings and produces a final verdict. "
             "Manual run only."
         ),
         "system": 1,
         "enabled": 1,
         "subject_type": "ticket",
-        "trigger_json": None,          # no auto-fire — manual trigger only
-        "on_success_json": {},         # surfacing IS the value, no auto move/status
+        "trigger_json": None,
+        "on_success_json": {},
         "steps": [
             {
-                "agent_id": "agent_consultant",
-                "agent_name": "Consultant",
-                "prompt_template": ROUND_1_REVIEW_TEMPLATE,
+                "agent_id": "agent_planner",
+                "agent_name": "Planner",
+                "prompt_template": INITIAL_PLAN_TEMPLATE,
                 "on_failure": "pause",
                 "timeout_ms": 300000,
             },
             {
                 "agent_id": "agent_consultant",
                 "agent_name": "Consultant",
-                "prompt_template": ROUND_2_FOLLOWUP_TEMPLATE,
+                "prompt_template": CONSULTANT_REVIEW_TEMPLATE,
                 "on_failure": "pause",
                 "timeout_ms": 300000,
-                "use_resume": True,    # consumed in Phase 2 runner change
+            },
+            {
+                "agent_id": "agent_planner",
+                "agent_name": "Planner",
+                "prompt_template": MEDIATION_SYNTHESIS_TEMPLATE,
+                "on_failure": "pause",
+                "timeout_ms": 300000,
+                "use_resume": True,
             },
         ],
     },
@@ -375,35 +428,54 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str, int]:
-    """Insert any missing system workflows for *project_id*.  Idempotent.
+    """Insert missing system workflows for *project_id*; sync canonical fields
+    on existing system rows so seed-definition changes propagate. Idempotent.
 
-    Matches existing rows by (project_id, name, system=1).  Does NOT
-    overwrite existing system workflows.
+    Existing user (`system=0`) workflows are never touched. For `system=1` rows,
+    description / steps / trigger_json / on_success_json / subject_type are
+    overwritten from the seed definition; `enabled` is preserved (so a user who
+    disabled a default keeps it disabled).
 
-    Returns {"inserted": N, "existing": M}.
+    Returns {"inserted": N, "updated": M, "existing": K}.
     """
     inserted = 0
+    updated = 0
     existing = 0
     now = datetime.now(timezone.utc).isoformat()
 
     for wf in DEFAULT_WORKFLOWS:
-        # Check by (project_id, name, system=1) in the workflows table.
-        # The workflows table uses TEXT id (UUID-style), not project_id, so
-        # we store project_id via a convention: name is unique per project for
-        # system workflows.  We match on name + system flag.
         row = db.execute(
-            "SELECT id FROM workflows WHERE name = ? AND system = 1 "
-            "AND id LIKE ?",
+            "SELECT id, description, steps, trigger_json, on_success_json, subject_type "
+            "FROM workflows WHERE name = ? AND system = 1 AND id LIKE ?",
             (wf["name"], f"{project_id}::%"),
         ).fetchone()
 
+        steps_json = json.dumps(wf["steps"], ensure_ascii=False)
+        trigger_json = json.dumps(wf["trigger_json"], ensure_ascii=False)
+        on_success_json = json.dumps(wf.get("on_success_json", {}), ensure_ascii=False)
+
         if row:
-            existing += 1
+            wf_id = row[0] if not hasattr(row, "keys") else row["id"]
+            cur = (
+                row[1] if not hasattr(row, "keys") else row["description"],
+                row[2] if not hasattr(row, "keys") else row["steps"],
+                row[3] if not hasattr(row, "keys") else row["trigger_json"],
+                row[4] if not hasattr(row, "keys") else row["on_success_json"],
+                row[5] if not hasattr(row, "keys") else row["subject_type"],
+            )
+            target = (wf["description"], steps_json, trigger_json, on_success_json, wf["subject_type"])
+            if cur != target:
+                db.execute(
+                    "UPDATE workflows SET description=?, steps=?, trigger_json=?, "
+                    "on_success_json=?, subject_type=?, updated_at=? WHERE id=?",
+                    (*target, now, wf_id),
+                )
+                updated += 1
+            else:
+                existing += 1
             continue
 
         wf_id = f"{project_id}::sys::{wf['name'].lower().replace(' ', '-').replace('→', 'to')}"
-
-        steps_with_project = wf["steps"]  # keep as-is; agent_id resolved at runtime
 
         db.execute(
             """
@@ -416,13 +488,13 @@ def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str,
                 wf_id,
                 wf["name"],
                 wf["description"],
-                json.dumps(steps_with_project, ensure_ascii=False),
+                steps_json,
                 now,
                 now,
                 wf["system"],
                 wf["enabled"],
-                json.dumps(wf["trigger_json"], ensure_ascii=False),
-                json.dumps(wf.get("on_success_json", {}), ensure_ascii=False),
+                trigger_json,
+                on_success_json,
                 wf["subject_type"],
                 project_id,
             ),
@@ -430,4 +502,4 @@ def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str,
         inserted += 1
 
     db.commit()
-    return {"inserted": inserted, "existing": existing}
+    return {"inserted": inserted, "updated": updated, "existing": existing}

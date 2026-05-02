@@ -131,6 +131,15 @@ Priority: high | Complexity: M | Status: for-review
 
 ## Backlog
 
+### B-23: Editable AI suggestions before accepting
+Priority: medium | Complexity: M | Status: proposed
+Parent: B-17
+Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
+
+### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
+Priority: high | Complexity: M | Status: proposed
+Auto-triggers when session attaches. Reads session.md + summary.json + ticket context. Claude CLI with structured prompt. Creates draft child tickets under parent. Re-triage button. 90s timeout. Depends: B-24, B-25, B-29.
+
 ### I-18: Add auto-start recording setting for feedbacks widget
 Priority: medium | Complexity: S | Status: proposed
 Add feedbacks.autostart boolean setting so Record button opens widget with ?autostart=1, skipping the Start Recording click. Feedbacks already supports the param — just append it to the URL in serve.py and add a toggle in the settings UI.
@@ -150,11 +159,6 @@ Collapsed cards show only title, ID, status badge, and metadata — no descripti
 - [ ] Preview text is selectable but not interactive
 - [ ] Works for both kanban cards and bottom list rows
 
-### B-21: Re-assess button — always visible with loading feedback
-Priority: medium | Complexity: S | Status: proposed
-Parent: B-17
-Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
-
 ### B-44: Add 'Ready' pill to auto+eligible kanban cards
 Priority: medium | Complexity: S | Status: proposed
 When a ticket is in auto mode AND eligibility checks pass, show a green 'Ready' pill in the card meta row. Today the only signal is the subtle gray kitchen-badge dot, which triggers off automation_mode alone — not strict eligibility — so a ticket marked auto but missing acceptance criteria still shows the dot. The Eligible filter chip in the top bar is currently the only place that reflects real eligibility, which is too easy to miss.
@@ -163,6 +167,11 @@ When a ticket is in auto mode AND eligibility checks pass, show a green 'Ready' 
 - [ ] Pill hidden on auto-mode tickets that fail eligibility
 - [ ] Pill replaced by the run-state indicator when a run is active (queued/running/needs-input/failed)
 - [ ] Hover tooltip reads 'Eligible — would dispatch on next tick'
+
+### B-21: Re-assess button — always visible with loading feedback
+Priority: medium | Complexity: S | Status: proposed
+Parent: B-17
+Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
 
 ### B-45: Show eligibility reasons in ticket detail overlay when not ready
 Priority: medium | Complexity: S | Status: proposed
@@ -182,15 +191,6 @@ Auto-mode cards that fail eligibility need a quick on-card view of why. Today sc
 - [ ] No icon shown on manual-mode cards
 - [ ] No icon shown when the ticket is fully eligible (the Ready pill from ticket #1 takes over)
 - [ ] Reasons sourced from automation_eligibility_reasons already in the ticket JSON — no extra API call
-
-### B-23: Editable AI suggestions before accepting
-Priority: medium | Complexity: M | Status: proposed
-Parent: B-17
-Make .diff-hunk-new contentEditable in renderDiffUI. User can edit AI suggestion text before clicking Apply. Mutate hunk.suggested in-place on input event. _applyDiffHunks reads edited value automatically. Add focus CSS for editable hunks.
-
-### B-31: AI triage pipeline — auto-trigger, Claude CLI, draft child ticket creation
-Priority: high | Complexity: M | Status: proposed
-Auto-triggers when session attaches. Reads session.md + summary.json + ticket context. Claude CLI with structured prompt. Creates draft child tickets under parent. Re-triage button. 90s timeout. Depends: B-24, B-25, B-29.
 
 ## Ideas
 
@@ -264,6 +264,9 @@ test pet
 - [ ] markdown-criteria-test 1775127571
 
 ## Bugs
+
+### BUG-01: Sample bug — placeholder for Live tab demo
+Priority: high | Complexity: M | Status: bug
 
 ## Icebox
 

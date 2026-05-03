@@ -17,6 +17,89 @@ from pathlib import Path
 
 
 REPO_DIR = Path(__file__).resolve().parent
+VALID_TARGETS = ("auto", "claude", "codex", "both", "none")
+CODEX_CURRENT_ENV = (
+    "CODEX_CI",
+    "CODEX_SANDBOX",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+    "CODEX_THREAD_ID",
+)
+CLAUDE_CURRENT_ENV_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE")
+SKILL_SOURCES = [
+    ("ticket-takeaway", "src/skills/ticket-takeaway/SKILL.md"),
+    ("review", "src/skills/review/SKILL.md"),
+    ("spec", "src/skills/spec/SKILL.md"),
+    ("accept", "src/skills/accept/SKILL.md"),
+    ("feedbacks", "src/skills/feedbacks/SKILL.md"),
+]
+
+
+def _home(home: Path | str | None = None) -> Path:
+    return Path(home).expanduser() if home is not None else Path.home()
+
+
+def _env(env=None):
+    return os.environ if env is None else env
+
+
+def get_claude_home(home: Path | str | None = None) -> Path:
+    return _home(home) / ".claude"
+
+
+def get_codex_home(env=None, home: Path | str | None = None) -> Path:
+    env = _env(env)
+    configured = env.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else _home(home) / ".codex"
+
+
+def get_skill_dir(agent: str, env=None, home: Path | str | None = None) -> Path:
+    if agent == "claude":
+        return get_claude_home(home) / "skills"
+    if agent == "codex":
+        return get_codex_home(env, home) / "skills"
+    raise ValueError(f"Unsupported skill target: {agent}")
+
+
+def detect_auto_target(env=None, home: Path | str | None = None) -> str:
+    """Resolve --target auto to one agent, avoiding cross-agent skill writes."""
+    env = _env(env)
+    explicit = env.get("TICKET_TAKEAWAY_AGENT", "").strip().lower()
+    if explicit in {"claude", "codex"}:
+        return explicit
+
+    codex_current = any(key in env for key in CODEX_CURRENT_ENV)
+    claude_current = any(key.startswith(CLAUDE_CURRENT_ENV_PREFIXES) for key in env)
+    if codex_current and not claude_current:
+        return "codex"
+    if claude_current and not codex_current:
+        return "claude"
+    if env.get("CODEX_HOME") and not claude_current:
+        return "codex"
+
+    codex_present = get_codex_home(env, home).exists()
+    claude_present = get_claude_home(home).exists()
+    if codex_present and not claude_present:
+        return "codex"
+
+    # Historical default: when ambiguous or fresh, install Claude skills.
+    return "claude"
+
+
+def resolve_skill_targets(target: str = "auto", env=None, home: Path | str | None = None):
+    """Return (agent, skills_dir) pairs for the requested skill install target."""
+    if target not in VALID_TARGETS:
+        raise ValueError(f"Unsupported skill target: {target}")
+    if target == "none":
+        return []
+    if target == "both":
+        agents = ["claude", "codex"]
+    elif target == "auto":
+        agents = [detect_auto_target(env, home)]
+    else:
+        agents = [target]
+    return [(agent, get_skill_dir(agent, env, home)) for agent in agents]
+
+
 INSTALL_DIR = Path.home() / ".claude" / "ticket-takeaway"
 DASHBOARD_DIR = Path.home() / ".claude" / "dashboard"
 SKILLS_DIR = Path.home() / ".claude" / "skills"
@@ -32,9 +115,10 @@ def copy_file(src: Path, dst: Path, label: str = ""):
         print(f"  {label}: {dst}")
 
 
-def install_system_files():
+def install_system_files(target: str = "auto") -> list[str]:
     """Copy CLI, generator, and skills to runtime locations."""
     print("Installing system files...")
+    skill_targets = resolve_skill_targets(target)
 
     # Core files
     copy_file(REPO_DIR / "src" / "tickets-cli.py", INSTALL_DIR / "tickets-cli.py", "CLI")
@@ -58,18 +142,14 @@ def install_system_files():
     dashboard_gen.write_text(text, encoding="utf-8")
 
     # Skills
-    skills = [
-        ("ticket-takeaway", "src/skills/ticket-takeaway/SKILL.md"),
-        ("review", "src/skills/review/SKILL.md"),
-        ("spec", "src/skills/spec/SKILL.md"),
-        ("accept", "src/skills/accept/SKILL.md"),
-        ("feedbacks", "src/skills/feedbacks/SKILL.md"),
-    ]
-    for skill_name, src_path in skills:
-        src = REPO_DIR / src_path
-        if src.exists():
-            dst = SKILLS_DIR / skill_name / "SKILL.md"
-            copy_file(src, dst, f"Skill: /{skill_name}")
+    if not skill_targets:
+        print("  Skills: skipped (--target none)")
+    for agent, skills_dir in skill_targets:
+        for skill_name, src_path in SKILL_SOURCES:
+            src = REPO_DIR / src_path
+            if src.exists():
+                dst = skills_dir / skill_name / "SKILL.md"
+                copy_file(src, dst, f"Skill ({agent}): /{skill_name}")
 
     # Registry template (only if registry doesn't exist yet)
     example = REPO_DIR / "src" / "registry.example.json"
@@ -79,6 +159,7 @@ def install_system_files():
         print(f"  Registry: kept existing {REGISTRY_PATH}")
 
     print("System files installed.")
+    return [agent for agent, _ in skill_targets]
 
 
 def register_project(project_id: str = None, project_name: str = None, project_path: str = None):
@@ -146,11 +227,16 @@ def main():
     parser.add_argument("--path", help="Project path (default: current directory)")
     parser.add_argument("--no-seed", action="store_true",
                         help="Skip seeding the DB from markdown")
+    parser.add_argument("--target", choices=VALID_TARGETS, default="auto",
+                        help=("Skill install target: auto detects the current agent, "
+                              "claude installs to ~/.claude/skills, codex installs to "
+                              "$CODEX_HOME/skills or ~/.codex/skills, both installs both, "
+                              "none skips skills"))
 
     args = parser.parse_args()
 
     # Always install/upgrade system files
-    install_system_files()
+    installed_targets = install_system_files(args.target)
     print()
 
     # Register if requested
@@ -180,6 +266,10 @@ def main():
 
     print()
     print("Done. Run /dashboard to generate the board.")
+    if "claude" in installed_targets:
+        print("Restart Claude Code to pick up updated skills.")
+    if "codex" in installed_targets:
+        print("Restart Codex to pick up updated skills.")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.10+
-- Claude Code CLI installed
+- Claude Code CLI or Codex CLI installed
 - Git (for code stats collection)
 
 ## Quick Install
@@ -18,7 +18,7 @@ python3 ~/projects/ticket-takeaway/install.py --register
 This will:
 1. Copy `tickets-cli.py`, `generate.py` to `~/.claude/ticket-takeaway/`
 2. Copy `generate.py` to `~/.claude/dashboard/` (with path fix)
-3. Install skills (`/dashboard`, `/review`, `/spec`, `/accept`) to `~/.claude/skills/`
+3. Install skills (`/dashboard`, `/review`, `/spec`, `/accept`, `/feedbacks`) for the detected agent
 4. Create `registry.json` (or preserve existing)
 5. Register the current project
 6. Seed the SQLite DB from your `PRODUCT_BACKLOG.md` (if it exists)
@@ -35,6 +35,24 @@ python3 ~/projects/ticket-takeaway/install.py --register --id myproject --name "
 python3 ~/projects/ticket-takeaway/install.py
 ```
 
+## Skill Target Selection
+
+The installer defaults to `--target auto`. Auto installs skills for one agent only:
+
+- Codex when the installer is running under Codex or only a Codex home exists
+- Claude when the installer is running under Claude, or when both homes or neither home exist and no current agent is detectable
+
+This keeps existing Claude installs compatible while avoiding surprise writes into both agents' skill directories. Use an explicit target when you want deterministic behavior:
+
+```bash
+python3 ~/projects/ticket-takeaway/install.py --target codex
+python3 ~/projects/ticket-takeaway/install.py --target claude
+python3 ~/projects/ticket-takeaway/install.py --target both
+python3 ~/projects/ticket-takeaway/install.py --target none
+```
+
+Codex skills install to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`. Claude skills install to `~/.claude/skills`.
+
 ## File Deployment Map
 
 | Source (in this repo) | Deployed Location | Purpose |
@@ -42,11 +60,11 @@ python3 ~/projects/ticket-takeaway/install.py
 | `src/tickets-cli.py` | `~/.claude/ticket-takeaway/tickets-cli.py` | CLI for all ticket CRUD |
 | `src/generate.py` | `~/.claude/ticket-takeaway/generate.py` | Dashboard HTML generator |
 | `src/generate.py` | `~/.claude/dashboard/generate.py` | Dashboard copy (DASHBOARD_DIR patched) |
-| `src/skills/ticket-takeaway/SKILL.md` | `~/.claude/skills/ticket-takeaway/SKILL.md` | `/dashboard` skill |
-| `src/skills/review/SKILL.md` | `~/.claude/skills/review/SKILL.md` | `/review` skill |
-| `src/skills/spec/SKILL.md` | `~/.claude/skills/spec/SKILL.md` | `/spec` skill |
-| `src/skills/accept/SKILL.md` | `~/.claude/skills/accept/SKILL.md` | `/accept` skill |
-| `src/skills/feedbacks/SKILL.md` | `~/.claude/skills/feedbacks/SKILL.md` | `/feedbacks` wrapper skill (superset of base feedbacks skill) |
+| `src/skills/ticket-takeaway/SKILL.md` | `~/.claude/skills/ticket-takeaway/SKILL.md` or `~/.codex/skills/ticket-takeaway/SKILL.md` | `/dashboard` skill |
+| `src/skills/review/SKILL.md` | `~/.claude/skills/review/SKILL.md` or `~/.codex/skills/review/SKILL.md` | `/review` skill |
+| `src/skills/spec/SKILL.md` | `~/.claude/skills/spec/SKILL.md` or `~/.codex/skills/spec/SKILL.md` | `/spec` skill |
+| `src/skills/accept/SKILL.md` | `~/.claude/skills/accept/SKILL.md` or `~/.codex/skills/accept/SKILL.md` | `/accept` skill |
+| `src/skills/feedbacks/SKILL.md` | `~/.claude/skills/feedbacks/SKILL.md` or `~/.codex/skills/feedbacks/SKILL.md` | `/feedbacks` wrapper skill (superset of base feedbacks skill) |
 
 Runtime data (not overwritten on upgrade):
 | File | Purpose |

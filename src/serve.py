@@ -93,7 +93,11 @@ from journeys import (
 )
 from page_scraper import scan_all_screens, scans_to_json
 from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN_TESTIDS
-from workflows_seed import seed_default_workflows as _seed_default_workflows
+from workflows_seed import (
+    seed_default_workflows as _seed_default_workflows,
+    seed_default_agents as _seed_default_agents,
+)
+import conditions as _conditions
 
 import html as _html
 
@@ -985,48 +989,112 @@ def _discover_project_agents(proj: dict) -> list[dict]:
     return results
 
 
-def _list_workflows() -> list[dict]:
-    """Return all workflows."""
+def _serialize_workflow(row: dict) -> dict:
+    """Convert a raw workflow DB row into the API response shape.
+
+    Parses trigger_json, on_success_json, and steps from stored JSON strings
+    into Python objects so callers get parsed values, not raw strings.
+    """
+    d = dict(row)
+    for field in ("trigger_json", "on_success_json"):
+        raw = d.get(field)
+        if raw:
+            try:
+                d[field] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                d[field] = None
+        else:
+            d[field] = None
+    raw_steps = d.get("steps")
+    if raw_steps:
+        try:
+            d["steps"] = json.loads(raw_steps)
+        except (json.JSONDecodeError, TypeError):
+            d["steps"] = []
+    else:
+        d["steps"] = []
+    # Normalize integer flags
+    d["system"] = int(d.get("system") or 0)
+    d["enabled"] = int(d.get("enabled") if d.get("enabled") is not None else 1)
+    return d
+
+
+def _list_workflows(project_id: "str | None" = None) -> list[dict]:
+    """Return workflows owned by a project. Pass `None` for legacy un-scoped behavior
+    (used only by internal callers and tests). Project-scoped queries return only
+    rows whose project_id matches — legacy NULL rows are intentionally excluded.
+    """
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        rows = conn.execute("SELECT * FROM workflows ORDER BY name").fetchall()
+        if project_id is None:
+            rows = conn.execute("SELECT * FROM workflows ORDER BY name").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM workflows WHERE project_id = ? ORDER BY name",
+                (project_id,),
+            ).fetchall()
         conn.close()
-    return [dict(r) for r in rows]
+    return [_serialize_workflow(dict(r)) for r in rows]
 
 
-def _get_workflow(workflow_id: str) -> dict | None:
-    """Return a single workflow by ID."""
+def _get_workflow(workflow_id: str, project_id: "str | None" = None) -> dict | None:
+    """Return a single workflow by ID. If project_id is provided, only returns
+    the row when project_id matches — legacy NULL rows are not visible.
+    """
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        if project_id is None:
+            row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM workflows WHERE id = ? AND project_id = ?",
+                (workflow_id, project_id),
+            ).fetchone()
         conn.close()
-    return dict(row) if row else None
+    return _serialize_workflow(dict(row)) if row else None
 
 
-def _create_workflow(workflow_id: str, name: str, description: str, steps: str) -> dict | None:
-    """Insert a new workflow. steps should be a JSON string."""
+def _create_workflow(
+    workflow_id: str,
+    name: str,
+    description: str,
+    steps: str,
+    *,
+    project_id: "str | None" = None,
+    enabled: int = 1,
+    trigger_json: "str | None" = None,
+    on_success_json: "str | None" = None,
+    subject_type: str = "ticket",
+) -> dict | None:
+    """Insert a new workflow. steps/trigger_json/on_success_json should be JSON strings."""
     with _db_lock:
         conn = get_db()
         init_db(conn)
         try:
             conn.execute(
-                "INSERT INTO workflows (id, name, description, steps) VALUES (?, ?, ?, ?)",
-                (workflow_id, name, description, steps),
+                "INSERT INTO workflows "
+                "(id, name, description, steps, system, enabled, trigger_json, on_success_json, subject_type, project_id) "
+                "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
+                (workflow_id, name, description, steps, enabled, trigger_json, on_success_json, subject_type, project_id),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
             conn.close()
-            return dict(row) if row else None
+            return _serialize_workflow(dict(row)) if row else None
         except sqlite3.IntegrityError:
             conn.close()
             return None
 
 
 def _update_workflow(workflow_id: str, updates: dict) -> dict | None:
-    """Update an existing workflow. Returns updated record or None."""
-    allowed = {"name", "description", "steps"}
+    """Update an existing workflow. Returns updated record or None.
+
+    For system workflows, only `enabled` may be changed (403 is returned by the
+    caller; this function accepts any allowed field to keep the logic clean).
+    """
+    allowed = {"name", "description", "steps", "enabled", "trigger_json", "on_success_json"}
     fields = {k: v for k, v in updates.items() if k in allowed}
     if not fields:
         return _get_workflow(workflow_id)
@@ -1040,7 +1108,7 @@ def _update_workflow(workflow_id: str, updates: dict) -> dict | None:
         conn.commit()
         row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
         conn.close()
-    return dict(row) if row else None
+    return _serialize_workflow(dict(row)) if row else None
 
 
 def _delete_workflow(workflow_id: str) -> bool:
@@ -1075,12 +1143,21 @@ def _list_workflow_runs(project_id: str, ticket_id: str) -> list[dict]:
     return results
 
 
-def _get_workflow_run(run_id: str) -> dict | None:
-    """Return a single workflow run with parsed conversation."""
+def _get_workflow_run(run_id: str, project_id: "str | None" = None) -> dict | None:
+    """Return a single workflow run with parsed conversation. When project_id is
+    provided, the row is only returned if it belongs to that project — used by
+    request handlers to prevent cross-project leakage of run state.
+    """
     with _db_lock:
         conn = get_db()
         init_db(conn)
-        row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+        if project_id is None:
+            row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM workflow_runs WHERE id = ? AND project_id = ?",
+                (run_id, project_id),
+            ).fetchone()
         conn.close()
     if not row:
         return None
@@ -1094,7 +1171,7 @@ def _get_workflow_run(run_id: str) -> dict | None:
 
 def _update_workflow_run(run_id: str, **kwargs) -> dict | None:
     """Update a workflow run. Auto-serializes conversation to JSON."""
-    allowed = {"status", "current_step", "conversation", "completed_at"}
+    allowed = {"status", "current_step", "conversation", "completed_at", "session_ids"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return _get_workflow_run(run_id)
@@ -1125,6 +1202,450 @@ def _recover_stuck_workflow_runs() -> None:
             conn.commit()
             print(f"  Recovered {stuck} stuck workflow run(s) → failed")
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3A helpers — workflow inspect, kitchen settings, run observability
+# ---------------------------------------------------------------------------
+
+def _inspect_workflows_for_ticket(project_id: str, ticket_id: str) -> dict:
+    """Evaluate all enabled workflows against a ticket and return per-condition results.
+
+    This is the eligibility inspector (endpoint C). Unlike evaluate_trigger()
+    which returns a single bool, we evaluate each condition independently so
+    the UI can show pass/fail per condition.
+    """
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        try:
+            ctx = _conditions.build_subject_context(conn, project_id, ticket_id)
+        except ValueError as exc:
+            conn.close()
+            raise exc
+
+        # Build a compact summary from the assembled context for the response
+        ticket = ctx["ticket"]
+        subj = ctx.get("automation_subject")
+        automation_mode = subj["automation_mode"] if subj else "manual"
+
+        # Count criteria
+        criteria_count = conn.execute(
+            "SELECT COUNT(*) FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()[0]
+
+        # deps_clear (reuse condition evaluator)
+        from actions import _deps_clear  # type: ignore[import]
+        deps_ok, _ = _deps_clear(conn, project_id, ticket_id)
+
+        # tests_covered
+        from actions import _tests_covered, _has_active_run  # type: ignore[import]
+        tc_ok, _ = _tests_covered(conn, ctx["ticket_row"])
+
+        # has_description
+        has_description = bool((ticket.get("description") or "").strip())
+
+        active_run = ctx["active_run"]
+
+        subject_context_summary = {
+            "section": ticket.get("section", ""),
+            "automation_mode": automation_mode,
+            "has_description": has_description,
+            "criteria_count": criteria_count,
+            "deps_clear": deps_ok,
+            "tests_covered": tc_ok,
+            "active_run": active_run,
+        }
+
+        # Fetch enabled workflows owned by this project. We intentionally exclude
+        # rows with project_id IS NULL — those are unmigrated legacy entries that
+        # would otherwise leak across projects.
+        wf_rows = conn.execute(
+            "SELECT * FROM workflows WHERE (enabled = 1 OR enabled = '1') "
+            "AND project_id = ?",
+            (project_id,),
+        ).fetchall()
+        conn.close()
+
+    def _flatten_conditions(node):
+        """Walk an arbitrarily-nested all_of/any_of trigger and yield each leaf
+        condition. Mirrors the recursion in conditions.evaluate_trigger so the
+        inspector reports every condition the dispatcher will actually check.
+        """
+        if not isinstance(node, dict):
+            return
+        if "all_of" in node and isinstance(node["all_of"], list):
+            for child in node["all_of"]:
+                yield from _flatten_conditions(child)
+        elif "any_of" in node and isinstance(node["any_of"], list):
+            for child in node["any_of"]:
+                yield from _flatten_conditions(child)
+        elif "kind" in node:
+            yield node
+
+    workflow_results = []
+    for wf_row in wf_rows:
+        wf = _serialize_workflow(dict(wf_row))
+        trigger = wf.get("trigger_json")  # already parsed by _serialize_workflow
+
+        condition_results = []
+        all_passed = True
+
+        if trigger is None:
+            pass
+        else:
+            for cond in _flatten_conditions(trigger):
+                kind = cond.get("kind", "")
+                params = {k: v for k, v in cond.items() if k != "kind"}
+                entry = _conditions.CONDITION_CATALOG.get(kind)
+                if entry:
+                    try:
+                        passed, reason = entry["evaluator"](ctx, params)
+                    except Exception as exc:
+                        passed, reason = False, f"evaluator error: {exc}"
+                else:
+                    passed, reason = False, f"unknown condition kind {kind!r}"
+                condition_results.append({
+                    "kind": kind,
+                    "params": params,
+                    "passed": passed,
+                    "reason": reason,
+                })
+                if not passed:
+                    all_passed = False
+            # Trust the official evaluator for the top-level pass/fail — flatten
+            # is for display only. all_of vs any_of semantics matter at the root.
+            try:
+                all_passed, _ = _conditions.evaluate_trigger(trigger, ctx)
+            except Exception:
+                pass
+
+        workflow_results.append({
+            "workflow_id": wf["id"],
+            "name": wf.get("name", ""),
+            "system": wf.get("system", 0),
+            "enabled": wf.get("enabled", 1),
+            "passed": all_passed,
+            "conditions": condition_results,
+        })
+
+    return {
+        "ticket_id": ticket_id,
+        "subject_context_summary": subject_context_summary,
+        "workflows": workflow_results,
+    }
+
+
+_KITCHEN_BOOL_KEYS = frozenset({"kitchen.use_db_workflows", "kitchen.paused"})
+_KITCHEN_INT_KEYS = frozenset({"kitchen.poll_seconds"})
+
+
+def _get_kitchen_settings() -> dict:
+    """Return all kitchen.* settings as a parsed dict (bool/int coercion applied)."""
+    all_settings = _get_all_settings()
+    kitchen = {}
+    for key, raw in all_settings.items():
+        if not key.startswith("kitchen."):
+            continue
+        short_key = key[len("kitchen."):]
+        if key in _KITCHEN_BOOL_KEYS:
+            kitchen[short_key] = str(raw).lower() == "true"
+        elif key in _KITCHEN_INT_KEYS:
+            try:
+                kitchen[short_key] = int(raw)
+            except (TypeError, ValueError):
+                kitchen[short_key] = raw
+        else:
+            kitchen[short_key] = raw
+    # Inject live paused state from kitchen module
+    kitchen["paused"] = _kitchen.is_paused()
+    return kitchen
+
+
+def _set_kitchen_settings(updates: dict) -> tuple[dict | None, str | None]:
+    """Validate and persist kitchen settings updates.
+
+    Returns (settings_dict, error_message). error_message is None on success.
+    """
+    KNOWN_BOOL = {"use_db_workflows", "paused"}
+    KNOWN_INT = {"poll_seconds"}
+
+    validated = {}
+    for key, value in updates.items():
+        if key in KNOWN_BOOL:
+            if not isinstance(value, bool):
+                return None, f"{key!r} must be a boolean"
+            validated[f"kitchen.{key}"] = str(value).lower()
+        elif key in KNOWN_INT:
+            if not isinstance(value, int):
+                return None, f"{key!r} must be an integer"
+            validated[f"kitchen.{key}"] = str(value)
+        else:
+            # Allow unknown keys with raw string storage
+            validated[f"kitchen.{key}"] = str(value)
+
+    _set_settings(validated)
+    return _get_kitchen_settings(), None
+
+
+def _serialize_kitchen_run(row, title_map: dict | None = None) -> dict:
+    """Convert a runs table row into the API response shape."""
+    d = dict(row)
+    # Parse metadata_json
+    raw_meta = d.pop("metadata_json", None)
+    if raw_meta:
+        try:
+            d["workflow_meta"] = json.loads(raw_meta)
+        except (json.JSONDecodeError, TypeError):
+            d["workflow_meta"] = None
+    else:
+        d["workflow_meta"] = None
+    # Enrich with ticket title when subject_type='ticket'
+    if title_map and d.get("subject_type") == "ticket":
+        d["ticket_title"] = title_map.get(d.get("subject_id", ""))
+    else:
+        d["ticket_title"] = None
+    return d
+
+
+def _get_ticket_titles(conn, project_id: str) -> dict:
+    """Return a {ticket_id: title} map for all tickets in the project."""
+    rows = conn.execute(
+        "SELECT id, title FROM tickets WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    return {r["id"]: r["title"] for r in rows}
+
+
+_RUNS_SELECT = (
+    "SELECT id, project_id, subject_type, subject_id, runner_kind, status, "
+    "       started_at, claimed_at, heartbeat_at, "
+    "       finished_at, duration_ms, error_message, attempt, metadata_json "
+    "FROM runs"
+)
+
+_ACTIVE_STATUSES = ("queued", "preparing", "running", "needs_input")
+_FINISHED_STATUSES = ("succeeded", "failed", "cancelled", "stalled")
+
+
+def _get_active_kitchen_runs(project_id: str) -> list[dict]:
+    """Return all active kitchen runs for a project."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        placeholders = ",".join("?" for _ in _ACTIVE_STATUSES)
+        rows = conn.execute(
+            f"{_RUNS_SELECT} WHERE project_id = ? AND status IN ({placeholders}) ORDER BY id DESC",
+            (project_id, *_ACTIVE_STATUSES),
+        ).fetchall()
+        title_map = _get_ticket_titles(conn, project_id)
+        conn.close()
+    return [_serialize_kitchen_run(r, title_map) for r in rows]
+
+
+def _get_recent_kitchen_runs(project_id: str, limit: int = 25) -> list[dict]:
+    """Return most recent finished kitchen runs for a project."""
+    limit = max(1, min(limit, 100))
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        placeholders = ",".join("?" for _ in _FINISHED_STATUSES)
+        rows = conn.execute(
+            f"{_RUNS_SELECT} WHERE project_id = ? AND status IN ({placeholders}) "
+            "ORDER BY finished_at DESC, id DESC LIMIT ?",
+            (project_id, *_FINISHED_STATUSES, limit),
+        ).fetchall()
+        title_map = _get_ticket_titles(conn, project_id)
+        conn.close()
+    return [_serialize_kitchen_run(r, title_map) for r in rows]
+
+
+def _get_kitchen_run_detail(project_id: str, run_id: int) -> dict | None:
+    """Return full run detail with activity_events."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        r = conn.execute(
+            "SELECT id, project_id, subject_type, subject_id, runner_kind, status, "
+            "       started_at, claimed_at, heartbeat_at, "
+            "       finished_at, duration_ms, error_message, attempt, metadata_json, "
+            "       workspace_path, evidence_dir, needs_input_prompt, triggered_by "
+            "FROM runs WHERE id = ? AND project_id = ?",
+            (run_id, project_id),
+        ).fetchone()
+        if not r:
+            conn.close()
+            return None
+        run_dict = _serialize_kitchen_run(r)
+
+        # Fetch activity events for the run's subject in the run's time window
+        started_at = run_dict.get("started_at") or "1970-01-01"
+        finished_at = run_dict.get("finished_at") or datetime.utcnow().isoformat()
+        evt_rows = conn.execute(
+            "SELECT id, actor_type, actor_id, event_kind, payload_json, occurred_at, discarded_run_id "
+            "FROM activity_events "
+            "WHERE project_id = ? AND subject_type = ? AND subject_id = ? "
+            "  AND occurred_at >= ? AND occurred_at <= ? "
+            "ORDER BY id ASC",
+            (project_id, run_dict.get("subject_type", ""), run_dict.get("subject_id", ""),
+             started_at, finished_at),
+        ).fetchall()
+        conn.close()
+
+    events = []
+    for ev in evt_rows:
+        try:
+            payload = json.loads(ev["payload_json"]) if ev["payload_json"] else {}
+        except Exception:
+            payload = {}
+        events.append({
+            "id": ev["id"],
+            "actor_type": ev["actor_type"],
+            "actor_id": ev["actor_id"],
+            "event_kind": ev["event_kind"],
+            "payload": payload,
+            "occurred_at": ev["occurred_at"],
+            "discarded_run_id": ev["discarded_run_id"],
+        })
+    return {"run": run_dict, "events": events}
+
+
+def _get_run_evidence(project_id: str, run_id: int) -> list[dict] | None:
+    """Return evidence file listing for a run. Returns None if run not found."""
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        r = conn.execute(
+            "SELECT evidence_dir FROM runs WHERE id = ? AND project_id = ?",
+            (run_id, project_id),
+        ).fetchone()
+        conn.close()
+    if r is None:
+        return None  # run not found
+    evidence_dir = r["evidence_dir"]
+    if not evidence_dir or not os.path.isdir(evidence_dir):
+        return []
+    files = []
+    try:
+        for name in os.listdir(evidence_dir):
+            fpath = os.path.join(evidence_dir, name)
+            if os.path.isfile(fpath):
+                st = os.stat(fpath)
+                files.append({
+                    "name": name,
+                    "path": fpath,
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                })
+    except OSError:
+        pass
+    return files
+
+
+# ---------------------------------------------------------------------------
+# End Phase 3A helpers
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Streaming subprocess + session persistence helpers
+# ---------------------------------------------------------------------------
+
+def _apply_resume_args(command: str, args: list, session_id: str) -> list:
+    """Inject explicit-session-id resume flags into a CLI invocation.
+
+    codex: replace ``exec`` token with ``exec resume <session_id>`` in the
+    args list (the codex CLI accepts an explicit session id positionally).
+    claude: append ``--resume <session_id>`` (idempotent — replaces existing).
+    Other commands: append ``--resume <session_id>`` as a best-effort fallback.
+    Returns a NEW list — does not mutate args.
+    """
+    out = list(args or [])
+    cmd = (command or "").lower()
+    if cmd == "codex":
+        for i, t in enumerate(out):
+            if t == "exec":
+                # If "resume" already follows "exec", replace/insert session_id only
+                if i + 1 < len(out) and out[i + 1] == "resume":
+                    if i + 2 < len(out) and not out[i + 2].startswith("-"):
+                        out[i + 2] = session_id
+                    else:
+                        out.insert(i + 2, session_id)
+                else:
+                    out.insert(i + 1, "resume")
+                    out.insert(i + 2, session_id)
+                return out
+        # No `exec` token found — append exec resume <session_id>
+        return out + ["exec", "resume", session_id]
+    # Generic / claude path: --resume <session_id>
+    if "--resume" in out:
+        idx = out.index("--resume")
+        if idx + 1 < len(out):
+            out[idx + 1] = session_id
+        else:
+            out.append(session_id)
+        return out
+    return out + ["--resume", session_id]
+
+
+def _extract_session_id(command: str, stdout: str, stderr: str, started_before: float) -> "str | None":
+    """Extract the CLI's session id from process output.
+
+    Best-effort — returns None on failure; callers proceed without persistence.
+
+    codex: looks for a ``Session: <uuid>`` line on stderr (or stdout). Falls
+    back to scanning ~/.codex/sessions/ for the most-recently-modified file
+    with mtime >= started_before.
+
+    claude: looks for JSON output containing "session_id" or a line matching
+    ``session_id: <uuid>``. Falls back to scanning ~/.claude/projects/ similarly.
+    """
+    import glob as _glob
+    cmd = (command or "").lower()
+    UUID_RE = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
+    blob = (stdout or "") + "\n" + (stderr or "")
+    if cmd == "codex":
+        for pat in (
+            r"Session(?:\s*ID)?\s*[:=]\s*(" + UUID_RE + ")",
+            r'"session_id"\s*[:=]\s*"(' + UUID_RE + ')"?',
+            r'session[_\-]?id["\s:=]+(' + UUID_RE + ')',
+        ):
+            m = re.search(pat, blob, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        # Filesystem fallback: find most-recently-modified session file
+        sessions_dir = os.path.expanduser("~/.codex/sessions")
+        if os.path.isdir(sessions_dir):
+            candidates = []
+            for p in _glob.glob(os.path.join(sessions_dir, "*.json")):
+                try:
+                    mt = os.path.getmtime(p)
+                    if mt >= started_before - 1:
+                        candidates.append((mt, p))
+                except OSError:
+                    continue
+            if candidates:
+                candidates.sort(reverse=True)
+                fname = os.path.basename(candidates[0][1])
+                m = re.search(UUID_RE, fname)
+                if m:
+                    return m.group(0)
+        return None
+    if cmd == "claude":
+        for pat in (
+            r'"session_id"\s*:\s*"(' + UUID_RE + ')"',
+            r'session_id\s*[:=]\s*(' + UUID_RE + ')',
+        ):
+            m = re.search(pat, blob, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        return None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# End Phase 2 helpers
+# ---------------------------------------------------------------------------
 
 
 def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow: dict, proj: dict) -> None:
@@ -1234,12 +1755,32 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             # Run agent CLI
             try:
                 agent_args = json.loads(agent.get("args", "[]")) if isinstance(agent.get("args"), str) else agent.get("args", [])
+                if isinstance(agent_args, str):
+                    agent_args = [agent_args]
             except (json.JSONDecodeError, TypeError):
                 agent_args = []
 
-            cmd = [agent.get("command", "claude")] + agent_args + [
-                "-p", prompt, "--output-format", "json", "--no-session-persistence",
-            ]
+            # Read the freshest session_ids from DB (another handler may have updated it)
+            fresh_run = _get_workflow_run(run_id)
+            session_ids: dict = {}
+            if fresh_run:
+                try:
+                    session_ids = json.loads(fresh_run.get("session_ids") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    session_ids = {}
+            prior_sid = session_ids.get(agent_id)
+
+            # Build the command — persist_session agents get session resume, others get --no-session-persistence
+            if agent.get("persist_session"):
+                if prior_sid:
+                    agent_args = _apply_resume_args(agent.get("command", "claude"), agent_args, prior_sid)
+                # else: first call for this agent in this run — fresh session, no resume flag
+            else:
+                if "--no-session-persistence" not in agent_args:
+                    agent_args = agent_args + ["--no-session-persistence"]
+
+            command_name = agent.get("command", "claude")
+            cmd = [command_name] + agent_args + ["-p", prompt, "--output-format", "json"]
 
             # Progress entry so the UI shows which agent is running immediately
             agent_label = agent.get("name", agent_id)
@@ -1253,73 +1794,120 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     _workflow_runs[run_id]["status"] = "running"
                     _workflow_runs[run_id]["current_step"] = step_idx
 
+            # Streaming subprocess — read stdout line by line, flush to DB periodically
+            deadline = time.time() + WORKFLOW_AGENT_TIMEOUT
+            started_at = time.time()
+            timed_out = False
+            exit_code = None
+            all_output_lines: list = []
+            turn: dict = {
+                "role": "streaming",
+                "agent": agent_label,
+                "agent_id": agent_id,
+                "step": step_idx,
+                "streaming": True,
+                "content": "",
+                "ts": datetime.utcnow().isoformat(),
+            }
+            conversation.append(turn)
+            last_flush = time.time()
+            line_count = 0
+
             try:
-                result = subprocess.run(
+                proc = subprocess.Popen(
                     cmd,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    timeout=WORKFLOW_AGENT_TIMEOUT,
                     cwd=os.path.expanduser(proj.get("path", ".")),
                 )
-
-                # Remove the "Running agent..." placeholder
-                conversation = [t for t in conversation
-                                if not (t.get("role") == "system"
-                                        and t.get("step") == step_idx
-                                        and "Running agent" in t.get("content", ""))]
-
-                # Check for non-zero exit code
-                if result.returncode != 0:
-                    err = (result.stderr or result.stdout or "").strip()[:2000] or f"Exit code {result.returncode}"
-                    conversation.append({
-                        "role": "system", "step": step_idx,
-                        "content": f"Agent '{agent_label}' failed:\n{err}",
-                    })
-                    _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
-                    continue
-
-                # Parse response — same pattern as gate-check
-                response_text = result.stdout.strip()
-                try:
-                    response_json = json.loads(response_text)
-                    if isinstance(response_json, dict) and "result" in response_json:
-                        response_content = response_json["result"]
-                    elif isinstance(response_json, dict) and "content" in response_json:
-                        response_content = response_json["content"]
-                    else:
-                        response_content = response_text
-                except json.JSONDecodeError:
-                    response_content = response_text
-
+                while True:
+                    if time.time() > deadline:
+                        proc.kill()
+                        timed_out = True
+                        break
+                    line = proc.stdout.readline()
+                    if line == "" and proc.poll() is not None:
+                        break
+                    if line:
+                        all_output_lines.append(line)
+                        turn["content"] += line
+                        line_count += 1
+                        now = time.time()
+                        if (now - last_flush >= 1.0) or (line_count % 16 == 0):
+                            _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                            last_flush = now
+                exit_code = proc.poll()
+            except Exception as _popen_err:
+                turn["streaming"] = False
+                turn["content"] = f"Subprocess error: {_popen_err}"
                 conversation.append({
-                    "role": "agent",
-                    "agent": agent_label,
-                    "agent_id": agent_id,
-                    "step": step_idx,
-                    "content": response_content,
+                    "role": "system", "step": step_idx,
+                    "content": f"step failed: {_popen_err}",
+                    "ts": datetime.utcnow().isoformat(),
                 })
-            except subprocess.TimeoutExpired:
-                # Remove the "Running agent..." placeholder
-                conversation = [t for t in conversation
-                                if not (t.get("role") == "system"
-                                        and t.get("step") == step_idx
-                                        and "Running agent" in t.get("content", ""))]
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
+
+            turn["streaming"] = False
+            turn["exit_code"] = exit_code
+
+            # Remove the "Running agent..." placeholder (added before streaming turn)
+            conversation = [t for t in conversation
+                            if not (t.get("role") == "system"
+                                    and t.get("step") == step_idx
+                                    and "Running agent" in t.get("content", ""))]
+
+            if timed_out:
+                turn["content"] += "\n[timeout]"
                 conversation.append({
-                    "role": "system",
-                    "step": step_idx,
+                    "role": "system", "step": step_idx,
                     "content": f"Agent '{agent_label}' timed out after {WORKFLOW_AGENT_TIMEOUT}s",
+                    "ts": datetime.utcnow().isoformat(),
                 })
-            except Exception as e:
-                # Remove the "Running agent..." placeholder
-                conversation = [t for t in conversation
-                                if not (t.get("role") == "system"
-                                        and t.get("step") == step_idx
-                                        and "Running agent" in t.get("content", ""))]
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
+
+            # Capture session id for persist_session agents
+            if agent.get("persist_session"):
+                full_output = "".join(all_output_lines)
+                new_sid = _extract_session_id(command_name, full_output, "", started_at)
+                if new_sid and new_sid != prior_sid:
+                    session_ids[agent_id] = new_sid
+                    _update_workflow_run(run_id, session_ids=json.dumps(session_ids))
+
+            # Check for non-zero exit code
+            if exit_code != 0:
+                err = turn["content"].strip()[:2000] or f"Exit code {exit_code}"
                 conversation.append({
-                    "role": "system",
-                    "step": step_idx,
-                    "content": f"Agent '{agent_label}' error: {e}",
+                    "role": "system", "step": step_idx,
+                    "content": f"Agent '{agent_label}' failed:\n{err}",
+                    "ts": datetime.utcnow().isoformat(),
                 })
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
+
+            # Parse response from accumulated output — same pattern as gate-check
+            response_text = turn["content"].strip()
+            try:
+                response_json = json.loads(response_text)
+                if isinstance(response_json, dict) and "result" in response_json:
+                    response_content = response_json["result"]
+                elif isinstance(response_json, dict) and "content" in response_json:
+                    response_content = response_json["content"]
+                else:
+                    response_content = response_text
+            except json.JSONDecodeError:
+                response_content = response_text
+
+            conversation.append({
+                "role": "agent",
+                "agent": agent_label,
+                "agent_id": agent_id,
+                "step": step_idx,
+                "content": response_content,
+                "ts": datetime.utcnow().isoformat(),
+            })
 
             _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
 
@@ -4099,6 +4687,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"path": display, "absolute": str(resolved), "dirs": dirs})
                 return
 
+            # Phase 3A: condition catalog (project-agnostic)
+            if remainder == "/api/workflow-conditions/catalog":
+                catalog = []
+                for kind, entry in _conditions.CONDITION_CATALOG.items():
+                    catalog.append({
+                        "kind": kind,
+                        "label": entry.get("label", kind),
+                        "params": entry.get("params", []),
+                    })
+                self._send_json({"conditions": catalog})
+                return
+
             # Legacy backward compat: --project flag redirects bare /api/ routes
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
@@ -4283,6 +4883,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Settings
+        # Phase 3A: kitchen settings
+        if remainder == "/api/settings/kitchen":
+            self._send_json({"settings": _get_kitchen_settings()})
+            return
+
         if remainder == "/api/settings":
             self._send_json(_get_all_settings())
             return
@@ -4350,6 +4955,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"events": events})
             return
 
+        # Phase 3A: active kitchen runs for this project
+        if remainder == "/api/runs/active":
+            runs = _get_active_kitchen_runs(proj["id"])
+            self._send_json({"runs": runs})
+            return
+
+        # Phase 3A: recent finished kitchen runs for this project
+        if remainder.startswith("/api/runs/recent"):
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                limit = max(1, min(int(qs.get("limit", ["25"])[0]), 100))
+            except (ValueError, TypeError):
+                limit = 25
+            runs = _get_recent_kitchen_runs(proj["id"], limit)
+            self._send_json({"runs": runs})
+            return
+
+        # Phase 3A: run evidence file listing
+        m = re.match(r"^/api/runs/(\d+)/evidence$", remainder)
+        if m:
+            run_id = int(m.group(1))
+            files = _get_run_evidence(proj["id"], run_id)
+            if files is None:
+                self._send_json({"error": "run not found"}, 404)
+                return
+            self._send_json({"files": files})
+            return
+
         # Kitchen (M3): list runs for a ticket. Newest first. Powers the live run panel.
         # Path: /api/runs?ticket={id}&limit={n}  (limit defaults 10, max 50)
         if remainder.startswith("/api/runs?") or remainder == "/api/runs":
@@ -4382,25 +5015,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"runs": [dict(r) for r in rows]})
             return
 
-        # Kitchen (M3): single run detail.
+        # Kitchen (M3 + Phase 3A): single run detail with activity events.
         m = re.match(r"^/api/runs/(\d+)$", remainder)
         if m:
             run_id = int(m.group(1))
-            with _db_lock:
-                conn = get_db(); init_db(conn)
-                r = conn.execute(
-                    "SELECT id, project_id, subject_type, subject_id, runner_kind, status, "
-                    "       workspace_path, started_at, finished_at, duration_ms, "
-                    "       error_class, error_message, summary, needs_input_prompt, "
-                    "       attempt, triggered_by "
-                    "FROM runs WHERE id = ? AND project_id = ?",
-                    (run_id, proj["id"]),
-                ).fetchone()
-                conn.close()
-            if not r:
+            detail = _get_kitchen_run_detail(proj["id"], run_id)
+            if not detail:
                 self._send_json({"error": "run not found"}, 404)
                 return
-            self._send_json(dict(r))
+            self._send_json(detail)
             return
 
         # Workflow Bounce GET routes
@@ -4414,7 +5037,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if remainder == "/api/workflow/workflows":
-            self._send_json({"workflows": _list_workflows()})
+            self._send_json({"workflows": _list_workflows(project_id=proj["id"])})
             return
 
         # Active workflow runs across all tickets (for kanban indicators)
@@ -4446,7 +5069,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_.-]+)$", remainder)
         if m:
             run_id = m.group(1)
-            run = _get_workflow_run(run_id)
+            run = _get_workflow_run(run_id, project_id=proj["id"])
             if not run:
                 self._send_json({"error": "Run not found"}, 404)
                 return
@@ -4696,6 +5319,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Project-scoped routes ────────────────────────────────────
 
+        # Phase 3A: kitchen settings update
+        if remainder == "/api/settings/kitchen":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            if not isinstance(body, dict):
+                self._send_json({"error": "Body must be a JSON object"}, 400)
+                return
+            settings, err = _set_kitchen_settings(body)
+            if err:
+                self._send_json({"error": err}, 400)
+                return
+            self._send_json({"settings": settings})
+            return
+
         # Settings update
         if remainder == "/api/settings":
             try:
@@ -4792,8 +5432,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Agent not found"}, 404)
             return
 
-        # Update workflow
-        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_-]*)$", remainder)
+        # Update workflow (Phase 3A: system workflow guard + new fields)
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
         if m:
             workflow_id = m.group(1)
             try:
@@ -4801,9 +5441,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (json.JSONDecodeError, ValueError):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
+            # 403 guard: system workflows may only have 'enabled' toggled
+            existing = _get_workflow(workflow_id, project_id=proj["id"])
+            if not existing:
+                self._send_json({"error": "Workflow not found"}, 404)
+                return
+            if existing.get("system"):
+                non_enabled_keys = {k for k in body if k != "enabled"}
+                if non_enabled_keys:
+                    self._send_json({"error": "system_workflow"}, 403)
+                    return
             # Auto-serialize steps list to JSON
             if "steps" in body and isinstance(body["steps"], list):
                 body["steps"] = json.dumps(body["steps"])
+            # Accept trigger_json / on_success_json as object or string
+            for field in ("trigger_json", "on_success_json"):
+                if field in body and body[field] is not None and not isinstance(body[field], str):
+                    body[field] = json.dumps(body[field])
             updated = _update_workflow(workflow_id, body)
             if updated:
                 self._send_json(updated)
@@ -6082,6 +6736,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"Failed to clone feedbacks: {e}"}, 500)
             return
 
+        # Phase 3A: eligibility inspector
+        if remainder == "/api/workflows/inspect":
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            ticket_id = (body.get("ticket_id") or "").strip()
+            if not ticket_id:
+                self._send_json({"error": "ticket_id is required"}, 400)
+                return
+            try:
+                result = _inspect_workflows_for_ticket(proj["id"], ticket_id)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, 404)
+                return
+            self._send_json(result)
+            return
+
         # ── Workflow Bounce POST routes ─────────────────────────────
 
         # Create workflow agent
@@ -6108,7 +6781,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"Agent '{agent_id}' already exists"}, 409)
             return
 
-        # Create workflow
+        # Create workflow (Phase 3A: accepts new fields)
         if remainder == "/api/workflow/workflows":
             try:
                 body = self._read_body()
@@ -6124,7 +6797,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
             steps = body.get("steps", [])
             if isinstance(steps, list):
                 steps = json.dumps(steps)
-            wf = _create_workflow(workflow_id, name, description, steps)
+            # New Phase 3A fields — accept object or string for trigger_json/on_success_json
+            raw_trigger = body.get("trigger_json")
+            trigger_json = None
+            if raw_trigger is not None:
+                trigger_json = json.dumps(raw_trigger) if not isinstance(raw_trigger, str) else raw_trigger
+            raw_success = body.get("on_success_json")
+            on_success_json = None
+            if raw_success is not None:
+                on_success_json = json.dumps(raw_success) if not isinstance(raw_success, str) else raw_success
+            enabled = int(bool(body.get("enabled", True)))
+            subject_type = body.get("subject_type", "ticket")
+            wf = _create_workflow(
+                workflow_id, name, description, steps,
+                project_id=proj["id"],
+                enabled=enabled,
+                trigger_json=trigger_json,
+                on_success_json=on_success_json,
+                subject_type=subject_type,
+            )
             if wf:
                 self._send_json(wf, 201)
             else:
@@ -6144,7 +6835,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not workflow_id:
                 self._send_json({"error": "workflow_id is required"}, 400)
                 return
-            workflow = _get_workflow(workflow_id)
+            workflow = _get_workflow(workflow_id, project_id=proj["id"])
             if not workflow:
                 self._send_json({"error": f"Workflow '{workflow_id}' not found"}, 404)
                 return
@@ -6187,6 +6878,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_-]+)/cancel$", remainder)
         if m:
             run_id = m.group(1)
+            if not _get_workflow_run(run_id, project_id=proj["id"]):
+                self._send_json({"error": "Run not found"}, 404)
+                return
             with _workflow_runs_lock:
                 mem = _workflow_runs.get(run_id)
                 if mem:
@@ -6200,12 +6894,63 @@ class DashboardHandler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_-]+)/resume$", remainder)
         if m:
             run_id = m.group(1)
+            if not _get_workflow_run(run_id, project_id=proj["id"]):
+                self._send_json({"error": "Run not found"}, 404)
+                return
             with _workflow_runs_lock:
                 mem = _workflow_runs.get(run_id)
                 if mem:
                     mem["status"] = "running"
             _update_workflow_run(run_id, status="running")
             self._send_json({"ok": True, "run_id": run_id, "status": "running"})
+            return
+
+        # Respond to a needs_input workflow run — appends user turn then flips to paused
+        # so the spin-loop in _run_workflow_thread picks it up and resumes.
+        m = re.match(r"^/api/workflow/runs/([A-Za-z0-9_-]+)/respond$", remainder)
+        if m:
+            run_id = m.group(1)
+            run = _get_workflow_run(run_id, project_id=proj["id"])
+            if not run:
+                self._send_json({"error": "Run not found"}, 404)
+                return
+            if run.get("status") != "needs_input":
+                self._send_json({"error": "Run is not awaiting input"}, 409)
+                return
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            response_text = (body.get("response") or "").strip()
+            if not response_text:
+                self._send_json({"error": "response is required"}, 400)
+                return
+            # Append a user turn to conversation so the next subprocess call sees it
+            current_step = run.get("current_step", 0)
+            try:
+                conversation = json.loads(run.get("conversation") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                conversation = []
+            conversation.append({
+                "role": "user",
+                "step": current_step,
+                "content": response_text,
+                "ts": datetime.utcnow().isoformat(),
+            })
+            # Flip to paused (spin-loop condition: st != "paused" → break) so the
+            # orchestrator exits the spin-loop and resumes execution.
+            _update_workflow_run(
+                run_id,
+                conversation=conversation,
+                status="paused",
+            )
+            with _workflow_runs_lock:
+                mem = _workflow_runs.get(run_id)
+                if mem:
+                    mem["status"] = "paused"
+            updated = _get_workflow_run(run_id)
+            self._send_json(updated or {"ok": True, "run_id": run_id})
             return
 
         self._send_json({"error": "Not found"}, 404)
@@ -6304,10 +7049,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Agent not found"}, 404)
             return
 
-        # Delete workflow
-        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_-]*)$", remainder)
+        # Delete workflow (Phase 3A: system workflow guard, Phase 3 fix: project-scoped)
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
         if m:
             workflow_id = m.group(1)
+            existing = _get_workflow(workflow_id, project_id=proj["id"])
+            if not existing:
+                self._send_json({"error": "Workflow not found"}, 404)
+                return
+            if existing.get("system"):
+                self._send_json({"error": "system_workflow"}, 403)
+                return
             if _delete_workflow(workflow_id):
                 self._send_json({"ok": True, "deleted": workflow_id})
             else:
@@ -6576,6 +7328,18 @@ def main():
 
     # Recover workflow runs stuck in "running" from a previous server session
     _recover_stuck_workflow_runs()
+
+    # Seed default global agents (idempotent, runs once regardless of projects)
+    try:
+        _ag_db = get_db()
+        _ag_result = _seed_default_agents(_ag_db)
+        _ag_db.close()
+        if _ag_result["inserted"]:
+            print(f"  Seeded {_ag_result['inserted']} default agent(s)")
+        if _ag_result["migrated"]:
+            print(f"  Migrated {_ag_result['migrated']} agent(s) (agent_planchk → agent_consultant)")
+    except Exception as _e:
+        print(f"  Warning: could not seed default agents: {_e}", file=__import__("sys").stderr)
 
     # Seed default system workflows for every registered project (idempotent)
     for _proj in list(_PROJECTS_CACHE.values()):

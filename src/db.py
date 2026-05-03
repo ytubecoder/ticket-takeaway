@@ -476,3 +476,37 @@ def init_db(conn: sqlite3.Connection):
                 pass  # Column already exists
         conn.execute("INSERT INTO _migrations (version) VALUES (9)")
         conn.commit()
+
+    # Migration 10: Scope workflows to a project. Backfill existing system rows
+    # whose IDs follow the `{project_id}::sys::{slug}` pattern; user-created
+    # rows with NULL project_id remain shared until edited.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 10").fetchone():
+        try:
+            conn.execute("ALTER TABLE workflows ADD COLUMN project_id TEXT")
+        except sqlite3.OperationalError:
+            pass
+        conn.execute("""
+            UPDATE workflows
+               SET project_id = substr(id, 1, instr(id, '::sys::') - 1)
+             WHERE system = 1 AND project_id IS NULL AND instr(id, '::sys::') > 0
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS workflows_project ON workflows (project_id)")
+        conn.execute("INSERT INTO _migrations (version) VALUES (10)")
+        conn.commit()
+
+    # Migration 11: Plan Check — persist_session on agents, session_ids on runs.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 11").fetchone():
+        try:
+            conn.execute(
+                "ALTER TABLE workflow_agents ADD COLUMN persist_session INTEGER DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE workflow_runs ADD COLUMN session_ids TEXT DEFAULT '{}'"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        conn.execute("INSERT INTO _migrations (version) VALUES (11)")
+        conn.commit()

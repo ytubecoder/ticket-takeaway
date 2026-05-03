@@ -170,10 +170,26 @@ def _eval_parent_done(ctx: dict, p: dict) -> tuple[bool, str]:
 # Evaluator returns (passed, reason_string).  reason_string explains why the
 # condition passed or failed (used for diagnostics / UI tooltips).
 
+_SECTION_OPTIONS = ["Ideas", "Backlog", "WIP", "For Review", "Done", "Bugs", "Icebox", "Won't Do"]
+_AUTOMATION_MODE_OPTIONS = ["manual", "auto", "held"]
+
+# Imported lazily inside the dict so test runs that don't have constants on path
+# still load the catalog without raising. The UI uses options to render dropdowns.
+try:
+    from constants import STATUSES as _STATUS_OPTIONS  # type: ignore
+except Exception:  # pragma: no cover
+    _STATUS_OPTIONS = [
+        "proposed", "specified", "ready",
+        "in-progress", "blocked", "rework",
+        "for-review", "done", "released",
+        "bug", "bug-fixed", "icebox", "wontdo",
+    ]
+
+
 CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     "section_equals": {
         "label": "Section is",
-        "params": [{"name": "value", "type": "section_select"}],
+        "params": [{"name": "value", "type": "section_select", "options": _SECTION_OPTIONS}],
         "evaluator": lambda ctx, p: (
             ctx["ticket"]["section"] == p["value"],
             f"section is {ctx['ticket']['section']!r}, need {p['value']!r}",
@@ -181,7 +197,7 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "section_in": {
         "label": "Section is one of",
-        "params": [{"name": "values", "type": "section_multi_select"}],
+        "params": [{"name": "values", "type": "section_multi_select", "options": _SECTION_OPTIONS}],
         "evaluator": lambda ctx, p: (
             ctx["ticket"]["section"] in p.get("values", []),
             f"section is {ctx['ticket']['section']!r}, need one of {p.get('values', [])}",
@@ -189,7 +205,7 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "status_equals": {
         "label": "Status is",
-        "params": [{"name": "value", "type": "status_select"}],
+        "params": [{"name": "value", "type": "status_select", "options": _STATUS_OPTIONS}],
         "evaluator": lambda ctx, p: (
             ctx["ticket"]["status"] == p["value"],
             f"status is {ctx['ticket']['status']!r}, need {p['value']!r}",
@@ -197,7 +213,7 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "automation_mode": {
         "label": "Automation mode is",
-        "params": [{"name": "value", "type": "automation_mode_select"}],
+        "params": [{"name": "value", "type": "automation_mode_select", "options": _AUTOMATION_MODE_OPTIONS}],
         "evaluator": _eval_automation_mode,
     },
     "has_field": {

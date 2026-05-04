@@ -45,14 +45,51 @@ def capture_commit_hash(project_path: str) -> str:
         return ""
 
 
+# ---------------------------------------------------------------------------
+# Typed errors — paired with an HTTP-status mapper in serve.py
+# ---------------------------------------------------------------------------
+# These subclass ValueError so legacy `except ValueError:` blocks keep working.
+# New call sites should catch the specific type they care about, and route
+# handlers can use DashboardHandler._send_typed_error() to emit a uniform
+# {"code", "error"} body with the matching status code.
+
+class AppError(ValueError):
+    """Base class for application errors with an HTTP status mapping."""
+    http_status: int = 500
+    code: str = "internal_error"
+
+
+class NotFoundError(AppError):
+    http_status = 404
+    code = "not_found"
+
+
+class TicketNotFoundError(NotFoundError):
+    code = "ticket_not_found"
+
+
+class ProjectNotFoundError(NotFoundError):
+    code = "project_not_found"
+
+
+class ValidationError(AppError):
+    http_status = 400
+    code = "validation_error"
+
+
+class ConflictError(AppError):
+    http_status = 409
+    code = "conflict"
+
+
 def _find_ticket(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> sqlite3.Row:
-    """Locate a ticket by ID (case-insensitive).  Raises ValueError if not found."""
+    """Locate a ticket by ID (case-insensitive). Raises TicketNotFoundError if not found."""
     ticket = conn.execute(
         "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
         (ticket_id, project_id),
     ).fetchone()
     if not ticket:
-        raise ValueError(f"Ticket '{ticket_id}' not found in project '{project_id}'.")
+        raise TicketNotFoundError(f"Ticket '{ticket_id}' not found in project '{project_id}'.")
     return ticket
 
 

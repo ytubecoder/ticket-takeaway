@@ -20,9 +20,7 @@ from actions import (
     accept_ticket,
     eligibility,
     emit_event,
-    execute_scheduled_event,
     move_ticket,
-    schedule_event,
     set_automation_mode,
     set_no_test_required,
     update_ticket,
@@ -572,9 +570,13 @@ class TestSpineEventsOnExistingActions:
 # ---------------------------------------------------------------------------
 
 class TestInternalSideEffects:
-    def test_parent_auto_promote_emits_system_event(self, conn):
-        # Parent in WIP, two child bugs. When both children fix, parent must
-        # auto-promote AND emit a section_change with actor_type='system'.
+    def test_parent_auto_promote_no_longer_synchronous(self, conn):
+        """Phase A migration (tidy-newt): parent-promote moved to a system
+        workflow. update_ticket() must NOT promote the parent inline anymore —
+        the workflow dispatcher does it on the next tick.
+
+        See tests/test_tdd_system_workflows.py for the end-to-end coverage.
+        """
         conn.execute(
             "INSERT INTO tickets (id, project_id, title, section, status, description) "
             "VALUES ('B-1', 'p', 'Parent', 'WIP', 'in-progress', 'desc')"
@@ -594,28 +596,26 @@ class TestInternalSideEffects:
         update_ticket(conn, "p", "BUG-2", status="bug-fixed", actor=ActorContext.human())
         conn.commit()
 
-        rows = conn.execute(
-            "SELECT subject_id, actor_type, payload_json "
-            "FROM activity_events WHERE subject_id='B-1' AND event_kind='section_change'"
-        ).fetchall()
-        assert len(rows) == 1, "expected exactly one parent-promote event"
-        assert rows[0]["actor_type"] == "system"
-        payload = json.loads(rows[0]["payload_json"])
-        assert payload == {"before": "WIP", "after": "For Review"}
-
-    def test_scheduled_auto_accept_emits_system_event(self, conn):
-        _add_ticket(conn, section="For Review", status="done"); conn.commit()
-        eid = schedule_event(conn, "auto-accept", "B-1", "p", delay_seconds=0)
-        conn.commit()
-        evt = conn.execute("SELECT * FROM scheduled_events WHERE id = ?", (eid,)).fetchone()
-        execute_scheduled_event(conn, evt); conn.commit()
-        row = conn.execute(
-            "SELECT actor_type, payload_json FROM activity_events "
-            "WHERE subject_id='B-1' AND event_kind='section_change'"
+        # Parent must still be in WIP (no synchronous cascade).
+        parent = conn.execute(
+            "SELECT section FROM tickets WHERE id = 'B-1'"
         ).fetchone()
-        assert row is not None
-        assert row["actor_type"] == "system"
-        assert json.loads(row["payload_json"]) == {"before": "For Review", "after": "Done"}
+        assert parent["section"] == "WIP", \
+            "parent should NOT be promoted by update_ticket — workflow handles it"
+
+        # No system section_change event should have fired for the parent.
+        rows = conn.execute(
+            "SELECT subject_id FROM activity_events "
+            "WHERE subject_id='B-1' AND event_kind='section_change' "
+            "AND actor_type='system'"
+        ).fetchall()
+        assert len(rows) == 0, "no synchronous parent-promote event expected"
+
+    # NOTE: test_scheduled_auto_accept_emits_system_event removed — Phase A
+    # migration (tidy-newt) moved auto-accept into a system workflow. The
+    # scheduled_events table + 30s poller stay in place dormant for future
+    # delayed-effect support. See workflows_seed.py "Auto-accept reviewed
+    # tickets" entry (disabled by default).
 
 
 # ---------------------------------------------------------------------------

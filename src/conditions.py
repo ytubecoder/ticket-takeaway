@@ -156,6 +156,116 @@ def _eval_parent_done(ctx: dict, p: dict) -> tuple[bool, str]:
     return (False, f"parent {parent_id!r} section is {row['section']!r}, not Done")
 
 
+def _eval_children_have_open_bugs(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if this ticket has at least one child bug whose status is non-terminal.
+
+    Wraps actions._has_open_bugs to keep the predicate single-sourced.
+    """
+    from actions import _has_open_bugs  # type: ignore[import]
+
+    ticket = ctx["ticket"]
+    has = _has_open_bugs(ctx["db"], ticket["project_id"], ticket["id"])
+    if has:
+        return (True, "ticket has open child bug(s)")
+    return (False, "no open child bugs")
+
+
+def _eval_children_no_open_bugs(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if this ticket has no child bugs in a non-terminal status.
+
+    Vacuously true when the ticket has no children at all.
+    """
+    from actions import _has_open_bugs  # type: ignore[import]
+
+    ticket = ctx["ticket"]
+    has = _has_open_bugs(ctx["db"], ticket["project_id"], ticket["id"])
+    if has:
+        return (False, "ticket has open child bug(s)")
+    return (True, "no open child bugs")
+
+
+def _eval_children_all_status_in(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if every child of this ticket has status in the selected set.
+
+    Vacuously true when the ticket has no children — combine with a
+    `has_children` condition (or check upstream) if the empty case must fail.
+    """
+    db: sqlite3.Connection = ctx["db"]
+    ticket = ctx["ticket"]
+    wanted = p.get("value") or p.get("values") or []
+    if isinstance(wanted, str):
+        wanted = [wanted]
+    wanted_set = set(wanted)
+    children = db.execute(
+        "SELECT status FROM tickets WHERE parent = ? AND project_id = ?",
+        (ticket["id"], ticket["project_id"]),
+    ).fetchall()
+    if not children:
+        return (True, "no children (vacuously true)")
+    bad = [c["status"] for c in children if c["status"] not in wanted_set]
+    if not bad:
+        return (True, f"all {len(children)} children in {sorted(wanted_set)}")
+    return (False, f"{len(bad)} child(ren) not in {sorted(wanted_set)} (e.g. {bad[0]!r})")
+
+
+def _eval_children_any_status_in(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if at least one child of this ticket has status in the selected set."""
+    db: sqlite3.Connection = ctx["db"]
+    ticket = ctx["ticket"]
+    wanted = p.get("value") or p.get("values") or []
+    if isinstance(wanted, str):
+        wanted = [wanted]
+    wanted_set = set(wanted)
+    children = db.execute(
+        "SELECT status FROM tickets WHERE parent = ? AND project_id = ?",
+        (ticket["id"], ticket["project_id"]),
+    ).fetchall()
+    if not children:
+        return (False, "no children")
+    matching = [c["status"] for c in children if c["status"] in wanted_set]
+    if matching:
+        return (True, f"{len(matching)} of {len(children)} child(ren) in {sorted(wanted_set)}")
+    return (False, f"no child status in {sorted(wanted_set)}")
+
+
+def _eval_has_children(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if this ticket has at least one child ticket."""
+    db: sqlite3.Connection = ctx["db"]
+    ticket = ctx["ticket"]
+    row = db.execute(
+        "SELECT 1 FROM tickets WHERE parent = ? AND project_id = ? LIMIT 1",
+        (ticket["id"], ticket["project_id"]),
+    ).fetchone()
+    if row:
+        return (True, "ticket has children")
+    return (False, "no children")
+
+
+def _eval_parent_section_not_in(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if the ticket's parent is NOT in any of the named sections.
+
+    Vacuously true when the ticket has no parent.
+    """
+    db: sqlite3.Connection = ctx["db"]
+    ticket = ctx["ticket"]
+    parent_id = ticket.get("parent")
+    if not parent_id:
+        return (True, "no parent ticket")
+    sections = p.get("value") or p.get("values") or []
+    if isinstance(sections, str):
+        sections = [sections]
+    sections_set = set(sections)
+    row = db.execute(
+        "SELECT section FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+        (parent_id, ticket["project_id"]),
+    ).fetchone()
+    if not row:
+        return (True, f"parent {parent_id!r} not found (vacuously true)")
+    if row["section"] in sections_set:
+        return (False, f"parent {parent_id!r} section is {row['section']!r}, in excluded set")
+    return (True, f"parent {parent_id!r} section is {row['section']!r}, not in {sorted(sections_set)}")
+
+
 # ---------------------------------------------------------------------------
 # Condition catalog
 # ---------------------------------------------------------------------------
@@ -301,6 +411,36 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
         "label": "Parent ticket is done (or no parent)",
         "params": [],
         "evaluator": _eval_parent_done,
+    },
+    "children_have_open_bugs": {
+        "label": "Children include open bugs",
+        "params": [],
+        "evaluator": _eval_children_have_open_bugs,
+    },
+    "children_no_open_bugs": {
+        "label": "All child bugs resolved",
+        "params": [],
+        "evaluator": _eval_children_no_open_bugs,
+    },
+    "children_all_status_in": {
+        "label": "All children status in",
+        "params": [{"name": "value", "type": "status_multi_select", "options": _STATUS_OPTIONS}],
+        "evaluator": _eval_children_all_status_in,
+    },
+    "children_any_status_in": {
+        "label": "Any child status in",
+        "params": [{"name": "value", "type": "status_multi_select", "options": _STATUS_OPTIONS}],
+        "evaluator": _eval_children_any_status_in,
+    },
+    "has_children": {
+        "label": "Ticket has children",
+        "params": [],
+        "evaluator": _eval_has_children,
+    },
+    "parent_section_not_in": {
+        "label": "Parent section is not one of",
+        "params": [{"name": "value", "type": "section_multi_select", "options": _SECTION_OPTIONS}],
+        "evaluator": _eval_parent_section_not_in,
     },
 }
 

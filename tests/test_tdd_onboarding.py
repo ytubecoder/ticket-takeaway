@@ -41,11 +41,11 @@ def test_seed_project_with_valid_backlog(temp_project):
         "# Product Backlog\n\n"
         "## Backlog\n\n"
         "### B-01: First ticket\n"
-        "Priority: high | Complexity: M | Status: proposed\n"
+        "Priority: high | Status: proposed\n"
         "A description.\n"
         "- [ ] Criterion one\n\n"
         "### B-02: Second ticket\n"
-        "Priority: low | Complexity: S | Status: proposed\n\n",
+        "Priority: low | Status: proposed\n\n",
         encoding="utf-8",
     )
     count = seed_project(conn, project)
@@ -74,7 +74,7 @@ def test_seed_project_is_idempotent(temp_project):
     project, conn, tmp_path = temp_project
     backlog = tmp_path / "PRODUCT_BACKLOG.md"
     backlog.write_text(
-        "# Backlog\n\n## Backlog\n\n### B-01: Ticket\nPriority: medium | Complexity: M | Status: proposed\n\n",
+        "# Backlog\n\n## Backlog\n\n### B-01: Ticket\nPriority: medium | Status: proposed\n\n",
         encoding="utf-8",
     )
     seed_project(conn, project)

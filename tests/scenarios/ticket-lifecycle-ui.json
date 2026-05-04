@@ -13,8 +13,7 @@
         "title": "Lifecycle test \u2014 prepare release notes",
         "section": "Backlog",
         "description": "Compile the weekly release notes before Friday standup.",
-        "priority": "high",
-        "complexity": "M"
+        "priority": "high"
       }
     ]
   },

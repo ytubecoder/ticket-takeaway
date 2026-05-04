@@ -168,7 +168,7 @@ class TestCascade:
                   "no_test_required INTEGER DEFAULT 0, no_test_required_note TEXT DEFAULT '', "
                   "parent TEXT, sort_order INTEGER DEFAULT 0, "
                   "created_at TEXT, updated_at TEXT, summary TEXT DEFAULT '', "
-                  "priority TEXT DEFAULT 'medium', complexity TEXT DEFAULT 'M', "
+                  "priority TEXT DEFAULT 'medium', "
                   "commit_hash TEXT DEFAULT '', release_tag TEXT DEFAULT '', "
                   "PRIMARY KEY (id, project_id))")
         c.commit()

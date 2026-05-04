@@ -34,7 +34,7 @@ from typing import Any, Callable, Optional
 
 from actions import ActorContext, emit_event, utcnow_iso
 from db import REGISTRY_PATH
-from runners import AgentRunner, RunOutcome, Runner, ScenarioRunner
+from runners import AgentRunner, NoopRunner, RunOutcome, Runner, ScenarioRunner
 from workspaces import WorkspaceInfo, create_or_reuse, run_hook, workspace_path_for
 from workflow_config import load_workflow_config, load_prompt_template
 
@@ -80,7 +80,11 @@ _paused_lock = threading.Lock()
 _PAUSED_SETTING_KEY = "kitchen.paused"
 
 # Runner registry — maps runner_kind to Runner instance. Tests can swap.
-_RUNNERS: dict[str, Runner] = {"agent": AgentRunner(), "scenario": ScenarioRunner()}
+_RUNNERS: dict[str, Runner] = {
+    "agent": AgentRunner(),
+    "scenario": ScenarioRunner(),
+    "noop": NoopRunner(),
+}
 
 
 def _runner_kind_for(subject_type: str) -> str:
@@ -488,9 +492,12 @@ def _dispatch_via_legacy(get_db: Callable[[], sqlite3.Connection], settings: dic
 def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
     """DB-workflow dispatch path: evaluates tickets against enabled workflow triggers.
 
-    Loops over enabled workflows (system workflows first) and for each subject
-    in automation_mode='auto', evaluates the trigger.  First matching workflow
-    wins (one workflow per dispatch tick per subject).
+    System workflows (system=1) bypass the `automation_mode='auto'` filter so
+    they can fire against ANY non-draft, non-archived ticket. User workflows
+    (system=0) keep the legacy auto-mode-only behaviour.
+
+    For each (workflow, ticket) pair, evaluates the trigger; first matching
+    workflow per ticket dispatches a run (one workflow per tick per subject).
     """
     import json as _json
     from conditions import build_subject_context, evaluate_trigger
@@ -532,10 +539,12 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
             if not workflows:
                 continue
 
-            # Find candidate subjects: tickets in auto mode, not draft/archived.
-            # Wider section scope than legacy — each workflow specifies its own
-            # section filter via trigger_json.
-            subjects = conn.execute(
+            # Two candidate subject pools:
+            #   - auto_subjects:   tickets with automation_mode='auto' (used by user workflows)
+            #   - all_subjects:    every non-draft/non-archived ticket (used by system workflows)
+            # System workflows must fire regardless of automation_mode, so we
+            # evaluate them against the wider pool.
+            auto_subjects = conn.execute(
                 "SELECT t.id FROM tickets t "
                 "JOIN automation_subjects s ON s.subject_id = t.id "
                 "  AND s.project_id = t.project_id AND s.subject_type = 'ticket' "
@@ -545,11 +554,27 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
                 "         WHEN 'low' THEN 2 ELSE 3 END, t.created_at ASC, t.id ASC",
                 (project_id,),
             ).fetchall()
+            all_subjects = conn.execute(
+                "SELECT t.id FROM tickets t "
+                "WHERE t.project_id = ? AND t.archived = 0 AND t.draft = 0 "
+                "ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+                "         WHEN 'low' THEN 2 ELSE 3 END, t.created_at ASC, t.id ASC",
+                (project_id,),
+            ).fetchall()
 
-            for srow in subjects:
+            auto_ids = {s["id"] for s in auto_subjects}
+            # Iterate over the union (system workflows can fire on any ticket;
+            # user workflows only on auto-mode tickets — we'll filter per-workflow).
+            seen: set = set()
+            ordered_ids: list[str] = []
+            for s in all_subjects:
+                if s["id"] not in seen:
+                    seen.add(s["id"])
+                    ordered_ids.append(s["id"])
+
+            for ticket_id in ordered_ids:
                 if slots <= 0 or project_slots <= 0:
                     break
-                ticket_id = srow["id"]
 
                 # Skip if already has an active run.
                 if _has_active_run(conn, project_id, "ticket", ticket_id):
@@ -557,6 +582,11 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
 
                 # Try each workflow in order — first match dispatches.
                 for wf in workflows:
+                    is_system = bool(wf["system"])
+                    # User workflows still respect automation_mode='auto' filter.
+                    if not is_system and ticket_id not in auto_ids:
+                        continue
+
                     try:
                         trigger_raw = wf["trigger_json"]
                         # Workflows with null trigger_json are manual-only — skip.
@@ -646,6 +676,13 @@ def _try_claim_and_dispatch(
     config["_prompt_template"] = load_prompt_template(project_path)
     base_ref = (config.get("agent", {}) or {}).get("base_ref", "origin/main")
 
+    # Detect zero-step workflows (pure mutation rules — e.g. system workflows
+    # like parent-promote and auto-accept). These skip workspace + agent
+    # subprocess and run via NoopRunner, which only applies on_success effects.
+    is_noop_workflow = bool(
+        workflow_meta and not (workflow_meta.get("steps") or [])
+    )
+
     # When a workflow is specified, override the prompt template with the
     # workflow step's prompt_template (substitution happens in the runner).
     if workflow_meta:
@@ -661,7 +698,7 @@ def _try_claim_and_dispatch(
     # Insert the queued row inside a BEGIN IMMEDIATE tx so a concurrent tick
     # would block; the partial unique index makes the race safe regardless.
     claim_owner = _INSTANCE_OWNER
-    runner_kind = _runner_kind_for(subject_type)
+    runner_kind = "noop" if is_noop_workflow else _runner_kind_for(subject_type)
     metadata = _json.dumps(workflow_meta) if workflow_meta else "{}"
     conn = get_db()
     try:
@@ -690,24 +727,35 @@ def _try_claim_and_dispatch(
 
     # Provision workspace (worktree) — outside the claim tx, but before the
     # runner thread starts, so any failure marks the run failed cleanly.
-    try:
-        ws = create_or_reuse(project_path, project_id, subject_type, subject_id, base_ref=base_ref)
-    except ValueError as e:
-        # Workspace setup failed — mark the run failed in a fresh tx.
-        c = get_db()
+    # Noop workflows (zero steps) need no workspace; we pass a stub.
+    if is_noop_workflow:
+        ws = WorkspaceInfo(
+            path=Path(project_path),
+            branch="",
+            base_ref=base_ref,
+            is_git_worktree=False,
+            created_now=False,
+            bootstrapped=True,
+        )
+    else:
         try:
-            c.execute(
-                "UPDATE runs SET status='failed', error_class='workspace_setup', "
-                "error_message=?, finished_at=?, heartbeat_at=? WHERE id = ?",
-                (str(e), utcnow_iso(), utcnow_iso(), run_id),
-            )
-            emit_event(c, project_id, subject_type, subject_id, "run_failed",
-                       {"run_id": run_id, "error_class": "workspace_setup",
-                        "error_message": str(e)}, ActorContext.system())
-            c.commit()
-        finally:
-            c.close()
-        return False
+            ws = create_or_reuse(project_path, project_id, subject_type, subject_id, base_ref=base_ref)
+        except ValueError as e:
+            # Workspace setup failed — mark the run failed in a fresh tx.
+            c = get_db()
+            try:
+                c.execute(
+                    "UPDATE runs SET status='failed', error_class='workspace_setup', "
+                    "error_message=?, finished_at=?, heartbeat_at=? WHERE id = ?",
+                    (str(e), utcnow_iso(), utcnow_iso(), run_id),
+                )
+                emit_event(c, project_id, subject_type, subject_id, "run_failed",
+                           {"run_id": run_id, "error_class": "workspace_setup",
+                            "error_message": str(e)}, ActorContext.system())
+                c.commit()
+            finally:
+                c.close()
+            return False
 
     # Spawn the runner thread.
     runner = _RUNNERS.get(runner_kind)

@@ -46,7 +46,7 @@ Each project has a `PRODUCT_BACKLOG.md` at its root. Sections map directly to ka
 
 ## WIP
 ### B-10: Landing Page Polish
-Priority: medium | Complexity: M | Status: in-progress
+Priority: medium | Status: in-progress
 Landing page refinements — layout, branding, signup messaging.
 - [ ] Hero section with clear value prop
 - [ ] Signup CTA above the fold
@@ -54,14 +54,14 @@ Landing page refinements — layout, branding, signup messaging.
 - [ ] Screenshot carousel of key features
 
 ### B-11: Geo-Located Landing Screenshots
-Priority: low | Complexity: L | Status: blocked
+Priority: low | Status: blocked
 Automated geo-located screenshot generation — waiting on API access.
 - [ ] Playwright script captures screenshots at 10+ city locations
 - [ ] Screenshots auto-uploaded to asset directory
 
 ## For Review
 ### B-05: Security Hardening Initiative
-Priority: high | Complexity: L | Status: for-review
+Priority: high | Status: for-review
 httpOnly cookies, CSP headers, rate limiting.
 - [ ] All auth tokens in httpOnly cookies
 - [ ] CSP headers configured
@@ -69,43 +69,43 @@ httpOnly cookies, CSP headers, rate limiting.
 
 ## Backlog
 ### B-01: Contact Panel + Worker Info
-Priority: high | Complexity: M | Status: specified
+Priority: high | Status: specified
 Left-side contact panel with worker communication links.
 - [ ] Phone, email, Slack links per worker
 - [ ] Collapsible left panel
 - [ ] On-duty status indicators
 
 ### B-02: Task Interactions
-Priority: high | Complexity: M | Status: proposed
+Priority: high | Status: proposed
 Enhanced task interaction with context menus and floating cards.
 
 ## Ideas
 ### I-01: Kanban Drag-Drop Enhancement
-Priority: low | Complexity: M | Status: proposed
+Priority: low | Status: proposed
 Enhanced kanban board with drag-drop reordering.
 
 ## Done
 ### R-01: Authentication & User Management
-Priority: high | Complexity: L | Status: released
+Priority: high | Status: released
 Email+password auth, roles, onboarding. Released v1.0.2.
 
 ### R-02: Form Template System
-Priority: high | Complexity: XL | Status: released
+Priority: high | Status: released
 CRUD form templates with 17 field types. Released v1.0.2.
 
 ## Won't Do
 ### W-01: Native Mobile App
-Priority: low | Complexity: XL | Status: wont-do
+Priority: low | Status: wont-do
 PWA approach chosen instead.
 
 ## Icebox
 ### Z-01: Offline Mode Support
-Priority: low | Complexity: XL | Status: icebox
+Priority: low | Status: icebox
 Service worker caching for offline use — revisit later.
 
 ## Bugs
 ### BUG-01: Form validation error on mobile
-Priority: high | Complexity: S | Status: in-progress
+Priority: high | Status: in-progress
 Submit button unresponsive on iOS Safari when keyboard is open.
 - [ ] Reproduce on iOS 17 Safari
 - [ ] Fix viewport handling during keyboard display
@@ -121,14 +121,14 @@ Submit button unresponsive on iOS Safari when keyboard is open.
 - `## Icebox` → Icebox column
 - `## Bugs` → Collapsible section below the kanban board (starts collapsed)
 - Each `###` heading is one item. Format: `### {ID}: {Title}`
-- First line after heading: `Priority: {high|medium|low} | Complexity: {S|M|L|XL} | Status: {status}`
+- First line after heading: `Priority: {high|medium|low} | Status: {status}`
 - Optional lines after metadata (each on its own line, before description):
   - `Parent: {parent-id}` — links sub-tickets to parent
   - `Rationale: {reason}` — captures "why" decisions (shown collapsed on card)
   - `Depends: {id1}, {id2}` — inter-ticket dependencies (blocked tickets dimmed on dashboard)
 - Next paragraph (non-bullet lines) until a bullet list or next `###`/`##`: **description text**
 - Lines starting with `- [ ]` or `- [x]`: **acceptance criteria** (rendered as checklist in expanded card view)
-- If no priority/complexity line, defaults: `medium`, `M`
+- If no priority line, default: `medium`
 - If no status, defaults based on section: backlog→`proposed`, wip→`in-progress`, review→`for-review`, ideas→`proposed`
 
 **Status is optional metadata within a section.** The section determines the column. Status provides finer detail (e.g., `blocked` within WIP, `specified` vs `proposed` within Backlog). If omitted, defaults to the section's primary status.
@@ -238,13 +238,13 @@ python3 $CLI update goodform I-03 --status specified
 **Add a new ticket:**
 ```bash
 python3 $CLI add goodform "New feature idea" --section ideas
-python3 $CLI add goodform "Ready to build" --section backlog --priority high --complexity M
+python3 $CLI add goodform "Ready to build" --section backlog --priority high
 python3 $CLI add goodform "Bug found" --section bugs --parent B-05 --description "Description of the bug"
 ```
 
 **Create a bug sub-ticket linked to a parent:**
 ```bash
-python3 $CLI add goodform "Login button broken on mobile" --section bugs --parent B-12 --priority high --complexity S
+python3 $CLI add goodform "Login button broken on mobile" --section bugs --parent B-12 --priority high
 # Creates BUG-XX in Bugs section, linked to parent B-12
 ```
 
@@ -319,7 +319,7 @@ python3 $CLI watch --project goodform &
 | `/dashboard generate` | **generate** |
 | `/dashboard status <project> <item-id> <new-section>` | **status** — move item between sections |
 | `/accept <item-id>` | **accept** — now a separate skill, see `/accept` |
-| `/dashboard add <project> "<title>" [--section S] [--priority P] [--complexity C]` | **add** — add new entry |
+| `/dashboard add <project> "<title>" [--section S] [--priority P]` | **add** — add new entry |
 | `/dashboard show [project]` | **show** — terminal summary |
 
 ---
@@ -483,7 +483,7 @@ Use these exact CSS custom properties:
 
 **Standard card (backlog, WIP, ideas):**
 
-Cards show a short description (2-line clamp) by default. Single-click expands to show full description, acceptance criteria, and complexity. Double-click still copies the work prompt.
+Cards show a short description (2-line clamp) by default. Single-click expands to show full description and acceptance criteria. Double-click still copies the work prompt.
 
 ```html
 <div class="card" data-column="{colKey}" data-title="{title}" data-desc="{desc}" data-item-id="{id}">
@@ -494,7 +494,6 @@ Cards show a short description (2-line clamp) by default. Single-click expands t
   <div class="card-meta">
     <span class="card-id">{id}</span>
     <span class="status-badge {status}">{status}</span>
-    <span class="complexity-badge">{complexity}</span>
   </div>
   <div class="card-desc">{first line of description — 2-line clamp}</div>
   <div class="card-expand">
@@ -686,7 +685,7 @@ The CLI updates the DB, sets the default status, syncs PRODUCT_BACKLOG.md, and r
 Adds a new ticket. See **CLI Quick Reference** above for examples.
 
 ```bash
-python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<title>" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D]
+python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<title>" [--section S] [--priority P] [--parent ID] [--description D]
 ```
 
 Auto-generates the ID (B- for backlog, I- for ideas, BUG- for bugs, etc.).

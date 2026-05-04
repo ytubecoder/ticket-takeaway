@@ -376,24 +376,53 @@ class AgentRunner(Runner):
         """Apply on_success_json actions from a DB workflow after a successful run.
 
         Supported actions:
-          move_to:     move ticket to the named section
-          set_status:  set ticket status
-          add_tags:    list[str] — tags to add (creates if missing)
-          remove_tags: list[str] — tags to remove
+          move_to:        move ticket to the named section (legacy alias of move_section)
+          move_section:   move target ticket to the named section
+          set_status:     set target ticket status
+          add_tags:       list[str] — tags to add (creates if missing)
+          remove_tags:    list[str] — tags to remove
+          accept_ticket:  truthy → call actions.accept_ticket() for the target
+                          (refuses silently if preconditions fail)
+          apply_to:       'self' (default) | 'parent' — when 'parent', all the
+                          above effects target the ticket's parent instead.
+                          If parent is missing, the effect block is skipped.
         """
         on_success = workflow_meta.get("on_success") or {}
         if not on_success:
             return
         try:
-            from actions import move_ticket, update_ticket  # type: ignore[import]
+            from actions import (  # type: ignore[import]
+                move_ticket,
+                update_ticket,
+                accept_ticket as _accept_ticket,
+            )
             conn = conn_factory()
             try:
-                move_to = on_success.get("move_to")
+                # Resolve effect target — either the subject (self) or its parent.
+                apply_to = (on_success.get("apply_to") or "self").lower()
+                target_id = ticket_id
+                if apply_to == "parent":
+                    row = conn.execute(
+                        "SELECT parent FROM tickets WHERE UPPER(id) = UPPER(?) "
+                        "AND project_id = ?",
+                        (ticket_id, project_id),
+                    ).fetchone()
+                    parent_id = row["parent"] if row else None
+                    if not parent_id:
+                        # Nothing to do — silently skip.
+                        return
+                    target_id = parent_id
+
+                # Move section: accept move_section (canonical) or move_to (alias).
+                move_to = on_success.get("move_section") or on_success.get("move_to")
                 set_status = on_success.get("set_status")
                 add_tags = on_success.get("add_tags") or []
                 remove_tags = on_success.get("remove_tags") or []
+                accept = on_success.get("accept_ticket")
+
                 if move_to:
-                    move_ticket(conn, project_id, ticket_id, move_to, actor=actor)
+                    move_ticket(conn, project_id, target_id, move_to, actor=actor)
+
                 update_kwargs = {}
                 if set_status:
                     update_kwargs["status"] = set_status
@@ -402,7 +431,39 @@ class AgentRunner(Runner):
                 if remove_tags:
                     update_kwargs["remove_tags"] = list(remove_tags) if not isinstance(remove_tags, list) else remove_tags
                 if update_kwargs:
-                    update_ticket(conn, project_id, ticket_id, actor=actor, **update_kwargs)
+                    update_ticket(conn, project_id, target_id, actor=actor, **update_kwargs)
+
+                if accept:
+                    # Verify preconditions: ticket must currently be in
+                    # For Review with status 'done'. This mirrors the
+                    # invariants the human Accept button enforces.
+                    trow = conn.execute(
+                        "SELECT section, status FROM tickets "
+                        "WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                        (target_id, project_id),
+                    ).fetchone()
+                    if trow and trow["section"] == "For Review" and trow["status"] == "done":
+                        # Resolve project_path / project_name for spec writing.
+                        project_path = ""
+                        project_name = project_id
+                        try:
+                            from db import REGISTRY_PATH  # type: ignore[import]
+                            import json as _json
+                            registry = _json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+                            for p in registry.get("projects", []):
+                                if p.get("id") == project_id:
+                                    import os as _os
+                                    project_path = _os.path.expanduser(p.get("path", ""))
+                                    project_name = p.get("name", project_id)
+                                    break
+                        except Exception:
+                            pass
+                        _accept_ticket(
+                            conn, project_id, target_id,
+                            project_path, project_name, actor=actor,
+                        )
+                    # else: silently skip — preconditions not met.
+
                 conn.commit()
             finally:
                 conn.close()
@@ -858,3 +919,54 @@ class GapAnalyzer(Runner):
     def execute(self, run_id, project_id, subject_type, subject_id,
                 workspace, config, conn_factory, cancel_event=None):
         raise NotImplementedError("GapAnalyzer lands in M4 (closed loop)")
+
+
+# ---------------------------------------------------------------------------
+# NoopRunner — used by system workflows that are pure mutation rules
+# (parent-promote, auto-accept, etc.). No agent subprocess, no workspace
+# required. Just applies the workflow's on_success effects and marks the
+# run succeeded. The workspace argument is ignored (the dispatcher passes a
+# stub; see kitchen._try_claim_and_dispatch zero-step path).
+# ---------------------------------------------------------------------------
+
+class NoopRunner(Runner):
+    """Runner for zero-step workflows: applies on_success effects only."""
+    runner_kind = "noop"
+
+    def execute(
+        self,
+        run_id: int,
+        project_id: str,
+        subject_type: str,
+        subject_id: str,
+        workspace,
+        config: dict,
+        conn_factory: Callable[[], sqlite3.Connection],
+        cancel_event=None,
+    ) -> RunOutcome:
+        actor = ActorContext.system()
+        started = time.monotonic()
+
+        with db_session(conn_factory) as conn:
+            _set_run_status(conn, run_id, "running")
+            conn.commit()
+
+        # Apply on_success effects via the same helper AgentRunner uses.
+        workflow_meta = config.get("_workflow_meta")
+        if workflow_meta and subject_type == "ticket":
+            AgentRunner._apply_on_success(
+                workflow_meta, project_id, subject_id, actor, conn_factory
+            )
+
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        wf_name = (workflow_meta or {}).get("workflow_name", "system workflow")
+        summary = f"{wf_name} applied"
+        with db_session(conn_factory) as conn:
+            _set_run_status(conn, run_id, "succeeded",
+                            summary=summary, exit_code=0, finished=True)
+            emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
+                       {"run_id": run_id, "summary": summary,
+                        "duration_ms": elapsed_ms}, actor)
+            conn.commit()
+        return RunOutcome(run_id=run_id, final_status="succeeded",
+                          duration_ms=elapsed_ms, summary=summary)

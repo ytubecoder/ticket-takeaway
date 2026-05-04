@@ -83,7 +83,6 @@ class Ticket:
     id: str
     title: str
     priority: str = "medium"
-    complexity: str = "M"
     status: str = "proposed"
     section: str = "Ideas"
     description: str = ""
@@ -204,11 +203,11 @@ def parse_backlog(filepath: str) -> list[Ticket]:
             )
             continue
 
-        # Detect metadata line: Priority: X | Complexity: Y | Status: Z
+        # Detect metadata line: Priority: X | Status: Z
+        # (Legacy 'Complexity:' segments are silently skipped — see migration #13.)
         if current_ticket and line_stripped.startswith("Priority:"):
             meta = _parse_metadata_line(line_stripped)
             current_ticket.priority = meta.get("priority", current_ticket.priority)
-            current_ticket.complexity = meta.get("complexity", current_ticket.complexity)
             current_ticket.status = meta.get("status", current_ticket.status)
             continue
 
@@ -256,7 +255,10 @@ def _parse_ticket_header(header: str) -> tuple[str, str]:
 
 
 def _parse_metadata_line(line: str) -> dict:
-    """Parse 'Priority: high | Complexity: M | Status: in-progress'"""
+    """Parse 'Priority: high | Status: in-progress'.
+
+    Legacy 'Complexity:' segments are silently skipped — see migration #13.
+    """
     result = {}
     for part in line.split("|"):
         part = part.strip()
@@ -266,8 +268,6 @@ def _parse_metadata_line(line: str) -> dict:
             value = value.strip().lower()
             if key == "priority" and value in ("high", "medium", "low"):
                 result["priority"] = value
-            elif key == "complexity" and value.upper() in ("S", "M", "L", "XL"):
-                result["complexity"] = value.upper()
             elif key == "status":
                 result["status"] = value
     return result
@@ -399,7 +399,6 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             id=r["id"],
             title=r["title"],
             priority=r["priority"],
-            complexity=r["complexity"],
             status=r["status"],
             section=r["section"],
             description=r["description"],
@@ -686,9 +685,6 @@ def generate_html(project: Project) -> str:
     count_status_inprogress = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "in-progress")
     count_status_forreview = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "for-review")
     count_type_bug = sum(1 for t in all_visible if t.section == "Bugs" or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed"))
-    count_size_s = sum(1 for t in all_visible if t.complexity == "S")
-    count_size_m = sum(1 for t in all_visible if t.complexity == "M")
-    count_size_l = sum(1 for t in all_visible if t.complexity == "L")
 
     # Rationalised automation filter counts
     _ACTIVE_RUN_STATUSES = {"queued", "preparing", "running"}
@@ -1100,11 +1096,6 @@ a {{ color: var(--accent); text-decoration: none; }}
 .card.expanded .card-desc,
 .card.expanded .card-criteria {{ display: block; }}
 .card-footer {{ display: flex; align-items: center; gap: 6px; }}
-.complexity-badge {{
-  font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600;
-  background: var(--bg-page); color: var(--text-tertiary); border: 1px solid var(--border-subtle);
-  font-family: var(--font-mono);
-}}
 .child-count-badge {{
   font-size: 9px; padding: 1px 6px; border-radius: 10px;
   background: rgba(99,102,241,0.12); color: #818cf8;
@@ -1194,7 +1185,6 @@ a {{ color: var(--accent); text-decoration: none; }}
 .list-row-main .priority-dot {{ margin-top: 0; }}
 .list-row-main .card-id {{ min-width: 50px; }}
 .list-row-main .card-title {{ font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.list-row-main .complexity-badge {{ font-size: 8px; padding: 0 4px; }}
 .commit-badge {{
   font-family: var(--font-mono); font-size: 9px; color: var(--text-tertiary);
   background: var(--bg-hover); padding: 0 4px; border-radius: 3px;
@@ -1211,10 +1201,8 @@ a {{ color: var(--accent); text-decoration: none; }}
 .edit-enabled .priority-dot {{ cursor: pointer; }}
 .edit-enabled .status-badge {{ cursor: pointer; }}
 .edit-enabled .criterion {{ cursor: pointer; }}
-.edit-enabled .complexity-badge {{ cursor: pointer; }}
 .edit-enabled .priority-dot:hover {{ transform: scale(1.5); transition: transform 0.15s; }}
 .edit-enabled .status-badge:hover {{ filter: brightness(1.3); transition: filter 0.15s; }}
-.edit-enabled .complexity-badge:hover {{ filter: brightness(1.3); transition: filter 0.15s; }}
 /* Click-to-edit text fields */
 .edit-enabled .card-title {{ cursor: text; }}
 .edit-enabled .card.expanded .card-desc {{ cursor: text; }}
@@ -2481,6 +2469,15 @@ body.bounce-open .bounce-back-btn {{ display: inline-flex; }}
   padding: 1px 6px; border-radius: 4px; background: rgba(139,92,246,0.12); color: #8b5cf6;
   border: 1px solid rgba(139,92,246,0.25); margin-left: 6px;
 }}
+.kw-sys-lock-banner {{
+  font-size: 12px; padding: 8px 12px; border-radius: 6px;
+  background: rgba(139,92,246,0.06); color: var(--text-secondary);
+  border: 1px solid rgba(139,92,246,0.18);
+  display: flex; align-items: center; gap: 8px;
+}}
+.kw-sys-lock-banner::before {{
+  content: '\\1F512'; font-size: 13px; opacity: 0.7;
+}}
 .kw-trigger-summary {{ color: var(--text-tertiary); font-size: 11px; font-family: var(--font-mono); }}
 .kw-enabled-toggle {{ cursor: pointer; }}
 
@@ -2835,12 +2832,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   <span class="filter-divider"></span>
   <span class="filter-group" data-group-name="type">
     <button class="filter-btn" data-filter="bug" data-group="type">Bug <span class="count">{count_type_bug}</span></button>
-  </span>
-  <span class="filter-divider"></span>
-  <span class="filter-group" data-group-name="size">
-    <button class="filter-btn" data-filter="S" data-group="size">S <span class="count">{count_size_s}</span></button>
-    <button class="filter-btn" data-filter="M" data-group="size">M <span class="count">{count_size_m}</span></button>
-    <button class="filter-btn" data-filter="L" data-group="size">L <span class="count">{count_size_l}</span></button>
   </span>
   <span class="filter-divider"></span>
   <!-- Automation filters — automation lens on the existing kanban -->
@@ -3331,7 +3322,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           var match = false;
           if (g === 'status') {{ match = vals.indexOf(card.dataset.status) !== -1; }}
           else if (g === 'type') {{ match = card.dataset.isBug === 'true'; }}
-          else if (g === 'size') {{ match = vals.indexOf(card.dataset.complexity) !== -1; }}
           else if (g === 'kitchen') {{
             // Multi-select within group is OR. A card matches if ANY chip applies.
             var mode = card.dataset.automationMode;
@@ -3600,9 +3590,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           }});
         }}
       }} else if (!oldTagGroup && newTagGroup) {{
-        // Tag group appeared — insert before drafts divider
-        var sizeGroup = document.querySelector('.filter-group[data-group-name="size"]');
-        if (sizeGroup && sizeGroup.nextElementSibling) {{
+        // Tag group appeared — insert after the Type filter group (size group
+        // was removed in Phase B; Type is the last static group before kitchen).
+        var typeGroup = document.querySelector('.filter-group[data-group-name="type"]');
+        if (typeGroup && typeGroup.nextElementSibling) {{
           var divider = document.createElement('span');
           divider.className = 'filter-divider';
           divider.id = 'tagFilterDivider';
@@ -3611,7 +3602,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           group.dataset.groupName = 'tags';
           group.id = 'tagFilterGroup';
           group.innerHTML = newTagGroup.innerHTML;
-          sizeGroup.parentNode.insertBefore(divider, sizeGroup.nextElementSibling);
+          typeGroup.parentNode.insertBefore(divider, typeGroup.nextElementSibling);
           divider.parentNode.insertBefore(group, divider.nextSibling);
           group.querySelectorAll('.filter-btn').forEach(function(btn) {{
             btn.addEventListener('click', function() {{
@@ -4179,57 +4170,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         }}
       }}, true);
 
-      // --- Complexity badge click — show S/M/L/XL select ---
-      document.addEventListener('click', function(e) {{
-        var badge = e.target.closest('.complexity-badge');
-        if (!badge) return;
-        var card = badge.closest('.card');
-        if (!card || !card.dataset.itemId) return;
-        if (e.target.closest('.linked-child-card')) return;
-        e.stopPropagation();
-        e.preventDefault();
-        clearTimeout(card._clickTimer);
-        var existing = document.querySelector('.complexity-dropdown');
-        if (existing) existing.remove();
-        var oldComplexity = badge.textContent.trim();
-        var sizes = ['S', 'M', 'L', 'XL'];
-        var dd = document.createElement('div');
-        dd.className = 'complexity-dropdown';
-        dd.style.cssText = 'position:absolute;z-index:100;background:var(--bg-card);border:1px solid var(--border-main);border-radius:6px;padding:4px 0;min-width:60px;box-shadow:0 4px 12px rgba(0,0,0,.4);';
-        sizes.forEach(function(sz) {{
-          var opt = document.createElement('div');
-          opt.textContent = sz;
-          opt.style.cssText = 'padding:3px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);text-align:center;';
-          opt.addEventListener('mouseenter', function() {{ this.style.background = 'var(--bg-hover)'; }});
-          opt.addEventListener('mouseleave', function() {{ this.style.background = ''; }});
-          opt.addEventListener('click', function(ev) {{
-            ev.stopPropagation();
-            dd.remove();
-            badge.textContent = sz;
-            card.dataset.complexity = sz;
-            pushUndo(card.dataset.itemId, card.dataset.itemId + ' complexity \u2192 ' + sz, function() {{
-              badge.textContent = oldComplexity;
-              card.dataset.complexity = oldComplexity;
-              return apiPut(card.dataset.itemId, {{ complexity: oldComplexity }});
-            }}, function() {{
-              badge.textContent = sz;
-              card.dataset.complexity = sz;
-              return apiPut(card.dataset.itemId, {{ complexity: sz }});
-            }});
-            apiPut(card.dataset.itemId, {{ complexity: sz }});
-          }});
-          dd.appendChild(opt);
-        }});
-        badge.parentElement.style.position = 'relative';
-        badge.parentElement.appendChild(dd);
-        setTimeout(function() {{
-          document.addEventListener('click', function closer() {{
-            dd.remove();
-            document.removeEventListener('click', closer);
-          }}, {{ once: true }});
-        }}, 0);
-      }}, true);
-
       // --- Click-to-edit for parent link ---
       document.addEventListener('click', function(e) {{
         var parentEl = e.target.closest('.card-parent-link');
@@ -4560,7 +4500,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     <div class="detail-meta-strip">
       <span class="meta-chip meta-chip--priority" title="Click to change priority"><span class="chip-dot"></span><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--status" title="Click to change status" data-testid="detail-status"><span class="chip-text"></span></span>
-      <span class="meta-chip meta-chip--complexity" title="Click to change complexity"><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--parent"><span class="chip-label">Parent:</span> <span class="chip-value">None</span></span>
       <span class="meta-chip meta-chip--section"><span class="chip-text"></span></span>
       <!-- Kitchen automation toggle (M1a) — Manual / Auto / Held + hold reason -->
@@ -4791,7 +4730,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   var CAT_RMAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke', L:'reviewed' }};
   var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', tests: 'T', reviewed: 'R', smoke: 'S' }};
   var PRIORITY_CYCLE = ['high', 'medium', 'low'];
-  var COMPLEXITY_CYCLE = ['S', 'M', 'L', 'XL'];
   var STATUS_OPTIONS = {json.dumps(STATUSES)};
 
   var gateBanner = document.getElementById('detail-gate-banner');
@@ -4871,10 +4809,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     var statusText = overlay.querySelector('.meta-chip--status .chip-text');
     statusText.textContent = (data.status || 'proposed').replace(/-/g, ' ').replace(/\\b\\w/g, function(c){{ return c.toUpperCase(); }});
 
-    // Complexity
-    var compText = overlay.querySelector('.meta-chip--complexity .chip-text');
-    compText.textContent = data.complexity || 'M';
-
     // Parent
     var parentChip = overlay.querySelector('.meta-chip--parent');
     var parentVal = parentChip.querySelector('.chip-value');
@@ -4915,14 +4849,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     var idx = PRIORITY_CYCLE.indexOf(currentData.priority || 'medium');
     var next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
     autosaveField('priority', next).then(function() {{ populateMetaChips(currentData); toast('Priority updated'); }});
-  }});
-
-  // Complexity cycling
-  overlay.querySelector('.meta-chip--complexity').addEventListener('click', function() {{
-    if (!currentData) return;
-    var idx = COMPLEXITY_CYCLE.indexOf(currentData.complexity || 'M');
-    var next = COMPLEXITY_CYCLE[(idx + 1) % COMPLEXITY_CYCLE.length];
-    autosaveField('complexity', next).then(function() {{ populateMetaChips(currentData); toast('Complexity updated'); }});
   }});
 
   // Status dropdown
@@ -5101,7 +5027,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       var a = escapeHtmlForHistory(typeof after === 'object'  ? JSON.stringify(after)  : (after  === '' || after  === null ? '∅' : after));
       return '<span class="h-old">' + b + '</span> → <span class="h-new">' + a + '</span>';
     }}
-    if (k === 'section_change')      return diff(p.before, p.after);
+    if (k === 'section_change') {{
+      // System-actor section moves are the parent auto-promote cascade — render in plain English.
+      if (ev.actor_type === 'system' && p.after === 'For Review') {{
+        return 'Auto-promoted to For Review (all children reached terminal status)';
+      }}
+      return diff(p.before, p.after);
+    }}
     if (k === 'status_change')        return diff(p.before, p.after);
     if (k === 'mode_changed')         return 'mode: ' + diff(p.before, p.after);
     if (k === 'hold_set')             return 'held: ' + escapeHtmlForHistory(p.reason || '');
@@ -5155,6 +5087,14 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           '<span></span>' +
         '</div>';
       }}).join('');
+      // Auto-expand history when there are system-actor events (cascades, auto-promotes, etc.) —
+      // these mutations have no other UI surface so they need to be visible by default.
+      var hasSystemEvents = events.some(function(ev) {{ return ev.actor_type === 'system'; }});
+      if (hasSystemEvents) {{
+        listEl.classList.remove('hidden');
+        var toggleBtn = overlay.querySelector('#history-toggle');
+        if (toggleBtn) toggleBtn.textContent = 'Hide';
+      }}
     }}).catch(function(err) {{
       listEl.innerHTML = '<div class="history-empty">Failed: ' + escapeHtmlForHistory(err.message || err) + '</div>';
     }});
@@ -6820,6 +6760,9 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       }}
       // Load live run panel (M3)
       loadRuns(tid);
+      // Preload history so cascade events (system actor) auto-expand on open.
+      // The renderer keeps the section collapsed when no system events are present.
+      loadHistory(tid);
     }});
   }}
 
@@ -8752,13 +8695,40 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
       var cloneBtn = document.createElement('button');
       cloneBtn.className = 'kw-clone-btn';
-      cloneBtn.textContent = 'Clone to customize';
+      cloneBtn.textContent = 'Duplicate to customize';
       cloneBtn.addEventListener('click', function() {{
-        openNewWorkflowForm({{ name: 'Copy of ' + (wf.name || ''), trigger_json: wf.trigger_json, on_success_json: wf.on_success_json, steps: wf.steps }});
+        // Phase A: server-side duplicate endpoint — creates a user-owned copy
+        // (system=0) preserving trigger / steps / on_success / enabled state.
+        fetch(EDIT_API + '/workflow/workflows/' + encodeURIComponent(wf.id) + '/duplicate', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{}})
+        }})
+          .then(function(r) {{ return r.json().then(function(d) {{ return {{ status: r.status, data: d }}; }}); }})
+          .then(function(res) {{
+            if (res.status === 201 && res.data && res.data.id) {{
+              showAppToast('Duplicated as "' + (res.data.name || res.data.id) + '" — opening for edit.', 'success');
+              loadWorkflows();
+              // Open the new (editable) duplicate.
+              openWorkflowDetail(res.data);
+            }} else {{
+              showAppToast((res.data && res.data.error) || 'Duplicate failed', 'error');
+            }}
+          }})
+          .catch(function() {{ showAppToast('Duplicate failed', 'error'); }});
       }});
       hdr.appendChild(cloneBtn);
     }}
     detailDiv.appendChild(hdr);
+
+    // System-workflow lock banner — explains why everything below is read-only.
+    if (isSys) {{
+      var banner = document.createElement('div');
+      banner.className = 'kw-sys-lock-banner';
+      banner.textContent = 'This is a system workflow. You can disable it from the list, '
+        + 'or click "Duplicate to customize" above to make an editable copy.';
+      detailDiv.appendChild(banner);
+    }}
 
     // Description
     var descSection = document.createElement('div');
@@ -11266,7 +11236,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
-        f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
+        f'data-status="{status_class}" data-testid="ticket-card-{id_esc}"'
         f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
         f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
         f' data-automation-mode="{escape(t.automation_mode)}"'
@@ -11289,7 +11259,6 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'
         f'{git_html}'
         f'{actions_html}'
-        f'        <div class="card-footer"><span class="complexity-badge">{escape(t.complexity)}</span></div>\n'
         f'      </div>'
     )
 
@@ -11399,7 +11368,7 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         lines.append(
             f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
-            f'data-status="{status_class}" data-complexity="{escape(t.complexity)}" data-testid="ticket-card-{id_esc}"'
+            f'data-status="{status_class}" data-testid="ticket-card-{id_esc}"'
             f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
             f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}{list_tags_attr}{list_branch_attr}{list_pr_attr}>\n'
             f'        <div class="list-row-main">'
@@ -11407,7 +11376,6 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
             f'<span class="card-id">{id_esc}</span>'
             f'<span class="card-title">{title_esc}</span>'
             f'<span class="status-badge {status_class}">{status_class}</span>'
-            f'<span class="complexity-badge">{escape(t.complexity)}</span>'
             f'{commit_badge}{release_badge}'
             f'{child_badge_html}{open_btn}</div>\n'
             f'{readiness_html}'
@@ -11426,15 +11394,14 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
                 lines.append(
                     f'      <div class="list-row card" data-section="{slug}" '
                     f'data-title="{child_title}" data-item-id="{child_id}" data-desc="{child_desc}" '
-                    f'data-status="{child_status}" data-complexity="{escape(child.complexity)}"'
+                    f'data-status="{child_status}"'
                     f'{"" if slug != "bugs" and child_status not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
                     f' data-parent="{id_esc}">\n'
                     f'        <div class="list-row-main">'
                     f'<span class="priority-dot {child.priority}"></span>'
                     f'<span class="card-id">{child_id}</span>'
                     f'<span class="card-title">{child_title}</span>'
-                    f'<span class="status-badge {child_status}">{child_status}</span>'
-                    f'<span class="complexity-badge">{escape(child.complexity)}</span></div>\n'
+                    f'<span class="status-badge {child_status}">{child_status}</span></div>\n'
                     f'      </div>'
                 )
             lines.append(f'      </div>')
@@ -11466,7 +11433,6 @@ def generate_json_output(projects: list[Project]) -> str:
                 "id": t.id,
                 "title": t.title,
                 "priority": t.priority,
-                "complexity": t.complexity,
                 "status": t.status,
                 "section": t.section,
                 "description": t.description,

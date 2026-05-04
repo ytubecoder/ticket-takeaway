@@ -112,7 +112,7 @@ def test_add_project_with_existing_backlog(dashboard_server, temp_project_dir):
             "# Product Backlog\n\n"
             "## Backlog\n\n"
             "### B-01: Test ticket from existing backlog\n"
-            "Priority: high | Complexity: M | Status: proposed\n"
+            "Priority: high | Status: proposed\n"
             "- [ ] First criterion\n\n"
         )
 

@@ -449,7 +449,6 @@ def _build_edit_candidates(
         "status": "proposed",
         "description": "Original description text",
         "priority": "medium",
-        "complexity": "M",
     }
 
     return [
@@ -519,7 +518,6 @@ def _build_move_candidates(
         "section": from_section,
         "status": "proposed",
         "priority": "medium",
-        "complexity": "M",
     }
 
     return [
@@ -583,7 +581,6 @@ def _build_review_candidates(
         "section": "Review",
         "status": "for-review",
         "priority": "high",
-        "complexity": "M",
     }
 
     return [
@@ -696,7 +693,6 @@ def _build_delete_candidates(
         "title": ticket_title,
         "section": "Backlog",
         "priority": "low",
-        "complexity": "S",
     }
 
     return [

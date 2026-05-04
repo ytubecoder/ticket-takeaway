@@ -313,14 +313,16 @@ class TestPlanCheckWorkflowManifest:
 # ---------------------------------------------------------------------------
 
 class TestSeedDefaultWorkflowsWithPlanCheck:
-    def test_inserts_six_system_workflows(self, conn):
+    def test_inserts_seven_system_workflows(self, conn):
+        # Phase A migration: Review → Done replaced by Parent auto-promote +
+        # Auto-accept reviewed tickets, increasing the seed count to 7.
         result = seed_default_workflows(conn, PROJECT_ID)
-        assert result["inserted"] == 6
+        assert result["inserted"] == 7
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE ?",
             (f"{PROJECT_ID}::%",),
         ).fetchone()[0]
-        assert count == 6
+        assert count == 7
 
     def test_plan_check_seeded_for_project(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
@@ -359,8 +361,8 @@ class TestSeedDefaultWorkflowsWithPlanCheck:
         assert len(steps) == 3
         assert steps[2].get("use_resume") is True
 
-    def test_idempotent_second_run_still_six(self, conn):
+    def test_idempotent_second_run_still_seven(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         second = seed_default_workflows(conn, PROJECT_ID)
         assert second["inserted"] == 0
-        assert second["existing"] == 6
+        assert second["existing"] == 7

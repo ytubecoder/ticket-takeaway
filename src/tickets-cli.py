@@ -4,8 +4,8 @@
 Usage:
     tickets-cli.py seed [--project ID]
     tickets-cli.py list [--project ID] [--section S] [--status S]
-    tickets-cli.py add <project> "title" [--section S] [--priority P] [--complexity C] [--parent ID] [--description D] [--tag T]
-    tickets-cli.py update <project> <id> [--title T] [--priority P] [--complexity C] [--status S] [--description D] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID] [--add-tag T] [--remove-tag T]
+    tickets-cli.py add <project> "title" [--section S] [--priority P] [--parent ID] [--description D] [--tag T]
+    tickets-cli.py update <project> <id> [--title T] [--priority P] [--status S] [--description D] [--parent P] [--summary SUM] [--add-criteria "text"] [--check-criteria N] [--uncheck-criteria N] [--remove-criteria N] [--add-depends ID] [--remove-depends ID] [--add-tag T] [--remove-tag T]
     tickets-cli.py move <project> <id> <section>
     tickets-cli.py accept <project> <id>
     tickets-cli.py sync [--project ID]
@@ -91,7 +91,10 @@ def _parse_ticket_header(header: str) -> tuple[str, str]:
 
 
 def _parse_metadata_line(line: str) -> dict:
-    """Parse 'Priority: high | Complexity: M | Status: in-progress'"""
+    """Parse 'Priority: high | Status: in-progress'.
+
+    Legacy 'Complexity:' segments are silently skipped — see migration #13.
+    """
     result = {}
     for part in line.split("|"):
         part = part.strip()
@@ -101,8 +104,6 @@ def _parse_metadata_line(line: str) -> dict:
             value = value.strip().lower()
             if key == "priority" and value in ("high", "medium", "low"):
                 result["priority"] = value
-            elif key == "complexity" and value.upper() in ("S", "M", "L", "XL"):
-                result["complexity"] = value.upper()
             elif key == "status":
                 result["status"] = value
     return result
@@ -147,7 +148,6 @@ def parse_backlog(filepath: str) -> list[dict]:
                 "id": ticket_id,
                 "title": title,
                 "priority": "medium",
-                "complexity": "M",
                 "status": default_status,
                 "section": current_section,
                 "description": "",
@@ -168,8 +168,6 @@ def parse_backlog(filepath: str) -> list[dict]:
             meta = _parse_metadata_line(line_stripped)
             if "priority" in meta:
                 current_ticket["priority"] = meta["priority"]
-            if "complexity" in meta:
-                current_ticket["complexity"] = meta["complexity"]
             if "status" in meta:
                 current_ticket["status"] = meta["status"]
             continue
@@ -360,13 +358,13 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
         if tid in db_ids:
             # Existing ticket — update fields from markdown (markdown wins)
             conn.execute("""
-                UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
+                UPDATE tickets SET title=?, priority=?, status=?,
                     section=?, description=?, parent=?,
                     sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
                     release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
             """, (
-                t["title"], t["priority"], t["complexity"], t["status"],
+                t["title"], t["priority"], t["status"],
                 t["section"], t["description"], t["parent"],
                 t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
@@ -445,12 +443,12 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
         else:
             # New ticket added directly to markdown — insert into DB
             conn.execute("""
-                INSERT INTO tickets (id, project_id, title, priority, complexity, status,
+                INSERT INTO tickets (id, project_id, title, priority, status,
                                      section, description, parent, sort_order,
                                      commit_hash, release_tag)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (
-                tid, project_id, t["title"], t["priority"], t["complexity"],
+                tid, project_id, t["title"], t["priority"],
                 t["status"], t["section"], t["description"],
                 t["parent"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
@@ -543,7 +541,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             lines.append(f"### {t['id']}: {t['title']}")
 
             # Metadata
-            lines.append(f"Priority: {t['priority']} | Complexity: {t['complexity']} | Status: {t['status']}")
+            lines.append(f"Priority: {t['priority']} | Status: {t['status']}")
 
             # Parent
             if t["parent"]:
@@ -719,13 +717,13 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
             # Existing ticket — update fields from markdown (markdown wins)
             real_id = db_ids[tid.upper()]
             conn.execute("""
-                UPDATE tickets SET title=?, priority=?, complexity=?, status=?,
+                UPDATE tickets SET title=?, priority=?, status=?,
                     section=?, description=?, parent=?,
                     sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
                     release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
             """, (
-                t["title"], t["priority"], t["complexity"], t["status"],
+                t["title"], t["priority"], t["status"],
                 t["section"], t["description"], t["parent"],
                 t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
@@ -772,12 +770,12 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
         else:
             # New ticket added directly to markdown — insert into DB
             conn.execute("""
-                INSERT INTO tickets (id, project_id, title, priority, complexity, status,
+                INSERT INTO tickets (id, project_id, title, priority, status,
                                      section, description, parent, sort_order,
                                      commit_hash, release_tag)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (
-                tid, project_id, t["title"], t["priority"], t["complexity"],
+                tid, project_id, t["title"], t["priority"],
                 t["status"], t["section"], t["description"],
                 t["parent"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
@@ -834,12 +832,12 @@ def seed_project(conn: sqlite3.Connection, project: dict) -> int:
 
     for t in tickets:
         conn.execute("""
-            INSERT INTO tickets (id, project_id, title, priority, complexity, status,
+            INSERT INTO tickets (id, project_id, title, priority, status,
                                  section, description, parent, sort_order,
                                  commit_hash, release_tag)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            t["id"], project_id, t["title"], t["priority"], t["complexity"],
+            t["id"], project_id, t["title"], t["priority"],
             t["status"], t["section"], t["description"],
             t["parent"], t["sort_order"],
             t.get("commit_hash", ""), t.get("release_tag", ""),
@@ -961,7 +959,7 @@ def cmd_list(args):
             if r["section"] != current_section:
                 current_section = r["section"]
             title = r["title"][:38] + ".." if len(r["title"]) > 40 else r["title"]
-            print(f"{r['section']:<14} {r['id']:<10} {title:<40} {r['priority']:<8} {r['status']:<12} {r['complexity']}")
+            print(f"{r['section']:<14} {r['id']:<10} {title:<40} {r['priority']:<8} {r['status']:<12}")
 
         # Summary
         counts = {}
@@ -993,7 +991,6 @@ def cmd_add(args):
         conn, project_id, args.title,
         section=section,
         priority=args.priority or "medium",
-        complexity=args.complexity or "M",
         description=args.description or "",
         parent=args.parent,
         draft=args.draft,
@@ -1031,8 +1028,6 @@ def cmd_update(args):
         kwargs["title"] = args.title
     if args.priority is not None:
         kwargs["priority"] = args.priority
-    if args.complexity is not None:
-        kwargs["complexity"] = args.complexity
     if args.status is not None:
         kwargs["status"] = args.status
     if args.description is not None:
@@ -1357,7 +1352,6 @@ def cmd_unregister(args):
         conn.execute("DELETE FROM acceptance_criteria WHERE project_id = ?", (args.id,))
         conn.execute("DELETE FROM depends WHERE project_id = ?", (args.id,))
         conn.execute("DELETE FROM readiness_flags WHERE project_id = ?", (args.id,))
-        conn.execute("DELETE FROM scheduled_events WHERE project_id = ?", (args.id,))
         conn.execute("DELETE FROM tickets WHERE project_id = ?", (args.id,))
         conn.execute("DELETE FROM _sync_state WHERE project_id = ?", (args.id,))
         conn.commit()
@@ -1661,7 +1655,6 @@ def main():
     p_add.add_argument("title", help="Ticket title")
     p_add.add_argument("--section", help="Section (default: Backlog)")
     p_add.add_argument("--priority", help="Priority (high/medium/low)")
-    p_add.add_argument("--complexity", help="Complexity (S/M/L/XL)")
     p_add.add_argument("--parent", help="Parent ticket ID")
     p_add.add_argument("--description", help="Description text")
     p_add.add_argument("--tag", action="append", help="Add tag (repeatable)")
@@ -1673,7 +1666,6 @@ def main():
     p_upd.add_argument("id", help="Ticket ID")
     p_upd.add_argument("--title", help="New title")
     p_upd.add_argument("--priority", help="New priority")
-    p_upd.add_argument("--complexity", help="New complexity")
     p_upd.add_argument("--status", help="New status")
     p_upd.add_argument("--description", help="New description")
     p_upd.add_argument("--parent", help="New parent ID (empty to clear)")

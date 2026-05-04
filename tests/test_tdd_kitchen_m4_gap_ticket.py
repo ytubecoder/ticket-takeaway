@@ -85,7 +85,7 @@ def _file_gap_ticket(serve, project_id, run_id):
     title = f"[gap:{gap_kind}] {failed_action} step in journey {journey_id}".strip()
     description = f"_Auto-filed from red scenario run #{run_id}._\n\n**Gap kind:** `{gap_kind}`"
     tid = _add_ticket(c, project_id, title,
-                      section="Ideas", priority="medium", complexity="M",
+                      section="Ideas", priority="medium",
                       description=description, draft=True)
     c.execute("INSERT INTO acceptance_criteria (ticket_id, project_id, text) VALUES (?, ?, ?)",
               (tid, project_id, f"Resolve gap from run #{run_id}"))

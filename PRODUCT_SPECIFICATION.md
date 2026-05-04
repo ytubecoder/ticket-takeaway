@@ -131,6 +131,17 @@ Released: 2026-04-08 | Commit: bbd6ebf
 Priority: medium | Complexity: M | Status: released
 Released: 2026-04-16 | Commit: 015ee52
 
+
+### B-1: X
+Priority: medium | Complexity: M | Status: released
+Released: 2026-05-04
+desc
+
+
+### I-31: e2e-lifecycle-1777885690
+Priority: medium | Status: released
+Released: 2026-05-04 | Commit: 7eb9b06
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

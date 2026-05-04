@@ -100,6 +100,10 @@ class TestCatalogCompleteness:
         "has_field", "criteria_count_gte", "flag_set", "deps_clear",
         "tests_covered", "no_active_run", "tag_includes", "priority_at_least",
         "parent_done",
+        # Phase A — children + parent helpers for system workflows
+        "children_have_open_bugs", "children_no_open_bugs",
+        "children_all_status_in", "children_any_status_in",
+        "has_children", "parent_section_not_in",
     }
 
     def test_all_expected_kinds_present(self):
@@ -396,6 +400,166 @@ class TestParentDone:
         ok, reason = evaluate_condition({"kind": "parent_done"}, ctx)
         assert not ok
         assert "B-2" in reason
+
+
+class TestChildrenHaveOpenBugs:
+    def test_false_when_no_children(self, conn):
+        _make_ticket(conn)
+        ctx = _make_ctx(conn)
+        ok, reason = evaluate_condition({"kind": "children_have_open_bugs"}, ctx)
+        assert not ok
+        assert "no open" in reason
+
+    def test_true_when_open_bug_child(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="BUG-1", parent="B-1", status="bug")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition({"kind": "children_have_open_bugs"}, ctx)
+        assert ok
+
+    def test_false_when_all_children_terminal(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="BUG-1", parent="B-1", status="done")
+        _make_ticket(conn, tid="BUG-2", parent="B-1", status="bug-fixed")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition({"kind": "children_have_open_bugs"}, ctx)
+        assert not ok
+
+
+class TestChildrenNoOpenBugs:
+    def test_true_when_no_children(self, conn):
+        """Vacuously true: no children → no open bugs."""
+        _make_ticket(conn)
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition({"kind": "children_no_open_bugs"}, ctx)
+        assert ok
+
+    def test_false_when_open_bug_child(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="BUG-1", parent="B-1", status="bug")
+        ctx = _make_ctx(conn)
+        ok, reason = evaluate_condition({"kind": "children_no_open_bugs"}, ctx)
+        assert not ok
+        assert "open" in reason
+
+    def test_true_when_all_children_terminal(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="BUG-1", parent="B-1", status="done")
+        _make_ticket(conn, tid="BUG-2", parent="B-1", status="for-review")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition({"kind": "children_no_open_bugs"}, ctx)
+        assert ok
+
+
+class TestChildrenAllStatusIn:
+    def test_vacuous_true_no_children(self, conn):
+        _make_ticket(conn)
+        ctx = _make_ctx(conn)
+        ok, reason = evaluate_condition(
+            {"kind": "children_all_status_in", "value": ["done"]}, ctx,
+        )
+        assert ok
+        assert "no children" in reason
+
+    def test_true_all_children_match(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="B-2", parent="B-1", status="done")
+        _make_ticket(conn, tid="B-3", parent="B-1", status="for-review")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition(
+            {"kind": "children_all_status_in", "value": ["done", "for-review", "bug-fixed"]},
+            ctx,
+        )
+        assert ok
+
+    def test_false_one_child_outside(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="B-2", parent="B-1", status="done")
+        _make_ticket(conn, tid="B-3", parent="B-1", status="in-progress")
+        ctx = _make_ctx(conn)
+        ok, reason = evaluate_condition(
+            {"kind": "children_all_status_in", "value": ["done", "for-review"]},
+            ctx,
+        )
+        assert not ok
+        assert "in-progress" in reason
+
+
+class TestChildrenAnyStatusIn:
+    def test_false_no_children(self, conn):
+        _make_ticket(conn)
+        ctx = _make_ctx(conn)
+        ok, reason = evaluate_condition(
+            {"kind": "children_any_status_in", "value": ["done"]}, ctx,
+        )
+        assert not ok
+        assert "no children" in reason
+
+    def test_true_one_child_matches(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="B-2", parent="B-1", status="done")
+        _make_ticket(conn, tid="B-3", parent="B-1", status="in-progress")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition(
+            {"kind": "children_any_status_in", "value": ["done"]}, ctx,
+        )
+        assert ok
+
+    def test_false_no_match(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="B-2", parent="B-1", status="in-progress")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition(
+            {"kind": "children_any_status_in", "value": ["done", "for-review"]},
+            ctx,
+        )
+        assert not ok
+
+
+class TestHasChildren:
+    def test_false_when_no_children(self, conn):
+        _make_ticket(conn)
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition({"kind": "has_children"}, ctx)
+        assert not ok
+
+    def test_true_when_one_child(self, conn):
+        _make_ticket(conn, tid="B-1")
+        _make_ticket(conn, tid="B-2", parent="B-1")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition({"kind": "has_children"}, ctx)
+        assert ok
+
+
+class TestParentSectionNotIn:
+    def test_vacuous_true_no_parent(self, conn):
+        _make_ticket(conn)
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition(
+            {"kind": "parent_section_not_in", "value": ["Done"]}, ctx,
+        )
+        assert ok
+
+    def test_true_when_parent_in_other_section(self, conn):
+        _make_ticket(conn, tid="B-1", parent="B-2")
+        _make_ticket(conn, tid="B-2", section="Backlog")
+        ctx = _make_ctx(conn)
+        ok, _ = evaluate_condition(
+            {"kind": "parent_section_not_in", "value": ["Done", "Won't Do", "For Review"]},
+            ctx,
+        )
+        assert ok
+
+    def test_false_when_parent_in_excluded_section(self, conn):
+        _make_ticket(conn, tid="B-1", parent="B-2")
+        _make_ticket(conn, tid="B-2", section="For Review")
+        ctx = _make_ctx(conn)
+        ok, reason = evaluate_condition(
+            {"kind": "parent_section_not_in", "value": ["Done", "For Review"]},
+            ctx,
+        )
+        assert not ok
+        assert "For Review" in reason
 
 
 class TestUnknownCondition:

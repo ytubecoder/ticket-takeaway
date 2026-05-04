@@ -12,8 +12,7 @@
         "section": "Backlog",
         "status": "proposed",
         "description": "Original description text",
-        "priority": "medium",
-        "complexity": "M"
+        "priority": "medium"
       }
     ]
   },

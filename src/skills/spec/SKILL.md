@@ -62,7 +62,7 @@ Show the ticket as-is:
 - ID and title
 - Any existing description (may be empty)
 - Any existing acceptance criteria (may be empty)
-- Priority and complexity if set
+- Priority if set
 
 #### 4b. Explore the Idea
 
@@ -112,11 +112,10 @@ These are just suggestions — take what's useful, ignore the rest.
 
 Do NOT run `/tdd` automatically. Just plant the seed. The user can run it themselves when they're ready to build.
 
-#### 4e. Set Priority and Complexity
+#### 4e. Set Priority
 
-If not already set (or still at defaults), ask:
+If not already set (or still at default), ask:
 - **Priority**: "High, medium, or low?" — default to medium if the user doesn't care
-- **Complexity**: "S, M, L, or XL?" — default to M if the user doesn't care
 
 Don't belabor this. If the user says "whatever" or "medium", move on.
 
@@ -125,7 +124,7 @@ Don't belabor this. If the user says "whatever" or "medium", move on.
 Present the final ticket:
 ```markdown
 ### {ID}: {Title}
-Priority: {priority} | Complexity: {complexity} | Status: specified
+Priority: {priority} | Status: specified
 {Description}
 - [ ] {Criterion 1}
 - [ ] {Criterion 2}

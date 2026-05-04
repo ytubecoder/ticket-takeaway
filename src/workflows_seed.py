@@ -212,31 +212,60 @@ DEFAULT_WORKFLOWS: list[dict] = [
             }
         ],
     },
-    # 4. Review → Done: disabled by default — never auto-accept without user approval
+    # 4a. Parent auto-promote: when ALL children of a parent reach a terminal status
+    #     (done / for-review / bug-fixed), promote the parent to For Review.
+    #     System workflow — bypasses automation_mode filter so it fires against
+    #     any ticket that has children. Zero steps → applied via NoopRunner.
     {
-        "name": "Review → Done",
-        "description": "Accept tickets in For Review (disabled by default — requires explicit user approval)",
+        "name": "Parent auto-promote",
+        "description": (
+            "When all children of a parent ticket reach terminal status "
+            "(done / for-review / bug-fixed), promote the parent to For Review. "
+            "Replaces the legacy hardcoded _maybe_promote_parent hook."
+        ),
         "system": 1,
-        "enabled": 0,  # Memory: never auto-accept without user approval
+        "enabled": 1,  # Preserves today's behaviour
+        "subject_type": "ticket",
+        "trigger_json": {
+            "all_of": [
+                # Only consider tickets that actually have children.
+                {"kind": "has_children"},
+                # Don't move parents that are already terminal.
+                {"kind": "section_in", "values": ["Ideas", "Backlog", "WIP"]},
+                # Every child must be done / for-review / bug-fixed.
+                {"kind": "children_all_status_in",
+                 "value": ["done", "for-review", "bug-fixed"]},
+            ]
+        },
+        "on_success_json": {
+            "move_section": "For Review",
+        },
+        "steps": [],  # Pure mutation — no agent step.
+    },
+    # 4b. Auto-accept: move tickets in For Review with status 'done' and no
+    #     open child bugs to Done. DISABLED by default — never auto-accept
+    #     without explicit user approval (memory: feedback_no_accept_without_user).
+    {
+        "name": "Auto-accept reviewed tickets",
+        "description": (
+            "Move tickets in For Review with status 'done' and no open child bugs "
+            "to Done. Disabled by default — enable only if you want acceptance "
+            "to happen without manual approval."
+        ),
+        "system": 1,
+        "enabled": 0,
         "subject_type": "ticket",
         "trigger_json": {
             "all_of": [
                 {"kind": "section_equals", "value": "For Review"},
-                {"kind": "status_equals", "value": "for-review"},
-                {"kind": "automation_mode", "value": "auto"},
-                {"kind": "no_active_run"},
+                {"kind": "status_equals", "value": "done"},
+                {"kind": "children_no_open_bugs"},
             ]
         },
-        "on_success_json": {"move_to": "Done", "set_status": "done"},
-        "steps": [
-            {
-                "agent_id": None,
-                "agent_name": "acceptor",
-                "prompt_template": _ticket_prompt("Accept and finalise"),
-                "on_failure": "pause",
-                "timeout_ms": 300000,
-            }
-        ],
+        "on_success_json": {
+            "accept_ticket": True,
+        },
+        "steps": [],  # Pure mutation — no agent step.
     },
     # 5. Bug triage: orphan bugs (no parent) in Bugs section — sets a parent
     {

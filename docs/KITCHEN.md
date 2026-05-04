@@ -346,10 +346,16 @@ Events written under M1a remain valid under M1b.
 
 **Internal side-effect rule:** events are emitted from inside `actions.py`
 mutation functions, INCLUDING side effects that run inside other action
-functions. Examples: `auto_promote_parents()` emits `section_change` for the
-promoted parent; the scheduled-events poller emits its own events when it
-auto-accepts. The "spine" must include side effects from within actions, not
-just top-level calls.
+functions. Examples: the journey cascade on move-to-Done emits `run_started`
+for each linked journey under `ActorContext.system()`. The "spine" must include
+side effects from within actions, not just top-level calls.
+
+> **Note (Phase A migration — tidy-newt):** parent-auto-promote and the 5-min
+> auto-accept have been migrated out of `actions.py` post-change hooks and into
+> system workflows (`workflows_seed.py`). They now run via the workflow
+> dispatcher's NoopRunner path on the next tick — events still emit under
+> `ActorContext.system()` from inside the runner's `_apply_on_success` helper.
+> The audit invariant is unchanged.
 
 ## 9b. Actor attribution
 
@@ -704,7 +710,7 @@ on existing DBs.
 
 | Milestone | Plan | Shipped |
 |---|---|---|
-| M1a | Schema + spine | 100% — 65 tests; `ActorContext` + `emit_event` + `eligibility` + `set_automation_mode` + `set_no_test_required` + spine events on every existing mutation including internal side-effects (`auto_promote_parents`, scheduled auto-accept) |
+| M1a | Schema + spine | 100% — 65 tests; `ActorContext` + `emit_event` + `eligibility` + `set_automation_mode` + `set_no_test_required` + spine events on every existing mutation. Note: parent-promote + auto-accept were migrated to system workflows in Phase A (tidy-newt) — they still emit `system`-actor events but from the runner's `_apply_on_success` instead of `actions.py` post-change hooks. |
 | M1a UI | Auto toggle + no-tests + card badges | 100% — meta-strip chip with picker; checkbox + mandatory note; per-card kitchen-badge with idle / queued / running / needs-input / failed / held / cancelled variants |
 | M1b | Expanded vocab + history tab | 100% — every direct-write helper in `serve.py` routes through `emit_event` in same tx; 17 tests; collapsible History section in ticket detail with event-aware summaries; `discarded_run_id` flagged events render struck-through |
 | M2 | Kitchen view + filters + watched flag | 100% — `/` is now Kitchen, picker moved to `/projects`, `_aggregate_kitchen_state()` shared by HTML+JSON, watched-projects filter, board filter chips Auto/Held/Eligible/Needs-Input/Failed |

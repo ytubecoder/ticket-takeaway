@@ -35,7 +35,6 @@ def init_db(conn: sqlite3.Connection):
             project_id  TEXT NOT NULL,
             title       TEXT NOT NULL,
             priority    TEXT NOT NULL DEFAULT 'medium',
-            complexity  TEXT NOT NULL DEFAULT 'M',
             status      TEXT NOT NULL DEFAULT 'proposed',
             section     TEXT NOT NULL DEFAULT 'Ideas',
             description TEXT NOT NULL DEFAULT '',
@@ -391,7 +390,7 @@ def init_db(conn: sqlite3.Connection):
                 project_id         TEXT NOT NULL,
                 subject_type       TEXT NOT NULL CHECK (subject_type IN ('ticket','journey','investigation')),
                 subject_id         TEXT NOT NULL,
-                runner_kind        TEXT NOT NULL CHECK (runner_kind IN ('agent','scenario','gap_analyzer')),
+                runner_kind        TEXT NOT NULL CHECK (runner_kind IN ('agent','scenario','gap_analyzer','noop')),
                 status             TEXT NOT NULL CHECK (status IN
                                      ('queued','preparing','running','needs_input',
                                       'succeeded','failed','stalled','cancelled')),
@@ -509,4 +508,108 @@ def init_db(conn: sqlite3.Connection):
         except sqlite3.OperationalError:
             pass  # Column already exists
         conn.execute("INSERT INTO _migrations (version) VALUES (11)")
+        conn.commit()
+
+    # Migration 12 (Phase A — tidy-newt): widen the runs.runner_kind CHECK
+    # constraint to include 'noop'. The NoopRunner handles zero-step system
+    # workflows like Parent auto-promote and Auto-accept reviewed tickets —
+    # pure mutation rules with no agent subprocess. SQLite can't ALTER a
+    # CHECK constraint in place, so we rebuild the table preserving every
+    # existing column (whatever migrations 8/9/10/11 added).
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 12").fetchone():
+        existing_sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='runs'"
+        ).fetchone()
+        if existing_sql_row and "'noop'" not in (existing_sql_row["sql"] or ""):
+            # Discover the actual column list dynamically so we don't lose any
+            # field added by future migrations (or by older ones not in the
+            # canonical CREATE TABLE above on this DB).
+            old_cols_rows = conn.execute("PRAGMA table_info(runs)").fetchall()
+            col_names = [c["name"] for c in old_cols_rows]
+            col_list_sql = ", ".join(col_names)
+
+            # Build the new CREATE statement by replacing the old CHECK with
+            # the widened one. We do this textually because SQLite preserves
+            # the original CREATE in sqlite_master, including any extra
+            # columns added by later migrations. This keeps the rebuild
+            # forward-compatible: we lose nothing.
+            new_create_sql = existing_sql_row["sql"].replace(
+                "CHECK (runner_kind IN ('agent','scenario','gap_analyzer'))",
+                "CHECK (runner_kind IN ('agent','scenario','gap_analyzer','noop'))",
+            )
+            # Rename the table reference to runs_new for the rebuild.
+            new_create_sql = new_create_sql.replace(
+                "CREATE TABLE runs",
+                "CREATE TABLE runs_new",
+                1,
+            )
+            new_create_sql = new_create_sql.replace(
+                'CREATE TABLE "runs"',
+                'CREATE TABLE runs_new',
+                1,
+            )
+
+            # Defer FK checks for the swap (best-effort; no FKs target runs).
+            fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            conn.execute("PRAGMA foreign_keys=OFF")
+            try:
+                # Defensive: clean up any orphan runs_new from a prior aborted
+                # migration attempt before recreating it.
+                conn.execute("DROP TABLE IF EXISTS runs_new")
+                conn.execute(new_create_sql)
+                conn.execute(
+                    f"INSERT INTO runs_new ({col_list_sql}) "
+                    f"SELECT {col_list_sql} FROM runs"
+                )
+                conn.execute("DROP TABLE runs")
+                conn.execute("ALTER TABLE runs_new RENAME TO runs")
+                # Recreate canonical indexes (CREATE IF NOT EXISTS — no-op if
+                # the rebuild preserved them, which it doesn't because indexes
+                # are tied to the old table name).
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS runs_subject_latest "
+                    "ON runs (project_id, subject_type, subject_id, id DESC)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS runs_active "
+                    "ON runs (status) WHERE status IN "
+                    "('queued','preparing','running','needs_input')"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS runs_evidence_age "
+                    "ON runs (finished_at, evidence_status)"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_subject "
+                    "ON runs (project_id, subject_type, subject_id) "
+                    "WHERE status IN ('queued','preparing','running','needs_input')"
+                )
+            finally:
+                if fk_was_on:
+                    conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("INSERT INTO _migrations (version) VALUES (12)")
+        conn.commit()
+
+    # Migration 13 (Phase B — tidy-newt): retire the `complexity` column.
+    # Its only remaining use was decorative (kanban size filter). We back-fill
+    # the human-meaningful values into ticket_tags so the labels users have
+    # applied (~239 tickets) survive, then drop the column. SQLite 3.35+
+    # supports DROP COLUMN natively; Python 3.10+ ships with 3.45+.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 13").fetchone():
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+        if "complexity" in cols:
+            conn.execute(
+                "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) "
+                "SELECT id, project_id, "
+                "  CASE complexity "
+                "    WHEN 'S'  THEN 'Small' "
+                "    WHEN 'M'  THEN 'Medium' "
+                "    WHEN 'L'  THEN 'Large' "
+                "    WHEN 'XL' THEN 'XL' "
+                "  END "
+                "FROM tickets "
+                "WHERE complexity IN ('S','M','L','XL')"
+            )
+            conn.execute("ALTER TABLE tickets DROP COLUMN complexity")
+        conn.execute("INSERT INTO _migrations (version) VALUES (13)")
         conn.commit()

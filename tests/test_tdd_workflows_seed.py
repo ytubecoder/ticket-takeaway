@@ -66,8 +66,9 @@ class TestMigration9:
 # ---------------------------------------------------------------------------
 
 class TestDefaultWorkflowsManifest:
-    def test_exactly_six_workflows(self):
-        assert len(DEFAULT_WORKFLOWS) == 6
+    def test_exactly_seven_workflows(self):
+        # Phase A: Review → Done replaced by Parent auto-promote + Auto-accept
+        assert len(DEFAULT_WORKFLOWS) == 7
 
     def test_all_have_name(self):
         for wf in DEFAULT_WORKFLOWS:
@@ -85,14 +86,30 @@ class TestDefaultWorkflowsManifest:
             else:
                 assert wf.get("trigger_json"), f"{wf['name']!r} missing trigger_json"
 
-    def test_all_have_steps(self):
+    def test_all_have_steps_field(self):
+        """Every workflow must have a steps field (list); pure-mutation system
+        workflows like parent-promote / auto-accept ship empty step lists."""
         for wf in DEFAULT_WORKFLOWS:
-            assert wf.get("steps"), f"{wf['name']!r} missing steps"
+            assert "steps" in wf, f"{wf['name']!r} missing steps key"
+            assert isinstance(wf["steps"], list)
 
-    def test_review_to_done_is_disabled(self):
-        """Review → Done must be disabled by default (never auto-accept)."""
-        rv_done = next(wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Review → Done")
-        assert rv_done["enabled"] == 0, "Review → Done must be disabled by default"
+    def test_parent_promote_is_enabled(self):
+        """Parent auto-promote must be enabled by default (preserves legacy hook)."""
+        wf = next(w for w in DEFAULT_WORKFLOWS if w["name"] == "Parent auto-promote")
+        assert wf["enabled"] == 1
+
+    def test_auto_accept_is_disabled(self):
+        """Auto-accept must be disabled by default (memory: never auto-accept)."""
+        wf = next(w for w in DEFAULT_WORKFLOWS if w["name"] == "Auto-accept reviewed tickets")
+        assert wf["enabled"] == 0
+
+    def test_parent_promote_has_zero_steps(self):
+        wf = next(w for w in DEFAULT_WORKFLOWS if w["name"] == "Parent auto-promote")
+        assert wf["steps"] == []
+
+    def test_auto_accept_has_zero_steps(self):
+        wf = next(w for w in DEFAULT_WORKFLOWS if w["name"] == "Auto-accept reviewed tickets")
+        assert wf["steps"] == []
 
     def test_trigger_json_round_trips(self):
         for wf in DEFAULT_WORKFLOWS:
@@ -105,6 +122,8 @@ class TestDefaultWorkflowsManifest:
             assert isinstance(wf["steps"], list)
 
     def test_steps_have_prompt_template(self):
+        """Workflows with steps must define prompt_template per step. Zero-step
+        workflows (system mutation rules) are exempt."""
         for wf in DEFAULT_WORKFLOWS:
             for step in wf["steps"]:
                 assert "prompt_template" in step, f"{wf['name']!r} step missing prompt_template"
@@ -115,14 +134,14 @@ class TestDefaultWorkflowsManifest:
 # ---------------------------------------------------------------------------
 
 class TestSeedDefaultWorkflows:
-    def test_inserts_six_system_workflows(self, conn):
+    def test_inserts_seven_system_workflows(self, conn):
         result = seed_default_workflows(conn, PROJECT_ID)
-        assert result["inserted"] == 6
+        assert result["inserted"] == 7
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE ?",
             (f"{PROJECT_ID}::%",),
         ).fetchone()[0]
-        assert count == 6
+        assert count == 7
 
     def test_existing_is_zero_on_first_run(self, conn):
         result = seed_default_workflows(conn, PROJECT_ID)
@@ -131,17 +150,17 @@ class TestSeedDefaultWorkflows:
     def test_idempotent_second_run(self, conn):
         first = seed_default_workflows(conn, PROJECT_ID)
         second = seed_default_workflows(conn, PROJECT_ID)
-        assert first["inserted"] == 6
+        assert first["inserted"] == 7
         assert second["inserted"] == 0
-        assert second["existing"] == 6
+        assert second["existing"] == 7
 
-    def test_idempotent_count_stays_at_six(self, conn):
+    def test_idempotent_count_stays_at_seven(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         seed_default_workflows(conn, PROJECT_ID)
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1",
         ).fetchone()[0]
-        assert count == 6
+        assert count == 7
 
     def test_different_projects_get_independent_workflows(self, conn):
         seed_default_workflows(conn, "project-a")
@@ -152,8 +171,8 @@ class TestSeedDefaultWorkflows:
         count_b = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE 'project-b::%'"
         ).fetchone()[0]
-        assert count_a == 6
-        assert count_b == 6
+        assert count_a == 7
+        assert count_b == 7
 
     def test_stored_trigger_json_is_valid_json(self, conn):
         """Auto-fire workflows must be dicts; Plan Check stores JSON null."""
@@ -167,6 +186,8 @@ class TestSeedDefaultWorkflows:
             assert isinstance(parsed, dict) or parsed is None
 
     def test_stored_steps_is_valid_json_list(self, conn):
+        """Steps must always parse as a list. Pure-mutation system workflows
+        (parent-promote, auto-accept) ship empty step lists; that's allowed."""
         seed_default_workflows(conn, PROJECT_ID)
         rows = conn.execute(
             "SELECT steps FROM workflows WHERE system = 1 AND id LIKE ?",
@@ -175,15 +196,22 @@ class TestSeedDefaultWorkflows:
         for row in rows:
             parsed = json.loads(row["steps"])
             assert isinstance(parsed, list)
-            assert len(parsed) >= 1
 
-    def test_review_to_done_stored_as_disabled(self, conn):
+    def test_auto_accept_stored_as_disabled(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         row = conn.execute(
-            "SELECT enabled FROM workflows WHERE name = 'Review → Done' AND system = 1",
+            "SELECT enabled FROM workflows WHERE name = 'Auto-accept reviewed tickets' AND system = 1",
         ).fetchone()
         assert row is not None
         assert row["enabled"] == 0
+
+    def test_parent_promote_stored_as_enabled(self, conn):
+        seed_default_workflows(conn, PROJECT_ID)
+        row = conn.execute(
+            "SELECT enabled FROM workflows WHERE name = 'Parent auto-promote' AND system = 1",
+        ).fetchone()
+        assert row is not None
+        assert row["enabled"] == 1
 
     def test_backlog_to_wip_is_enabled(self, conn):
         seed_default_workflows(conn, PROJECT_ID)

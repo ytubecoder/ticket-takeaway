@@ -15,7 +15,7 @@ import os
 import sqlite3
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -126,61 +126,6 @@ def auto_generate_id(conn: sqlite3.Connection, project_id: str, section: str) ->
             pass
 
     return f"{prefix}{sep}{max_num + 1:02d}"
-
-
-def execute_scheduled_event(conn: sqlite3.Connection, event: sqlite3.Row) -> None:
-    """Execute a single scheduled event.  Called by the poller in serve.py.
-
-    Dispatches on event['event_type'].  Currently supported:
-      - 'auto-accept': accept the ticket (move to Done + spec entry)
-    """
-    event_type = event["event_type"]
-    ticket_id = event["ticket_id"]
-    project_id = event["project_id"]
-
-    if event_type == "auto-accept":
-        # Re-check preconditions: ticket still in For Review, status done, no open bugs
-        ticket = conn.execute(
-            "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
-            (ticket_id, project_id),
-        ).fetchone()
-        if not ticket:
-            return
-        if ticket["section"] != "For Review" or ticket["status"] != "done":
-            return
-        if _has_open_bugs(conn, project_id, ticket_id):
-            return
-
-        # Move to Done
-        sort_order = _next_sort_order(conn, project_id, "Done")
-        commit_hash_val = ""
-        try:
-            from db import REGISTRY_PATH
-            import json as _json
-            registry = _json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
-            for p in registry.get("projects", []):
-                if p["id"] == project_id:
-                    project_path = os.path.expanduser(p.get("path", ""))
-                    commit_hash_val = capture_commit_hash(project_path)
-                    break
-        except Exception:
-            pass
-
-        now = datetime.now().isoformat()
-        update_fields = "section = 'Done', sort_order = ?, updated_at = ?"
-        params: list = [sort_order, now]
-        if commit_hash_val and not ticket["commit_hash"]:
-            update_fields += ", commit_hash = ?"
-            params.append(commit_hash_val)
-        params.extend([ticket_id, project_id])
-        conn.execute(
-            f"UPDATE tickets SET {update_fields} WHERE id = ? AND project_id = ?",
-            params,
-        )
-        # Internal-side-effect rule (§9): scheduled auto-accept emits with system actor.
-        emit_event(conn, project_id, "ticket", ticket_id, "section_change",
-                   {"before": "For Review", "after": "Done"}, ActorContext.system())
-    # else: unknown event type — silently skip
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +588,9 @@ def move_ticket(
         emit_event(conn, project_id, "ticket", tid, "status_change",
                    {"before": old_status, "after": new_status}, actor)
 
-    # Post-change hooks (auto-promote parent, scheduled auto-accept).
-    # These use ActorContext.system() internally for any cascaded events.
+    # Post-change hooks. Phase A migration (tidy-newt) moved parent-promote
+    # and auto-accept into system workflows; what remains here is the journey
+    # cascade and commit-hash capture in _after_section_change.
     _after_section_change(conn, project_id, tid, old_section, target_section)
     _after_status_change(conn, project_id, tid, old_status, new_status)
 
@@ -691,7 +637,7 @@ def accept_ticket(
     spec_path = Path(project_path) / "PRODUCT_SPECIFICATION.md"
     today = datetime.now().strftime("%Y-%m-%d")
     entry = f"\n### {tid}: {ticket['title']}\n"
-    entry += f"Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: released\n"
+    entry += f"Priority: {ticket['priority']} | Status: released\n"
     commit_info = f" | Commit: {commit_hash_val}" if commit_hash_val else ""
     entry += f"Released: {today}{commit_info}\n"
     if ticket["description"]:
@@ -724,7 +670,6 @@ def add_ticket(
     title: str,
     section: str = "Backlog",
     priority: str = "medium",
-    complexity: str = "M",
     description: str = "",
     parent: Optional[str] = None,
     draft: bool = False,
@@ -740,10 +685,10 @@ def add_ticket(
     sort_order = _next_sort_order(conn, project_id, section)
 
     conn.execute(
-        "INSERT INTO tickets (id, project_id, title, priority, complexity, status, "
+        "INSERT INTO tickets (id, project_id, title, priority, status, "
         "section, description, parent, sort_order, draft, source_attachment_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (ticket_id, project_id, title, priority, complexity, status,
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (ticket_id, project_id, title, priority, status,
          section, description, parent, sort_order, int(draft), source_attachment_id),
     )
 
@@ -767,7 +712,6 @@ def update_ticket(
     *,
     title: Optional[str] = None,
     priority: Optional[str] = None,
-    complexity: Optional[str] = None,
     status: Optional[str] = None,
     description: Optional[str] = None,
     parent: Optional[str] = ...,  # sentinel — None means "clear parent"
@@ -803,8 +747,6 @@ def update_ticket(
         updates["title"] = title
     if priority is not None:
         updates["priority"] = priority.lower()
-    if complexity is not None:
-        updates["complexity"] = complexity.upper()
     if status is not None:
         updates["status"] = status.lower()
     if description is not None:
@@ -987,27 +929,6 @@ def _remove_criterion(
 # Post-change hooks
 # ---------------------------------------------------------------------------
 
-def schedule_event(
-    conn: sqlite3.Connection,
-    event_type: str,
-    ticket_id: str,
-    project_id: str,
-    payload: dict | None = None,
-    delay_seconds: int = 300,
-) -> int:
-    """Insert a scheduled event to fire after *delay_seconds*.
-
-    Returns the new event row id.
-    """
-    fire_at = (datetime.now() + timedelta(seconds=delay_seconds)).isoformat()
-    cur = conn.execute(
-        "INSERT INTO scheduled_events (event_type, ticket_id, project_id, payload, fire_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (event_type, ticket_id, project_id, json.dumps(payload or {}), fire_at),
-    )
-    return cur.lastrowid
-
-
 def _has_open_bugs(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> bool:
     """Return True if *ticket_id* has any child bugs not in a terminal status."""
     terminal = {"done", "for-review", "bug-fixed"}
@@ -1025,33 +946,16 @@ def _after_status_change(
     old_status: str,
     new_status: str,
 ) -> None:
-    """Run post-status-change side effects."""
-    # Promote parent when a child reaches a done-like status
-    if new_status in {"done", "for-review", "bug-fixed"}:
-        _maybe_promote_parent(conn, project_id, ticket_id)
+    """Run post-status-change side effects.
 
-    # Auto-accept rule: when status becomes "done" while in "For Review"
-    # and there are no open bugs, schedule an auto-accept with 5 min delay.
-    if new_status == "done":
-        ticket = conn.execute(
-            "SELECT section FROM tickets WHERE id = ? AND project_id = ?",
-            (ticket_id, project_id),
-        ).fetchone()
-        if ticket and ticket["section"] == "For Review":
-            if not _has_open_bugs(conn, project_id, ticket_id):
-                # Cancel any existing unfired auto-accept for this ticket
-                conn.execute(
-                    "UPDATE scheduled_events SET fired = 1 "
-                    "WHERE ticket_id = ? AND project_id = ? AND event_type = 'auto-accept' AND fired = 0",
-                    (ticket_id, project_id),
-                )
-                schedule_event(
-                    conn,
-                    event_type="auto-accept",
-                    ticket_id=ticket_id,
-                    project_id=project_id,
-                    delay_seconds=300,  # 5 minutes
-                )
+    Phase A migration (tidy-newt): the parent-promote rule was migrated to a
+    system workflow ("Parent auto-promote", workflows_seed.py). The legacy
+    _maybe_promote_parent() helper is kept defined for safety but no longer
+    invoked from this hook — the dispatcher's next tick picks up parents whose
+    children all reached terminal status and applies the move via the workflow
+    engine.
+    """
+    return  # noqa: F811 — explicit: no synchronous side effects
 
 
 def _after_section_change(
@@ -1061,9 +965,12 @@ def _after_section_change(
     old_section: str,
     new_section: str,
 ) -> None:
-    """Run post-move logic after a ticket changes section."""
-    _maybe_promote_parent(conn, project_id, ticket_id)
+    """Run post-move logic after a ticket changes section.
 
+    Phase A migration (tidy-newt): parent-promote moved to a system workflow.
+    This hook now only handles the journey cascade and commit-hash capture
+    (both of which are write side effects this transaction owns).
+    """
     # Kitchen M4: when a ticket reaches Done, cascade to any linked journeys.
     # Each linked journey gets a scenario run queued with triggered_by='journey-cascade'.
     # If the journey already has an active run, the partial unique index simply
@@ -1393,12 +1300,19 @@ def scan_prs(
     return {"updated": updated}
 
 
+# TODO: remove once parent-promote system workflow is verified in production.
+# Phase A migration (tidy-newt) replaced this with the "Parent auto-promote"
+# system workflow in workflows_seed.py — the dispatcher fires it on each tick
+# against parents whose children all reached terminal status. Kept defined for
+# safety in case the workflow engine needs to be temporarily disabled.
 def _maybe_promote_parent(
     conn: sqlite3.Connection,
     project_id: str,
     ticket_id: str,
 ) -> None:
-    """If this ticket has a parent, check whether all siblings are done/review-ready.
+    """DEPRECATED — see Phase A migration note above. No longer called.
+
+    If this ticket has a parent, check whether all siblings are done/review-ready.
 
     When every child of a parent ticket has status in
     {'for-review', 'bug-fixed', 'done'}, the parent is auto-promoted

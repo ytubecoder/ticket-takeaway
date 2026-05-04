@@ -65,7 +65,6 @@ from actions import (
     update_ticket as _actions_update_ticket,
     capture_commit_hash,
     auto_generate_id,
-    execute_scheduled_event,
     emit_event as _kitchen_emit_event,
     # Branch / PR (main)
     link_branch as _actions_link_branch,
@@ -422,7 +421,7 @@ def _update_ticket_field(proj: dict, ticket_id: str, field: str, value) -> bool:
     """Update a single field on a ticket. Returns True on success."""
     project_id = proj["id"]
     ALLOWED_FIELDS = {
-        "title", "priority", "complexity", "status", "description",
+        "title", "priority", "status", "description",
         "parent", "commit_hash", "release_tag", "draft",
     }
     if field not in ALLOWED_FIELDS:
@@ -735,7 +734,6 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
         return None
 
     priority = body.get("priority", "medium")
-    complexity = body.get("complexity", "M")
     description = body.get("description", "")
 
     with _db_lock:
@@ -749,7 +747,7 @@ def _create_ticket(proj: dict, title: str, body: dict) -> dict | None:
         ticket_id = _actions_add_ticket(
             conn, project_id, title,
             section=section, priority=priority,
-            complexity=complexity, description=description,
+            description=description,
             draft=draft,
             tags=tags or None,
         )
@@ -2078,7 +2076,7 @@ def _build_gate_prompt(ticket: dict, target_section: str) -> str:
 
 TICKET: {ticket['id']} — {ticket['title']}
 MOVE: {ticket['section']} → {target_section}
-Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: {ticket['status']}
+Priority: {ticket['priority']} | Status: {ticket['status']}
 
 CURRENT STATE:
 
@@ -2191,7 +2189,7 @@ def _build_category_prompt(ticket: dict, category: str, action: str) -> str:
     return f"""You are a project management assistant assessing a single aspect of a ticket.
 
 TICKET: {ticket['id']} — {ticket['title']}
-Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: {ticket['status']}
+Priority: {ticket['priority']} | Status: {ticket['status']}
 
 DESCRIPTION:
 {ticket.get('description') or '(empty)'}
@@ -2275,7 +2273,7 @@ def _build_enrich_prompt(ticket: dict, field: str, content: str, action: str) ->
     return f"""You are a project management assistant improving ticket content.
 
 TICKET: {ticket['id']} — {ticket['title']}
-Priority: {ticket['priority']} | Complexity: {ticket['complexity']} | Status: {ticket['status']}
+Priority: {ticket['priority']} | Status: {ticket['status']}
 
 DESCRIPTION:
 {ticket.get('description') or '(empty)'}
@@ -2443,7 +2441,7 @@ Do not include generic progress updates, restatements of acceptance criteria, or
 Prefer compact items that could help this ticket, this project, or the user's future work.
 
 TICKET: {ticket['id']} — {ticket['title']}
-Section: {ticket['section']} | Status: {ticket['status']} | Priority: {ticket['priority']} | Complexity: {ticket['complexity']}
+Section: {ticket['section']} | Status: {ticket['status']} | Priority: {ticket['priority']}
 
 DESCRIPTION:
 {ticket.get('description') or '(empty)'}
@@ -2816,7 +2814,6 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "id": row["id"],
         "title": row["title"],
         "priority": row["priority"],
-        "complexity": row["complexity"],
         "status": row["status"],
         "section": row["section"],
         "description": row["description"],
@@ -6037,7 +6034,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # so the human triaging it has something to react to.
                 tid = _actions_add_ticket(
                     conn, proj["id"], title,
-                    section="Ideas", priority="medium", complexity="M",
+                    section="Ideas", priority="medium",
                     description=description, draft=True,
                 )
                 # Pre-populate one acceptance criterion so the ticket reads as
@@ -6837,6 +6834,62 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"Workflow '{workflow_id}' already exists"}, 409)
             return
 
+        # Duplicate workflow — clones any workflow (including system rows, regardless
+        # of enabled state) into a new user-owned (system=0) row.
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)/duplicate$", remainder)
+        if m:
+            source_id = m.group(1)
+            existing = _get_workflow(source_id, project_id=proj["id"])
+            if not existing:
+                self._send_json({"error": "Workflow not found"}, 404)
+                return
+            # Optional override name from body, else "<name> (copy)".
+            try:
+                body = self._read_body() or {}
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            new_name = (body.get("name") or "").strip() or f"{existing.get('name', source_id)} (copy)"
+
+            # Generate a fresh ID by suffixing -copy / -copy-2 / -copy-N.
+            import uuid as _uuid
+            base_id = re.sub(r'[^a-z0-9_-]+', '-', new_name.lower()).strip('-') or _uuid.uuid4().hex[:8]
+            candidate = base_id
+            n = 2
+            while _get_workflow(candidate, project_id=proj["id"]):
+                candidate = f"{base_id}-{n}"
+                n += 1
+                if n > 100:
+                    candidate = f"{base_id}-{_uuid.uuid4().hex[:6]}"
+                    break
+
+            # Steps / trigger_json / on_success_json may be strings or objects in
+            # the serialized form returned by _get_workflow. Re-stringify if needed.
+            steps = existing.get("steps", "[]")
+            if isinstance(steps, (list, dict)):
+                steps = json.dumps(steps)
+            trigger_json = existing.get("trigger_json")
+            if trigger_json is not None and not isinstance(trigger_json, str):
+                trigger_json = json.dumps(trigger_json)
+            on_success_json = existing.get("on_success_json")
+            if on_success_json is not None and not isinstance(on_success_json, str):
+                on_success_json = json.dumps(on_success_json)
+            description = existing.get("description", "")
+            subject_type = existing.get("subject_type", "ticket")
+
+            wf = _create_workflow(
+                candidate, new_name, description, steps,
+                project_id=proj["id"],
+                enabled=int(existing.get("enabled", 1)),
+                trigger_json=trigger_json,
+                on_success_json=on_success_json,
+                subject_type=subject_type,
+            )
+            if wf:
+                self._send_json(wf, 201)
+            else:
+                self._send_json({"error": "Failed to duplicate workflow"}, 500)
+            return
+
         # Start a workflow run for a ticket
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/workflow/run$", remainder)
         if m:
@@ -7267,57 +7320,6 @@ def _start_external_edit_watcher(interval: float = 5.0):
 # Main
 # ---------------------------------------------------------------------------
 
-def _start_scheduled_event_poller(interval: float = 30.0):
-    """Daemon thread executing scheduled events across all projects."""
-    import time
-
-    def _poll():
-        while True:
-            try:
-                time.sleep(interval)
-                with _db_lock:
-                    conn = get_db()
-                    init_db(conn)
-                    now = datetime.now().isoformat()
-                    due = conn.execute(
-                        "SELECT * FROM scheduled_events WHERE fired = 0 AND fire_at <= ? "
-                        "ORDER BY fire_at ASC",
-                        (now,),
-                    ).fetchall()
-                    projects_to_sync = set()
-                    for event in due:
-                        try:
-                            execute_scheduled_event(conn, event)
-                            conn.execute(
-                                "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
-                                (event["id"],),
-                            )
-                            projects_to_sync.add(event["project_id"])
-                        except Exception:
-                            conn.execute(
-                                "UPDATE scheduled_events SET fired = 1 WHERE id = ?",
-                                (event["id"],),
-                            )
-                            import traceback
-                            traceback.print_exc()
-                    if projects_to_sync:
-                        conn.commit()
-                        with _PROJECTS_CACHE_LOCK:
-                            cache_snap = dict(_PROJECTS_CACHE)
-                        for pid in projects_to_sync:
-                            proj = cache_snap.get(pid)
-                            if proj:
-                                cli.sync_to_markdown(conn, proj)
-                                cli.regenerate_dashboard(proj)
-                    conn.close()
-            except Exception:
-                import traceback
-                traceback.print_exc()
-
-    t = threading.Thread(target=_poll, daemon=True, name="scheduled-event-poller")
-    t.start()
-
-
 def main():
     global _LEGACY_PROJECT_ID, SERVER_PORT
 
@@ -7370,7 +7372,6 @@ def main():
 
     # Start background threads
     _start_external_edit_watcher()
-    _start_scheduled_event_poller()
     _start_feedbacks_session_watcher()
 
     # Kitchen orchestrator (M3) — polls eligible subjects, dispatches agent runs.

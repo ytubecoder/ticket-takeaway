@@ -49,7 +49,6 @@ MOCK_TICKET_RESPONSE = {
     "id": "B-01",
     "title": "Mock ticket",
     "priority": "medium",
-    "complexity": "M",
     "status": "in-progress",
     "description": "A test ticket",
     "acceptance_criteria": [],

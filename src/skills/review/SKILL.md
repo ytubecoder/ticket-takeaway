@@ -64,7 +64,7 @@ ls -dt {project_root}/.feedbacks/{ticket-id}/feedbacks-*/session.md 2>/dev/null 
 
 Show each ticket's full content:
 - ID and title
-- Priority, complexity, status
+- Priority, status
 - Full description
 - Acceptance criteria (`- [ ]` / `- [x]` items)
 
@@ -151,7 +151,7 @@ If yes:
 ### 2. Create Bug Sub-Ticket
 
 ```bash
-python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<Brief description>" --section bugs --parent <parent-ID> --priority <priority> --complexity S --description "<User's feedback description>"
+python3 ~/.claude/ticket-takeaway/tickets-cli.py add <project> "<Brief description>" --section bugs --parent <parent-ID> --priority <priority> --description "<User's feedback description>"
 ```
 
 Then add acceptance criteria:

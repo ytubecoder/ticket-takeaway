@@ -120,7 +120,6 @@ def seed_tickets(manifest_seed: dict, api_base: str) -> SeedResult:
           - status      (optional — applied via a follow-up PUT if non-default)
           - description (optional)
           - priority    (optional)
-          - complexity  (optional)
           - criteria    (optional list[str])
     api_base:
         Base URL of the running serve.py instance including the project
@@ -150,7 +149,7 @@ def seed_tickets(manifest_seed: dict, api_base: str) -> SeedResult:
             "title": title,
             "section": section.lower(),
         }
-        for optional_key in ("description", "priority", "complexity"):
+        for optional_key in ("description", "priority"):
             if optional_key in spec:
                 payload[optional_key] = spec[optional_key]
 

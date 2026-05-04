@@ -155,6 +155,47 @@ def test_delete_system_workflow_forbidden(dashboard_server):
     assert resp.get("error") == "system_workflow"
 
 
+def test_duplicate_system_workflow_creates_user_copy(dashboard_server):
+    """POST /api/workflow/workflows/{id}/duplicate clones a system row to a
+    user-owned row. Even disabled system workflows can be duplicated.
+
+    Phase A migration: user-facing duplicate path so users can customise
+    behaviour by cloning a system workflow then editing the clone.
+    """
+    data = api_get(dashboard_server, "/api/workflow/workflows")
+    system_wfs = [w for w in data["workflows"] if w.get("system")]
+    if not system_wfs:
+        pytest.skip("No system workflows seeded")
+
+    # Prefer a disabled system workflow if available — verifies that
+    # duplicate works regardless of enabled state.
+    disabled = [w for w in system_wfs if not w.get("enabled")]
+    src = disabled[0] if disabled else system_wfs[0]
+    src_id = src["id"]
+
+    status, resp = _raw_post(
+        dashboard_server,
+        f"/api/workflow/workflows/{src_id}/duplicate",
+        {},
+    )
+    assert status == 201, resp
+    assert resp.get("system") == 0, "duplicate must NOT carry the system flag"
+    assert resp.get("id") != src_id, "duplicate must have a different id"
+    assert "(copy)" in (resp.get("name") or "").lower() or resp.get("name")
+
+    # Cleanup the user-owned duplicate.
+    api_delete(dashboard_server, f"/api/workflow/workflows/{resp['id']}")
+
+
+def test_duplicate_nonexistent_workflow_404(dashboard_server):
+    status, resp = _raw_post(
+        dashboard_server,
+        "/api/workflow/workflows/does-not-exist-xyz/duplicate",
+        {},
+    )
+    assert status == 404, resp
+
+
 # ---------------------------------------------------------------------------
 # B. Condition catalog
 # ---------------------------------------------------------------------------
@@ -177,6 +218,16 @@ def test_condition_catalog_returns_catalog(dashboard_server):
         assert "params" in entry
         # Must NOT have evaluator (not JSON-serializable, should be stripped)
         assert "evaluator" not in entry
+
+    # Phase A: the four new system-workflow conditions must be exposed.
+    kinds = {c["kind"] for c in data["conditions"]}
+    for required in (
+        "children_have_open_bugs",
+        "children_no_open_bugs",
+        "children_all_status_in",
+        "children_any_status_in",
+    ):
+        assert required in kinds, f"{required!r} missing from catalog"
 
 
 # ---------------------------------------------------------------------------

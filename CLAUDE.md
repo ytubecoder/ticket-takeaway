@@ -58,10 +58,13 @@ src/evidence.py    — Kitchen evidence rotation pipeline (live → summarised �
 **Workflow Bounce** (I-19): Multi-agent prompt routing system. Users define agents (name + CLI command + system prompt) and workflows (ordered steps, each with an agent + optional step instructions). Applying a workflow to a ticket bounces its content through the agent sequence. Primary agent (step 1) mediates disagreements.
 
 - **DB tables:** `workflow_agents`, `workflows`, `workflow_runs` (migration 4)
-- **API:** `/api/workflow/agents`, `/api/workflow/workflows` (CRUD), `/api/tickets/{id}/workflow/run` (execution), `/api/workflow/runs/{id}` (status/polling), `/api/workflow/runs/active` (active runs across all tickets for kanban indicators)
+- **API:** `/api/workflow/agents`, `/api/workflow/workflows` (CRUD), `/api/workflow/workflows/{id}/duplicate` (clone any workflow — including disabled system rows — into a user-owned editable copy), `/api/tickets/{id}/workflow/run` (execution), `/api/workflow/runs/{id}` (status/polling), `/api/workflow/runs/active` (active runs across all tickets for kanban indicators)
 - **CLI:** `tickets-cli.py agent list/add/update/remove`, `workflow list/add/add-step/remove-step/remove`
 - **UI:** Agents and workflows are managed in a full-page "Workflows & Agents" view (zap icon in nav bar, `body.bounce-open`). Settings (Appearance, Feedbacks, Managed Files, Project metadata, Scenarios, Danger Zone) live in the right-hand drawer (gear icon). Ticket detail has workflow dropdown + Run button with instant placeholder and polling.
 - **Execution:** Background thread per run, `subprocess.run(["claude", "-p", ...])` per step, `--no-session-persistence` flag, 120s timeout (`WORKFLOW_AGENT_TIMEOUT`). Progress conversation entries flushed to DB before each subprocess call. Return code checked; stderr surfaced on failure. Disagreement detection via primary agent evaluation after each step.
+- **System workflows (`system=1`):** Seeded immutable defaults that ship enabled-or-disabled out of the box. Users can disable, can duplicate (creates an editable user-owned copy via `POST .../duplicate`), but cannot edit the system row in place — `PUT` with non-`enabled` fields and `DELETE` both return `403 system_workflow`. System workflows **bypass the `automation_mode='auto'` filter** in the dispatcher: they evaluate against ALL non-draft non-archived tickets in the catchment sections. User workflows (`system=0`) keep the legacy auto-mode-only behaviour.
+- **Zero-step workflows (NoopRunner):** System workflows like `Parent auto-promote` and `Auto-accept reviewed tickets` ship with `steps: []` — pure mutation rules with no agent subprocess. The dispatcher routes these through `runners.NoopRunner`, which skips workspace creation and applies the workflow's `on_success_json` effects directly under `ActorContext.system()`.
+- **`on_success` effects:** `move_section` / `move_to` (move target ticket), `set_status`, `add_tags`, `remove_tags`, `accept_ticket: true` (calls `actions.accept_ticket`; refuses silently unless target is in `For Review` with status `done`), and `apply_to: "self"|"parent"` (default `self`; when `parent`, all the above effects target the ticket's parent — used by parent-promote so the workflow runs on the parent itself but could be repurposed in user workflows).
 - **Resilience:** `_recover_stuck_workflow_runs()` on server startup marks orphaned "running" records as "failed". GET run handler detects dead threads (DB says running, no thread in memory) and auto-fails them. Agreement check errors logged to conversation instead of silently swallowed.
 - **Kanban indicators:** 3s poll to `/api/workflow/runs/active` shows pulsing `▶ workflow running` text on kanban cards while active. Static accent dot (`.card-wf-unread`) appears when run completes; cleared when user opens ticket detail overlay.
 - **Validation:** `_normalize_json_array` and `_normalize_workflow_steps` reject invalid args, `_project_*` agent IDs, and missing agents.
@@ -73,7 +76,7 @@ src/evidence.py    — Kitchen evidence rotation pipeline (live → summarised �
 
 **Seek (project discovery):** `tickets-cli.py seek <project>` or `POST /api/seek` scans project files for ticket-like content (markdown tasks, README TODOs, code TODO/FIXME/HACK comments, CHANGELOG unreleased, GitHub Issues via `gh` CLI). Creates draft tickets in Ideas section. Deduplicates against existing tickets and previous drafts using title normalization + source-key matching. Empty boards show a CTA with Seek button as primary discovery point.
 
-**Business rules:** Post-change hooks in `actions.py` fire after moves/status changes. Auto-promote parent when all children done. Scheduled events table + 30s poller for delayed rules (e.g., auto-accept after 5min).
+**Business rules:** Post-change hooks in `actions.py` fire after moves/status changes (journey cascade on move-to-Done, commit-hash capture). The legacy parent-auto-promote and 5-min auto-accept rules are now system workflows (`workflows_seed.py` → `Parent auto-promote` enabled, `Auto-accept reviewed tickets` disabled) — visible in the Workflows & Agents page and toggle-able. Scheduled events table + 30s poller stay in place dormant for future delayed-effect support.
 
 **`src/tickets-cli.py`** is the CLI for all ticket CRUD. Subcommands: `seed`, `list`, `add`, `update`, `move`, `accept`, `sync`, `register`, `unregister`. Every write auto-syncs DB → PRODUCT_BACKLOG.md.
 
@@ -83,9 +86,9 @@ src/evidence.py    — Kitchen evidence rotation pipeline (live → summarised �
 3. Collects git/code stats via shell commands
 4. Renders a self-contained HTML file with inline CSS/JS (light/dark/system theming)
 5. Dashboard polls every 2s and does **in-place DOM diffing** (no full page reload) — moved cards get a glow indicator, new cards fade in, removed cards fade out, scroll/filter/expanded state preserved. **Polling is skipped when `body.bounce-open` is set** to prevent form/editor destruction.
-6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug), Size (S/M/L). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-complexity`, `data-is-bug` attributes for filtering.
+6. **Cross-cutting filters** in the filter bar: Status (Proposed/In Progress/For Review), Type (Bug). Multi-select with OR within groups, AND between groups. Composes with text search. Cards carry `data-status`, `data-is-bug` attributes for filtering.
 
-Data model: `Ticket` dataclass (id, title, priority, complexity, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content, tags) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
+Data model: `Ticket` dataclass (id, title, priority, status, section, description, acceptance_criteria, parent, depends, summary, archived, commit_hash, release_tag, readiness_flags, readiness_content, tags) → `Project` dataclass (tickets + CodeStats) → HTML or JSON. `section` is the single term for kanban placement; `column` is derived from section (not stored). `rationale` field removed.
 
 **Three-layer hierarchy** (see `docs/LIFECYCLE.md` Section 3b):
 - **Section** = where the work is (Ideas → Backlog → WIP → Review → Done)
@@ -105,8 +108,8 @@ Source files in `src/` are canonical. They deploy to `~/.claude/` for runtime us
 - **Workflow buttons** (Start, Done, Accept — shown when expanded), **Create/Delete** via API
 - **New ticket panel** ("+ New" in filter bar) — quick-create with title input + section dropdown
 - **Gate-check on column moves** — dragging/moving a ticket to a top column triggers an AI-powered readiness analysis (DCTRS flags), showing results in an expandable panel with per-section editable fields
-- **Ticket detail overlay** — single scrollable card. Header: ID + contenteditable title + DCSTL readiness dots (click to scroll). Meta strip: priority/status/complexity chips (click to cycle/dropdown), parent (click to edit), section badge. Body: D C S T L sections stacked with inline auto-save on blur. "Assess"/"Re-assess" button per section (always visible at 40% opacity). Criteria/Tests/Smoke as individual list items (add/edit/delete per-item). Learnings as prose textarea. AI responses cached per-ticket. ↗ open button on kanban cards.
-- **Undo/Redo** — Ctrl+Z undoes last edit, Ctrl+Shift+Z/Ctrl+Y redoes. Stack depth 50. Covers priority, status, complexity, criteria, text edits.
+- **Ticket detail overlay** — single scrollable card. Header: ID + contenteditable title + DCSTL readiness dots (click to scroll). Meta strip: priority/status chips (click to cycle/dropdown), parent (click to edit), section badge. Body: D C S T L sections stacked with inline auto-save on blur. "Assess"/"Re-assess" button per section (always visible at 40% opacity). Criteria/Tests/Smoke as individual list items (add/edit/delete per-item). Learnings as prose textarea. AI responses cached per-ticket. ↗ open button on kanban cards.
+- **Undo/Redo** — Ctrl+Z undoes last edit, Ctrl+Shift+Z/Ctrl+Y redoes. Stack depth 50. Covers priority, status, criteria, text edits.
 - **Keyboard shortcuts** — Ctrl+Enter saves textarea, Escape reverts without closing overlay.
 
 Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from cwd, port 8787)
@@ -150,7 +153,7 @@ Start: `python3 ~/.claude/ticket-takeaway/serve.py` (auto-detects project from c
 
 ```markdown
 ### {ID}: {Title}
-Priority: {priority} | Complexity: {complexity} | Status: {status}
+Priority: {priority} | Status: {status}
 Parent: {parent-id}       (optional — for sub-tickets)
 Depends: {id1}, {id2}     (optional — inter-ticket dependencies)
 Tags: {tag1}, {tag2}      (optional — thematic/sprint tags, stored in ticket_tags table)

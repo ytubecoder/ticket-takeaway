@@ -120,7 +120,7 @@ Generates and opens the kanban board. The dashboard supports light, dark, and sy
 
 ### `/spec` — Ideas to Backlog
 
-Run `/spec` to walk through all ideas, or `/spec {ID}` for a specific one. The skill reads unvetted tickets, helps you write a description and acceptance criteria, sets priority and complexity, and moves the ticket to Backlog with status `specified`.
+Run `/spec` to walk through all ideas, or `/spec {ID}` for a specific one. The skill reads unvetted tickets, helps you write a description and acceptance criteria, sets priority, and moves the ticket to Backlog with status `specified`.
 
 ### `/review` — For Review to Done
 

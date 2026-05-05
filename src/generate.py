@@ -5021,7 +5021,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
             return '<button class="automation-picker-opt' + (m===current?' active':'') + '" data-mode="' + m + '">' + modeLabels[m] + '</button>';
           }}).join('') +
         '</div>' +
-        '<textarea class="automation-picker-reason" placeholder="Reason (required to pause)"' + (current==='paused'?'':' style="display:none"') + '>' + (currentReason ? currentReason.replace(/[&<>"]/g, function(c){{return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];}}) : '') + '</textarea>' +
+        '<textarea class="automation-picker-reason" placeholder="Reason (optional)"' + (current==='paused'?'':' style="display:none"') + '>' + (currentReason ? currentReason.replace(/[&<>"]/g, function(c){{return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];}}) : '') + '</textarea>' +
         '<div class="automation-picker-error"></div>' +
         '<div class="automation-picker-actions">' +
           '<button data-act="cancel">Cancel</button>' +
@@ -5045,11 +5045,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       pkr.querySelector('[data-act="save"]').addEventListener('click', function(ev) {{
         ev.stopPropagation();
         var reason = (reasonEl.value || '').trim();
-        if (selectedMode === 'paused' && !reason) {{
-          errEl.textContent = 'Reason required when pausing.';
-          reasonEl.focus();
-          return;
-        }}
         postAutomation(selectedMode, reason).then(function(updated) {{
           currentData = updated;
           populateMetaChips(currentData);
@@ -9753,8 +9748,14 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           row.appendChild(title);
           var reason = document.createElement('span');
           reason.className = 'lp-reason';
-          reason.textContent = p.pause_reason || '';
-          reason.title = p.pause_reason || '';
+          if (p.pause_reason) {{
+            reason.textContent = p.pause_reason;
+            reason.title = p.pause_reason;
+          }} else {{
+            reason.textContent = '—';
+            reason.title = 'No reason given';
+            reason.style.color = 'var(--text-tertiary)';
+          }}
           row.appendChild(reason);
           var btn = document.createElement('button');
           btn.textContent = 'Resume';
@@ -10327,9 +10328,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     var mode = action === 'pause' ? 'paused' : 'auto';
     ppBtn.disabled = true;
     var url = EDIT_API + '/tickets/' + encodeURIComponent(tid) + '/automation';
-    var body = {{ mode: mode }};
-    if (mode === 'paused') body.pause_reason = 'Paused via card icon';
-    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}})
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{ mode: mode }})}})
       .then(function(r) {{ if (!r.ok) throw new Error(); return r.json(); }})
       .then(function() {{
         showAppToast(mode === 'paused' ? 'Paused ' + _esc(tid) : 'Resumed ' + _esc(tid), 'success');

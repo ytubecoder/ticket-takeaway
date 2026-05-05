@@ -418,14 +418,25 @@ class TestSetAutomationMode:
         with pytest.raises(ValueError):
             set_automation_mode(conn, "p", "ticket", "B-1", "bogus", ActorContext.human())
 
-    def test_paused_without_reason_rejected(self, conn):
-        with pytest.raises(ValueError):
-            set_automation_mode(conn, "p", "ticket", "B-1", "paused", ActorContext.human())
+    def test_paused_without_reason_accepted(self, conn):
+        # Pause is optional — pause_reason can be omitted entirely.
+        set_automation_mode(conn, "p", "ticket", "B-1", "paused", ActorContext.human())
+        conn.commit()
+        row = conn.execute(
+            "SELECT automation_mode, pause_reason FROM automation_subjects"
+        ).fetchone()
+        assert row["automation_mode"] == "paused"
+        assert row["pause_reason"] is None
 
-    def test_paused_with_whitespace_only_reason_rejected(self, conn):
-        with pytest.raises(ValueError):
-            set_automation_mode(conn, "p", "ticket", "B-1", "paused",
-                                ActorContext.human(), pause_reason="   ")
+    def test_paused_with_whitespace_only_reason_normalised_to_null(self, conn):
+        # Whitespace-only reason is treated as no reason.
+        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
+                            ActorContext.human(), pause_reason="   ")
+        conn.commit()
+        row = conn.execute(
+            "SELECT pause_reason FROM automation_subjects"
+        ).fetchone()
+        assert row["pause_reason"] is None
 
     def test_first_set_to_auto_emits_mode_changed(self, conn):
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()

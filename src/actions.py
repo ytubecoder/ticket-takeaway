@@ -440,16 +440,17 @@ def set_automation_mode(
     actor: ActorContext,
     pause_reason: str | None = None,
 ) -> None:
-    """Set a subject's automation_mode. 'paused' requires a pause_reason.
-    Emits the appropriate event(s). Caller must commit.
+    """Set a subject's automation_mode. Emits the appropriate event(s).
+    Caller must commit.
 
-    Valid modes: 'manual', 'auto', 'paused'. Pause without reason is rejected.
-    Lazy-creates the automation_subjects row if it doesn't exist.
+    Valid modes: 'manual', 'auto', 'paused'. `pause_reason` is optional —
+    empty/whitespace strings are normalised to None. Lazy-creates the
+    automation_subjects row if it doesn't exist.
     """
     if mode not in ("manual", "auto", "paused"):
         raise ValueError(f"invalid mode: {mode!r}")
-    if mode == "paused" and not (pause_reason or "").strip():
-        raise ValueError("pause requires a non-empty reason")
+    if mode == "paused":
+        pause_reason = (pause_reason or "").strip() or None
 
     _upsert_subject(conn, project_id, subject_type, subject_id, actor)
 

@@ -2863,14 +2863,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
 <div class="filter-bar" id="filterBar">
   <button class="bounce-back-btn" id="bounceBackBtn">&larr; Back to Board</button>
-  <button class="filter-btn active" data-filter="all" data-group="all">All <span class="count">{count_total}</span></button>
-  <span class="filter-divider"></span>
-  <span class="filter-group" data-group-name="status">
-    <button class="filter-btn" data-filter="proposed" data-group="status">Proposed <span class="count">{count_status_proposed}</span></button>
-    <button class="filter-btn" data-filter="in-progress" data-group="status">In Progress <span class="count">{count_status_inprogress}</span></button>
-    <button class="filter-btn" data-filter="for-review" data-group="status">For Review <span class="count">{count_status_forreview}</span></button>
-  </span>
-  <span class="filter-divider"></span>
   <span class="filter-group" data-group-name="type">
     <button class="filter-btn" data-filter="bug" data-group="type">Bug <span class="count">{count_type_bug}</span></button>
   </span>
@@ -2895,14 +2887,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       </div>
     </span>
     <button class="filter-btn" data-filter="for-review-auto"  data-group="kitchen" data-testid="for-review-auto-chip" title="Latest run succeeded and tests flag set">For Review (auto) <span class="count">{count_for_review_auto}</span></button>
-  </span>
-  <span class="filter-divider"></span>
-  <!-- Branch / PR filters — surface GitHub state on the kanban -->
-  <span class="filter-group" data-group-name="branch">
-    <button class="filter-btn" data-filter="has-branch" data-group="branch" title="Tickets with at least one branch linked">Has Branch <span class="count">{count_has_branch}</span></button>
-    <button class="filter-btn" data-filter="pr-open"    data-group="branch" title="At least one branch with an open or draft PR">PR Open <span class="count">{count_pr_open}</span></button>
-    <button class="filter-btn" data-filter="pr-merged"  data-group="branch" title="Latest PR merged (no open PRs)">PR Merged <span class="count">{count_pr_merged}</span></button>
-    <button class="filter-btn" data-filter="no-branch"  data-group="branch" title="No branches linked">No Branch <span class="count">{count_no_branch}</span></button>
   </span>
   <span class="filter-divider"></span>
 {_tag_filter_html}  <span class="filter-divider"></span>
@@ -3406,7 +3390,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     }});
     var groups = Object.keys(activeByGroup);
     var noFilters = groups.length === 0;
-    if (noFilters) {{ allBtn.classList.add('active'); }} else {{ allBtn.classList.remove('active'); }}
+    if (allBtn) {{
+      if (noFilters) allBtn.classList.add('active');
+      else allBtn.classList.remove('active');
+    }}
 
     var allCards = document.querySelectorAll('.card');
     allCards.forEach(function(card) {{
@@ -3468,7 +3455,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     btn.addEventListener('click', function() {{
       if (btn.dataset.group === 'all') {{
         filterBtns.forEach(function(b) {{ b.classList.remove('active'); }});
-        allBtn.classList.add('active');
+        if (allBtn) allBtn.classList.add('active');
       }} else {{
         btn.classList.toggle('active');
       }}

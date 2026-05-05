@@ -3240,9 +3240,16 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .step-result-detail img {{ max-width: 100%; border-radius: 4px; margin-top: 8px; border: 1px solid var(--border-default); }}
 .run-history {{ margin-top: 16px; }}
 .run-history h3 {{ font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }}
+.run-history-header {{ display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }}
+.run-history-header h3 {{ margin-bottom: 0; }}
 .run-row {{ display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; color: var(--text-secondary); }}
 .run-row:hover {{ background: var(--bg-hover); }}
 .run-row .run-id {{ font-family: "SF Mono", Monaco, monospace; color: var(--text-tertiary); }}
+.run-row.run-row-hidden {{ display: none; }}
+.run-results-top {{ margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border-default); }}
+.run-history-top {{ margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border-default); }}
+.btn-link {{ background: none; border: none; padding: 0; font-size: 11px; color: var(--accent); cursor: pointer; text-decoration: none; }}
+.btn-link:hover {{ text-decoration: underline; }}
 .form-row {{ display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }}
 .form-row label {{ font-size: 11px; color: var(--text-secondary); min-width: 80px; }}
 .form-row input {{ flex: 1; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 4px; padding: 6px 8px; color: var(--text-primary); font-size: 13px; font-family: inherit; }}
@@ -3363,6 +3370,21 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       <label>Description</label>
       <input id="detail-description" data-testid="detail-description" placeholder="What does this journey validate?">
     </div>
+    <div id="run-results" class="run-results run-results-top" style="display:none;" data-testid="run-results">
+      <div class="run-summary">
+        <span id="run-status-label" class="run-status" data-testid="run-status"></span>
+        <span id="run-meta" class="run-meta" data-testid="run-meta"></span>
+      </div>
+      <div id="step-timeline" class="step-timeline" data-testid="step-timeline"></div>
+      <div id="step-result-detail" class="step-result-detail" style="display:none;" data-testid="step-result-detail"></div>
+    </div>
+    <div id="run-history" class="run-history run-history-top" style="display:none;" data-testid="run-history">
+      <div class="run-history-header">
+        <h3>Run History</h3>
+        <button id="run-history-toggle" type="button" class="btn-link" data-testid="run-history-toggle" style="display:none;"></button>
+      </div>
+      <div id="run-history-list" data-testid="run-history-list"></div>
+    </div>
     <h3 style="font-size:13px;font-weight:600;margin:20px 0 8px;">Steps</h3>
     <div id="timeline-container" class="tl-container" data-testid="timeline-container"></div>
     <div id="flow-lightbox" class="flow-lightbox" style="display:none;" onclick="closeLightbox()">
@@ -3374,18 +3396,6 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
         <button class="btn btn-ghost btn-sm" onclick="linkTicket()" data-testid="link-ticket-btn">+ Link Ticket</button>
       </div>
       <div id="linked-tickets" data-testid="linked-tickets" style="font-size:12px;color:var(--text-secondary);"></div>
-    </div>
-    <div id="run-results" class="run-results" style="display:none;" data-testid="run-results">
-      <div class="run-summary">
-        <span id="run-status-label" class="run-status" data-testid="run-status"></span>
-        <span id="run-meta" class="run-meta" data-testid="run-meta"></span>
-      </div>
-      <div id="step-timeline" class="step-timeline" data-testid="step-timeline"></div>
-      <div id="step-result-detail" class="step-result-detail" style="display:none;" data-testid="step-result-detail"></div>
-    </div>
-    <div id="run-history" class="run-history" style="display:none;" data-testid="run-history">
-      <h3>Run History</h3>
-      <div id="run-history-list" data-testid="run-history-list"></div>
     </div>
   </div>
 </div>
@@ -3968,9 +3978,10 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       historyDiv.style.display = 'block';
       var histList = document.getElementById('run-history-list');
       histList.textContent = '';
-      runs.forEach(function(run) {{
+      var HIST_PREVIEW = 2;
+      runs.forEach(function(run, idx) {{
         var row = document.createElement('div');
-        row.className = 'run-row';
+        row.className = 'run-row' + (idx >= HIST_PREVIEW ? ' run-row-hidden' : '');
         var d = document.createElement('span'); d.className = 'status-dot ' + run.status; row.appendChild(d);
         var rid = document.createElement('span'); rid.className = 'run-id'; rid.textContent = run.id; row.appendChild(rid);
         var t = document.createElement('span'); t.textContent = timeAgo(run.started_at); row.appendChild(t);
@@ -3978,6 +3989,25 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
         row.onclick = function() {{ loadRunDetail(journey.id, run.id); }};
         histList.appendChild(row);
       }});
+      var toggleBtn = document.getElementById('run-history-toggle');
+      if (toggleBtn) {{
+        if (runs.length > HIST_PREVIEW) {{
+          toggleBtn.style.display = '';
+          var expanded = false;
+          var hidden = runs.length - HIST_PREVIEW;
+          toggleBtn.textContent = 'Show ' + hidden + ' more';
+          toggleBtn.onclick = function() {{
+            expanded = !expanded;
+            histList.querySelectorAll('.run-row').forEach(function(r, i) {{
+              if (i >= HIST_PREVIEW) r.classList.toggle('run-row-hidden', !expanded);
+            }});
+            toggleBtn.textContent = expanded ? 'Show fewer' : ('Show ' + hidden + ' more');
+          }};
+        }} else {{
+          toggleBtn.style.display = 'none';
+          toggleBtn.onclick = null;
+        }}
+      }}
     }} else {{ historyDiv.style.display = 'none'; }}
   }}
 

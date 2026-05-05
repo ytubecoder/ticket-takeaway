@@ -261,10 +261,10 @@ class TestEligibilityTicket:
         r = eligibility(conn, "p", "ticket", "B-1")
         assert r.eligible, r.reasons
 
-    def test_held_blocks(self, conn):
+    def test_paused_blocks(self, conn):
         _add_ticket(conn); conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
-        set_automation_mode(conn, "p", "ticket", "B-1", "held", ActorContext.human(), hold_reason="waiting")
+        set_automation_mode(conn, "p", "ticket", "B-1", "paused", ActorContext.human(), pause_reason="waiting")
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
         assert not r.eligible
@@ -418,14 +418,14 @@ class TestSetAutomationMode:
         with pytest.raises(ValueError):
             set_automation_mode(conn, "p", "ticket", "B-1", "bogus", ActorContext.human())
 
-    def test_held_without_reason_rejected(self, conn):
+    def test_paused_without_reason_rejected(self, conn):
         with pytest.raises(ValueError):
-            set_automation_mode(conn, "p", "ticket", "B-1", "held", ActorContext.human())
+            set_automation_mode(conn, "p", "ticket", "B-1", "paused", ActorContext.human())
 
-    def test_held_with_whitespace_only_reason_rejected(self, conn):
+    def test_paused_with_whitespace_only_reason_rejected(self, conn):
         with pytest.raises(ValueError):
-            set_automation_mode(conn, "p", "ticket", "B-1", "held",
-                                ActorContext.human(), hold_reason="   ")
+            set_automation_mode(conn, "p", "ticket", "B-1", "paused",
+                                ActorContext.human(), pause_reason="   ")
 
     def test_first_set_to_auto_emits_mode_changed(self, conn):
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
@@ -433,26 +433,26 @@ class TestSetAutomationMode:
         assert e["event_kind"] == "mode_changed"
         assert json.loads(e["payload_json"]) == {"before": "manual", "after": "auto"}
 
-    def test_setting_held_emits_hold_set(self, conn):
+    def test_setting_paused_emits_pause_set(self, conn):
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
-        set_automation_mode(conn, "p", "ticket", "B-1", "held",
-                            ActorContext.human(), hold_reason="waiting on Stripe")
+        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
+                            ActorContext.human(), pause_reason="waiting on Stripe")
         conn.commit()
         e = conn.execute("SELECT event_kind, payload_json FROM activity_events ORDER BY id DESC").fetchone()
-        assert e["event_kind"] == "hold_set"
+        assert e["event_kind"] == "pause_set"
         payload = json.loads(e["payload_json"])
         assert payload["reason"] == "waiting on Stripe"
         assert payload["before"] == "auto"
-        assert payload["after"] == "held"
+        assert payload["after"] == "paused"
 
-    def test_clearing_held_emits_hold_cleared(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "held",
-                            ActorContext.human(), hold_reason="x"); conn.commit()
+    def test_clearing_paused_emits_pause_cleared(self, conn):
+        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
+                            ActorContext.human(), pause_reason="x"); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
         e = conn.execute("SELECT event_kind, payload_json FROM activity_events ORDER BY id DESC").fetchone()
-        assert e["event_kind"] == "hold_cleared"
+        assert e["event_kind"] == "pause_cleared"
         payload = json.loads(e["payload_json"])
-        assert payload["before"] == "held"
+        assert payload["before"] == "paused"
         assert payload["after"] == "auto"
         assert payload["prior_reason"] == "x"
 
@@ -463,15 +463,15 @@ class TestSetAutomationMode:
         n_after = conn.execute("SELECT COUNT(*) FROM activity_events").fetchone()[0]
         assert n_before == n_after
 
-    def test_clearing_hold_clears_reason_field(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "held",
-                            ActorContext.human(), hold_reason="x"); conn.commit()
+    def test_clearing_pause_clears_reason_field(self, conn):
+        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
+                            ActorContext.human(), pause_reason="x"); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
         row = conn.execute(
-            "SELECT automation_mode, hold_reason FROM automation_subjects"
+            "SELECT automation_mode, pause_reason FROM automation_subjects"
         ).fetchone()
         assert row["automation_mode"] == "auto"
-        assert row["hold_reason"] is None
+        assert row["pause_reason"] is None
 
 
 class TestSetNoTestRequired:

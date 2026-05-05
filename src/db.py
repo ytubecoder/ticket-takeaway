@@ -374,8 +374,8 @@ def init_db(conn: sqlite3.Connection):
                 subject_type    TEXT NOT NULL CHECK (subject_type IN ('ticket','journey','investigation')),
                 subject_id      TEXT NOT NULL,
                 automation_mode TEXT NOT NULL DEFAULT 'manual'
-                                CHECK (automation_mode IN ('manual','auto','held')),
-                hold_reason     TEXT,
+                                CHECK (automation_mode IN ('manual','auto','paused')),
+                pause_reason    TEXT,
                 watched_at      TEXT,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now')),
                 created_by      TEXT,
@@ -612,4 +612,53 @@ def init_db(conn: sqlite3.Connection):
             )
             conn.execute("ALTER TABLE tickets DROP COLUMN complexity")
         conn.execute("INSERT INTO _migrations (version) VALUES (13)")
+        conn.commit()
+
+    # Migration 14 — rename automation_mode value 'held' → 'paused' and the
+    # accompanying column 'hold_reason' → 'pause_reason'. The UX rationale:
+    # 'held' is ambiguous (problem? deliberate?), 'paused' signals user intent.
+    # SQLite can't modify CHECK constraints in place, so we rebuild the table.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 14").fetchone():
+        cols = {row["name"] for row in conn.execute(
+            "PRAGMA table_info(automation_subjects)"
+        ).fetchall()}
+        if "hold_reason" in cols and "pause_reason" not in cols:
+            conn.executescript("""
+                CREATE TABLE automation_subjects_new (
+                    project_id      TEXT NOT NULL,
+                    subject_type    TEXT NOT NULL CHECK (subject_type IN ('ticket','journey','investigation')),
+                    subject_id      TEXT NOT NULL,
+                    automation_mode TEXT NOT NULL DEFAULT 'manual'
+                                    CHECK (automation_mode IN ('manual','auto','paused')),
+                    pause_reason    TEXT,
+                    watched_at      TEXT,
+                    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                    created_by      TEXT,
+                    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_by      TEXT,
+                    PRIMARY KEY (project_id, subject_type, subject_id)
+                );
+                INSERT INTO automation_subjects_new
+                  (project_id, subject_type, subject_id, automation_mode,
+                   pause_reason, watched_at, created_at, created_by,
+                   updated_at, updated_by)
+                SELECT
+                  project_id, subject_type, subject_id,
+                  CASE automation_mode WHEN 'held' THEN 'paused' ELSE automation_mode END,
+                  hold_reason, watched_at, created_at, created_by,
+                  updated_at, updated_by
+                FROM automation_subjects;
+                DROP TABLE automation_subjects;
+                ALTER TABLE automation_subjects_new RENAME TO automation_subjects;
+            """)
+        # Rename event names so historical activity reads in the new vocab.
+        conn.execute(
+            "UPDATE activity_events SET event_kind = 'pause_set' "
+            "WHERE event_kind = 'hold_set'"
+        )
+        conn.execute(
+            "UPDATE activity_events SET event_kind = 'pause_cleared' "
+            "WHERE event_kind = 'hold_cleared'"
+        )
+        conn.execute("INSERT INTO _migrations (version) VALUES (14)")
         conn.commit()

@@ -47,11 +47,13 @@ def test_canonical_chips_present(live_page):
         assert btn is not None, f"Expected chip data-filter='{label_filt}' — not found"
 
 
-def test_held_chip_absent(live_page):
-    """Held chip must not exist in the filter bar."""
+def test_paused_chip_absent(live_page):
+    """A standalone Paused chip must not exist — paused is a sub-toggle of Auto."""
     p = live_page
+    btn = _filter_chip(p, "paused")
+    assert btn is None, "Paused chip found — should not be a top-level chip"
     btn = _filter_chip(p, "held")
-    assert btn is None, "Held chip found — should have been removed"
+    assert btn is None, "Legacy held chip found — should have been removed"
 
 
 def test_eligible_chip_absent(live_page):
@@ -152,8 +154,9 @@ def test_ready_chip_shows_only_ready_cards(live_page):
     btn.click()
     p.wait_for_timeout(300)
 
-    # Every visible card must have: automationMode auto|held AND eligible=true
-    # AND runStatus not in queued|preparing|running
+    # Every visible card must have: automationMode == 'auto' AND eligible=true
+    # AND runStatus not in queued|preparing|running. Paused is intentionally
+    # excluded from Ready (paused tickets aren't dispatching).
     result = p.evaluate("""
         (function() {
             var ACTIVE = {queued: 1, preparing: 1, running: 1};
@@ -163,7 +166,7 @@ def test_ready_chip_shows_only_ready_cards(live_page):
                 var mode = c.dataset.automationMode;
                 var eligible = c.dataset.eligible;
                 var rs = c.dataset.runStatus || '';
-                return !((mode === 'auto' || mode === 'held') && eligible === 'true' && !ACTIVE[rs]);
+                return !(mode === 'auto' && eligible === 'true' && !ACTIVE[rs]);
             });
             return {total: visible.length, bad: bad.length};
         })()
@@ -308,23 +311,71 @@ def test_needs_attention_chip_toggles_active(live_page):
 
 
 # ---------------------------------------------------------------------------
-# 12. Auto chip includes held-mode tickets
+# 12. Auto chip excludes paused by default; sub-toggle "Include paused" adds them.
 # ---------------------------------------------------------------------------
 
 
-def test_auto_chip_predicate_includes_held(live_page):
-    """Auto filter predicate matches cards with automationMode='held' (not just 'auto')."""
+def test_auto_chip_excludes_paused_by_default(live_page):
+    """Auto filter, with the 'Include paused' sub-toggle off, must skip mode=paused."""
     p = live_page
 
-    # Use JS to verify the predicate would match held-mode cards
-    result = p.evaluate("""
+    # Force the localStorage flag off so the test is deterministic regardless
+    # of what a previous run set.
+    p.evaluate("localStorage.removeItem('tt-auto-include-paused')")
+    # Re-load so the JS picks up the cleared flag.
+    p.reload()
+    p.wait_for_timeout(300)
+
+    btn = _filter_chip(p, "auto")
+    if btn is None:
+        pytest.skip("Auto chip not found")
+    btn.click()
+    p.wait_for_timeout(300)
+
+    # No visible card should have mode='paused' while the chevron toggle is off.
+    bad = p.evaluate("""
         (function() {
-            // Simulate what the filter JS does for auto chip
-            var testCard = document.createElement('div');
-            testCard.dataset.automationMode = 'held';
-            // The predicate: mode === 'auto' || mode === 'held'
-            var mode = testCard.dataset.automationMode;
-            return (mode === 'auto' || mode === 'held');
+            var cards = Array.from(document.querySelectorAll('.card'));
+            var visible = cards.filter(function(c) { return c.style.display !== 'none'; });
+            return visible.filter(function(c) { return c.dataset.automationMode === 'paused'; }).length;
         })()
     """)
-    assert result is True, "Auto chip predicate should match automationMode='held'"
+    assert bad == 0, f"{bad} paused cards visible while 'Include paused' is OFF"
+
+    # Reset
+    btn.click()
+    p.wait_for_timeout(150)
+
+
+def test_auto_chip_includes_paused_when_subtoggle_on(live_page):
+    """Auto filter, with 'Include paused' on, includes mode=paused cards."""
+    p = live_page
+    # Tick the sub-toggle directly to avoid clicking through chevron timing.
+    p.evaluate("""
+        localStorage.setItem('tt-auto-include-paused', '1');
+    """)
+    p.reload()
+    p.wait_for_timeout(300)
+
+    btn = _filter_chip(p, "auto")
+    if btn is None:
+        pytest.skip("Auto chip not found")
+    btn.click()
+    p.wait_for_timeout(300)
+
+    # Spot-check the predicate: with the toggle on, mode=paused must be matched.
+    matches = p.evaluate("""
+        (function() {
+            var t = document.createElement('div');
+            t.dataset.automationMode = 'paused';
+            var mode = t.dataset.automationMode;
+            var include = localStorage.getItem('tt-auto-include-paused') === '1';
+            return (mode === 'auto' || (include && mode === 'paused'));
+        })()
+    """)
+    assert matches is True, "Auto predicate should match mode='paused' when sub-toggle is on"
+
+    # Reset
+    btn.click()
+    p.wait_for_timeout(100)
+    p.evaluate("localStorage.removeItem('tt-auto-include-paused')")

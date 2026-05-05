@@ -686,12 +686,15 @@ def generate_html(project: Project) -> str:
     count_status_forreview = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "for-review")
     count_type_bug = sum(1 for t in all_visible if t.section == "Bugs" or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed"))
 
-    # Rationalised automation filter counts
+    # Rationalised automation filter counts.
+    # 'Auto' counts only mode == 'auto' by default; 'paused' is opt-in via the
+    # chevron sub-toggle. 'Ready' likewise only considers actively-on tickets.
     _ACTIVE_RUN_STATUSES = {"queued", "preparing", "running"}
-    count_auto = sum(1 for t in all_visible if t.automation_mode in ("auto", "held"))
+    count_auto = sum(1 for t in all_visible if t.automation_mode == "auto")
+    count_paused = sum(1 for t in all_visible if t.automation_mode == "paused")
     count_ready = sum(
         1 for t in all_visible
-        if t.automation_mode in ("auto", "held")
+        if t.automation_mode == "auto"
         and t.automation_eligible
         and t.latest_run_status not in _ACTIVE_RUN_STATUSES
     )
@@ -1049,7 +1052,20 @@ a {{ color: var(--accent); text-decoration: none; }}
     margin-left: 2px;
 }}
 .kitchen-badge.kb-idle    {{ background: #94a3b8; opacity: 0.55; }}
-.kitchen-badge.kb-held    {{ background: #f59e0b; opacity: 0.85; }}
+.kitchen-badge.kb-paused  {{ background: #f59e0b; opacity: 0.85; }}
+.card-pp-btn {{
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  background: rgba(34,197,94,0.10);
+  color: #22c55e;
+  font-size: 8px; line-height: 1;
+  cursor: pointer; transition: filter 0.15s;
+  margin-right: 4px; vertical-align: middle;
+}}
+.card-pp-btn:hover {{ filter: brightness(1.25); border-color: var(--accent); }}
+.card-pp-btn.paused {{ background: rgba(245,158,11,0.10); color: #f59e0b; }}
 .kitchen-badge.kb-queued,
 .kitchen-badge.kb-running {{ background: #3b82f6; opacity: 0.95; box-shadow: 0 0 0 2px rgba(59,130,246,0.18); }}
 .kitchen-badge.kb-needs-input {{ background: #f59e0b; opacity: 1; box-shadow: 0 0 0 2px rgba(245,158,11,0.22); }}
@@ -1725,7 +1741,7 @@ a {{ color: var(--accent); text-decoration: none; }}
 .meta-chip--automation .chip-value {{ font-weight: 700; }}
 .meta-chip--automation[data-mode="manual"] .chip-value {{ color: var(--text-tertiary); }}
 .meta-chip--automation[data-mode="auto"]    .chip-value {{ color: #3b82f6; }}
-.meta-chip--automation[data-mode="held"]    .chip-value {{ color: #f59e0b; }}
+.meta-chip--automation[data-mode="paused"]  .chip-value {{ color: #f59e0b; }}
 .automation-picker {{ position: absolute; z-index: 1010; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); min-width: 240px; }}
 .automation-picker-row {{ display: flex; gap: 4px; margin-bottom: 6px; }}
 .automation-picker-opt {{ flex: 1; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-subtle); background: none; color: var(--text-secondary); cursor: pointer; border-radius: 6px; font-family: var(--font-sans); }}
@@ -2653,6 +2669,31 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 }}
 .live-pause-btn:hover {{ color: var(--text-primary); }}
 .live-pause-btn.paused {{ border-color: #f59e0b; color: #f59e0b; }}
+.live-paused-zone {{
+  margin: 8px 0 12px; padding: 12px 14px; border-radius: 8px;
+  background: rgba(245,158,11,0.06);
+  border: 1px solid rgba(245,158,11,0.25);
+}}
+.live-paused-zone .live-lane-title {{ color: #f59e0b; margin-bottom: 8px; }}
+.live-paused-list {{ display: flex; flex-direction: column; gap: 6px; }}
+.live-paused-row {{
+  display: grid; grid-template-columns: 70px 1fr 110px auto; gap: 10px;
+  padding: 6px 10px; border-radius: 6px; font-size: 12px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  align-items: center;
+}}
+.live-paused-row .lp-tid {{ font-family: "SF Mono", Monaco, monospace; color: var(--text-tertiary); }}
+.live-paused-row .lp-reason {{ color: #f59e0b; font-size: 11px; }}
+.live-paused-row button {{
+  font-size: 11px; padding: 3px 10px; border-radius: 4px;
+  border: 1px solid var(--accent); background: rgba(34,197,94,0.10); color: #22c55e;
+  cursor: pointer;
+}}
+.live-paused-row button:hover {{ filter: brightness(1.2); }}
+.live-section-divider {{
+  font-size: 11px; color: var(--text-tertiary); text-transform: uppercase;
+  letter-spacing: 0.5px; margin: 10px 0 6px;
+}}
 .live-heartbeat {{ font-size: 11px; color: var(--text-tertiary); margin-left: auto; }}
 .live-lanes {{
   display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px;
@@ -2836,8 +2877,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   <span class="filter-divider"></span>
   <!-- Automation filters — automation lens on the existing kanban -->
   <span class="filter-group" data-group-name="kitchen">
-    <button class="filter-btn" data-filter="auto"             data-group="kitchen" title="Tickets with automation enabled (auto or held)">Auto <span class="count">{count_auto}</span></button>
-    <button class="filter-btn" data-filter="ready"            data-group="kitchen" title="Auto/held, meets all dispatch conditions, no active run">Ready <span class="count">{count_ready}</span></button>
+    <span class="filter-btn-wrap" id="autoChipWrap" style="position:relative;display:inline-flex;align-items:center;">
+      <button class="filter-btn" data-filter="auto"           data-group="kitchen" data-testid="auto-chip" title="Tickets with auto-dispatch on (excludes paused unless opted in)">Auto <span class="count" id="autoChipCount">{count_auto}</span></button><button class="filter-btn-chevron" id="autoChipChevron" data-testid="auto-chip-chevron" title="Refine Auto filter" aria-label="Refine Auto sub-filters" style="border-left:none;border-radius:0 5px 5px 0;padding:4px 6px;font-size:10px;line-height:1;">&#9660;</button>
+      <div class="auto-popover" id="autoPopover" style="display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:200;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:8px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:170px;white-space:nowrap;">
+        <label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;"><input type="checkbox" id="autoIncludePaused"> Include paused <span style="color:var(--text-tertiary);font-size:11px;">({count_paused})</span></label>
+      </div>
+    </span>
+    <button class="filter-btn" data-filter="ready"            data-group="kitchen" title="Auto on, meets all dispatch conditions, no active run">Ready <span class="count">{count_ready}</span></button>
     <button class="filter-btn" data-filter="running"          data-group="kitchen" title="Has an active run (queued, preparing, or running)">Running <span class="count">{count_running}</span></button>
     <span class="filter-btn-wrap" id="needsAttentionWrap" style="position:relative;display:inline-flex;align-items:center;">
       <button class="filter-btn" data-filter="needs-attention" data-group="kitchen" data-testid="needs-attention-chip" title="Run needs input, failed, stalled, or cancelled">Needs Attention <span class="count">{count_needs_attention}</span></button><button class="filter-btn-chevron" id="needsAttentionChevron" data-testid="needs-attention-chevron" title="Refine Needs Attention filter" aria-label="Refine Needs Attention sub-filters" style="border-left:none;border-radius:0 5px 5px 0;padding:4px 6px;font-size:10px;line-height:1;">&#9660;</button>
@@ -3132,6 +3178,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       <button class="live-pause-btn" id="livePauseBtn">Pause Kitchen</button>
       <span class="live-heartbeat" id="liveHeartbeat">Last refreshed: —</span>
     </div>
+    <!-- Non-live zone: tickets opted in to auto but currently paused. -->
+    <div class="live-paused-zone" id="liveLanePaused">
+      <div class="live-lane-title">Paused (auto on, not dispatching)</div>
+      <div class="live-empty" id="liveEmptyPaused">No paused tickets</div>
+      <div class="live-paused-list" id="livePausedList"></div>
+    </div>
+    <div class="live-section-divider">Live runs</div>
     <div class="live-lanes">
       <div class="live-lane" id="liveLaneQueued">
         <div class="live-lane-title">Queued</div>
@@ -3272,6 +3325,49 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   }}
   syncNaCheckboxes();
 
+  // Auto popover toggle — "Include paused" sub-filter (persisted in localStorage)
+  var AUTO_INCLUDE_PAUSED_KEY = 'tt-auto-include-paused';
+  var autoIncludePaused = (function() {{
+    try {{ return localStorage.getItem(AUTO_INCLUDE_PAUSED_KEY) === '1'; }} catch (e) {{ return false; }}
+  }})();
+  var autoChevron = document.getElementById('autoChipChevron');
+  var autoPopover = document.getElementById('autoPopover');
+  var autoIncludeChk = document.getElementById('autoIncludePaused');
+  if (autoIncludeChk) autoIncludeChk.checked = autoIncludePaused;
+  if (autoChevron && autoPopover) {{
+    autoChevron.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      var open = autoPopover.style.display !== 'none';
+      autoPopover.style.display = open ? 'none' : 'block';
+    }});
+    if (autoIncludeChk) {{
+      autoIncludeChk.addEventListener('change', function() {{
+        autoIncludePaused = this.checked;
+        try {{ localStorage.setItem(AUTO_INCLUDE_PAUSED_KEY, autoIncludePaused ? '1' : '0'); }} catch (e) {{}}
+        // Reflect the count in the chip when the sub-toggle changes.
+        var countEl = document.getElementById('autoChipCount');
+        if (countEl) {{
+          var base = parseInt(countEl.dataset.baseCount || countEl.textContent, 10) || 0;
+          if (!countEl.dataset.baseCount) countEl.dataset.baseCount = String(base);
+          var paused = parseInt(countEl.dataset.pausedCount || '0', 10) || 0;
+          if (!countEl.dataset.pausedCount) {{
+            // Pull count from popover label "(N)" lazily.
+            var label = autoIncludeChk.parentElement.textContent || '';
+            var m = label.match(/\\((\\d+)\\)/);
+            if (m) {{ paused = parseInt(m[1], 10); countEl.dataset.pausedCount = String(paused); }}
+          }}
+          countEl.textContent = autoIncludePaused ? String(base + paused) : String(base);
+        }}
+        applyFilters();
+      }});
+    }}
+    document.addEventListener('click', function(e) {{
+      if (autoPopover.style.display !== 'none' && !autoPopover.contains(e.target) && e.target !== autoChevron) {{
+        autoPopover.style.display = 'none';
+      }}
+    }});
+  }}
+
   // Needs Attention popover toggle
   var naChevron = document.getElementById('needsAttentionChevron');
   var naPopover = document.getElementById('needsAttentionPopover');
@@ -3328,8 +3424,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
             var rs = card.dataset.runStatus || '';
             for (var i = 0; i < vals.length; i++) {{
               var v = vals[i];
-              if (v === 'auto'             && (mode === 'auto' || mode === 'held'))   {{ match = true; break; }}
-              if (v === 'ready'            && (mode === 'auto' || mode === 'held') && card.dataset.eligible === 'true' && !ACTIVE_RUN_STATUSES[rs]) {{ match = true; break; }}
+              if (v === 'auto'             && (mode === 'auto' || (autoIncludePaused && mode === 'paused')))   {{ match = true; break; }}
+              if (v === 'ready'            && mode === 'auto' && card.dataset.eligible === 'true' && !ACTIVE_RUN_STATUSES[rs]) {{ match = true; break; }}
               if (v === 'running'          && ACTIVE_RUN_STATUSES[rs])             {{ match = true; break; }}
               if (v === 'needs-attention'  && naEnabledSubs.indexOf(rs) !== -1)     {{ match = true; break; }}
               if (v === 'for-review-auto'  && card.dataset.automationForReview === '1') {{ match = true; break; }}
@@ -4823,12 +4919,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     if (autoChip) {{
       var mode = data.automation_mode || 'manual';
       autoChip.setAttribute('data-mode', mode);
-      var label = mode.charAt(0).toUpperCase() + mode.slice(1);
-      if (mode === 'held' && data.hold_reason) {{
-        label += ' — ' + data.hold_reason;
-        autoChip.title = 'Held: ' + data.hold_reason;
+      var labelMap = {{ 'manual': 'Off', 'auto': 'On', 'paused': 'Paused' }};
+      var label = labelMap[mode] || mode;
+      if (mode === 'paused' && data.pause_reason) {{
+        label += ' — ' + data.pause_reason;
+        autoChip.title = 'Paused: ' + data.pause_reason;
       }} else {{
-        autoChip.title = 'Automation: ' + label;
+        autoChip.title = 'Auto: ' + label;
       }}
       autoChip.querySelector('.chip-value').textContent = label;
     }}
@@ -4885,12 +4982,12 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   function closeAutoPicker() {{
     if (_autoPicker) {{ _autoPicker.parentNode.removeChild(_autoPicker); _autoPicker = null; }}
   }}
-  function postAutomation(mode, holdReason) {{
+  function postAutomation(mode, pauseReason) {{
     if (!currentData || !currentData.id) return Promise.reject(new Error('no ticket'));
     var apiBase = (document.querySelector('meta[name="edit-api"]') || {{}}).content || '';
     var url = (apiBase ? apiBase : '') + '/api/tickets/' + encodeURIComponent(currentData.id) + '/automation';
     var body = {{ mode: mode }};
-    if (mode === 'held') body.hold_reason = holdReason || '';
+    if (mode === 'paused') body.pause_reason = pauseReason || '';
     return fetch(url, {{
       method: 'POST',
       headers: {{ 'Content-Type': 'application/json' }},
@@ -4902,6 +4999,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       }});
     }});
   }}
+  // Expose so card-level play/pause buttons can flip mode without opening picker.
+  window._ttPostAutomation = postAutomation;
   var autoChipEl = overlay.querySelector('.meta-chip--automation');
   if (autoChipEl) {{
     autoChipEl.addEventListener('click', function(e) {{
@@ -4909,7 +5008,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       if (_autoPicker) {{ closeAutoPicker(); return; }}
       var rect = this.getBoundingClientRect();
       var current = (currentData && currentData.automation_mode) || 'manual';
-      var currentReason = (currentData && currentData.hold_reason) || '';
+      var currentReason = (currentData && currentData.pause_reason) || '';
+      var modeLabels = {{ 'manual': 'Off', 'auto': 'On', 'paused': 'Paused' }};
       var pkr = document.createElement('div');
       pkr.className = 'automation-picker';
       pkr.style.position = 'fixed';
@@ -4917,11 +5017,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       pkr.style.left = rect.left + 'px';
       pkr.innerHTML =
         '<div class="automation-picker-row">' +
-          ['manual','auto','held'].map(function(m) {{
-            return '<button class="automation-picker-opt' + (m===current?' active':'') + '" data-mode="' + m + '">' + m.charAt(0).toUpperCase()+m.slice(1) + '</button>';
+          ['manual','auto','paused'].map(function(m) {{
+            return '<button class="automation-picker-opt' + (m===current?' active':'') + '" data-mode="' + m + '">' + modeLabels[m] + '</button>';
           }}).join('') +
         '</div>' +
-        '<textarea class="automation-picker-reason" placeholder="Reason (required for Held)"' + (current==='held'?'':' style="display:none"') + '>' + (currentReason ? currentReason.replace(/[&<>"]/g, function(c){{return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];}}) : '') + '</textarea>' +
+        '<textarea class="automation-picker-reason" placeholder="Reason (required to pause)"' + (current==='paused'?'':' style="display:none"') + '>' + (currentReason ? currentReason.replace(/[&<>"]/g, function(c){{return ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}})[c];}}) : '') + '</textarea>' +
         '<div class="automation-picker-error"></div>' +
         '<div class="automation-picker-actions">' +
           '<button data-act="cancel">Cancel</button>' +
@@ -4937,7 +5037,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           ev.stopPropagation();
           selectedMode = btn.getAttribute('data-mode');
           pkr.querySelectorAll('.automation-picker-opt').forEach(function(b) {{ b.classList.toggle('active', b===btn); }});
-          reasonEl.style.display = selectedMode === 'held' ? '' : 'none';
+          reasonEl.style.display = selectedMode === 'paused' ? '' : 'none';
           errEl.textContent = '';
         }});
       }});
@@ -4945,8 +5045,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       pkr.querySelector('[data-act="save"]').addEventListener('click', function(ev) {{
         ev.stopPropagation();
         var reason = (reasonEl.value || '').trim();
-        if (selectedMode === 'held' && !reason) {{
-          errEl.textContent = 'Reason required when holding.';
+        if (selectedMode === 'paused' && !reason) {{
+          errEl.textContent = 'Reason required when pausing.';
           reasonEl.focus();
           return;
         }}
@@ -4954,7 +5054,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           currentData = updated;
           populateMetaChips(currentData);
           closeAutoPicker();
-          toast('Automation: ' + selectedMode);
+          var labelMap = {{ 'manual': 'Off', 'auto': 'On', 'paused': 'Paused' }};
+          toast('Auto: ' + (labelMap[selectedMode] || selectedMode));
         }}).catch(function(err) {{
           errEl.textContent = err.message || 'failed';
         }});
@@ -5036,8 +5137,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     }}
     if (k === 'status_change')        return diff(p.before, p.after);
     if (k === 'mode_changed')         return 'mode: ' + diff(p.before, p.after);
-    if (k === 'hold_set')             return 'held: ' + escapeHtmlForHistory(p.reason || '');
-    if (k === 'hold_cleared')         return 'unheld → ' + escapeHtmlForHistory(p.after || '');
+    if (k === 'pause_set')            return 'paused: ' + escapeHtmlForHistory(p.reason || '');
+    if (k === 'pause_cleared')        return 'unpaused → ' + escapeHtmlForHistory(p.after || '');
+    // Legacy event names — still emitted in DBs migrated from earlier versions.
+    if (k === 'hold_set')              return 'paused: ' + escapeHtmlForHistory(p.reason || '');
+    if (k === 'hold_cleared')          return 'unpaused → ' + escapeHtmlForHistory(p.after || '');
     if (k === 'criteria_check')       return 'criterion #' + p.criterion_id + ': ' + diff(p.before, p.after);
     if (k === 'criteria_added')       return '+ ' + escapeHtmlForHistory(p.text || '');
     if (k === 'criteria_removed')     return '− ' + escapeHtmlForHistory(p.text || '');
@@ -9623,6 +9727,53 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         _setLane('liveLaneRecent', 'liveEmptyRecent', recent);
       }})
       .catch(function() {{}});
+
+    // Paused tickets (auto on, not dispatching) — non-live zone.
+    fetch(EDIT_API + '/automation/paused')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        var paused = data.paused || [];
+        var listEl = document.getElementById('livePausedList');
+        var emptyEl = document.getElementById('liveEmptyPaused');
+        if (!listEl) return;
+        listEl.textContent = '';
+        if (paused.length === 0) {{
+          if (emptyEl) emptyEl.style.display = '';
+          return;
+        }}
+        if (emptyEl) emptyEl.style.display = 'none';
+        paused.forEach(function(p) {{
+          var row = document.createElement('div');
+          row.className = 'live-paused-row';
+          var tid = document.createElement('span');
+          tid.className = 'lp-tid'; tid.textContent = p.ticket_id;
+          row.appendChild(tid);
+          var title = document.createElement('span');
+          title.className = 'lp-title'; title.textContent = p.title || '(untitled)';
+          row.appendChild(title);
+          var reason = document.createElement('span');
+          reason.className = 'lp-reason';
+          reason.textContent = p.pause_reason || '';
+          reason.title = p.pause_reason || '';
+          row.appendChild(reason);
+          var btn = document.createElement('button');
+          btn.textContent = 'Resume';
+          btn.title = 'Resume auto-dispatch for ' + p.ticket_id;
+          btn.addEventListener('click', function() {{
+            btn.disabled = true;
+            fetch(EDIT_API + '/tickets/' + encodeURIComponent(p.ticket_id) + '/automation', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify({{ mode: 'auto' }}),
+            }})
+              .then(function(r) {{ if (!r.ok) throw new Error(); refreshLiveData(); }})
+              .catch(function() {{ btn.disabled = false; showAppToast('Resume failed', 'error'); }});
+          }});
+          row.appendChild(btn);
+          listEl.appendChild(row);
+        }});
+      }})
+      .catch(function() {{}});
   }}
 
   function startLivePolling() {{
@@ -10159,6 +10310,45 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       startRecording(btn.dataset.ticketId);
     }}
   }});
+
+  // Per-card play/pause buttons — flip automation_mode without opening picker.
+  // Auto → paused defaults the reason to "Paused via card icon"; resume just
+  // sets mode back to 'auto' with no reason.
+  // Registered at capture phase: the parent .card stops bubble propagation in
+  // its own click handler, so a bubble-phase delegate would never fire.
+  document.addEventListener('click', function(e) {{
+    var ppBtn = e.target.closest('.card-pp-btn');
+    if (!ppBtn) return;
+    e.stopPropagation();
+    e.preventDefault();
+    var tid = ppBtn.dataset.ticketId;
+    if (!tid) return;
+    var action = ppBtn.dataset.ppAction;
+    var mode = action === 'pause' ? 'paused' : 'auto';
+    ppBtn.disabled = true;
+    var url = EDIT_API + '/tickets/' + encodeURIComponent(tid) + '/automation';
+    var body = {{ mode: mode }};
+    if (mode === 'paused') body.pause_reason = 'Paused via card icon';
+    fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}})
+      .then(function(r) {{ if (!r.ok) throw new Error(); return r.json(); }})
+      .then(function() {{
+        showAppToast(mode === 'paused' ? 'Paused ' + _esc(tid) : 'Resumed ' + _esc(tid), 'success');
+        // Optimistic UI flip — the next dashboard refresh will replace markup.
+        if (mode === 'paused') {{
+          ppBtn.classList.add('paused');
+          ppBtn.dataset.ppAction = 'resume';
+          ppBtn.title = 'Paused — click to resume';
+          ppBtn.innerHTML = '❚❚';
+        }} else {{
+          ppBtn.classList.remove('paused');
+          ppBtn.dataset.ppAction = 'pause';
+          ppBtn.title = 'Auto on — click to pause';
+          ppBtn.innerHTML = '▸';
+        }}
+        ppBtn.disabled = false;
+      }})
+      .catch(function() {{ showAppToast('Failed to update automation', 'error'); ppBtn.disabled = false; }});
+  }}, true);
 
   // Per-card run-now buttons (delegated) — visible only when data-eligible="true" and no active run
   document.addEventListener('click', function(e) {{
@@ -11183,16 +11373,34 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         kb_class, kb_title = "kb-cancelled", "Last run cancelled"
     elif t.latest_run_status == "stalled":
         kb_class, kb_title = "kb-failed", "Last run stalled"
-    elif t.automation_mode == "held":
-        kb_class, kb_title = "kb-held", "Automation held"
+    elif t.automation_mode == "paused":
+        kb_class, kb_title = "kb-paused", "Auto on, paused"
     elif t.automation_mode == "auto":
-        kb_class, kb_title = "kb-idle", "Auto — eligible to run"
+        kb_class, kb_title = "kb-idle", "Auto on — eligible to run"
     kb_html = (
         f'<span class="kitchen-badge {kb_class}" title="{escape(kb_title)}" '
         f'data-automation-mode="{escape(t.automation_mode)}" '
         f'data-run-status="{escape(t.latest_run_status or "")}"></span>'
         if kb_class else ""
     )
+
+    # Card play/pause icon — only on cards that have auto turned on. Click to
+    # toggle the dispatcher between actively dispatching and paused. Manual
+    # tickets don't render this; opening the detail overlay's automation
+    # picker is the path to flip them on.
+    if t.automation_mode == "auto":
+        pp_html = (
+            f'<button class="card-pp-btn" data-pp-action="pause" data-ticket-id="{escape(t.id)}" '
+            f'title="Auto on — click to pause" aria-label="Pause automation">&#9658;</button>'
+        )
+    elif t.automation_mode == "paused":
+        pp_html = (
+            f'<button class="card-pp-btn paused" data-pp-action="resume" data-ticket-id="{escape(t.id)}" '
+            f'title="Paused — click to resume" aria-label="Resume automation">&#10074;&#10074;</button>'
+        )
+    else:
+        pp_html = ""
+    kb_html = pp_html + kb_html
 
     # Tags
     tags_list = getattr(t, 'tags', [])

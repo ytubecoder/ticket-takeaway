@@ -281,7 +281,7 @@ def _eval_parent_section_not_in(ctx: dict, p: dict) -> tuple[bool, str]:
 # condition passed or failed (used for diagnostics / UI tooltips).
 
 _SECTION_OPTIONS = ["Ideas", "Backlog", "WIP", "For Review", "Done", "Bugs", "Icebox", "Won't Do"]
-_AUTOMATION_MODE_OPTIONS = ["manual", "auto", "held"]
+_AUTOMATION_MODE_OPTIONS = ["manual", "auto", "paused"]
 
 # Imported lazily inside the dict so test runs that don't have constants on path
 # still load the catalog without raising. The UI uses options to render dropdowns.

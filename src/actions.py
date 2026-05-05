@@ -438,30 +438,30 @@ def set_automation_mode(
     subject_id: str,
     mode: str,
     actor: ActorContext,
-    hold_reason: str | None = None,
+    pause_reason: str | None = None,
 ) -> None:
-    """Set a subject's automation_mode. Held requires hold_reason. Emits the
-    appropriate event(s). Caller must commit.
+    """Set a subject's automation_mode. 'paused' requires a pause_reason.
+    Emits the appropriate event(s). Caller must commit.
 
-    Valid modes: 'manual', 'auto', 'held'. Held without reason is rejected.
+    Valid modes: 'manual', 'auto', 'paused'. Pause without reason is rejected.
     Lazy-creates the automation_subjects row if it doesn't exist.
     """
-    if mode not in ("manual", "auto", "held"):
+    if mode not in ("manual", "auto", "paused"):
         raise ValueError(f"invalid mode: {mode!r}")
-    if mode == "held" and not (hold_reason or "").strip():
-        raise ValueError("hold requires a non-empty reason")
+    if mode == "paused" and not (pause_reason or "").strip():
+        raise ValueError("pause requires a non-empty reason")
 
     _upsert_subject(conn, project_id, subject_type, subject_id, actor)
 
     prior = conn.execute(
-        "SELECT automation_mode, hold_reason FROM automation_subjects "
+        "SELECT automation_mode, pause_reason FROM automation_subjects "
         "WHERE project_id = ? AND subject_type = ? AND subject_id = ?",
         (project_id, subject_type, subject_id),
     ).fetchone()
     prior_mode = prior["automation_mode"]
-    prior_reason = prior["hold_reason"]
+    prior_reason = prior["pause_reason"]
 
-    if prior_mode == mode and (mode != "held" or prior_reason == hold_reason):
+    if prior_mode == mode and (mode != "paused" or prior_reason == pause_reason):
         return  # no-op
 
     now = utcnow_iso()
@@ -469,25 +469,25 @@ def set_automation_mode(
     conn.execute(
         """
         UPDATE automation_subjects
-        SET automation_mode = ?, hold_reason = ?, updated_at = ?, updated_by = ?
+        SET automation_mode = ?, pause_reason = ?, updated_at = ?, updated_by = ?
         WHERE project_id = ? AND subject_type = ? AND subject_id = ?
         """,
-        (mode, hold_reason if mode == "held" else None, now, actor_str,
+        (mode, pause_reason if mode == "paused" else None, now, actor_str,
          project_id, subject_type, subject_id),
     )
 
-    if mode == "held":
+    if mode == "paused":
         emit_event(
             conn, project_id, subject_type, subject_id,
-            "hold_set",
-            {"before": prior_mode, "after": "held", "reason": hold_reason},
+            "pause_set",
+            {"before": prior_mode, "after": "paused", "reason": pause_reason},
             actor,
         )
-    elif prior_mode == "held":
+    elif prior_mode == "paused":
         emit_event(
             conn, project_id, subject_type, subject_id,
-            "hold_cleared",
-            {"before": "held", "after": mode, "prior_reason": prior_reason},
+            "pause_cleared",
+            {"before": "paused", "after": mode, "prior_reason": prior_reason},
             actor,
         )
     else:

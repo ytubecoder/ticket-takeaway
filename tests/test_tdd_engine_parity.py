@@ -250,14 +250,14 @@ class TestParityManualMode:
         assert wf_passed is False
 
 
-class TestParityHeldMode:
-    """Held automation mode — both should block."""
+class TestParityPausedMode:
+    """Paused automation mode — both should block."""
 
-    def test_held_mode_both_block(self, conn):
+    def test_paused_mode_both_block(self, conn):
         _add_ticket(conn)
         _add_criteria(conn)
-        set_automation_mode(conn, "p", "ticket", "B-1", "held",
-                            ActorContext.human(), hold_reason="waiting on design")
+        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
+                            ActorContext.human(), pause_reason="waiting on design")
         _set_tests_flag(conn)
         conn.commit()
 

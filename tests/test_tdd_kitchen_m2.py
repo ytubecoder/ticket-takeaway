@@ -59,11 +59,11 @@ def _seed_ticket(db_file, pid, tid, section="Backlog", status="specified", descr
     c.commit(); c.close()
 
 
-def _set_mode(db_file, pid, tid, mode, hold_reason=None):
+def _set_mode(db_file, pid, tid, mode, pause_reason=None):
     from actions import set_automation_mode, ActorContext
     c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
     set_automation_mode(c, pid, "ticket", tid, mode, ActorContext.human(),
-                        hold_reason=hold_reason)
+                        pause_reason=pause_reason)
     c.commit(); c.close()
 
 
@@ -96,7 +96,7 @@ class TestAggregatorBuckets:
         serve, _ = serve_mod
         state = serve._aggregate_kitchen_state()
         assert set(state["buckets"].keys()) == {
-            "needs_me", "running", "ready_to_delegate", "held", "failed"
+            "needs_me", "running", "ready_to_delegate", "paused", "failed"
         }
         for k in state["buckets"]:
             assert state["buckets"][k] == []
@@ -104,16 +104,16 @@ class TestAggregatorBuckets:
         names = {p["name"] for p in state["projects"]}
         assert names == {"Alpha", "Beta"}
 
-    def test_held_ticket_lands_in_held_bucket(self, serve_mod):
+    def test_paused_ticket_lands_in_paused_bucket(self, serve_mod):
         serve, db_file = serve_mod
         _seed_ticket(db_file, "alpha", "B-1")
-        _set_mode(db_file, "alpha", "B-1", "held", hold_reason="waiting on key")
+        _set_mode(db_file, "alpha", "B-1", "paused", pause_reason="waiting on key")
         state = serve._aggregate_kitchen_state()
-        assert len(state["buckets"]["held"]) == 1
-        item = state["buckets"]["held"][0]
+        assert len(state["buckets"]["paused"]) == 1
+        item = state["buckets"]["paused"][0]
         assert item["ticket_id"] == "B-1"
         assert item["project_id"] == "alpha"
-        assert item["hold_reason"] == "waiting on key"
+        assert item["pause_reason"] == "waiting on key"
 
     def test_eligible_auto_no_run_lands_in_ready(self, serve_mod):
         serve, db_file = serve_mod
@@ -161,7 +161,7 @@ class TestAggregatorBuckets:
         _set_mode(db_file, "alpha", "B-1", "auto")  # ready
 
         _seed_ticket(db_file, "alpha", "B-2")
-        _set_mode(db_file, "alpha", "B-2", "held", hold_reason="x")
+        _set_mode(db_file, "alpha", "B-2", "paused", pause_reason="x")
 
         _seed_ticket(db_file, "beta", "B-3")
         _set_mode(db_file, "beta", "B-3", "auto")
@@ -179,7 +179,7 @@ class TestAggregatorBuckets:
         assert sorted(ticket_ids) == ["B-1", "B-2", "B-3", "B-4"]
         # Confirm bucket placement
         assert {i["ticket_id"] for i in state["buckets"]["ready_to_delegate"]} == {"B-1"}
-        assert {i["ticket_id"] for i in state["buckets"]["held"]}              == {"B-2"}
+        assert {i["ticket_id"] for i in state["buckets"]["paused"]}              == {"B-2"}
         assert {i["ticket_id"] for i in state["buckets"]["running"]}           == {"B-3"}
         assert {i["ticket_id"] for i in state["buckets"]["needs_me"]}          == {"B-4"}
 
@@ -194,22 +194,22 @@ class TestWatchedProjects:
     def test_default_includes_all_projects(self, serve_mod):
         serve, db_file = serve_mod
         _seed_ticket(db_file, "alpha", "B-1")
-        _set_mode(db_file, "alpha", "B-1", "held", hold_reason="x")
+        _set_mode(db_file, "alpha", "B-1", "paused", pause_reason="x")
         _seed_ticket(db_file, "beta", "B-2")
-        _set_mode(db_file, "beta", "B-2", "held", hold_reason="y")
+        _set_mode(db_file, "beta", "B-2", "paused", pause_reason="y")
         state = serve._aggregate_kitchen_state()
-        assert {i["project_id"] for i in state["buckets"]["held"]} == {"alpha", "beta"}
+        assert {i["project_id"] for i in state["buckets"]["paused"]} == {"alpha", "beta"}
 
     def test_unwatched_project_dropped_from_buckets_and_summaries(self, serve_mod):
         serve, db_file = serve_mod
         _seed_ticket(db_file, "alpha", "B-1")
-        _set_mode(db_file, "alpha", "B-1", "held", hold_reason="x")
+        _set_mode(db_file, "alpha", "B-1", "paused", pause_reason="x")
         _seed_ticket(db_file, "beta",  "B-2")
-        _set_mode(db_file, "beta",  "B-2", "held", hold_reason="y")
+        _set_mode(db_file, "beta",  "B-2", "paused", pause_reason="y")
         # Mark beta unwatched in the cache (simulates the registry flag).
         serve._PROJECTS_CACHE["beta"]["watched"] = False
         state = serve._aggregate_kitchen_state()
-        assert {i["project_id"] for i in state["buckets"]["held"]} == {"alpha"}
+        assert {i["project_id"] for i in state["buckets"]["paused"]} == {"alpha"}
         assert {p["id"] for p in state["projects"]} == {"alpha"}
 
 

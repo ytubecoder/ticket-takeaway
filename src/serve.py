@@ -2989,19 +2989,19 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
     # Errors here are non-fatal: pre-migration DBs or transient failures fall
     # back to default 'manual' / no run / not eligible.
     automation_mode = "manual"
-    hold_reason = None
+    pause_reason = None
     no_test_required = False
     no_test_required_note = ""
     latest_run_status = None
     try:
         am_row = conn.execute(
-            "SELECT automation_mode, hold_reason FROM automation_subjects "
+            "SELECT automation_mode, pause_reason FROM automation_subjects "
             "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
             (project_id, row["id"]),
         ).fetchone()
         if am_row:
             automation_mode = am_row["automation_mode"]
-            hold_reason = am_row["hold_reason"]
+            pause_reason = am_row["pause_reason"]
         if "no_test_required" in row.keys():
             no_test_required = bool(row["no_test_required"])
             no_test_required_note = row["no_test_required_note"] or ""
@@ -3080,7 +3080,7 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "attachment_count": attachment_count,
         # Kitchen state (M1a)
         "automation_mode": automation_mode,
-        "hold_reason": hold_reason,
+        "pause_reason": pause_reason,
         "no_test_required": no_test_required,
         "no_test_required_note": no_test_required_note,
         "latest_run_status": latest_run_status,
@@ -4226,15 +4226,15 @@ def _aggregate_kitchen_state() -> dict:
       {
         "buckets": {
           "needs_me": [...], "running": [...], "ready_to_delegate": [...],
-          "held": [...], "failed": [...],
+          "paused": [...], "failed": [...],
         },
         "projects": [{id, name, counts: {wip, review, blocked, running, needs_me}}, ...],
       }
 
     Each item is {project_id, project_name, ticket_id, title, section, status,
-                  automation_mode, latest_run_status, hold_reason, eligibility_reasons?}.
+                  automation_mode, latest_run_status, pause_reason, eligibility_reasons?}.
     Subjects appear in at most one bucket, with priority needs_me > running >
-    ready_to_delegate > held > failed.
+    ready_to_delegate > paused > failed.
     """
     from actions import eligibility as _elig
 
@@ -4243,7 +4243,7 @@ def _aggregate_kitchen_state() -> dict:
         # the aggregator includes everything by default.
         projects = [p for p in _PROJECTS_CACHE.values() if p.get("watched", True)]
 
-    buckets = {k: [] for k in ("needs_me", "running", "ready_to_delegate", "held", "failed")}
+    buckets = {k: [] for k in ("needs_me", "running", "ready_to_delegate", "paused", "failed")}
     project_summaries = []
 
     with _db_lock:
@@ -4271,12 +4271,12 @@ def _aggregate_kitchen_state() -> dict:
                     counts["blocked"] += 1
 
                 am_row = conn.execute(
-                    "SELECT automation_mode, hold_reason FROM automation_subjects "
+                    "SELECT automation_mode, pause_reason FROM automation_subjects "
                     "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ?",
                     (pid, tid),
                 ).fetchone()
                 mode = am_row["automation_mode"] if am_row else "manual"
-                hold_reason = am_row["hold_reason"] if am_row else None
+                pause_reason = am_row["pause_reason"] if am_row else None
 
                 latest = conn.execute(
                     "SELECT status FROM runs WHERE project_id = ? AND subject_type='ticket' AND subject_id=? "
@@ -4295,7 +4295,7 @@ def _aggregate_kitchen_state() -> dict:
                     "ticket_id": tid, "title": t["title"],
                     "section": t["section"], "status": t["status"],
                     "automation_mode": mode, "latest_run_status": run_status,
-                    "hold_reason": hold_reason,
+                    "pause_reason": pause_reason,
                 }
 
                 # Bucket assignment with single-priority placement.
@@ -4305,8 +4305,8 @@ def _aggregate_kitchen_state() -> dict:
                     buckets["running"].append(base_item)
                 elif run_status in ("failed", "stalled"):
                     buckets["failed"].append(base_item)
-                elif mode == "held":
-                    buckets["held"].append(base_item)
+                elif mode == "paused":
+                    buckets["paused"].append(base_item)
                 elif mode == "auto":
                     # Eligibility check — only show in Ready To Delegate when
                     # there's no active run AND DCSTL gates pass.
@@ -4361,7 +4361,7 @@ def _render_kitchen_view(port: int) -> str:
         ("running",           "Running",           "Active runs — agents currently cooking."),
         ("ready_to_delegate", "Ready To Delegate",
          "Auto + all gates clear — would dispatch on next tick (simulated while paused)."),
-        ("held",              "Held",              "Paused intentionally, with a reason."),
+        ("paused",            "Paused",            "Auto-on but paused intentionally, with a reason."),
         ("failed",            "Failed",            "Last run failed or stalled — needs attention."),
     ]
 
@@ -4376,16 +4376,16 @@ def _render_kitchen_view(port: int) -> str:
                 f'<span class="kv-run kv-run-{it["latest_run_status"]}">{it["latest_run_status"]}</span>'
                 if it["latest_run_status"] else ""
             )
-            hold_html = (
-                f'<span class="kv-hold-reason" title="{_html.escape(it["hold_reason"] or "")}">— {_html.escape(it["hold_reason"] or "")}</span>'
-                if it["hold_reason"] else ""
+            pause_html = (
+                f'<span class="kv-pause-reason" title="{_html.escape(it["pause_reason"] or "")}">— {_html.escape(it["pause_reason"] or "")}</span>'
+                if it["pause_reason"] else ""
             )
             rows.append(
                 f'<a class="kv-row" href="{ticket_url}">'
                 f'<span class="kv-tid">{_html.escape(it["ticket_id"])}</span>'
                 f'<span class="kv-title">{_html.escape(it["title"])}</span>'
                 f'<span class="kv-proj">{_html.escape(it["project_name"])}</span>'
-                f'{mode_html}{run_html}{hold_html}'
+                f'{mode_html}{run_html}{pause_html}'
                 f'</a>'
             )
         return "".join(rows)
@@ -5277,6 +5277,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"runs": runs})
             return
 
+        # Project-scoped list of tickets with mode='paused' — feeds the Live
+        # tab's "Paused (auto on, not dispatching)" zone.
+        if remainder == "/api/automation/paused":
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                rows = conn.execute(
+                    "SELECT s.subject_id AS ticket_id, s.pause_reason, "
+                    "       s.updated_at, t.title "
+                    "FROM automation_subjects s "
+                    "LEFT JOIN tickets t "
+                    "       ON t.id = s.subject_id "
+                    "      AND t.project_id = s.project_id "
+                    "WHERE s.project_id = ? "
+                    "  AND s.subject_type = 'ticket' "
+                    "  AND s.automation_mode = 'paused' "
+                    "ORDER BY s.updated_at DESC",
+                    (proj["id"],),
+                ).fetchall()
+                conn.close()
+            self._send_json({
+                "paused": [
+                    {
+                        "ticket_id": r["ticket_id"],
+                        "title": r["title"] or "",
+                        "pause_reason": r["pause_reason"] or "",
+                        "updated_at": r["updated_at"],
+                    }
+                    for r in rows
+                ]
+            })
+            return
+
         # Phase 3A: recent finished kitchen runs for this project
         if remainder.startswith("/api/runs/recent"):
             qs = parse_qs(urlparse(self.path).query)
@@ -6064,18 +6096,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
             mode = body.get("mode", "")
-            hold_reason = body.get("hold_reason")
+            # Accept either the new key (`pause_reason`) or legacy `hold_reason`
+            # for one release in case any external callers still send the old
+            # field name.
+            pause_reason = body.get("pause_reason")
+            if pause_reason is None:
+                pause_reason = body.get("hold_reason")
             try:
                 with _db_lock:
                     conn = get_db(); init_db(conn)
                     _kitchen_set_mode(
                         conn, proj["id"], "ticket", ticket_id, mode,
-                        ActorContext.human(), hold_reason=hold_reason,
+                        ActorContext.human(), pause_reason=pause_reason,
                     )
                     conn.commit(); conn.close()
             except ValueError as e:
                 self._send_json({"error": str(e)}, 400)
                 return
+            # Regenerate the dashboard so the 2s DOM-diff poll picks up the
+            # mode change (Auto pill count, kitchen-badge class, play/pause
+            # icon state). Without this the optimistic UI flip in the JS gets
+            # overwritten by the next poll's stale HTML.
+            try:
+                cli.regenerate_dashboard(proj)
+            except Exception:
+                pass
             t = _get_ticket_json(proj["id"], ticket_id)
             self._send_json(t or {"ok": True})
             return

@@ -2869,10 +2869,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
 <div class="filter-bar" id="filterBar">
   <button class="bounce-back-btn" id="bounceBackBtn">&larr; Back to Board</button>
-  <span class="filter-group" data-group-name="type">
-    <button class="filter-btn" data-filter="bug" data-group="type">Bug <span class="count">{count_type_bug}</span></button>
-  </span>
-  <span class="filter-divider"></span>
   <!-- Automation filters — automation lens on the existing kanban -->
   <span class="filter-group" data-group-name="kitchen">
     <span class="filter-btn-wrap" id="autoChipWrap" style="position:relative;display:inline-flex;align-items:center;">

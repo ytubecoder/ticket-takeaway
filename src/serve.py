@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from pathlib import Path
@@ -177,6 +177,146 @@ _scenario_runs_lock = threading.Lock()
 # Workflow bounce tracking
 _workflow_runs: dict[str, dict] = {}
 _workflow_runs_lock = threading.Lock()
+
+
+def _finalize_journey_run(run_id: str) -> bool:
+    """Bridge a finished scenario subprocess into journey_runs/step_results.
+
+    Idempotent — safe to call repeatedly. Returns True if the run was just
+    finalised on this call, False if the subprocess is still running, the
+    run isn't a journey run, or it was already finalised.
+    """
+    with _scenario_runs_lock:
+        run = _scenario_runs.get(run_id)
+        if not run or "journey_id" not in run:
+            return False
+        proc = run.get("process")
+        if proc is None or proc.poll() is None:
+            return False
+        if run.get("_finalized"):
+            return False
+
+    journey_id = run["journey_id"]
+    project_id = run["project_id"]
+    scenario_id = run["scenario_id"]
+    output_dir = run.get("output_dir", "")
+
+    # Locate the artifact directory created by this run. The runner names it
+    # `{scenario_id}-{ts}` where ts is its own time.time() call (close to but
+    # not always identical to ours), so we pick the newest dir starting with
+    # the scenario id created at-or-after this run's start.
+    artifact_dir = ""
+    summary: dict = {}
+    if output_dir and os.path.isdir(output_dir):
+        candidates = sorted(
+            (
+                os.path.join(output_dir, d)
+                for d in os.listdir(output_dir)
+                if d.startswith(scenario_id + "-")
+                and os.path.isdir(os.path.join(output_dir, d))
+            ),
+            key=lambda p: os.path.getmtime(p),
+            reverse=True,
+        )
+        for cand in candidates:
+            sp = os.path.join(cand, "summary.json")
+            if os.path.isfile(sp):
+                try:
+                    with open(sp) as f:
+                        loaded = json.load(f)
+                    if loaded.get("scenario_id") == scenario_id:
+                        artifact_dir = os.path.join(cand, "screenshots")
+                        summary = loaded
+                        break
+                except Exception:
+                    continue
+
+    if not summary:
+        # Subprocess crashed before writing summary.json. Mark failed but
+        # don't lose the row — the user still wants to see the failure.
+        summary = {
+            "status": "failed" if proc.returncode != 0 else "passed",
+            "duration_ms": 0,
+            "failed_step_index": 0 if proc.returncode != 0 else None,
+            "error_message": "Run produced no summary.json",
+        }
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        # Update run row
+        conn.execute(
+            "UPDATE journey_runs "
+            "SET status = ?, finished_at = ?, duration_ms = ?, "
+            "    error_message = ?, artifact_dir = ? "
+            "WHERE id = ? AND project_id = ?",
+            (
+                summary.get("status", "failed"),
+                finished_at,
+                summary.get("duration_ms", 0),
+                summary.get("error_message", ""),
+                artifact_dir,
+                run_id,
+                project_id,
+            ),
+        )
+        # Update step results based on failed_step_index
+        failed_idx = summary.get("failed_step_index")
+        step_results = conn.execute(
+            "SELECT id, sort_order FROM journey_step_results "
+            "WHERE run_id = ? ORDER BY sort_order",
+            (run_id,),
+        ).fetchall()
+        for sr in step_results:
+            i = sr["sort_order"]
+            if summary.get("status") == "passed":
+                status = "passed"
+            elif failed_idx is not None and i < failed_idx:
+                status = "passed"
+            elif failed_idx is not None and i == failed_idx:
+                status = "failed"
+            else:
+                status = "skipped"
+            err = summary.get("error_message", "") if status == "failed" else ""
+            conn.execute(
+                "UPDATE journey_step_results SET status = ?, error_message = ? "
+                "WHERE id = ?",
+                (status, err, sr["id"]),
+            )
+        conn.commit()
+
+        # Backfill screenshot paths onto capture-step results
+        if artifact_dir and os.path.isdir(artifact_dir):
+            pngs = sorted(
+                f for f in os.listdir(artifact_dir)
+                if f.endswith(".png") and not f.startswith("FAILURE-")
+            )
+            capture_results = conn.execute(
+                "SELECT jsr.id "
+                "FROM journey_step_results jsr "
+                "JOIN journey_steps js ON jsr.step_id = js.id "
+                "WHERE jsr.run_id = ? AND js.action = 'capture' "
+                "ORDER BY jsr.sort_order",
+                (run_id,),
+            ).fetchall()
+            for i, png in enumerate(pngs):
+                if i >= len(capture_results):
+                    break
+                url = f"/api/journeys/{journey_id}/runs/{run_id}/screenshots/{png}"
+                conn.execute(
+                    "UPDATE journey_step_results SET screenshot_path = ? "
+                    "WHERE id = ?",
+                    (url, capture_results[i]["id"]),
+                )
+            conn.commit()
+        conn.close()
+
+    with _scenario_runs_lock:
+        if run_id in _scenario_runs:
+            _scenario_runs[run_id]["_finalized"] = True
+            _scenario_runs[run_id]["status"] = summary.get("status", "failed")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -3653,8 +3793,30 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
     toast('Starting run (' + backend + ')...');
     apiPost('/journeys/' + currentJourney.id + '/run', {{backend: backend}}).then(function(r) {{
       if (r.data.error) {{ toast(r.data.error, 'error'); return; }}
-      toast('Run started: ' + r.data.run_id);
-      setTimeout(function() {{ openJourney(currentJourney.id); }}, 2000);
+      var runId = r.data.run_id;
+      toast('Run started: ' + runId);
+      var jid = currentJourney.id;
+      // Poll the run until it leaves 'running', then refresh the journey
+      // (which loads runs[] into the timeline + screenshots panel).
+      var attempts = 0;
+      var maxAttempts = 60;  // ~3 minutes at 3s interval
+      function poll() {{
+        attempts++;
+        apiGet('/journeys/' + jid + '/runs/' + runId).then(function(d) {{
+          var status = (d.run && d.run.status) || d.status;
+          if (status && status !== 'running') {{
+            toast('Run ' + status, status === 'passed' ? 'success' : 'error');
+            openJourney(jid);
+          }} else if (attempts < maxAttempts) {{
+            setTimeout(poll, 3000);
+          }} else {{
+            toast('Run still running — refresh manually', 'error');
+          }}
+        }}).catch(function() {{
+          if (attempts < maxAttempts) setTimeout(poll, 3000);
+        }});
+      }}
+      setTimeout(poll, 2000);
     }});
   }};
 
@@ -5201,6 +5363,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             journey_id = m.group(1)
             project_id = proj["id"]
+            # Finalize any in-flight runs for this journey so the runs list
+            # reflects up-to-date statuses.
+            with _scenario_runs_lock:
+                pending = [
+                    rid for rid, run in _scenario_runs.items()
+                    if run.get("journey_id") == journey_id
+                    and not run.get("_finalized")
+                ]
+            for rid in pending:
+                _finalize_journey_run(rid)
             try:
                 with _db_lock:
                     conn = get_db()
@@ -5217,6 +5389,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             journey_id = m.group(1)
             run_id = m.group(2)
+            # Lazily finalize if the subprocess just exited.
+            _finalize_journey_run(run_id)
             with _db_lock:
                 conn = get_db()
                 init_db(conn)
@@ -5233,9 +5407,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "SELECT * FROM journey_step_results WHERE run_id = ? ORDER BY sort_order",
                     (run_id,),
                 ).fetchall()
-                run_dict["step_results"] = [dict(sr) for sr in step_results]
+                step_results_list = [dict(sr) for sr in step_results]
                 conn.close()
-            self._send_json(run_dict)
+            self._send_json({"run": run_dict, "step_results": step_results_list})
             return
 
         # Journey API: serve run screenshot
@@ -6461,21 +6635,51 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             scenario_id = manifest["id"]
             run_id = f"{scenario_id}-{int(time.time())}"
+            started_at = datetime.now(timezone.utc).isoformat()
             project_path = proj.get("path", "")
             scenarios_dir = os.path.join(project_path, "tests", "scenarios")
             os.makedirs(scenarios_dir, exist_ok=True)
             with open(os.path.join(scenarios_dir, f"{journey_id}.json"), "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
                 f.write("\n")
+            # Insert journey_runs row up front so the GUI can poll status.
+            # Step results get filled in by _finalize_journey_run on completion.
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                step_rows = conn.execute(
+                    "SELECT id FROM journey_steps "
+                    "WHERE journey_id = ? AND project_id = ? ORDER BY sort_order",
+                    (journey_id, proj["id"]),
+                ).fetchall()
+                conn.execute(
+                    "INSERT INTO journey_runs "
+                    "(id, journey_id, project_id, status, started_at) "
+                    "VALUES (?, ?, ?, 'running', ?)",
+                    (run_id, journey_id, proj["id"], started_at),
+                )
+                for i, srow in enumerate(step_rows):
+                    conn.execute(
+                        "INSERT INTO journey_step_results "
+                        "(run_id, step_id, sort_order, status) "
+                        "VALUES (?, ?, ?, 'pending')",
+                        (run_id, srow["id"], i),
+                    )
+                conn.commit()
+                conn.close()
             cmd = [sys.executable, "-m", "pytest", "tests/test_scenarios.py", "-v", f"--scenario-id={scenario_id}"]
             if backend:
                 cmd.append(f"--backend={backend}")
             env = {**os.environ, "TT_SCENARIO_BASE_URL": f"http://localhost:{SERVER_PORT}/{proj['id']}"}
             proc = subprocess.Popen(cmd, cwd=project_path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             with _scenario_runs_lock:
-                _scenario_runs[run_id] = {"scenario_id": scenario_id, "status": "running", "process": proc,
+                _scenario_runs[run_id] = {
+                    "scenario_id": scenario_id, "status": "running", "process": proc,
                     "output_dir": os.path.join(project_path, ".artifacts", "scenarios"),
-                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "journey_id": journey_id,
+                    "project_id": proj["id"],
+                }
             self._send_json({"run_id": run_id, "status": "running"})
             return
 

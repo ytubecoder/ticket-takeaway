@@ -11,13 +11,16 @@ Starts an HTTP server at http://localhost:PORT (default 8787) that:
   - POST /api/tickets/<id>/move → move ticket between sections
 """
 
+import atexit
 import importlib.util
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -177,6 +180,115 @@ _scenario_runs_lock = threading.Lock()
 # Workflow bounce tracking
 _workflow_runs: dict[str, dict] = {}
 _workflow_runs_lock = threading.Lock()
+
+# Managed CDP Chrome process — spawned on demand when a CDP run is dispatched
+# and nothing is already listening on the debug port. Reused across runs.
+_cdp_chrome_proc: subprocess.Popen | None = None
+_cdp_chrome_lock = threading.Lock()
+_CDP_DEFAULT_ENDPOINT = "http://localhost:9222"
+
+
+def _cdp_endpoint_reachable(endpoint: str, timeout_s: float = 1.5) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"{endpoint}/json/version", timeout=timeout_s
+        ) as r:
+            r.read()
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_cdp_chrome(
+    endpoint: str = _CDP_DEFAULT_ENDPOINT,
+    boot_timeout_s: float = 10.0,
+) -> tuple[bool, str]:
+    """Make sure a CDP-debuggable Chrome is reachable at `endpoint`.
+
+    Returns (ok, detail). If something already answers (the user's own
+    Chrome or our managed instance), returns (True, "external"|"managed").
+    Otherwise spawns a headless Chrome with the debug port open, waits
+    until it answers, and returns (True, "spawned"). Falls through to
+    (False, error_message) if we can't bring one up.
+    """
+    global _cdp_chrome_proc
+
+    if _cdp_endpoint_reachable(endpoint):
+        with _cdp_chrome_lock:
+            if _cdp_chrome_proc and _cdp_chrome_proc.poll() is None:
+                return True, "managed"
+        return True, "external"
+
+    with _cdp_chrome_lock:
+        # Re-check after acquiring the lock — another request may have
+        # spawned Chrome while we were waiting.
+        if _cdp_endpoint_reachable(endpoint):
+            return True, "managed" if _cdp_chrome_proc else "external"
+
+        # Clean up a dead managed process before respawning.
+        if _cdp_chrome_proc and _cdp_chrome_proc.poll() is not None:
+            _cdp_chrome_proc = None
+
+        chrome_bin = (
+            shutil.which("google-chrome")
+            or shutil.which("chromium")
+            or shutil.which("chromium-browser")
+            or shutil.which("chrome")
+        )
+        if not chrome_bin:
+            return False, "No chromium/chrome binary found on PATH."
+
+        port = endpoint.rsplit(":", 1)[-1]
+        profile_dir = os.path.join(tempfile.gettempdir(), "tt-cdp-profile")
+        os.makedirs(profile_dir, exist_ok=True)
+        cmd = [
+            chrome_bin,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={profile_dir}",
+            "--headless=new",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-gpu",
+            "--no-sandbox",
+            "about:blank",
+        ]
+        try:
+            _cdp_chrome_proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except OSError as e:
+            return False, f"Failed to launch Chrome: {e}"
+
+        deadline = time.time() + boot_timeout_s
+        while time.time() < deadline:
+            if _cdp_endpoint_reachable(endpoint):
+                return True, "spawned"
+            if _cdp_chrome_proc.poll() is not None:
+                _cdp_chrome_proc = None
+                return False, "Chrome exited before opening debug port."
+            time.sleep(0.25)
+
+        try:
+            _cdp_chrome_proc.terminate()
+        except Exception:
+            pass
+        _cdp_chrome_proc = None
+        return False, f"Chrome did not open debug port within {boot_timeout_s:.0f}s."
+
+
+@atexit.register
+def _shutdown_cdp_chrome() -> None:
+    proc = _cdp_chrome_proc
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def _finalize_journey_run(run_id: str) -> bool:
@@ -6634,6 +6746,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 400)
                 return
             scenario_id = manifest["id"]
+            # If CDP was requested, make sure a debuggable Chrome is reachable.
+            # Either reuse an existing one (the user's, or a previously
+            # spawned managed instance) or spawn a fresh headless one.
+            if backend == "cdp":
+                ok, detail = _ensure_cdp_chrome()
+                if not ok:
+                    self._send_json({
+                        "error": f"CDP backend requested but no Chrome reachable: {detail}"
+                    }, 503)
+                    return
             run_id = f"{scenario_id}-{int(time.time())}"
             started_at = datetime.now(timezone.utc).isoformat()
             project_path = proj.get("path", "")

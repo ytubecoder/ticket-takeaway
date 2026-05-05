@@ -198,6 +198,42 @@ Add feedbacks.autostart boolean setting so Record button opens widget with ?auto
 - [ ] When disabled (default), widget opens with Start Recording button as before
 - [ ] Setting persists across page reloads
 
+### B-49: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-50: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-51: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-52: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-53: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-54: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-55: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-56: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-57: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-58: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-59: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-60: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
 ## Ideas
 
 ### I-04: Persist filter and search state in localStorage

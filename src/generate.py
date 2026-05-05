@@ -744,6 +744,12 @@ def generate_html(project: Project) -> str:
     bugs_cards = _render_list_rows(list(reversed(by_section["Bugs"])), "bugs", child_tickets, dep_state)
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
+    # Hide the version pill when the project has no package.json (the only
+    # case where cs.version stays at the literal default).
+    version_badge_html = (
+        f'<span class="version-badge">{escape(cs.version)}</span>'
+        if cs.version and cs.version != "v0.0.0" else ""
+    )
 
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
@@ -2843,7 +2849,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   </div>
   <div class="header-row2">
     <span class="project-name">{escape(project_name)}</span>
-    <span class="version-badge">{escape(cs.version)}</span>
+    {version_badge_html}
     <div class="progress-bar-wrap">
       <div class="progress-bar"><div class="progress-fill" style="width: {progress_pct}%"></div></div>
       <span class="progress-pct">{progress_pct}%</span>

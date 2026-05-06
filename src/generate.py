@@ -62,6 +62,9 @@ SVG_ICONS = {
     "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
     "ladle": '<path d="M5 12a7 7 0 0 0 14 0z"/><path d="M12 12V5"/><path d="M9 5h6"/>',
     "git-branch": '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+    "kanban": '<path d="M6 5v11"/><path d="M12 5v6"/><path d="M18 5v14"/><rect x="3" y="3" width="18" height="18" rx="2"/>',
+    "panel-left": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+    "grid": '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
 }
 
 
@@ -72,6 +75,259 @@ def _svg_icon(name: str, size: int = 16, cls: str = "") -> str:
             f'fill="none" stroke="currentColor" stroke-width="2" '
             f'stroke-linecap="round" stroke-linejoin="round">'
             f'{SVG_ICONS.get(name, "")}</svg>')
+
+
+# ---------------------------------------------------------------------------
+# Shared left navigation rail
+# ---------------------------------------------------------------------------
+# Single source of truth for the rail used by the kanban (generate.py) and
+# the fullscreen views (journeys, kitchen) rendered by serve.py. Items:
+#   Kanban / Journeys / Kitchen / Workflows / Settings
+# Workflows + Settings live inside the kanban view (an inline panel + a
+# right-hand drawer respectively); from non-kanban pages we deep-link to
+# /{pid}/?bounce=1 / /{pid}/?settings=1 so the kanban auto-opens them.
+
+def build_nav_rail_css() -> str:
+    """CSS for the left navigation rail. Inject inside any <style> block."""
+    return """
+:root { --rail-w-collapsed: 48px; --rail-w-expanded: 200px; --rail-w: var(--rail-w-collapsed); }
+body.rail-expanded { --rail-w: var(--rail-w-expanded); }
+body { padding-left: var(--rail-w); transition: padding-left 0.18s ease; }
+.nav-rail {
+  position: fixed; top: 0; left: 0; bottom: 0; width: var(--rail-w);
+  background: var(--bg-surface); border-right: 1px solid var(--border-subtle);
+  display: flex; flex-direction: column; z-index: 90;
+  transition: width 0.18s ease; overflow: hidden;
+}
+.nav-rail-toggle {
+  display: flex; align-items: center; gap: 10px;
+  height: 44px; padding: 0 14px; flex-shrink: 0;
+  background: none; border: none; border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary); cursor: pointer; font: inherit; text-align: left;
+}
+.nav-rail-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.nav-rail-toggle svg { flex-shrink: 0; width: 18px; height: 18px; }
+.nav-rail-brand { font-size: 12px; font-weight: 700; letter-spacing: -0.2px; white-space: nowrap; opacity: 0; transition: opacity 0.12s; }
+body.rail-expanded .nav-rail-brand { opacity: 1; }
+.nav-rail-items { display: flex; flex-direction: column; gap: 2px; padding: 8px 6px; }
+.nav-rail-divider { height: 1px; background: var(--border-subtle); margin: 6px 8px; }
+.nav-rail-item {
+  display: flex; align-items: center; gap: 12px;
+  height: 36px; padding: 0 10px; border-radius: 6px;
+  color: var(--text-secondary); text-decoration: none; cursor: pointer;
+  background: none; border: none; font: inherit; text-align: left; width: 100%;
+  white-space: nowrap; overflow: hidden;
+}
+.nav-rail-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-rail-item.active { background: var(--bg-hover); color: var(--text-primary); }
+.nav-rail-item.active::before {
+  content: ''; position: absolute; left: 0; width: 3px; height: 22px;
+  background: var(--accent); border-radius: 0 2px 2px 0;
+}
+.nav-rail-item { position: relative; }
+.nav-rail-item svg { flex-shrink: 0; width: 16px; height: 16px; }
+.nav-rail-label { font-size: 13px; opacity: 0; transition: opacity 0.12s; pointer-events: none; }
+body.rail-expanded .nav-rail-label { opacity: 1; pointer-events: auto; }
+.nav-rail-spacer { flex: 1; }
+.nav-rail-footer { padding: 10px 14px; border-top: 1px solid var(--border-subtle); }
+.nav-rail-footer .version-badge { display: inline-block; }
+body:not(.rail-expanded) .nav-rail-footer { padding: 10px 0; text-align: center; font-size: 9px; }
+@media (max-width: 600px) { body { padding-left: var(--rail-w-collapsed); } body.rail-expanded { padding-left: var(--rail-w-collapsed); } body.rail-expanded .nav-rail { width: var(--rail-w-expanded); box-shadow: 4px 0 16px rgba(0,0,0,0.4); } }
+.bounce-page { left: var(--rail-w) !important; width: calc(100vw - var(--rail-w)) !important; }
+"""
+
+
+def build_nav_rail_html() -> str:
+    """Empty rail container. The JS in ``build_nav_rail_js()`` owns the
+    structure — derives current view + project from URL, builds items
+    dynamically. Single source of truth lives client-side so changes to
+    the rail propagate to every page automatically."""
+    return '<nav class="nav-rail" id="navRail" aria-label="Primary"></nav>'
+
+
+def build_nav_rail_js() -> str:
+    """JS that builds the rail (icons, items, hrefs), handles collapse
+    persistence, and intercepts inline-toggle clicks on the kanban so
+    Workflows/Settings open the inline panel/drawer instead of navigating."""
+    # Embed the SVG inner contents we need so the JS doesn't need a server
+    # round-trip. Mirrors SVG_ICONS for the rail's six icons.
+    icons_js = {
+        "flame": SVG_ICONS["flame"],
+        "kanban": SVG_ICONS["kanban"],
+        "route": SVG_ICONS["route"],
+        "ladle": SVG_ICONS["ladle"],
+        "settings": SVG_ICONS["settings"],
+        "panel-left": SVG_ICONS["panel-left"],
+        "grid": SVG_ICONS["grid"],
+    }
+    icons_pairs = ",".join(f'"{k}":{json.dumps(v)}' for k, v in icons_js.items())
+    return """
+(function(){
+  var KEY = 'tt-rail-expanded';
+  var LAST_PROJ_KEY = 'tt-last-project';
+  var ICONS = {""" + icons_pairs + """};
+
+  function svg(name, size){
+    size = size || 16;
+    return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none" '
+      + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>';
+  }
+
+  // Reserved first-segment names that are NOT project ids.
+  var RESERVED = {projects:1, api:1, 'static':1, 'favicon.ico':1};
+
+  function getMeta(name){
+    var m = document.querySelector('meta[name="'+name+'"]');
+    return m ? m.getAttribute('content') : '';
+  }
+
+  function detectPidFromPath(){
+    var path = window.location.pathname;
+    var m = path.match(/^\\/([^/]+)(?:\\/|$)/);
+    if (!m) return '';
+    var seg = m[1];
+    if (RESERVED[seg]) return '';
+    return seg;
+  }
+
+  function currentPid(){
+    var meta = getMeta('current-project');
+    if (meta) {
+      try { localStorage.setItem(LAST_PROJ_KEY, meta); } catch(e){}
+      return meta;
+    }
+    var fromPath = detectPidFromPath();
+    if (fromPath) {
+      try { localStorage.setItem(LAST_PROJ_KEY, fromPath); } catch(e){}
+      return fromPath;
+    }
+    return '';
+  }
+
+  // For cross-project pages (Kitchen), use the last per-project page the
+  // user visited. Falls back to the first project from the projects-list
+  // meta if nothing remembered. Final fallback: the project picker.
+  function fallbackPid(){
+    try {
+      var stored = localStorage.getItem(LAST_PROJ_KEY);
+      if (stored) return stored;
+    } catch(e){}
+    var raw = getMeta('projects-list');
+    if (raw) {
+      try {
+        var list = JSON.parse(raw);
+        if (Array.isArray(list) && list.length && list[0].id) return list[0].id;
+      } catch(e){}
+    }
+    return '';
+  }
+
+  function currentView(){
+    var path = window.location.pathname;
+    var qs = new URLSearchParams(window.location.search);
+    if (path === '/projects') return 'projects';
+    if (path === '/kitchen') return 'kitchen';
+    if (path === '/' || path === '') return 'projects';
+    if (/\\/journeys/.test(path)) return 'journeys';
+    if (qs.get('bounce') === '1') return 'workflows';
+    if (qs.get('settings') === '1') return 'settings';
+    return 'kanban';
+  }
+
+  function buildItem(view, href, icon, label, id){
+    var view_now = currentView();
+    var active = view === view_now ? ' active' : '';
+    var idAttr = id ? ' id="'+id+'"' : '';
+    return '<a class="nav-rail-item'+active+'"'+idAttr+' href="'+href+'" '
+      + 'data-view="'+view+'" data-testid="rail-'+view+'" title="'+label+'">'
+      + svg(icon, 16) + '<span class="nav-rail-label">'+label+'</span></a>';
+  }
+
+  function buildRail(){
+    var pid = currentPid() || fallbackPid();
+    var prefix = pid ? '/'+pid : '';
+    // Per-project items: if no project context anywhere, send users to picker.
+    var kanbanHref    = prefix ? prefix+'/'             : '/projects';
+    var journeysHref  = prefix ? prefix+'/journeys'     : '/projects';
+    var workflowsHref = prefix ? prefix+'/?bounce=1'    : '/projects';
+    var settingsHref  = prefix ? prefix+'/?settings=1'  : '/projects';
+
+    return ''
+      + '<button class="nav-rail-toggle" id="navRailToggle" data-testid="rail-toggle" '
+      +   'aria-label="Toggle navigation rail" title="Toggle menu">'
+      +   svg('panel-left', 18)
+      +   '<span class="nav-rail-brand">Ticket Takeaway</span>'
+      + '</button>'
+      + '<div class="nav-rail-items">'
+      +   buildItem('kanban',   kanbanHref,    'kanban',   'Kanban')
+      +   buildItem('journeys', journeysHref,  'route',    'Journeys')
+      +   '<div class="nav-rail-divider"></div>'
+      +   buildItem('projects', '/projects',   'grid',     'Projects')
+      +   buildItem('kitchen',  '/kitchen',    'flame',    'Kitchen')
+      +   buildItem('workflows', workflowsHref,'ladle',    'Workflows', 'railWorkflowsBtn')
+      +   buildItem('settings',  settingsHref, 'settings', 'Settings',  'railSettingsBtn')
+      + '</div>'
+      + '<div class="nav-rail-spacer"></div>'
+      + '<div class="nav-rail-footer"></div>';
+  }
+
+  function mount(){
+    var root = document.getElementById('navRail');
+    if (!root) return;
+    root.innerHTML = buildRail();
+  }
+
+  function applyCollapse(){
+    var expanded = localStorage.getItem(KEY) === '1';
+    document.body.classList.toggle('rail-expanded', expanded);
+  }
+  applyCollapse();
+
+  // Wire interactions once at document level — survives DOM rebuilds.
+  document.addEventListener('click', function(e){
+    var t = e.target.closest('#navRailToggle');
+    if (t) {
+      e.preventDefault();
+      var on = !document.body.classList.contains('rail-expanded');
+      localStorage.setItem(KEY, on ? '1' : '0');
+      applyCollapse();
+      return;
+    }
+    // Kanban only: intercept Workflows/Settings to open inline panel/drawer.
+    var wf = e.target.closest('#railWorkflowsBtn');
+    if (wf && document.getElementById('bounceToggleBtn')) {
+      e.preventDefault();
+      document.getElementById('bounceToggleBtn').click();
+      return;
+    }
+    var st = e.target.closest('#railSettingsBtn');
+    if (st && document.getElementById('settingsToggleBtn')) {
+      e.preventDefault();
+      document.getElementById('settingsToggleBtn').click();
+      return;
+    }
+  });
+
+  function autoOpen(){
+    var qs = new URLSearchParams(window.location.search);
+    if (qs.get('bounce') === '1') {
+      var b = document.getElementById('bounceToggleBtn');
+      if (b) b.click();
+    } else if (qs.get('settings') === '1') {
+      var s = document.getElementById('settingsToggleBtn');
+      if (s) s.click();
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function(){ mount(); autoOpen(); });
+  } else {
+    mount();
+    autoOpen();
+  }
+})();
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +367,14 @@ class Ticket:
 
     @property
     def automation_for_review(self) -> bool:
-        """True when latest run succeeded AND tests readiness flag is set."""
+        """True when latest run succeeded AND there is at least one criterion.
+
+        The S/T readiness flags were collapsed into acceptance_criteria
+        (migration 15); criteria are now the bar.
+        """
         return (
             self.latest_run_status == "succeeded"
-            and "tests" in self.readiness_flags
+            and len(self.acceptance_criteria) > 0
         )
 
 
@@ -751,6 +1011,12 @@ def generate_html(project: Project) -> str:
         if cs.version and cs.version != "v0.0.0" else ""
     )
 
+    # Pre-computed nav rail fragments (must be built outside the f-string
+    # because build_nav_rail_css() returns plain CSS with { } characters).
+    _rail_css = build_nav_rail_css()
+    _rail_html = build_nav_rail_html()
+    _rail_js = build_nav_rail_js()
+
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
     _icon_journeys = _svg_icon("route", 14)
@@ -760,8 +1026,6 @@ def generate_html(project: Project) -> str:
     _dctrs_icons = ''.join([
         f'<button class="readiness-dot" data-flag="description" title="Description" aria-label="Description">{_svg_icon("file-text", 12)}</button>',
         f'<button class="readiness-dot" data-flag="criteria" title="Criteria" aria-label="Criteria">{_svg_icon("check-square", 12)}</button>',
-        f'<button class="readiness-dot" data-flag="smoke" title="Smoke" aria-label="Smoke">{_svg_icon("flame", 12)}</button>',
-        f'<button class="readiness-dot" data-flag="tests" title="Tests" aria-label="Tests">{_svg_icon("flask-conical", 12)}</button>',
         f'<button class="readiness-dot" data-flag="reviewed" title="Learnings" aria-label="Learnings">{_svg_icon("eye", 12)}</button>',
     ])
 
@@ -2835,6 +3099,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 </style>
 </head>
 <body>
+{_rail_html}
 
 <div class="header-block">
   <div class="header-row1">
@@ -2888,7 +3153,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         <label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;"><input type="checkbox" data-na-sub="cancelled" checked> Cancelled</label>
       </div>
     </span>
-    <button class="filter-btn" data-filter="for-review-auto"  data-group="kitchen" data-testid="for-review-auto-chip" title="Latest run succeeded and tests flag set">For Review (auto) <span class="count">{count_for_review_auto}</span></button>
+    <button class="filter-btn" data-filter="for-review-auto"  data-group="kitchen" data-testid="for-review-auto-chip" title="Latest run succeeded and at least one acceptance criterion present">For Review (auto) <span class="count">{count_for_review_auto}</span></button>
   </span>
   <span class="filter-divider"></span>
 {_tag_filter_html}  <span class="filter-divider"></span>
@@ -2905,9 +3170,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       <div id="branchesPanelBody"></div>
     </div>
   </div>
-  <button class="settings-toggle" id="journeysBtn" data-testid="journeys-btn" title="Journeys" onclick="window.__goJourneys()">{_icon_journeys}</button>
-  <button class="settings-toggle" id="bounceToggleBtn" data-testid="bounce-toggle" title="Workflows &amp; Agents">{_icon_bounce}</button>
-  <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings">{_icon_settings}</button>
+  <button class="settings-toggle" id="bounceToggleBtn" data-testid="bounce-toggle" title="Workflows &amp; Agents" style="display:none">{_icon_bounce}</button>
+  <button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings" style="display:none">{_icon_settings}</button>
   <button class="new-ticket-btn" id="newTicketBtn" data-testid="new-ticket-btn">+ New</button>
   <div class="new-ticket-panel" id="newTicketPanel" style="display:none">
     <div class="new-ticket-quick">
@@ -3081,14 +3345,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
 </div>
 
-<!-- Full-page Kitchen UI (three-tab: Workflows / Agents / Live) -->
+<!-- Full-page Workflows & Agents view (live-runs view moved to /Kitchen) -->
 <div class="bounce-page" id="bounce-page">
   <header class="bounce-header">
-    <h2><span id="bounce-tab-title">Kitchen</span></h2>
+    <h2><span id="bounce-tab-title">Workflows</span></h2>
     <div class="bounce-tabs">
       <button class="bounce-tab active" data-tab="workflows" id="bounceTabWorkflows">Workflows</button>
       <button class="bounce-tab" data-tab="agents" id="bounceTabAgents">Agents</button>
-      <button class="bounce-tab" data-tab="live" id="bounceTabLive">Live</button>
     </div>
     <button class="bounce-back-btn" id="bounceCloseBtn">&larr; Back</button>
   </header>
@@ -3158,46 +3421,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     </div>
   </div>
 
-  <!-- Live tab -->
-  <div class="bounce-tab-panel" data-tab="live" id="bounceTabPanelLive" hidden>
-    <div class="live-topbar">
-      <button class="live-pause-btn" id="livePauseBtn">Pause Kitchen</button>
-      <span class="live-heartbeat" id="liveHeartbeat">Last refreshed: —</span>
-    </div>
-    <!-- Non-live zone: tickets opted in to auto but currently paused. -->
-    <div class="live-paused-zone" id="liveLanePaused">
-      <div class="live-lane-title">Paused (auto on, not dispatching)</div>
-      <div class="live-empty" id="liveEmptyPaused">No paused tickets</div>
-      <div class="live-paused-list" id="livePausedList"></div>
-    </div>
-    <div class="live-section-divider">Live runs</div>
-    <div class="live-lanes">
-      <div class="live-lane" id="liveLaneQueued">
-        <div class="live-lane-title">Queued</div>
-        <div class="live-empty" id="liveEmptyQueued">No queued runs</div>
-      </div>
-      <div class="live-lane" id="liveLaneRunning">
-        <div class="live-lane-title">Running</div>
-        <div class="live-empty" id="liveEmptyRunning">No running runs</div>
-      </div>
-      <div class="live-lane" id="liveLaneInput">
-        <div class="live-lane-title">Needs Input</div>
-        <div class="live-empty" id="liveEmptyInput">None waiting</div>
-      </div>
-      <div class="live-lane" id="liveLaneRecent">
-        <div class="live-lane-title">Recent (24h)</div>
-        <div class="live-empty" id="liveEmptyRecent">No recent runs</div>
-      </div>
-    </div>
-    <!-- Run detail side panel -->
-    <div class="live-detail-panel hidden" id="liveDetailPanel">
-      <div class="live-detail-header">
-        <h3 id="liveDetailTitle">Run detail</h3>
-        <button class="live-detail-close" id="liveDetailClose" title="Close">&times;</button>
-      </div>
-      <div class="live-detail-body" id="liveDetailBody"></div>
-    </div>
-  </div>
 </div>
 
 <!-- Eligibility Inspector modal -->
@@ -3850,9 +4073,9 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         if (card) setCardGateChecking(card, false);
         // Find first needs-work category to focus on
         var cats = data.categories || {{}};
-        var catRMap = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke' }};
+        var catRMap = {{ D:'description', C:'criteria', L:'reviewed' }};
         var focusTab = 'description';
-        ['D','C','T','R','S'].forEach(function(k) {{
+        ['D','C','L'].forEach(function(k) {{
           if (cats[k] && cats[k].status === 'needs-work' && focusTab === 'description') {{
             focusTab = catRMap[k];
           }}
@@ -4710,48 +4933,14 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         <input type="text" class="criteria-add-input" placeholder="+ Add criterion and press Enter">
       </div>
 
-      <!-- Smoke -->
-      <div class="detail-section" data-section="smoke" id="section-smoke">
-        <div class="detail-section-header">
-          <h3><span class="section-flag" data-cat="S">S</span> Smoke</h3>
-          <button class="section-assess-btn" data-cat="S">Assess</button>
-        </div>
-        <div class="detail-assess-loading hidden" data-cat-loading="S">Assessing smoke tests...</div>
-        <div class="detail-assessment hidden" data-cat-result="S"></div>
-        <ul class="detail-criteria-list" data-list-field="smoke"></ul>
-        <input type="text" class="criteria-add-input" data-list-add="smoke" placeholder="+ Add smoke test and press Enter">
-      </div>
-
-      <!-- Tests -->
-      <div class="detail-section" data-section="tests" id="section-tests">
-        <div class="detail-section-header">
-          <h3><span class="section-flag" data-cat="T">T</span> Tests</h3>
-          <button class="section-assess-btn" data-cat="T">Assess</button>
-        </div>
-        <div class="detail-assess-loading hidden" data-cat-loading="T">Assessing tests...</div>
-        <div class="detail-assessment hidden" data-cat-result="T"></div>
-        <ul class="detail-criteria-list" data-list-field="tests"></ul>
-        <input type="text" class="criteria-add-input" data-list-add="tests" placeholder="+ Add test item and press Enter">
-        <!-- Kitchen no-test-required bypass (M1a) -->
-        <div class="ntr-block" data-testid="ntr-block">
-          <label class="ntr-checkbox-row">
-            <input type="checkbox" id="ntr-checkbox" data-testid="ntr-checkbox">
-            <span>No tests required</span>
-          </label>
-          <textarea id="ntr-note" data-testid="ntr-note" class="ntr-note hidden"
-                    placeholder="Why no tests? (required — e.g. 'pure docs change', 'config-only')"
-                    rows="2"></textarea>
-        </div>
-      </div>
-
       <!-- Learnings -->
       <div class="detail-section" data-section="reviewed" id="section-reviewed">
         <div class="detail-section-header">
-          <h3><span class="section-flag" data-cat="R">L</span> Learnings / Sync</h3>
-          <button class="section-assess-btn learnings-generate-btn" data-cat="R" data-action="generate-learnings">Generate</button>
+          <h3><span class="section-flag" data-cat="L">L</span> Learnings / Sync</h3>
+          <button class="section-assess-btn learnings-generate-btn" data-cat="L" data-action="generate-learnings">Generate</button>
         </div>
-        <div class="detail-assess-loading hidden" data-cat-loading="R">Generating learnings...</div>
-        <div class="detail-assessment hidden" data-cat-result="R"></div>
+        <div class="detail-assess-loading hidden" data-cat-loading="L">Generating learnings...</div>
+        <div class="detail-assessment hidden" data-cat-result="L"></div>
         <textarea class="detail-editor" data-field="reviewed" placeholder="Learnings, sync notes, and decisions captured along the way..."></textarea>
       </div>
 
@@ -4810,10 +4999,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   var _editingField = null;
   var _assessCache = {{}};  // keyed by ticketId:gate:section or ticketId:cat:D/C/T/R/S
 
-  var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', tests:'Tests', reviewed:'Learnings', smoke:'Smoke Tests' }};
-  var CAT_MAP = {{ description:'D', criteria:'C', tests:'T', reviewed:'R', smoke:'S' }};
-  var CAT_RMAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke', L:'reviewed' }};
-  var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', tests: 'T', reviewed: 'R', smoke: 'S' }};
+  var FLAG_NAMES = {{ description:'Description', criteria:'Acceptance Criteria', reviewed:'Learnings' }};
+  var CAT_MAP = {{ description:'D', criteria:'C', reviewed:'L' }};
+  var CAT_RMAP = {{ D:'description', C:'criteria', L:'reviewed', R:'reviewed' }};
+  var TAB_COMPAT = {{ properties: null, description: 'D', criteria: 'C', reviewed: 'L' }};
   var PRIORITY_CYCLE = ['high', 'medium', 'low'];
   var STATUS_OPTIONS = {json.dumps(STATUSES)};
 
@@ -5631,12 +5820,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
             prompt: function(t) {{ return 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.'; }} }},
       C: {{ icon: '\\u2611', label: 'Add Criteria',
             prompt: function(t) {{ return 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
-      T: {{ icon: '\U0001F52C', label: 'Run Tests',
-            prompt: function(t) {{ return 'Write test definitions for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }} }},
+      L: {{ icon: '\U0001F441', label: 'Start Learnings',
+            prompt: function(t) {{ return 'Capture learnings, decisions, and follow-ups for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
       R: {{ icon: '\U0001F441', label: 'Start Learnings',
-            prompt: function(t) {{ return 'Perform a code review for ' + t.id + ': "' + t.title + '". Check correctness, edge cases, and document decisions.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
-      S: {{ icon: '\U0001F4A8', label: 'Run Smoke',
-            prompt: function(t) {{ return 'Create a smoke test checklist for ' + t.id + ': "' + t.title + '". List manual verification steps to confirm the feature works end-to-end.\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'); }} }}
+            prompt: function(t) {{ return 'Perform a code review for ' + t.id + ': "' + t.title + '". Check correctness, edge cases, and document decisions.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }}
     }};
     var actionDef = actionDefs[cat];
     if (actionDef && currentData) {{
@@ -5704,7 +5891,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   }}
 
   // Field name mapping from cat key to data-field attribute on textarea
-  var CAT_FIELD_MAP = {{ D:'description', C:'criteria', T:'tests', R:'reviewed', S:'smoke', L:'reviewed' }};
+  var CAT_FIELD_MAP = {{ D:'description', C:'criteria', L:'reviewed', R:'reviewed' }};
 
   function _getFieldContent(cat) {{
     if (cat === 'C') {{
@@ -6467,10 +6654,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     overlay.querySelector('[data-field="description"]').value = data.description || '';
     populateCriteria(data);
     var fl = data.readiness_content || data.readiness_flags || {{}};
-    // Tests and Smoke are list-style fields
-    populateListField('tests', fl['tests'] || '');
-    populateListField('smoke', fl['smoke'] || '');
-    // Reviewed (Learnings) stays as textarea
+    // Tests and Smoke flags were collapsed into acceptance_criteria
+    // (migration 15). Reviewed (Learnings) stays as textarea.
     var reviewEd = overlay.querySelector('[data-field="reviewed"]');
     if(reviewEd) {{ reviewEd.value = fl['reviewed'] || ''; reviewEd._origValue = reviewEd.value; }}
     // Description orig value
@@ -6907,12 +7092,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
                 review: 'Review the description for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)') }},
           C: {{ create: 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'),
                 review: 'Review acceptance criteria for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)') }},
-          T: {{ create: 'Write test definitions for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
-                review: 'Review test definitions for ' + t.id + ': "' + t.title + '".' }},
+	          L: {{ create: 'Generate candidate learnings for ' + t.id + ': "' + t.title + '". Return concise items the human can accept, edit, or reject.\\n\\nDescription:\\n' + (t.description || '(empty)'),
+	                review: 'Generate more candidate learnings for ' + t.id + ': "' + t.title + '". Avoid duplicating existing learnings.\\n\\nCurrent learnings:\\n' + (_getFieldContent('L') || '(empty)') }},
 	          R: {{ create: 'Generate candidate learnings for ' + t.id + ': "' + t.title + '". Return concise items the human can accept, edit, or reject.\\n\\nDescription:\\n' + (t.description || '(empty)'),
-	                review: 'Generate more candidate learnings for ' + t.id + ': "' + t.title + '". Avoid duplicating existing learnings.\\n\\nCurrent learnings:\\n' + (_getFieldContent('R') || '(empty)') }},
-	          S: {{ create: 'Create a smoke test plan for ' + t.id + ': "' + t.title + '".\\n\\nCriteria:\\n' + (t.criteria_text || '(none)'),
-	                review: 'Review smoke test results for ' + t.id + ': "' + t.title + '".' }}
+	                review: 'Generate more candidate learnings for ' + t.id + ': "' + t.title + '". Avoid duplicating existing learnings.\\n\\nCurrent learnings:\\n' + (_getFieldContent('R') || '(empty)') }}
 	        }};
         var p = prompts[cat] && prompts[cat][action];
 	        if (p) navigator.clipboard.writeText(p).then(function(){{ toast('Prompt copied'); }});
@@ -7295,8 +7478,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       else t.classList.remove('active');
     }});
     var titleEl = document.getElementById('bounce-tab-title');
-    var titles = {{ workflows: 'Kitchen — Workflows', agents: 'Kitchen — Agents', live: 'Kitchen — Live' }};
-    if (titleEl) titleEl.textContent = titles[tabName] || 'Kitchen';
+    var titles = {{ workflows: 'Workflows', agents: 'Agents' }};
+    if (titleEl) titleEl.textContent = titles[tabName] || 'Workflows';
     try {{ localStorage.setItem(BOUNCE_TAB_KEY, tabName); }} catch(e) {{}}
     // Load tab-specific content
     if (tabName === 'workflows' && typeof _kwLoadWorkflows === 'function') _kwLoadWorkflows();
@@ -7304,7 +7487,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       if (typeof _spLoadAgents === 'function') _spLoadAgents();
       if (typeof _spLoadWorkflows === 'function') _spLoadWorkflows();
     }}
-    if (tabName === 'live' && typeof _liveRefresh === 'function') _liveRefresh();
   }}
 
   // Wire up tab buttons
@@ -7317,7 +7499,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     document.body.classList.add('bounce-open');
     // Restore last-active tab, or use the provided one
     var activeTab = tab || (function() {{
-      try {{ return localStorage.getItem(BOUNCE_TAB_KEY) || 'workflows'; }} catch(e) {{ return 'workflows'; }}
+      try {{
+        var stored = localStorage.getItem(BOUNCE_TAB_KEY);
+        // Migrate users who had the removed 'live' tab selected.
+        return (stored === 'live' || !stored) ? 'workflows' : stored;
+      }} catch(e) {{ return 'workflows'; }}
     }})();
     switchBounceTab(activeTab);
   }}
@@ -11239,6 +11425,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 </body>
 </html>"""
 
+    # Inject rail CSS and JS outside the f-string (they contain literal { }
+    # that would break f-string parsing if placed inline).
+    html = html.replace("</head>", "<style>" + _rail_css + "</style>\n</head>", 1)
+    html += "<script>" + _rail_js + "</script>"
+
     return html
 
 
@@ -11461,13 +11652,11 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
 
 def _render_readiness_row(t) -> str:
     """Render readiness indicator dots for a ticket."""
-    flag_map = {"D": "description", "C": "criteria", "S": "smoke", "T": "tests", "L": "reviewed"}
-    icon_name_map = {"D": "file-text", "C": "check-square", "S": "flame", "T": "flask-conical", "L": "eye"}
+    flag_map = {"D": "description", "C": "criteria", "L": "reviewed"}
+    icon_name_map = {"D": "file-text", "C": "check-square", "L": "eye"}
     indicators = [
         ("D", "Description", bool(t.description)),
         ("C", "Criteria", len(t.acceptance_criteria) > 0),
-        ("S", "Smoke tested", "smoke" in t.readiness_flags),
-        ("T", "Tests", "tests" in t.readiness_flags),
         ("L", "Learnings", "reviewed" in t.readiness_flags),
     ]
     dots = []

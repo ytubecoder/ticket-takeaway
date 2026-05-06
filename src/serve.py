@@ -1077,7 +1077,7 @@ def _accept_ticket(proj: dict, ticket_id: str) -> bool:
     return True
 
 
-VALID_READINESS_FLAGS = {"tests", "reviewed", "smoke"}
+VALID_READINESS_FLAGS = {"reviewed"}
 
 
 # ---------------------------------------------------------------------------
@@ -1895,6 +1895,24 @@ def _extract_session_id(command: str, stdout: str, stderr: str, started_before: 
     return None
 
 
+def _build_agent_cmd(command: str, args: list, prompt: str) -> list:
+    """Build the full argv for an agent invocation, per-CLI conventions.
+
+    claude: ``claude [args] -p <prompt> --output-format json`` — prompt via -p,
+    JSON-wrapped result on stdout.
+    codex: ``codex [args] <prompt>`` — prompt is positional; no --output-format
+    flag exists. Output is plain text and parsed as raw text by the caller.
+    other: ``<command> [args] <prompt>`` — best-effort positional fallback.
+    """
+    cmd = (command or "").lower()
+    base = [command] + list(args or [])
+    if cmd == "claude":
+        return base + ["-p", prompt, "--output-format", "json"]
+    if cmd == "codex":
+        return base + [prompt]
+    return base + [prompt]
+
+
 # ---------------------------------------------------------------------------
 # End Phase 2 helpers
 # ---------------------------------------------------------------------------
@@ -2022,17 +2040,18 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     session_ids = {}
             prior_sid = session_ids.get(agent_id)
 
+            command_name = agent.get("command", "claude")
             # Build the command — persist_session agents get session resume, others get --no-session-persistence
             if agent.get("persist_session"):
                 if prior_sid:
-                    agent_args = _apply_resume_args(agent.get("command", "claude"), agent_args, prior_sid)
+                    agent_args = _apply_resume_args(command_name, agent_args, prior_sid)
                 # else: first call for this agent in this run — fresh session, no resume flag
             else:
-                if "--no-session-persistence" not in agent_args:
+                # --no-session-persistence is a claude-specific flag; codex/others would reject it
+                if command_name.lower() == "claude" and "--no-session-persistence" not in agent_args:
                     agent_args = agent_args + ["--no-session-persistence"]
 
-            command_name = agent.get("command", "claude")
-            cmd = [command_name] + agent_args + ["-p", prompt, "--output-format", "json"]
+            cmd = _build_agent_cmd(command_name, agent_args, prompt)
 
             # Progress entry so the UI shows which agent is running immediately
             agent_label = agent.get("name", agent_id)
@@ -2068,6 +2087,7 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             try:
                 proc = subprocess.Popen(
                     cmd,
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -2184,10 +2204,11 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     except (json.JSONDecodeError, TypeError):
                         agree_args = []
 
-                    agree_cmd = [primary_agent.get("command", "claude")] + agree_args + ["-p", agree_prompt, "--output-format", "json"]
+                    agree_cmd = _build_agent_cmd(primary_agent.get("command", "claude"), agree_args, agree_prompt)
                     try:
                         agree_result = subprocess.run(
                             agree_cmd, capture_output=True, text=True,
+                            stdin=subprocess.DEVNULL,
                             timeout=WORKFLOW_AGENT_TIMEOUT,
                             cwd=os.path.expanduser(proj.get("path", ".")),
                         )
@@ -2338,13 +2359,11 @@ CURRENT STATE:
 [C] ACCEPTANCE CRITERIA ({checked}/{total} complete):
 {criteria_text}
 
-[T] TESTS: {'SET' if 'tests' in flags else 'NOT SET'}
-[R] REVIEWED: {'SET' if 'reviewed' in flags else 'NOT SET'}
-[S] SMOKE TESTED: {'SET' if 'smoke' in flags else 'NOT SET'}
+[L] LEARNINGS: {'SET' if 'reviewed' in flags else 'NOT SET'}
 
 DEPENDENCIES: {deps_text}
 
-TASK: Analyze readiness for moving to {target_section}. For each category (D,C,T,R,S), assess completeness and suggest specific improvements if needed.
+TASK: Analyze readiness for moving to {target_section}. For each category (D, C, L), assess completeness and suggest specific improvements if needed.
 
 Respond with ONLY valid JSON (no markdown fences, no explanation) matching this exact schema:
 {{
@@ -2353,9 +2372,7 @@ Respond with ONLY valid JSON (no markdown fences, no explanation) matching this 
   "categories": {{
     "D": {{ "status": "ok" or "needs-work", "current_summary": "brief state", "suggestion": "improvement or null" }},
     "C": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null", "add_criteria": ["new criterion 1"] }},
-    "T": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null" }},
-    "R": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null" }},
-    "S": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null" }}
+    "L": {{ "status": "ok" or "needs-work", "current_summary": "brief", "suggestion": "improvement or null" }}
   }}
 }}"""
 
@@ -2396,11 +2413,11 @@ def _run_gate_check(proj: dict, ticket_id: str, target_section: str) -> dict:
 
 # --------------- Per-category assessment ---------------
 
-_CAT_LABELS = {"D": "Description", "C": "Acceptance Criteria", "T": "Tests", "R": "Review", "S": "Smoke Tests"}
+_CAT_LABELS = {"D": "Description", "C": "Acceptance Criteria", "L": "Learnings"}
 
 
 def _build_category_prompt(ticket: dict, category: str, action: str) -> str:
-    """Build a focused prompt for a single DCTRS category assessment."""
+    """Build a focused prompt for a single DCL category assessment."""
     cat_label = _CAT_LABELS.get(category, category)
     criteria_lines = []
     for c in ticket.get("acceptance_criteria", []):
@@ -2414,12 +2431,10 @@ def _build_category_prompt(ticket: dict, category: str, action: str) -> str:
         current = ticket.get("description") or "(empty)"
     elif category == "C":
         current = criteria_text
-    elif category == "T":
-        current = (flags.get("tests") if isinstance(flags, dict) else "") or "(empty)"
-    elif category == "R":
+    elif category in ("L", "R"):
+        # Accept either letter — old DCTRS clients may still send "R" for the
+        # learnings/review pane while the new vocab is "L".
         current = (flags.get("reviewed") if isinstance(flags, dict) else "") or "(empty)"
-    elif category == "S":
-        current = (flags.get("smoke") if isinstance(flags, dict) else "") or "(empty)"
     else:
         current = "(unknown category)"
 
@@ -2500,9 +2515,7 @@ def _build_enrich_prompt(ticket: dict, field: str, content: str, action: str) ->
     field_label = {
         "description": "Description",
         "criteria": "Acceptance Criteria",
-        "tests": "Tests",
-        "reviewed": "Review Notes",
-        "smoke": "Smoke Test Plan",
+        "reviewed": "Learnings",
     }.get(field, field)
 
     criteria_lines = []
@@ -2682,8 +2695,6 @@ def _build_learnings_prompt(ticket: dict, current_content: str, evidence: str) -
     criteria_text = "\n".join(criteria_lines) if criteria_lines else "(none)"
 
     flags = ticket.get("readiness_flags", {})
-    tests = flags.get("tests", "") if isinstance(flags, dict) else ""
-    smoke = flags.get("smoke", "") if isinstance(flags, dict) else ""
     existing_learnings = current_content or (flags.get("reviewed", "") if isinstance(flags, dict) else "")
 
     return f"""You are extracting candidate learnings from a Ticket Takeaway ticket.
@@ -2700,12 +2711,6 @@ DESCRIPTION:
 
 ACCEPTANCE CRITERIA:
 {criteria_text}
-
-TEST NOTES:
-{tests or '(empty)'}
-
-SMOKE NOTES:
-{smoke or '(empty)'}
 
 CURRENT LEARNINGS:
 {existing_learnings or '(empty)'}
@@ -3138,6 +3143,10 @@ def _render_journeys_page(proj: dict, port: int, open_journey_id: str = "") -> s
     name = _safe_attr(proj.get("name", proj["id"]))
     api_base = f"http://localhost:{port}/{pid}/api"
 
+    rail_css = gen.build_nav_rail_css()
+    rail_html = gen.build_nav_rail_html()
+    rail_js = gen.build_nav_rail_js()
+
     return f'''<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -3168,9 +3177,7 @@ def _render_journeys_page(proj: dict, port: int, open_journey_id: str = "") -> s
 }}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-.header {{ display: flex; align-items: center; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--border-default); }}
-.header .back {{ color: var(--text-tertiary); text-decoration: none; font-size: 13px; }}
-.header .back:hover {{ color: var(--text-secondary); }}
+.header {{ display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }}
 .header h1 {{ font-size: 16px; font-weight: 600; flex: 1; }}
 .btn {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; border: 1px solid; transition: background 0.15s; }}
 .btn-primary {{ background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.3); color: var(--accent); }}
@@ -3329,10 +3336,11 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   box-shadow: 0 4px 24px rgba(0,0,0,0.5);
 }}
 </style>
+<style>{rail_css}</style>
 </head>
 <body>
+{rail_html}
 <div class="header">
-  <a href="/{pid}" class="back" data-testid="journeys-back">&larr; Board</a>
   <h1>Journeys</h1>
   <div style="display:flex;gap:8px;">
     <button class="btn btn-ghost" onclick="inferJourneys()" data-testid="infer-btn">Infer from Tickets</button>
@@ -4214,6 +4222,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   }});
 }})();
 </script>
+<script>{rail_js}</script>
 </body>
 </html>'''
 
@@ -4335,6 +4344,10 @@ def _aggregate_kitchen_state() -> dict:
 
 def _render_kitchen_view(port: int) -> str:
     """Render the Kitchen landing page — cross-project work surface."""
+    rail_css = gen.build_nav_rail_css()
+    rail_html = gen.build_nav_rail_html()
+    rail_js = gen.build_nav_rail_js()
+
     state = _aggregate_kitchen_state()
     paused = _kitchen.is_paused()
     ready_count = len(state["buckets"]["ready_to_delegate"])
@@ -4432,38 +4445,37 @@ def _render_kitchen_view(port: int) -> str:
 }})();
 </script>
 <style>
-:root[data-theme="dark"] {{
-  --bg: #0a0a0d; --surface: #16161a; --border: #2a2a32;
-  --text: #e8e8ec; --text-2: #9b9ba6; --text-3: #6e6e7a;
-  --accent: #6b9eff;
-}}
-:root[data-theme="light"] {{
-  --bg: #f8f8fb; --surface: #ffffff; --border: #e5e5ec;
-  --text: #1a1a22; --text-2: #5f5f6e; --text-3: #8b8b96;
+:root, [data-theme="dark"] {{
+  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
+  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
+  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
   --accent: #3b82f6;
 }}
+[data-theme="light"] {{
+  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
+  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
+  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
+  --accent: #2563eb;
+}}
 * {{ box-sizing: border-box; }}
-body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; }}
+body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font: 14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; }}
 .kv-page {{ max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }}
-.kv-header {{ display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }}
-.kv-header h1 {{ margin: 0; font-size: 22px; font-weight: 700; }}
-.kv-header-sub {{ color: var(--text-3); font-size: 13px; }}
-.kv-header-nav {{ margin-left: auto; display: flex; gap: 12px; }}
-.kv-header-nav a {{ color: var(--text-2); text-decoration: none; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid transparent; }}
-.kv-header-nav a:hover {{ color: var(--text); border-color: var(--border); }}
+.kv-header {{ display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }}
+.kv-header h1 {{ margin: 0; font-size: 16px; font-weight: 600; }}
+.kv-header-sub {{ color: var(--text-tertiary); font-size: 12px; }}
 .kv-bucket {{ margin-bottom: 22px; }}
 .kv-bucket-header {{ display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }}
-.kv-bucket-header h2 {{ margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); font-weight: 700; }}
-.kv-bucket-header .kv-count {{ font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--surface); color: var(--text-3); border: 1px solid var(--border); }}
-.kv-bucket-desc {{ color: var(--text-3); font-size: 12px; }}
-.kv-bucket-list {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}
-.kv-empty {{ padding: 14px 16px; color: var(--text-3); font-size: 12px; font-style: italic; }}
-.kv-row {{ display: grid; grid-template-columns: 70px 1fr 140px auto auto auto; gap: 10px; padding: 8px 14px; align-items: center; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; font-size: 13px; }}
+.kv-bucket-header h2 {{ margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); font-weight: 700; }}
+.kv-bucket-header .kv-count {{ font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--bg-surface); color: var(--text-tertiary); border: 1px solid var(--border-subtle); }}
+.kv-bucket-desc {{ color: var(--text-tertiary); font-size: 12px; }}
+.kv-bucket-list {{ background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }}
+.kv-empty {{ padding: 14px 16px; color: var(--text-tertiary); font-size: 12px; font-style: italic; }}
+.kv-row {{ display: grid; grid-template-columns: 70px 1fr 140px auto auto auto; gap: 10px; padding: 8px 14px; align-items: center; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); text-decoration: none; font-size: 13px; }}
 .kv-row:last-child {{ border-bottom: 0; }}
 .kv-row:hover {{ background: rgba(255,255,255,0.03); }}
 .kv-tid {{ font-family: ui-monospace, SF Mono, monospace; font-size: 11px; color: var(--accent); opacity: 0.75; }}
 .kv-title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-.kv-proj {{ font-size: 11px; color: var(--text-3); }}
+.kv-proj {{ font-size: 11px; color: var(--text-tertiary); }}
 .kv-mode, .kv-run {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; text-transform: uppercase; }}
 .kv-mode-auto {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
 .kv-mode-held {{ background: rgba(245,158,11,0.18); color: #f59e0b; }}
@@ -4472,38 +4484,37 @@ body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -ap
 .kv-run-needs_input {{ background: rgba(245,158,11,0.22); color: #f59e0b; }}
 .kv-run-failed, .kv-run-stalled {{ background: rgba(239,68,68,0.18); color: #ef4444; }}
 .kv-run-cancelled {{ background: rgba(107,114,128,0.18); color: #9ca3af; }}
-.kv-hold-reason {{ font-size: 11px; color: var(--text-3); font-style: italic; }}
+.kv-hold-reason {{ font-size: 11px; color: var(--text-tertiary); font-style: italic; }}
 .kv-projects-section {{ margin-top: 32px; }}
-.kv-project-row {{ display: grid; grid-template-columns: 1fr repeat(5, 110px); gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; align-items: center; font-size: 13px; }}
+.kv-project-row {{ display: grid; grid-template-columns: 1fr repeat(5, 110px); gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); text-decoration: none; align-items: center; font-size: 13px; }}
 .kv-project-row:last-child {{ border-bottom: 0; }}
 .kv-project-row:hover {{ background: rgba(255,255,255,0.03); }}
 .kv-project-name {{ font-weight: 600; }}
-.kv-project-stat {{ font-size: 11px; color: var(--text-3); text-align: right; }}
-.kv-project-stat strong {{ color: var(--text); margin-left: 4px; font-variant-numeric: tabular-nums; }}
+.kv-project-stat {{ font-size: 11px; color: var(--text-tertiary); text-align: right; }}
+.kv-project-stat strong {{ color: var(--text-primary); margin-left: 4px; font-variant-numeric: tabular-nums; }}
 
 /* Pause/resume control (M6) */
 .kv-pause-banner {{ display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid; }}
-.kv-pause-banner.is-paused {{ background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.40); color: var(--text); }}
-.kv-pause-banner.is-running {{ background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.32); color: var(--text); }}
+.kv-pause-banner.is-paused {{ background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.40); color: var(--text-primary); }}
+.kv-pause-banner.is-running {{ background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.32); color: var(--text-primary); }}
 .kv-pause-pill {{ font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }}
 .kv-pause-banner.is-paused  .kv-pause-pill {{ background: #f59e0b; color: #1a1a22; }}
 .kv-pause-banner.is-running .kv-pause-pill {{ background: #22c55e; color: #1a1a22; }}
-.kv-pause-msg  {{ flex: 1; font-size: 13px; color: var(--text-2); }}
+.kv-pause-msg  {{ flex: 1; font-size: 13px; color: var(--text-secondary); }}
 .kv-pause-btn  {{ background: var(--accent); color: white; border: 0; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }}
 .kv-pause-btn:hover {{ filter: brightness(1.08); }}
-.kv-pause-btn.secondary {{ background: transparent; color: var(--text-2); border: 1px solid var(--border); }}
-.kv-pause-btn.secondary:hover {{ color: var(--text); border-color: var(--text-3); }}
+.kv-pause-btn.secondary {{ background: transparent; color: var(--text-secondary); border: 1px solid var(--border-subtle); }}
+.kv-pause-btn.secondary:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
 </style>
+<style>{rail_css}</style>
 </head>
 <body>
+{rail_html}
+<header class="kv-header">
+  <h1>Kitchen</h1>
+  <span class="kv-header-sub">Cross-project work surface — what needs me, what's running, what's ready.</span>
+</header>
 <div class="kv-page">
-  <header class="kv-header">
-    <h1>Kitchen</h1>
-    <span class="kv-header-sub">Cross-project work surface — what needs me, what's running, what's ready.</span>
-    <nav class="kv-header-nav">
-      <a href="/projects">All Projects</a>
-    </nav>
-  </header>
   <div class="kv-pause-banner {pause_banner_class}" id="kv-pause-banner" data-testid="kv-pause-banner">
     <span class="kv-pause-pill">{pause_pill_label}</span>
     <span class="kv-pause-msg">{pause_msg}</span>
@@ -4533,6 +4544,7 @@ body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -ap
   }});
 }})();
 </script>
+<script>{rail_js}</script>
 </body>
 </html>"""
 
@@ -4580,6 +4592,10 @@ def _render_project_picker(port: int) -> str:
           {'' if path_exists else '<div class="proj-card-warn">Path not found</div>'}
         </a>'''
 
+    rail_css = gen.build_nav_rail_css()
+    rail_html = gen.build_nav_rail_html()
+    rail_js = gen.build_nav_rail_js()
+
     return f'''<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -4609,9 +4625,10 @@ def _render_project_picker(port: int) -> str:
   --accent: #2563eb;
 }}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 32px; }}
-.header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; padding-bottom: 16px; border-bottom: 1px solid var(--border-default); }}
-.header h1 {{ font-size: 20px; font-weight: 600; }}
+body {{ background: var(--bg-page); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+.picker-header {{ display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }}
+.picker-header h1 {{ font-size: 16px; font-weight: 600; }}
+.picker-body {{ padding: 32px; }}
 .header .count {{ color: var(--text-tertiary); font-size: 13px; }}
 .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; max-width: 900px; }}
 .proj-card {{ display: block; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 10px; padding: 20px; text-decoration: none; color: inherit; transition: border-color 0.15s, background 0.15s; }}
@@ -4656,12 +4673,15 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .picker-footer .btn-select:hover {{ background: rgba(59,130,246,0.3); }}
 .picker-footer .btn-select:disabled {{ opacity: 0.4; cursor: not-allowed; }}
 </style>
+<style>{rail_css}</style>
 </head>
 <body>
-<div class="header">
-  <h1>Ticket Takeaway</h1>
+{rail_html}
+<header class="picker-header">
+  <h1>Projects</h1>
   <span class="count">{len(projects)} project{"s" if len(projects) != 1 else ""} registered</span>
-</div>
+</header>
+<div class="picker-body">
 <div class="grid">
   {cards_html}
   <div class="add-card" onclick="document.getElementById('add-form').classList.toggle('visible')" data-testid="add-project-card">
@@ -4851,6 +4871,8 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
   }}
 }})();
 </script>
+</div>
+<script>{rail_js}</script>
 </body>
 </html>'''
 
@@ -4924,13 +4946,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes (proj is None) ────────────────────────────
         if proj is None:
-            # Root: Kitchen — cross-project work surface (M2)
+            # Root: redirect to Projects (the picker is the cross-project landing).
             if remainder == "/" or remainder == "":
+                self.send_response(302)
+                self.send_header("Location", "/projects")
+                self.end_headers()
+                return
+
+            # Kitchen — cross-project work surface (was at "/" prior to /kitchen move)
+            if remainder == "/kitchen":
                 html = _render_kitchen_view(SERVER_PORT)
                 self._send_html(html)
                 return
 
-            # Project picker (relocated from / in M2)
+            # Project picker
             if remainder == "/projects":
                 html = _render_project_picker(SERVER_PORT)
                 self._send_html(html)
@@ -6446,7 +6475,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             content = body.get("content", "")
             action = body.get("action", "review")
 
-            valid_fields = {"description", "criteria", "tests", "reviewed", "smoke"}
+            valid_fields = {"description", "criteria", "reviewed"}
             if field not in valid_fields:
                 self._send_json({"error": f"field must be one of: {', '.join(sorted(valid_fields))}"}, 400)
                 return

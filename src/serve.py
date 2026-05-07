@@ -116,7 +116,7 @@ _PROJECTS_CACHE: dict[str, dict] = {}
 _PROJECTS_CACHE_LOCK = threading.Lock()
 
 # Global route prefixes that must never be captured as project IDs
-_GLOBAL_PREFIXES = frozenset({"api", "settings", "static", "health", "favicon.ico", "index.html", ""})
+_GLOBAL_PREFIXES = frozenset({"api", "settings", "static", "health", "favicon.ico", "index.html", "workflows", ""})
 
 # Reserved project IDs that cannot be registered
 _RESERVED_IDS = frozenset({"api", "settings", "static", "health", "favicon.ico", "index.html"})
@@ -1272,27 +1272,39 @@ def _serialize_workflow(row: dict) -> dict:
 
 
 def _list_workflows(project_id: "str | None" = None) -> list[dict]:
-    """Return workflows owned by a project. Pass `None` for legacy un-scoped behavior
-    (used only by internal callers and tests). Project-scoped queries return only
-    rows whose project_id matches — legacy NULL rows are intentionally excluded.
+    """Return workflows visible to a project (or all workflows if project_id is None).
+
+    Post-migration-16 model: workflows are first-class. A workflow is visible to a
+    project iff it has a row in `workflow_projects` linking the two. Per-project
+    enable state lives on the join row (workflow_projects.enabled), and is folded
+    into the returned dict as `enabled` for the requesting project.
     """
     with _db_lock:
         conn = get_db()
         init_db(conn)
         if project_id is None:
             rows = conn.execute("SELECT * FROM workflows ORDER BY name").fetchall()
+            results = [_serialize_workflow(dict(r)) for r in rows]
         else:
-            rows = conn.execute(
-                "SELECT * FROM workflows WHERE project_id = ? ORDER BY name",
-                (project_id,),
-            ).fetchall()
+            rows = conn.execute("""
+                SELECT w.*, wp.enabled AS link_enabled
+                FROM workflows w
+                INNER JOIN workflow_projects wp ON w.id = wp.workflow_id
+                WHERE wp.project_id = ?
+                ORDER BY w.name
+            """, (project_id,)).fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["enabled"] = d.pop("link_enabled", d.get("enabled", 1))
+                results.append(_serialize_workflow(d))
         conn.close()
-    return [_serialize_workflow(dict(r)) for r in rows]
+    return results
 
 
 def _get_workflow(workflow_id: str, project_id: "str | None" = None) -> dict | None:
     """Return a single workflow by ID. If project_id is provided, only returns
-    the row when project_id matches — legacy NULL rows are not visible.
+    the row when project_id is linked via workflow_projects.
     """
     with _db_lock:
         conn = get_db()
@@ -1300,12 +1312,19 @@ def _get_workflow(workflow_id: str, project_id: "str | None" = None) -> dict | N
         if project_id is None:
             row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
         else:
-            row = conn.execute(
-                "SELECT * FROM workflows WHERE id = ? AND project_id = ?",
-                (workflow_id, project_id),
-            ).fetchone()
+            row = conn.execute("""
+                SELECT w.*, wp.enabled AS link_enabled
+                FROM workflows w
+                INNER JOIN workflow_projects wp ON w.id = wp.workflow_id
+                WHERE w.id = ? AND wp.project_id = ?
+            """, (workflow_id, project_id)).fetchone()
         conn.close()
-    return _serialize_workflow(dict(row)) if row else None
+    if not row:
+        return None
+    d = dict(row)
+    if "link_enabled" in d:
+        d["enabled"] = d.pop("link_enabled", d.get("enabled", 1))
+    return _serialize_workflow(d)
 
 
 def _create_workflow(
@@ -3146,6 +3165,15 @@ def _render_journeys_page(proj: dict, port: int, open_journey_id: str = "") -> s
     rail_css = gen.build_nav_rail_css()
     rail_html = gen.build_nav_rail_html()
     rail_js = gen.build_nav_rail_js()
+    drawer_css = gen.build_settings_drawer_css()
+    drawer_html = gen.build_settings_drawer_html(gen._svg_icon('x', 14))
+    drawer_js = gen.build_settings_drawer_js()
+
+    with _PROJECTS_CACHE_LOCK:
+        projects_meta_json = json.dumps([
+            {"id": p["id"], "name": p.get("name", p["id"])}
+            for p in _PROJECTS_CACHE.values()
+        ])
 
     return f'''<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -3153,6 +3181,9 @@ def _render_journeys_page(proj: dict, port: int, open_journey_id: str = "") -> s
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{name} — Journeys</title>
+<meta name="current-project" content="{pid}">
+<meta name="edit-api" content="{api_base}">
+<meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
 <script>
 (function(){{
   var s=localStorage.getItem('tt-theme');
@@ -3201,13 +3232,24 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .status-dot.skipped {{ background: var(--text-tertiary); }}
 .status-dot.pending {{ background: var(--border-strong); }}
 .content {{ padding: 24px; max-width: 1200px; }}
-.journey-list {{ display: flex; flex-direction: column; gap: 8px; }}
-.journey-card {{ background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }}
-.journey-card:hover {{ border-color: var(--border-strong); background: var(--bg-hover); }}
-.journey-card .top-row {{ display: flex; align-items: center; gap: 10px; }}
-.journey-card .title {{ font-size: 14px; font-weight: 600; flex: 1; }}
-.journey-card .meta {{ display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--text-tertiary); font-size: 11px; }}
+/* Journey list — matches the Workflows + Kitchen list pattern: a single
+   bordered container with thin-bordered rows, no card gaps. */
+.journey-list {{ background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }}
+.journey-card {{
+  display: grid; grid-template-columns: 16px minmax(220px, 1.4fr) minmax(160px, 1fr) auto auto;
+  gap: 12px; padding: 10px 14px; align-items: center; cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle); font-size: 13px;
+  transition: background 0.15s;
+}}
+.journey-card:last-child {{ border-bottom: 0; }}
+.journey-card:hover {{ background: rgba(255,255,255,0.03); }}
+[data-theme="light"] .journey-card:hover {{ background: var(--bg-hover); }}
+.journey-card .top-row {{ display: contents; /* flatten into the parent grid */ }}
+.journey-card .title {{ font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.journey-card .j-id {{ font-family: "SF Mono", Monaco, monospace; font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.journey-card .meta {{ display: flex; align-items: center; gap: 10px; color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }}
 .journey-card .persona {{ color: var(--text-secondary); font-size: 11px; font-style: italic; }}
+.journey-card .meta-sep {{ width: 3px; height: 3px; border-radius: 50%; background: var(--border-default); flex-shrink: 0; }}
 .empty-state {{ text-align: center; padding: 60px 24px; color: var(--text-tertiary); font-size: 13px; }}
 .journey-detail {{ display: none; }}
 .journey-detail.active {{ display: block; }}
@@ -3337,9 +3379,11 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 }}
 </style>
 <style>{rail_css}</style>
+<style>{drawer_css}</style>
 </head>
 <body>
 {rail_html}
+{drawer_html}
 <div class="header">
   <h1>Journeys</h1>
   <div style="display:flex;gap:8px;">
@@ -3688,48 +3732,47 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
         return;
       }}
       journeys.forEach(function(j) {{
-        var card = document.createElement('div');
-        card.className = 'journey-card';
-        card.setAttribute('data-testid', 'journey-card-' + j.id);
-        card.onclick = function() {{ openJourney(j.id); }};
-        // Top row
-        var topRow = document.createElement('div');
-        topRow.className = 'top-row';
+        // Single-row grid: dot · title · id · meta · status badge
+        var row = document.createElement('div');
+        row.className = 'journey-card';
+        row.setAttribute('data-testid', 'journey-card-' + j.id);
+        row.onclick = function() {{ openJourney(j.id); }};
+
         var dot = document.createElement('span');
         dot.className = 'status-dot ' + (j.last_run_status === 'passed' ? 'passed' : j.last_run_status === 'failed' ? 'failed' : 'pending');
+        row.appendChild(dot);
+
         var titleSpan = document.createElement('span');
         titleSpan.className = 'title';
         titleSpan.textContent = j.title;
-        var badge = document.createElement('span');
-        badge.className = 'badge badge-' + j.status;
-        badge.textContent = j.status;
-        topRow.appendChild(dot);
-        topRow.appendChild(titleSpan);
-        topRow.appendChild(badge);
-        card.appendChild(topRow);
-        var idRow = document.createElement('div');
-        idRow.style.cssText = 'font-size:10px;font-family:"SF Mono",Monaco,monospace;color:var(--text-tertiary);margin-top:2px;padding-left:20px;';
-        idRow.textContent = j.id;
-        card.appendChild(idRow);
-        // Meta
-        var meta = document.createElement('div');
+        row.appendChild(titleSpan);
+
+        var idSpan = document.createElement('span');
+        idSpan.className = 'j-id';
+        idSpan.textContent = j.id;
+        row.appendChild(idSpan);
+
+        var meta = document.createElement('span');
         meta.className = 'meta';
         var stepCount = document.createElement('span');
         stepCount.textContent = (j.step_count || 0) + ' steps';
         meta.appendChild(stepCount);
         if (j.persona) {{
-          var persona = document.createElement('span');
-          persona.className = 'persona';
-          persona.textContent = j.persona;
-          meta.appendChild(persona);
+          var sep = document.createElement('span'); sep.className = 'meta-sep'; meta.appendChild(sep);
+          var persona = document.createElement('span'); persona.className = 'persona'; persona.textContent = j.persona; meta.appendChild(persona);
         }}
         if (j.last_run_at) {{
-          var runAt = document.createElement('span');
-          runAt.textContent = 'Last run: ' + timeAgo(j.last_run_at);
-          meta.appendChild(runAt);
+          var sep2 = document.createElement('span'); sep2.className = 'meta-sep'; meta.appendChild(sep2);
+          var runAt = document.createElement('span'); runAt.textContent = 'Last run: ' + timeAgo(j.last_run_at); meta.appendChild(runAt);
         }}
-        card.appendChild(meta);
-        list.appendChild(card);
+        row.appendChild(meta);
+
+        var badge = document.createElement('span');
+        badge.className = 'badge badge-' + j.status;
+        badge.textContent = j.status;
+        row.appendChild(badge);
+
+        list.appendChild(row);
       }});
     }});
   }}
@@ -4223,6 +4266,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 }})();
 </script>
 <script>{rail_js}</script>
+<script>{drawer_js}</script>
 </body>
 </html>'''
 
@@ -4347,6 +4391,9 @@ def _render_kitchen_view(port: int) -> str:
     rail_css = gen.build_nav_rail_css()
     rail_html = gen.build_nav_rail_html()
     rail_js = gen.build_nav_rail_js()
+    drawer_css = gen.build_settings_drawer_css()
+    drawer_html = gen.build_settings_drawer_html(gen._svg_icon('x', 14))
+    drawer_js = gen.build_settings_drawer_js()
 
     state = _aggregate_kitchen_state()
     paused = _kitchen.is_paused()
@@ -4394,7 +4441,7 @@ def _render_kitchen_view(port: int) -> str:
                 if it["pause_reason"] else ""
             )
             rows.append(
-                f'<a class="kv-row" href="{ticket_url}">'
+                f'<a class="kv-row" href="{ticket_url}" data-project="{_safe_attr(it["project_id"])}">'
                 f'<span class="kv-tid">{_html.escape(it["ticket_id"])}</span>'
                 f'<span class="kv-title">{_html.escape(it["title"])}</span>'
                 f'<span class="kv-proj">{_html.escape(it["project_name"])}</span>'
@@ -4416,20 +4463,29 @@ def _render_kitchen_view(port: int) -> str:
             f'</section>'
         )
 
-    project_rows = []
-    for p in state["projects"]:
-        c = p["counts"]
-        project_rows.append(
-            f'<a class="kv-project-row" href="/{p["id"]}/">'
-            f'  <span class="kv-project-name">{_html.escape(p["name"])}</span>'
-            f'  <span class="kv-project-stat">WIP <strong>{c["wip"]}</strong></span>'
-            f'  <span class="kv-project-stat">Review <strong>{c["review"]}</strong></span>'
-            f'  <span class="kv-project-stat">Blocked <strong>{c["blocked"]}</strong></span>'
-            f'  <span class="kv-project-stat">Running <strong>{c["running"]}</strong></span>'
-            f'  <span class="kv-project-stat">Needs Me <strong>{c["needs_me"]}</strong></span>'
-            f'</a>'
+    # Per-project kitchen-item totals (one item per subject across all buckets).
+    proj_kv_counts: dict[str, int] = {}
+    for bucket_items in state["buckets"].values():
+        for it in bucket_items:
+            pid = it["project_id"]
+            proj_kv_counts[pid] = proj_kv_counts.get(pid, 0) + 1
+    total_kv_items = sum(proj_kv_counts.values())
+
+    project_filter_chips = (
+        f'<button class="kv-proj-filter active" data-project="" data-testid="kv-proj-all">'
+        f'All <span class="kv-num">{total_kv_items}</span></button>'
+        + "".join(
+            f'<button class="kv-proj-filter" data-project="{_safe_attr(p["id"])}" '
+            f'data-testid="kv-proj-{_safe_attr(p["id"])}">'
+            f'{_html.escape(p["name"])} <span class="kv-num">{proj_kv_counts.get(p["id"], 0)}</span>'
+            f'</button>'
+            for p in state["projects"]
         )
-    projects_html = "".join(project_rows) or '<div class="kv-empty">No projects registered. Add one from <a href="/projects">the project picker</a>.</div>'
+    )
+
+    projects_meta_json = json.dumps([
+        {"id": p["id"], "name": p.get("name", p["id"])} for p in state["projects"]
+    ])
 
     return f"""<!doctype html>
 <html data-theme="dark">
@@ -4437,6 +4493,7 @@ def _render_kitchen_view(port: int) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kitchen — Ticket Takeaway</title>
+<meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
 <script>
 (function () {{
   var t = localStorage.getItem('tt-theme') || 'system';
@@ -4485,13 +4542,19 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .kv-run-failed, .kv-run-stalled {{ background: rgba(239,68,68,0.18); color: #ef4444; }}
 .kv-run-cancelled {{ background: rgba(107,114,128,0.18); color: #9ca3af; }}
 .kv-hold-reason {{ font-size: 11px; color: var(--text-tertiary); font-style: italic; }}
-.kv-projects-section {{ margin-top: 32px; }}
-.kv-project-row {{ display: grid; grid-template-columns: 1fr repeat(5, 110px); gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); text-decoration: none; align-items: center; font-size: 13px; }}
-.kv-project-row:last-child {{ border-bottom: 0; }}
-.kv-project-row:hover {{ background: rgba(255,255,255,0.03); }}
-.kv-project-name {{ font-weight: 600; }}
-.kv-project-stat {{ font-size: 11px; color: var(--text-tertiary); text-align: right; }}
-.kv-project-stat strong {{ color: var(--text-primary); margin-left: 4px; font-variant-numeric: tabular-nums; }}
+/* Project filter chips at the top of the page */
+.kv-toolbar {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 18px; }}
+.kv-toolbar-label {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-tertiary); margin-right: 6px; }}
+.kv-proj-filter {{
+  font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  background: var(--bg-surface); border: 1px solid var(--border-subtle); color: var(--text-secondary);
+  font-family: inherit; display: inline-flex; align-items: center; gap: 6px;
+}}
+.kv-proj-filter:hover {{ color: var(--text-primary); border-color: var(--border-default); }}
+.kv-proj-filter.active {{ background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.45); color: var(--accent); }}
+.kv-proj-filter .kv-num {{ font-size: 10px; padding: 0 6px; border-radius: 8px; background: rgba(255,255,255,0.06); font-variant-numeric: tabular-nums; }}
+.kv-proj-filter.active .kv-num {{ background: rgba(59,130,246,0.25); color: var(--accent); }}
+.kv-bucket.kv-bucket-empty {{ display: none; }}
 
 /* Pause/resume control (M6) */
 .kv-pause-banner {{ display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid; }}
@@ -4507,9 +4570,11 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .kv-pause-btn.secondary:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
 </style>
 <style>{rail_css}</style>
+<style>{drawer_css}</style>
 </head>
 <body>
 {rail_html}
+{drawer_html}
 <header class="kv-header">
   <h1>Kitchen</h1>
   <span class="kv-header-sub">Cross-project work surface — what needs me, what's running, what's ready.</span>
@@ -4520,20 +4585,16 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
     <span class="kv-pause-msg">{pause_msg}</span>
     <button class="kv-pause-btn" id="kv-pause-btn" data-testid="kv-pause-btn">{pause_btn_label}</button>
   </div>
+  <div class="kv-toolbar" data-testid="kv-project-filter">
+    <span class="kv-toolbar-label">Projects</span>
+    {project_filter_chips}
+  </div>
   {sections_html}
-  <section class="kv-projects-section">
-    <header class="kv-bucket-header">
-      <h2>Projects</h2>
-      <span class="kv-bucket-desc">Per-project health snapshot.</span>
-    </header>
-    <div class="kv-bucket-list">{projects_html}</div>
-  </section>
 </div>
 <script>
 (function() {{
   var btn = document.getElementById('kv-pause-btn');
-  if (!btn) return;
-  btn.addEventListener('click', function() {{
+  if (btn) btn.addEventListener('click', function() {{
     var paused = document.getElementById('kv-pause-banner').classList.contains('is-paused');
     var url = '/api/kitchen/' + (paused ? 'resume' : 'pause');
     btn.disabled = true;
@@ -4542,9 +4603,720 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       .then(function() {{ window.location.reload(); }})
       .catch(function() {{ btn.disabled = false; }});
   }});
+
+  // Project filter — multi-select chips. Empty selection = show all.
+  var selection = new Set();
+
+  function applyFilter() {{
+    document.querySelectorAll('.kv-row').forEach(function(row) {{
+      var pid = row.getAttribute('data-project') || '';
+      var ok = (selection.size === 0) || selection.has(pid);
+      row.style.display = ok ? '' : 'none';
+    }});
+    // Hide buckets that have no visible rows; update visible count.
+    document.querySelectorAll('.kv-bucket').forEach(function(bucket) {{
+      var rows = bucket.querySelectorAll('.kv-row');
+      var visible = 0;
+      rows.forEach(function(r) {{ if (r.style.display !== 'none') visible++; }});
+      var countEl = bucket.querySelector('.kv-count');
+      if (countEl) countEl.textContent = visible;
+      var hasAny = rows.length > 0;
+      // When filtering hides every row in a bucket: collapse it. If the
+      // bucket was empty to begin with, leave the "Nothing here." line.
+      bucket.classList.toggle('kv-bucket-empty', hasAny && visible === 0);
+    }});
+  }}
+
+  document.querySelectorAll('.kv-proj-filter').forEach(function(chip) {{
+    chip.addEventListener('click', function() {{
+      var pid = chip.getAttribute('data-project') || '';
+      if (pid === '') {{
+        selection.clear();
+        document.querySelectorAll('.kv-proj-filter').forEach(function(c) {{ c.classList.remove('active'); }});
+        chip.classList.add('active');
+      }} else {{
+        if (selection.has(pid)) {{
+          selection.delete(pid);
+          chip.classList.remove('active');
+        }} else {{
+          selection.add(pid);
+          chip.classList.add('active');
+        }}
+        var allChip = document.querySelector('.kv-proj-filter[data-project=""]');
+        if (allChip) allChip.classList.toggle('active', selection.size === 0);
+      }}
+      applyFilter();
+    }});
+  }});
 }})();
 </script>
 <script>{rail_js}</script>
+<script>{drawer_js}</script>
+</body>
+</html>"""
+
+
+def _aggregate_workflows_state() -> dict:
+    """Return one row per workflow with the projects it's linked to.
+
+    Post-migration-16 model: workflows are canonical singletons. Each row
+    carries a `links` list — one entry per project the workflow applies to,
+    with that project's individual enabled flag.
+    """
+    with _PROJECTS_CACHE_LOCK:
+        projects = list(_PROJECTS_CACHE.values())
+    proj_name_by_id = {p["id"]: p.get("name", p["id"]) for p in projects}
+
+    workflows: list[dict] = []
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        rows = conn.execute("SELECT * FROM workflows ORDER BY system DESC, name").fetchall()
+        run_count_rows = conn.execute(
+            "SELECT workflow_id, COUNT(*) AS cnt FROM workflow_runs GROUP BY workflow_id"
+        ).fetchall()
+        link_rows = conn.execute(
+            "SELECT workflow_id, project_id, enabled FROM workflow_projects ORDER BY project_id"
+        ).fetchall()
+        conn.close()
+    runs_by_wf = {r["workflow_id"]: r["cnt"] for r in run_count_rows}
+    links_by_wf: dict[str, list[dict]] = {}
+    for lr in link_rows:
+        links_by_wf.setdefault(lr["workflow_id"], []).append({
+            "project_id": lr["project_id"],
+            "project_name": proj_name_by_id.get(lr["project_id"], lr["project_id"]),
+            "enabled": int(lr["enabled"]),
+        })
+
+    total_projects = len(projects)
+    for row in rows:
+        d = _serialize_workflow(dict(row))
+        d["scope"] = "system" if d.get("system") else "user"
+        d["scope_label"] = "System" if d.get("system") else "User"
+        d["links"] = links_by_wf.get(d["id"], [])
+        d["link_count"] = len(d["links"])
+        d["enabled_link_count"] = sum(1 for l in d["links"] if l["enabled"])
+        d["applies_to_all"] = d["link_count"] == total_projects and total_projects > 0
+        d["run_count"] = runs_by_wf.get(d["id"], 0)
+        d["step_count"] = len(d.get("steps") or [])
+        workflows.append(d)
+
+    return {
+        "workflows": workflows,
+        "projects": [{"id": p["id"], "name": p.get("name", p["id"])} for p in projects],
+    }
+
+
+def _render_workflows_view(port: int) -> str:
+    """Render the global Workflows page — two tabs (Workflows | Agents) with inline edit."""
+    rail_css = gen.build_nav_rail_css()
+    rail_html = gen.build_nav_rail_html()
+    rail_js = gen.build_nav_rail_js()
+    drawer_css = gen.build_settings_drawer_css()
+    drawer_html = gen.build_settings_drawer_html(gen._svg_icon('x', 14))
+    drawer_js = gen.build_settings_drawer_js()
+
+    state = _aggregate_workflows_state()
+    workflows = state["workflows"]
+    projects = state["projects"]
+    projects_meta_json = json.dumps(projects)
+    agents = _list_workflow_agents()
+
+    def _scope_badge(scope: str, label: str) -> str:
+        cls = {"system": "wf-scope-system", "user": "wf-scope-user"}.get(scope, "wf-scope-user")
+        return f'<span class="wf-scope-badge {cls}">{_html.escape(label)}</span>'
+
+    def _applies_to_html(wf: dict) -> str:
+        links = wf.get("links") or []
+        if not links:
+            return '<span class="wf-applies-empty">no projects</span>'
+        if wf.get("applies_to_all"):
+            return f'<span class="wf-applies-all">All {len(links)} projects</span>'
+        pills = []
+        for l in links[:3]:
+            cls = "wf-applies-pill" + ("" if l["enabled"] else " disabled")
+            title = "enabled" if l["enabled"] else "disabled in this project"
+            pills.append(
+                f'<span class="{cls}" title="{title}">{_html.escape(l["project_name"])}</span>'
+            )
+        if len(links) > 3:
+            pills.append(f'<span class="wf-applies-more">+{len(links) - 3}</span>')
+        return "".join(pills)
+
+    # Resolve which project paths are actually present on this machine — used to
+    # pick a "healthy" target for the per-workflow advanced editor link. Without
+    # this, workflows linked to macOS-only projects on a WSL session (or vice
+    # versa) send the user to a kanban whose dashboard doesn't exist and 404s.
+    with _PROJECTS_CACHE_LOCK:
+        cache_snapshot = list(_PROJECTS_CACHE.values())
+    healthy_pids = {
+        p["id"] for p in cache_snapshot
+        if p.get("path") and Path(os.path.expanduser(p["path"])).is_dir()
+    }
+
+    def _pick_manage_target(wf: dict) -> str:
+        link_pids = [l["project_id"] for l in (wf.get("links") or [])]
+        for pid in link_pids:
+            if pid in healthy_pids:
+                return pid
+        if link_pids:
+            return link_pids[0]
+        for p in projects:
+            if p["id"] in healthy_pids:
+                return p["id"]
+        return projects[0]["id"] if projects else ""
+
+    if not workflows:
+        rows_html = '<div class="wf-empty">No workflows yet. Open a project and add one from the Workflows panel.</div>'
+    else:
+        row_parts = []
+        for wf in workflows:
+            scope_html = _scope_badge(wf["scope"], wf["scope_label"])
+            applies_html = _applies_to_html(wf)
+            target_pid = _pick_manage_target(wf)
+            advanced_href = f"/{_safe_attr(target_pid)}/kanban?bounce=1" if target_pid else ""
+            desc = wf.get("description") or ""
+            desc_html = (
+                f'<div class="wf-desc">{_html.escape(desc)}</div>' if desc else ""
+            )
+            linked_pids = ",".join(l["project_id"] for l in (wf.get("links") or []))
+            wf_id = wf["id"]
+            wf_id_attr = _safe_attr(wf_id)
+            is_system = bool(wf.get("system"))
+            enabled_checked = " checked" if int(wf.get("enabled") or 0) else ""
+            steps_list = wf.get("steps") or []
+            if steps_list:
+                steps_summary = "".join(
+                    f'<li>{i + 1}. {_html.escape(str((s or {}).get("agent") or (s or {}).get("agent_id") or (s or {}).get("name") or "step"))}</li>'
+                    for i, s in enumerate(steps_list)
+                )
+            else:
+                steps_summary = '<li class="wf-edit-empty">No steps configured.</li>'
+            sys_note = (
+                '<div class="wf-edit-note">System workflow — only Enabled may be toggled. Use the advanced editor or duplicate to customize.</div>'
+                if is_system else ""
+            )
+            del_btn = (
+                '<button class="wf-edit-delete" disabled title="System workflows can\'t be deleted; duplicate to customize.">Delete</button>'
+                if is_system
+                else f'<button class="wf-edit-delete" data-id="{wf_id_attr}">Delete</button>'
+            )
+            advanced_link = (
+                f'<a class="wf-edit-advanced" href="{_html.escape(advanced_href)}">Edit steps in advanced editor →</a>'
+                if advanced_href else ""
+            )
+
+            row_parts.append(
+                f'<div class="wf-row-wrap" data-scope="{wf["scope"]}" data-projects="{_safe_attr(linked_pids)}" data-wf-id="{wf_id_attr}" data-system="{1 if is_system else 0}" data-testid="wf-row-{wf_id_attr}">'
+                f'  <div class="wf-row">'
+                f'    <div class="wf-main">'
+                f'      <div class="wf-name">{_html.escape(wf.get("name", "Unnamed"))}</div>'
+                f'      {desc_html}'
+                f'    </div>'
+                f'    <div class="wf-cell">{scope_html}</div>'
+                f'    <div class="wf-cell wf-applies">{applies_html}</div>'
+                f'    <div class="wf-cell wf-num">{wf["step_count"]} step{"s" if wf["step_count"] != 1 else ""}</div>'
+                f'    <div class="wf-cell wf-num">{wf["enabled_link_count"]}/{wf["link_count"]} on</div>'
+                f'    <div class="wf-cell wf-num">{wf["run_count"]} run{"s" if wf["run_count"] != 1 else ""}</div>'
+                f'    <div class="wf-cell"><button class="wf-edit-toggle" data-id="{wf_id_attr}">Edit</button></div>'
+                f'  </div>'
+                f'  <div class="wf-edit-panel" data-id="{wf_id_attr}" hidden>'
+                f'    {sys_note}'
+                f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(wf.get("name", ""))}"></div>'
+                f'    <div class="wf-edit-row"><label>Description</label><textarea data-field="description" rows="2">{_html.escape(wf.get("description", ""))}</textarea></div>'
+                f'    <div class="wf-edit-row"><label>Enabled</label>'
+                f'      <label class="wf-edit-switch"><input type="checkbox" data-field="enabled"{enabled_checked}><span class="wf-edit-slider"></span></label>'
+                f'    </div>'
+                f'    <div class="wf-edit-row"><label>Steps</label><ul class="wf-edit-steps">{steps_summary}</ul></div>'
+                f'    {advanced_link}'
+                f'    <div class="wf-edit-actions">'
+                f'      <button class="wf-edit-save" data-id="{wf_id_attr}">Save</button>'
+                f'      {del_btn}'
+                f'      <span class="wf-edit-msg"></span>'
+                f'    </div>'
+                f'  </div>'
+                f'</div>'
+            )
+        rows_html = "".join(row_parts)
+
+    # Build the Agents tab rows. Custom agents only — discovered agents need a
+    # project context; the global tab keeps it simple.
+    if not agents:
+        agent_rows_html = '<div class="wf-empty">No custom agents yet. Click "+ New Agent" to create one.</div>'
+    else:
+        agent_parts = []
+        for a in agents:
+            aid = a["id"]
+            aid_attr = _safe_attr(aid)
+            aname = a.get("name") or aid
+            cmd = a.get("command") or ""
+            args_raw = a.get("args") or "[]"
+            try:
+                args_parsed = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                if isinstance(args_parsed, list):
+                    args_display = ", ".join(str(x) for x in args_parsed)
+                else:
+                    args_display = str(args_raw)
+            except (json.JSONDecodeError, TypeError):
+                args_display = str(args_raw)
+            sys_prompt = a.get("system_prompt") or ""
+            agent_parts.append(
+                f'<div class="ag-row-wrap" data-agent-id="{aid_attr}" data-testid="ag-row-{aid_attr}">'
+                f'  <div class="ag-row">'
+                f'    <div class="ag-main">'
+                f'      <div class="ag-name">{_html.escape(aname)}</div>'
+                f'      <div class="ag-cmd">{_html.escape(cmd)}{(" " + _html.escape(args_display)) if args_display else ""}</div>'
+                f'    </div>'
+                f'    <div class="ag-cell"><span class="ag-type ag-type-custom">custom</span></div>'
+                f'    <div class="ag-cell"><button class="ag-edit-toggle" data-id="{aid_attr}">Edit</button></div>'
+                f'  </div>'
+                f'  <div class="ag-edit-panel" data-id="{aid_attr}" hidden>'
+                f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(aname)}"></div>'
+                f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(cmd)}"></div>'
+                f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(args_display)}" placeholder="comma-separated or JSON array"></div>'
+                f'    <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4">{_html.escape(sys_prompt)}</textarea></div>'
+                f'    <div class="wf-edit-actions">'
+                f'      <button class="ag-edit-save" data-id="{aid_attr}">Save</button>'
+                f'      <button class="ag-edit-delete" data-id="{aid_attr}">Delete</button>'
+                f'      <span class="wf-edit-msg"></span>'
+                f'    </div>'
+                f'  </div>'
+                f'</div>'
+            )
+        agent_rows_html = "".join(agent_parts)
+
+    return f"""<!doctype html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflows — Ticket Takeaway</title>
+<meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
+<script>
+(function () {{
+  var t = localStorage.getItem('tt-theme') || 'system';
+  var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+}})();
+</script>
+<style>
+:root, [data-theme="dark"] {{
+  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
+  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
+  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
+  --accent: #3b82f6;
+}}
+[data-theme="light"] {{
+  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
+  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
+  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
+  --accent: #2563eb;
+}}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font: 14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; }}
+.wf-page {{ max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }}
+.wf-header {{ display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }}
+.wf-header h1 {{ margin: 0; font-size: 16px; font-weight: 600; }}
+.wf-header-sub {{ color: var(--text-tertiary); font-size: 12px; }}
+.wf-tabs {{ display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--border-subtle); }}
+.wf-tab {{ background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-secondary); padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }}
+.wf-tab:hover {{ color: var(--text-primary); }}
+.wf-tab.active {{ color: var(--text-primary); border-bottom-color: var(--accent); }}
+.wf-tab-pane {{ display: none; }}
+.wf-tab-pane.active {{ display: block; }}
+.wf-pane-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 12px; }}
+.wf-pane-header h2 {{ margin: 0; font-size: 13px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }}
+.wf-toolbar {{ display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; padding-top: 4px; }}
+.wf-toolbar-projects {{ margin-bottom: 14px; }}
+.wf-toolbar-label {{ font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-tertiary); margin-right: 4px; min-width: 60px; }}
+.wf-filter, .wf-proj-filter {{ font-size: 11px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
+.wf-filter:hover, .wf-proj-filter:hover {{ border-color: var(--border-default); color: var(--text-primary); }}
+.wf-filter.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
+.wf-proj-filter.active {{ background: rgba(34,197,94,0.18); border-color: rgba(34,197,94,0.45); color: #4ade80; }}
+.wf-proj-filter[data-project=""].active {{ background: var(--bg-hover); border-color: var(--border-default); color: var(--text-primary); }}
+.wf-list {{ background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }}
+.wf-row-wrap {{ border-bottom: 1px solid var(--border-subtle); }}
+.wf-row-wrap:last-child {{ border-bottom: 0; }}
+.wf-row {{ display: grid; grid-template-columns: minmax(220px, 1.4fr) 90px minmax(180px, 1fr) 80px 80px 80px 70px; gap: 12px; padding: 10px 14px; align-items: center; font-size: 13px; }}
+.wf-applies {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }}
+.wf-applies-pill {{ font-size: 10px; padding: 2px 7px; border-radius: 999px; background: rgba(34,197,94,0.14); color: #4ade80; border: 1px solid rgba(34,197,94,0.32); white-space: nowrap; }}
+.wf-applies-pill.disabled {{ background: rgba(107,114,128,0.12); color: var(--text-tertiary); border-color: var(--border-subtle); text-decoration: line-through; opacity: 0.7; }}
+.wf-applies-more {{ font-size: 10px; padding: 2px 7px; color: var(--text-tertiary); }}
+.wf-applies-all {{ font-size: 11px; color: #6b9eff; font-weight: 600; }}
+.wf-applies-empty {{ font-size: 11px; color: var(--text-tertiary); font-style: italic; }}
+.wf-row:hover {{ background: rgba(255,255,255,0.03); }}
+.wf-main {{ min-width: 0; }}
+.wf-name {{ font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.wf-desc {{ color: var(--text-tertiary); font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.wf-cell {{ font-size: 12px; color: var(--text-secondary); }}
+.wf-num {{ font-variant-numeric: tabular-nums; color: var(--text-tertiary); }}
+.wf-scope-badge {{ font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; }}
+.wf-scope-system {{ background: rgba(168,85,247,0.18); color: #c084fc; }}
+.wf-scope-user {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
+.wf-empty {{ padding: 32px 20px; color: var(--text-tertiary); text-align: center; font-style: italic; font-size: 13px; }}
+.wf-edit-toggle, .ag-edit-toggle {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
+.wf-edit-toggle:hover, .ag-edit-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
+.wf-edit-toggle.active, .ag-edit-toggle.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
+.wf-edit-panel, .ag-edit-panel {{ padding: 14px 18px 16px; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 10px; }}
+[data-theme="light"] .wf-edit-panel, [data-theme="light"] .ag-edit-panel {{ background: rgba(0,0,0,0.02); }}
+.wf-edit-row {{ display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: start; }}
+.wf-edit-row label {{ font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding-top: 6px; }}
+.wf-edit-row input[type="text"], .wf-edit-row textarea {{ width: 100%; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 6px; padding: 6px 10px; font-size: 13px; font-family: inherit; }}
+.wf-edit-row textarea {{ resize: vertical; min-height: 60px; }}
+.wf-edit-row input[type="text"]:focus, .wf-edit-row textarea:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }}
+.wf-edit-switch {{ position: relative; display: inline-block; width: 36px; height: 20px; }}
+.wf-edit-switch input {{ opacity: 0; width: 0; height: 0; }}
+.wf-edit-slider {{ position: absolute; cursor: pointer; inset: 0; background: var(--border-default); border-radius: 20px; transition: 0.15s; }}
+.wf-edit-slider::before {{ position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.15s; }}
+.wf-edit-switch input:checked + .wf-edit-slider {{ background: var(--accent); }}
+.wf-edit-switch input:checked + .wf-edit-slider::before {{ transform: translateX(16px); }}
+.wf-edit-steps {{ list-style: none; padding: 0; margin: 0; font-size: 12px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }}
+.wf-edit-steps .wf-edit-empty {{ color: var(--text-tertiary); font-style: italic; }}
+.wf-edit-advanced {{ font-size: 12px; color: var(--accent); text-decoration: none; padding-left: 122px; }}
+.wf-edit-advanced:hover {{ text-decoration: underline; }}
+.wf-edit-note {{ font-size: 11px; color: var(--text-tertiary); padding: 8px 10px; background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); border-radius: 6px; }}
+.wf-edit-actions {{ display: flex; align-items: center; gap: 10px; padding-left: 122px; padding-top: 4px; }}
+.wf-edit-save, .ag-edit-save {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; font-family: inherit; font-weight: 600; }}
+.wf-edit-save:hover, .ag-edit-save:hover {{ filter: brightness(1.1); }}
+.wf-edit-delete, .ag-edit-delete {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid #ef4444; background: transparent; color: #ef4444; cursor: pointer; font-family: inherit; }}
+.wf-edit-delete:hover:not(:disabled), .ag-edit-delete:hover {{ background: rgba(239,68,68,0.1); }}
+.wf-edit-delete:disabled {{ opacity: 0.45; cursor: not-allowed; }}
+.wf-edit-msg {{ font-size: 11px; color: var(--text-tertiary); }}
+.wf-edit-msg.ok {{ color: #4ade80; }}
+.wf-edit-msg.err {{ color: #ef4444; }}
+.ag-row-wrap {{ border-bottom: 1px solid var(--border-subtle); }}
+.ag-row-wrap:last-child {{ border-bottom: 0; }}
+.ag-row {{ display: grid; grid-template-columns: 1fr 90px 70px; gap: 12px; padding: 10px 14px; align-items: center; font-size: 13px; }}
+.ag-row:hover {{ background: rgba(255,255,255,0.03); }}
+.ag-main {{ min-width: 0; }}
+.ag-name {{ font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.ag-cmd {{ color: var(--text-tertiary); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.ag-cell {{ font-size: 12px; color: var(--text-secondary); }}
+.ag-type {{ font-size: 10px; padding: 2px 7px; border-radius: 999px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; }}
+.ag-type-custom {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
+.wf-pane-btn {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; font-family: inherit; font-weight: 600; }}
+.wf-pane-btn:hover {{ background: rgba(59,130,246,0.1); }}
+</style>
+<style>{rail_css}</style>
+<style>{drawer_css}</style>
+</head>
+<body>
+{rail_html}
+{drawer_html}
+<header class="wf-header">
+  <h1>Workflows</h1>
+  <span class="wf-header-sub">Cross-project — system defaults, global rules, and per-project workflows.</span>
+</header>
+<div class="wf-page">
+  <div class="wf-tabs" data-testid="wf-tabs">
+    <button class="wf-tab active" data-tab="workflows" data-testid="wf-tab-workflows">Workflows</button>
+    <button class="wf-tab" data-tab="agents" data-testid="wf-tab-agents">Agents</button>
+  </div>
+
+  <div class="wf-tab-pane active" data-tab-pane="workflows">
+    <div class="wf-toolbar" data-testid="wf-filter-bar">
+      <span class="wf-toolbar-label">Scope</span>
+      <button class="wf-filter active" data-filter="all">All <span class="wf-num">{len(workflows)}</span></button>
+      <button class="wf-filter" data-filter="system">System <span class="wf-num">{sum(1 for w in workflows if w['scope'] == 'system')}</span></button>
+      <button class="wf-filter" data-filter="user">User <span class="wf-num">{sum(1 for w in workflows if w['scope'] == 'user')}</span></button>
+    </div>
+    <div class="wf-toolbar wf-toolbar-projects" data-testid="wf-project-filter">
+      <span class="wf-toolbar-label">Projects</span>
+      <button class="wf-proj-filter active" data-project="" data-testid="wf-proj-all">All projects</button>
+      {''.join(f'<button class="wf-proj-filter" data-project="{_safe_attr(p["id"])}" data-testid="wf-proj-{_safe_attr(p["id"])}">{_html.escape(p["name"])} <span class="wf-num">{sum(1 for w in workflows if any(l["project_id"] == p["id"] for l in (w.get("links") or [])))}</span></button>' for p in projects)}
+    </div>
+    <div class="wf-list" data-testid="wf-list">{rows_html}</div>
+  </div>
+
+  <div class="wf-tab-pane" data-tab-pane="agents">
+    <div class="wf-pane-header">
+      <h2>Custom agents</h2>
+      <button class="wf-pane-btn" id="ag-new-btn" data-testid="ag-new-btn">+ New Agent</button>
+    </div>
+    <div class="ag-new-form" id="ag-new-form" hidden>
+      <div class="wf-edit-panel">
+        <div class="wf-edit-row"><label>ID</label><input type="text" data-field="id" placeholder="lowercase-with-dashes"></div>
+        <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name"></div>
+        <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="claude"></div>
+        <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" placeholder="comma-separated or JSON array"></div>
+        <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"></textarea></div>
+        <div class="wf-edit-actions">
+          <button class="ag-edit-save" id="ag-new-save">Create</button>
+          <button class="wf-edit-delete" id="ag-new-cancel">Cancel</button>
+          <span class="wf-edit-msg" id="ag-new-msg"></span>
+        </div>
+      </div>
+    </div>
+    <div class="wf-list" data-testid="ag-list" id="ag-list">{agent_rows_html}</div>
+  </div>
+</div>
+<script>
+(function() {{
+  var scopeFilter = 'all';
+  var projectSelection = new Set();
+
+  function applyFilters() {{
+    document.querySelectorAll('[data-tab-pane="workflows"] .wf-row-wrap').forEach(function(row) {{
+      var scopeOk = (scopeFilter === 'all' || row.dataset.scope === scopeFilter);
+      var rowProjects = (row.dataset.projects || '').split(',').filter(Boolean);
+      var projOk;
+      if (projectSelection.size === 0) {{
+        projOk = true;
+      }} else {{
+        projOk = rowProjects.some(function(pid) {{ return projectSelection.has(pid); }});
+      }}
+      row.style.display = (scopeOk && projOk) ? '' : 'none';
+    }});
+  }}
+
+  document.querySelectorAll('.wf-filter').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      document.querySelectorAll('.wf-filter').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      scopeFilter = btn.dataset.filter;
+      applyFilters();
+    }});
+  }});
+
+  document.querySelectorAll('.wf-proj-filter').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var pid = btn.dataset.project;
+      if (pid === '') {{
+        projectSelection.clear();
+        document.querySelectorAll('.wf-proj-filter').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      }} else {{
+        if (projectSelection.has(pid)) {{
+          projectSelection.delete(pid);
+          btn.classList.remove('active');
+        }} else {{
+          projectSelection.add(pid);
+          btn.classList.add('active');
+        }}
+        var allBtn = document.querySelector('.wf-proj-filter[data-project=""]');
+        if (allBtn) allBtn.classList.toggle('active', projectSelection.size === 0);
+      }}
+      applyFilters();
+    }});
+  }});
+
+  // Tab switching
+  document.querySelectorAll('.wf-tab').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var tab = btn.dataset.tab;
+      document.querySelectorAll('.wf-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.wf-tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tabPane === tab));
+    }});
+  }});
+
+  function setMsg(el, text, kind) {{
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.remove('ok', 'err');
+    if (kind) el.classList.add(kind);
+  }}
+
+  function parseArgs(raw) {{
+    var t = (raw || '').trim();
+    if (!t) return [];
+    if (t.startsWith('[')) {{
+      try {{ var arr = JSON.parse(t); return Array.isArray(arr) ? arr : []; }}
+      catch (e) {{ return []; }}
+    }}
+    return t.split(',').map(s => s.trim()).filter(Boolean);
+  }}
+
+  // Workflow row Edit toggle + Save + Delete
+  document.querySelectorAll('.wf-edit-toggle').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.wf-edit-panel[data-id="' + id + '"]');
+      if (!panel) return;
+      var open = !panel.hasAttribute('hidden');
+      if (open) {{
+        panel.setAttribute('hidden', '');
+        btn.classList.remove('active');
+        btn.textContent = 'Edit';
+      }} else {{
+        panel.removeAttribute('hidden');
+        btn.classList.add('active');
+        btn.textContent = 'Close';
+      }}
+    }});
+  }});
+
+  document.querySelectorAll('.wf-edit-save').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.wf-edit-panel[data-id="' + id + '"]');
+      var msg = panel.querySelector('.wf-edit-msg');
+      var wrap = document.querySelector('.wf-row-wrap[data-wf-id="' + id + '"]');
+      var isSystem = wrap && wrap.dataset.system === '1';
+      var body = {{}};
+      if (!isSystem) {{
+        body.name = panel.querySelector('input[data-field="name"]').value;
+        body.description = panel.querySelector('textarea[data-field="description"]').value;
+      }}
+      body.enabled = panel.querySelector('input[data-field="enabled"]').checked ? 1 : 0;
+      setMsg(msg, 'Saving…');
+      fetch('/api/workflow/workflows/' + encodeURIComponent(id), {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(body)
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Saved', 'ok');
+            setTimeout(() => location.reload(), 600);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  document.querySelectorAll('.wf-edit-delete').forEach(function(btn) {{
+    if (btn.disabled) return;
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      if (!confirm('Delete workflow "' + id + '"?')) return;
+      var panel = document.querySelector('.wf-edit-panel[data-id="' + id + '"]');
+      var msg = panel ? panel.querySelector('.wf-edit-msg') : null;
+      setMsg(msg, 'Deleting…');
+      fetch('/api/workflow/workflows/' + encodeURIComponent(id), {{method: 'DELETE'}})
+        .then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Deleted', 'ok');
+            setTimeout(() => location.reload(), 400);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // Agent row Edit toggle + Save + Delete
+  document.querySelectorAll('.ag-edit-toggle').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.ag-edit-panel[data-id="' + id + '"]');
+      if (!panel) return;
+      var open = !panel.hasAttribute('hidden');
+      if (open) {{
+        panel.setAttribute('hidden', '');
+        btn.classList.remove('active');
+        btn.textContent = 'Edit';
+      }} else {{
+        panel.removeAttribute('hidden');
+        btn.classList.add('active');
+        btn.textContent = 'Close';
+      }}
+    }});
+  }});
+
+  document.querySelectorAll('.ag-edit-save').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.ag-edit-panel[data-id="' + id + '"]');
+      var msg = panel.querySelector('.wf-edit-msg');
+      var body = {{
+        name: panel.querySelector('input[data-field="name"]').value,
+        command: panel.querySelector('input[data-field="command"]').value,
+        args: JSON.stringify(parseArgs(panel.querySelector('input[data-field="args"]').value)),
+        system_prompt: panel.querySelector('textarea[data-field="system_prompt"]').value
+      }};
+      setMsg(msg, 'Saving…');
+      fetch('/api/workflow/agents/' + encodeURIComponent(id), {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(body)
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Saved', 'ok');
+            setTimeout(() => location.reload(), 600);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  document.querySelectorAll('.ag-edit-delete').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      if (!confirm('Delete agent "' + id + '"?')) return;
+      var panel = document.querySelector('.ag-edit-panel[data-id="' + id + '"]');
+      var msg = panel ? panel.querySelector('.wf-edit-msg') : null;
+      setMsg(msg, 'Deleting…');
+      fetch('/api/workflow/agents/' + encodeURIComponent(id), {{method: 'DELETE'}})
+        .then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Deleted', 'ok');
+            setTimeout(() => location.reload(), 400);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // New Agent form
+  var newBtn = document.getElementById('ag-new-btn');
+  var newForm = document.getElementById('ag-new-form');
+  var newSave = document.getElementById('ag-new-save');
+  var newCancel = document.getElementById('ag-new-cancel');
+  var newMsg = document.getElementById('ag-new-msg');
+  if (newBtn && newForm) {{
+    newBtn.addEventListener('click', function() {{
+      newForm.hidden = !newForm.hidden;
+    }});
+  }}
+  if (newCancel) {{
+    newCancel.addEventListener('click', function() {{
+      newForm.hidden = true;
+      setMsg(newMsg, '');
+    }});
+  }}
+  if (newSave) {{
+    newSave.addEventListener('click', function() {{
+      var body = {{
+        id: newForm.querySelector('input[data-field="id"]').value.trim(),
+        name: newForm.querySelector('input[data-field="name"]').value.trim(),
+        command: newForm.querySelector('input[data-field="command"]').value.trim() || 'claude',
+        args: JSON.stringify(parseArgs(newForm.querySelector('input[data-field="args"]').value)),
+        system_prompt: newForm.querySelector('textarea[data-field="system_prompt"]').value
+      }};
+      if (!body.id) {{ setMsg(newMsg, 'ID is required', 'err'); return; }}
+      if (!body.name) body.name = body.id;
+      setMsg(newMsg, 'Creating…');
+      fetch('/api/workflow/agents', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(body)
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(newMsg, 'Created', 'ok');
+            setTimeout(() => location.reload(), 500);
+          }} else {{
+            setMsg(newMsg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(newMsg, String(e), 'err'));
+    }});
+  }}
+}})();
+</script>
+<script>{rail_js}</script>
+<script>{drawer_js}</script>
 </body>
 </html>"""
 
@@ -4568,8 +5340,11 @@ def _render_project_picker(port: int) -> str:
         projects = list(_PROJECTS_CACHE.values())
 
     cards_html = ""
+    gear_icon = gen._svg_icon('settings', 14)
+    chevron_icon = gen._svg_icon('panel-left', 12)  # repurposed as fold indicator
     for proj in projects:
         pid = proj["id"]
+        pid_attr = _safe_attr(pid)
         name = _safe_attr(proj.get("name", pid))
         raw_path = proj.get("path", "")
         display_path = _safe_attr(raw_path.replace(str(Path.home()), "~"))
@@ -4578,23 +5353,64 @@ def _render_project_picker(port: int) -> str:
         backlog = counts.get("Backlog", 0)
         review = counts.get("For Review", 0)
         path_exists = Path(os.path.expanduser(raw_path)).is_dir() if raw_path else False
-        opacity = "1" if path_exists else "0.5"
+        active = bool(proj.get("active", True))
+        warn_html = '' if path_exists else '<div class="proj-card-warn">Path not found</div>'
+        card_classes = "proj-card" + ("" if path_exists else " path-missing")
 
         cards_html += f'''
-        <a href="/{_safe_attr(pid)}" class="proj-card" style="opacity:{opacity}" data-testid="proj-card-{_safe_attr(pid)}">
-          <div class="proj-card-name">{name}</div>
-          <div class="proj-card-path">{display_path}</div>
-          <div class="proj-card-counts">
-            <span class="count-wip">{wip} WIP</span>
-            <span class="count-backlog">{backlog} Backlog</span>
-            <span class="count-review">{review} Review</span>
+        <div class="{card_classes}" data-pid="{pid_attr}" data-path="{_safe_attr(raw_path)}" data-testid="proj-card-{pid_attr}">
+          <div class="proj-card-main" data-pid="{pid_attr}">
+            <div class="proj-card-info">
+              <div class="proj-card-row">
+                <div class="proj-card-name">{name}</div>
+                {warn_html}
+              </div>
+              <div class="proj-card-path">{display_path}</div>
+            </div>
+            <div class="proj-card-counts">
+              <span class="count-wip">{wip} WIP</span>
+              <span class="count-backlog">{backlog} Backlog</span>
+              <span class="count-review">{review} Review</span>
+            </div>
+            <button class="proj-card-gear" data-pid="{pid_attr}" title="Settings" aria-label="Settings for {name}">{gear_icon}</button>
           </div>
-          {'' if path_exists else '<div class="proj-card-warn">Path not found</div>'}
-        </a>'''
+          <div class="proj-card-settings" data-pid="{pid_attr}" hidden>
+            <div class="pcs-section">
+              <div class="pcs-row"><label>Name</label><input type="text" data-field="name" value="{name}"></div>
+              <div class="pcs-row"><label>Path</label><input type="text" data-field="path" value="{_safe_attr(raw_path)}"></div>
+              <div class="pcs-row"><label>ID</label><input type="text" value="{pid_attr}" readonly class="pcs-readonly"></div>
+              <div class="pcs-row"><label>Active</label>
+                <label class="settings-toggle-switch">
+                  <input type="checkbox" data-field="active"{' checked' if active else ''}>
+                  <span class="settings-toggle-slider"></span>
+                </label>
+              </div>
+              <div class="pcs-actions">
+                <button class="pcs-save" data-pid="{pid_attr}">Save</button>
+                <span class="pcs-msg"></span>
+              </div>
+            </div>
+            <div class="pcs-section">
+              <div class="pcs-section-title">Managed Files</div>
+              <div class="pcs-managed-files" data-pid="{pid_attr}"></div>
+            </div>
+            <div class="pcs-section pcs-danger">
+              <button class="pcs-remove" data-pid="{pid_attr}">Remove Project</button>
+              <div class="pcs-hint">Removes from registry only. Files and tickets are not deleted.</div>
+            </div>
+          </div>
+        </div>'''
 
     rail_css = gen.build_nav_rail_css()
     rail_html = gen.build_nav_rail_html()
     rail_js = gen.build_nav_rail_js()
+    drawer_css = gen.build_settings_drawer_css()
+    drawer_html = gen.build_settings_drawer_html(gen._svg_icon('x', 14))
+    drawer_js = gen.build_settings_drawer_js()
+
+    projects_meta_json = json.dumps([
+        {"id": p["id"], "name": p.get("name", p["id"])} for p in projects
+    ])
 
     return f'''<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -4602,6 +5418,7 @@ def _render_project_picker(port: int) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ticket Takeaway</title>
+<meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
 <script>
 (function(){{
   var s=localStorage.getItem('tt-theme');
@@ -4630,14 +5447,14 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .picker-header h1 {{ font-size: 16px; font-weight: 600; }}
 .picker-body {{ padding: 32px; }}
 .header .count {{ color: var(--text-tertiary); font-size: 13px; }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; max-width: 900px; }}
-.proj-card {{ display: block; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 10px; padding: 20px; text-decoration: none; color: inherit; transition: border-color 0.15s, background 0.15s; }}
+.grid {{ display: flex; flex-direction: column; gap: 8px; max-width: 1100px; }}
+.proj-card {{ display: block; background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 8px; text-decoration: none; color: inherit; transition: border-color 0.15s, background 0.15s; }}
 .proj-card:hover {{ border-color: var(--accent); background: var(--bg-hover); }}
-.proj-card-name {{ font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }}
-.proj-card-path {{ font-size: 12px; color: var(--text-tertiary); font-family: monospace; margin-bottom: 12px; }}
+.proj-card-name {{ font-size: 14px; font-weight: 600; color: var(--text-primary); }}
+.proj-card-path {{ font-size: 12px; color: var(--text-tertiary); font-family: monospace; }}
 .proj-card-counts {{ display: flex; gap: 12px; font-size: 12px; }}
 .count-wip {{ color: #f59e0b; }} .count-backlog {{ color: #3b82f6; }} .count-review {{ color: #ec4899; }}
-.proj-card-warn {{ color: #ef4444; font-size: 11px; margin-top: 8px; }}
+.proj-card-warn {{ color: #ef4444; font-size: 11px; }}
 .add-card {{ display: flex; align-items: center; justify-content: center; background: transparent; border: 2px dashed var(--border-default); border-radius: 10px; padding: 20px; min-height: 110px; cursor: pointer; transition: border-color 0.15s; color: var(--text-tertiary); }}
 .add-card:hover {{ border-color: var(--accent); }}
 .add-card-inner {{ text-align: center; }}
@@ -4672,24 +5489,78 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 .picker-footer .btn-select {{ padding: 6px 16px; border-radius: 6px; border: none; background: rgba(59,130,246,0.2); color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; }}
 .picker-footer .btn-select:hover {{ background: rgba(59,130,246,0.3); }}
 .picker-footer .btn-select:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+/* Per-project expandable settings — single-row list layout */
+.proj-card {{ position: relative; padding: 0; overflow: hidden; }}
+.proj-card-main {{
+  padding: 12px 18px; cursor: pointer; display: flex; align-items: center; gap: 18px;
+}}
+.proj-card-info {{ flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }}
+.proj-card-row {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
+.proj-card-row .proj-card-warn {{ margin-left: 6px; }}
+.proj-card-counts {{ flex-shrink: 0; }}
+/* Path-missing rows: dim only the info + counts so the warning + gear stay
+   readable. The expanded settings panel always renders at full opacity, so
+   the user can fix the broken path without squinting. */
+.proj-card.path-missing {{
+  border-style: dashed; border-color: rgba(239, 68, 68, 0.4);
+}}
+.proj-card.path-missing .proj-card-info,
+.proj-card.path-missing .proj-card-counts {{ opacity: 0.55; }}
+.proj-card.path-missing .proj-card-warn {{ opacity: 1; font-weight: 600; }}
+.proj-card.path-missing .proj-card-gear {{ opacity: 0.85; }}
+/* Path missing → row click is a no-op (gear still expands settings). */
+.proj-card.path-missing .proj-card-main {{ cursor: default; }}
+.proj-card.path-missing:hover {{ background: var(--bg-card); border-color: rgba(239, 68, 68, 0.4); }}
+.proj-card-gear {{ background: none; border: none; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: 4px; line-height: 0; opacity: 0.6; transition: opacity 0.15s, color 0.15s, background 0.15s; }}
+.proj-card-gear:hover {{ opacity: 1; color: var(--text-primary); background: var(--bg-hover); }}
+.proj-card-gear svg {{ width: 14px; height: 14px; pointer-events: none; }}
+.proj-card.expanded {{ border-color: var(--accent); }}
+.proj-card-settings {{ border-top: 1px solid var(--border-subtle); padding: 14px 20px 16px; background: var(--bg-page); }}
+.pcs-section {{ margin-bottom: 14px; }}
+.pcs-section:last-child {{ margin-bottom: 0; }}
+.pcs-section-title {{ font-size: 11px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }}
+.pcs-row {{ display: flex; align-items: center; gap: 10px; padding: 4px 0; }}
+.pcs-row label {{ font-size: 12px; color: var(--text-secondary); width: 56px; flex-shrink: 0; }}
+.pcs-row input[type="text"] {{ font-size: 11px; padding: 4px 8px; border-radius: 5px; flex: 1; border: 1px solid var(--border-default); background: var(--bg-card); color: var(--text-primary); font-family: monospace; outline: none; min-width: 0; }}
+.pcs-row input[type="text"]:focus {{ border-color: var(--accent); }}
+.pcs-readonly {{ opacity: 0.7; cursor: not-allowed; }}
+.pcs-actions {{ display: flex; align-items: center; gap: 10px; margin-top: 8px; }}
+.pcs-save {{ font-size: 11px; padding: 5px 14px; border-radius: 5px; border: 1px solid rgba(59,130,246,0.3); background: rgba(59,130,246,0.12); color: var(--accent); cursor: pointer; font-family: inherit; }}
+.pcs-save:hover {{ background: rgba(59,130,246,0.22); }}
+.pcs-msg {{ font-size: 11px; }}
+.pcs-msg.ok {{ color: #22c55e; }}
+.pcs-msg.err {{ color: #ef4444; }}
+.pcs-managed-files {{ display: flex; flex-direction: column; gap: 4px; }}
+.pcs-mf-row {{ display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 3px 0; color: var(--text-secondary); }}
+.pcs-mf-dot {{ width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }}
+.pcs-mf-dot.exists {{ background: #22c55e; }}
+.pcs-mf-dot.missing {{ background: var(--border-default); }}
+.pcs-mf-path {{ font-family: monospace; color: var(--text-primary); }}
+.pcs-mf-badge {{ font-size: 9px; padding: 1px 5px; border-radius: 3px; background: var(--bg-hover); color: var(--text-tertiary); }}
+.pcs-mf-desc {{ color: var(--text-tertiary); font-size: 10px; margin-left: auto; text-align: right; }}
+.pcs-danger {{ padding-top: 10px; border-top: 1px dashed var(--border-subtle); }}
+.pcs-remove {{ font-size: 11px; padding: 5px 14px; border-radius: 5px; border: 1px solid rgba(239,68,68,0.3); background: rgba(239,68,68,0.08); color: #ef4444; cursor: pointer; font-family: inherit; }}
+.pcs-remove:hover {{ background: rgba(239,68,68,0.18); }}
+.pcs-hint {{ font-size: 10px; color: var(--text-tertiary); margin-top: 6px; }}
+.picker-new-btn {{ padding: 6px 14px; font-size: 13px; font-weight: 600; border-radius: 6px; border: 1px solid rgba(59,130,246,0.4); background: rgba(59,130,246,0.15); color: var(--accent); cursor: pointer; font-family: inherit; }}
+.picker-new-btn:hover {{ background: rgba(59,130,246,0.25); }}
 </style>
 <style>{rail_css}</style>
+<style>{drawer_css}</style>
 </head>
 <body>
 {rail_html}
+{drawer_html}
 <header class="picker-header">
   <h1>Projects</h1>
-  <span class="count">{len(projects)} project{"s" if len(projects) != 1 else ""} registered</span>
+  <div style="display:flex;align-items:center;gap:14px;">
+    <span class="count">{len(projects)} project{"s" if len(projects) != 1 else ""} registered</span>
+    <button class="picker-new-btn" id="newProjectBtn" data-testid="add-project-card">+ New</button>
+  </div>
 </header>
 <div class="picker-body">
 <div class="grid">
   {cards_html}
-  <div class="add-card" onclick="document.getElementById('add-form').classList.toggle('visible')" data-testid="add-project-card">
-    <div class="add-card-inner">
-      <div class="add-card-plus">+</div>
-      <div class="add-card-label">Add Project</div>
-    </div>
-  </div>
 </div>
 <form id="add-form" class="add-form" data-testid="add-project-form">
   <label>Project Folder</label>
@@ -4855,8 +5726,7 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       var data = {{
         id: form.elements.id.value || toSlug(form.elements.name.value),
         name: form.elements.name.value,
-        path: pathHidden.value,
-        description: ''
+        path: pathHidden.value
       }};
       fetch('/api/projects', {{
         method: 'POST',
@@ -4869,10 +5739,140 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
       }}).catch(function(err) {{ errorDiv.textContent = err.message; errorDiv.style.display = 'block'; }});
     }});
   }}
+
+  // "+ New" button toggles the add-form
+  var newBtn = document.getElementById('newProjectBtn');
+  if (newBtn) {{
+    newBtn.addEventListener('click', function() {{
+      document.getElementById('add-form').classList.toggle('visible');
+    }});
+  }}
+
+  // Auto-open add-form when ?new=1 is in the URL (e.g. from the rail switcher)
+  if (new URLSearchParams(window.location.search).get('new') === '1') {{
+    document.getElementById('add-form').classList.add('visible');
+  }}
+
+  // Project card click → navigate to project's kanban (skip when clicking
+  // the gear, the expanded settings panel, or when the path is missing —
+  // navigating there would just dead-end on a missing project directory).
+  document.querySelectorAll('.proj-card-main').forEach(function(main) {{
+    main.addEventListener('click', function(e) {{
+      if (e.target.closest('.proj-card-gear')) return;
+      var card = main.closest('.proj-card');
+      if (card && card.classList.contains('path-missing')) return;
+      var pid = main.getAttribute('data-pid');
+      if (pid) window.location.href = '/' + pid + '/kanban';
+    }});
+  }});
+
+  // Gear click → toggle expanded settings panel
+  document.querySelectorAll('.proj-card-gear').forEach(function(gear) {{
+    gear.addEventListener('click', function(e) {{
+      e.stopPropagation();
+      var pid = gear.getAttribute('data-pid');
+      var card = gear.closest('.proj-card');
+      if (!card) return;
+      var panel = card.querySelector('.proj-card-settings');
+      if (!panel) return;
+      var nowOpen = panel.hasAttribute('hidden');
+      if (nowOpen) {{
+        panel.removeAttribute('hidden');
+        card.classList.add('expanded');
+        loadManagedFilesFor(pid, card);
+      }} else {{
+        panel.setAttribute('hidden', '');
+        card.classList.remove('expanded');
+      }}
+    }});
+  }});
+
+  function loadManagedFilesFor(pid, card) {{
+    var container = card.querySelector('.pcs-managed-files');
+    if (!container) return;
+    fetch('/' + pid + '/api/managed-files')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(files) {{
+        while (container.firstChild) container.removeChild(container.firstChild);
+        files.forEach(function(f) {{
+          var row = document.createElement('div');
+          row.className = 'pcs-mf-row';
+          var dot = document.createElement('span');
+          dot.className = 'pcs-mf-dot ' + (f.exists ? 'exists' : 'missing');
+          dot.title = f.exists ? 'Exists' : 'Not created yet';
+          var pathEl = document.createElement('span');
+          pathEl.className = 'pcs-mf-path';
+          pathEl.textContent = f.path;
+          row.appendChild(dot);
+          row.appendChild(pathEl);
+          if (f.gitignored) {{
+            var badge = document.createElement('span');
+            badge.className = 'pcs-mf-badge';
+            badge.textContent = '.gitignored';
+            row.appendChild(badge);
+          }}
+          var desc = document.createElement('span');
+          desc.className = 'pcs-mf-desc';
+          desc.textContent = f.description;
+          row.appendChild(desc);
+          container.appendChild(row);
+        }});
+      }})
+      .catch(function() {{}});
+  }}
+
+  // Save button per card
+  document.querySelectorAll('.pcs-save').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var pid = btn.getAttribute('data-pid');
+      var card = btn.closest('.proj-card');
+      var panel = card.querySelector('.proj-card-settings');
+      var msg = panel.querySelector('.pcs-msg');
+      var nameVal = panel.querySelector('[data-field="name"]').value;
+      var pathVal = panel.querySelector('[data-field="path"]').value;
+      var activeVal = panel.querySelector('[data-field="active"]').checked;
+      msg.textContent = '';
+      msg.className = 'pcs-msg';
+      fetch('/api/projects/' + pid, {{
+        method: 'PUT',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ name: nameVal, path: pathVal, active: activeVal }})
+      }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
+      .then(function(res) {{
+        if (res.ok) {{
+          msg.textContent = 'Saved';
+          msg.className = 'pcs-msg ok';
+          var nameEl = card.querySelector('.proj-card-name');
+          if (nameEl) nameEl.textContent = nameVal;
+        }} else {{
+          msg.textContent = (res.data && res.data.error) || 'Failed';
+          msg.className = 'pcs-msg err';
+        }}
+      }}).catch(function() {{
+        msg.textContent = 'Network error';
+        msg.className = 'pcs-msg err';
+      }});
+    }});
+  }});
+
+  // Remove button per card
+  document.querySelectorAll('.pcs-remove').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var pid = btn.getAttribute('data-pid');
+      if (!confirm('Remove project "' + pid + '"? Tickets and files will not be deleted.')) return;
+      fetch('/api/projects/' + pid, {{ method: 'DELETE' }})
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+          if (data && data.ok) window.location.reload();
+          else alert((data && data.error) || 'Failed to remove');
+        }});
+    }});
+  }});
 }})();
 </script>
 </div>
 <script>{rail_js}</script>
+<script>{drawer_js}</script>
 </body>
 </html>'''
 
@@ -4959,6 +5959,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_html(html)
                 return
 
+            # Workflows — cross-project list with scope badges (system / global / project)
+            if remainder == "/workflows":
+                html = _render_workflows_view(SERVER_PORT)
+                self._send_html(html)
+                return
+
             # Project picker
             if remainder == "/projects":
                 html = _render_project_picker(SERVER_PORT)
@@ -4998,7 +6004,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     c = counts_map.get(p["id"], {})
                     result.append({
                         "id": p["id"], "name": p.get("name", p["id"]),
-                        "path": p.get("path", ""), "description": p.get("description", ""),
+                        "path": p.get("path", ""),
                         "active": p.get("active", True),
                         "ticket_counts": {"wip": c.get("WIP", 0), "backlog": c.get("Backlog", 0), "review": c.get("For Review", 0)}
                     })
@@ -5044,6 +6050,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"conditions": catalog})
                 return
 
+            # Global settings (theme/feedbacks) — same data on every page,
+            # so unprefixed /api/settings + /api/feedbacks/status work even
+            # when there's no project context.
+            if remainder == "/api/settings":
+                self._send_json(_get_all_settings())
+                return
+            if remainder == "/api/feedbacks/status":
+                self._send_json(_detect_feedbacks())
+                return
+
+            # Global workflow agents — custom agents are project-agnostic
+            # (workflow_agents has no project_id column). Used by /workflows page.
+            if remainder == "/api/workflow/agents":
+                custom = _list_workflow_agents()
+                for a in custom:
+                    a["source"] = "custom"
+                    a["editable"] = True
+                self._send_json({"agents": custom})
+                return
+
+            # Global workflows list — all workflows across all projects.
+            if remainder == "/api/workflow/workflows":
+                self._send_json({"workflows": _list_workflows()})
+                return
+
             # Legacy backward compat: --project flag redirects bare /api/ routes
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
@@ -5076,7 +6107,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Serve dashboard HTML
-        if remainder == "/" or remainder == "/index.html":
+        if remainder == "/" or remainder == "/index.html" or remainder == "/kanban":
             html_path = Path(os.path.expanduser(proj.get("path", ""))) / "docs" / "sdlc-dashboard.html"
             if html_path.exists():
                 html = html_path.read_text(encoding="utf-8")
@@ -5093,6 +6124,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             f"<meta name=\"projects-list\" content='{_safe_attr(projects_json)}'>\n"
                         )
                         html = html[:idx] + injection + html[idx:]
+                # Inject nav rail if absent (e.g. dashboard was generated before
+                # the rail feature shipped; without this, stale HTML files
+                # render menuless until the project is regenerated).
+                if 'id="navRail"' not in html and '</body>' in html:
+                    rail_inject = (
+                        f"<style>{gen.build_nav_rail_css()}</style>\n"
+                        f"{gen.build_nav_rail_html()}\n"
+                        f"<script>{gen.build_nav_rail_js()}</script>\n"
+                    )
+                    html = html.replace('</body>', f'{rail_inject}</body>', 1)
                 self._send_html(html)
             else:
                 self._send_json({"error": "Dashboard not generated yet. Run generate.py first."}, 404)
@@ -5683,7 +6724,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 for entry in registry["projects"]:
                     if entry["id"] == pid:
                         # M2-03: 'watched' is a Kitchen-aggregator filter flag.
-                        for field in ("name", "path", "description", "active", "watched"):
+                        for field in ("name", "path", "active", "watched"):
                             if field in body:
                                 entry[field] = body[field]
                         found = True
@@ -5696,6 +6737,66 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     json.dump(registry, f, indent=2)
                 _refresh_projects_cache()
                 self._send_json(updated_entry)
+                return
+
+            # Global settings update (theme/feedbacks).
+            if remainder == "/api/settings":
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                _set_settings(body)
+                self._send_json({"ok": True})
+                return
+
+            # Global update of a workflow agent — workflow_agents has no
+            # project_id column, so the project-scoped handler logic mirrors here.
+            m = re.match(r"^/api/workflow/agents/([a-z0-9][a-z0-9_-]*)$", remainder)
+            if m:
+                agent_id = m.group(1)
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                if isinstance(body.get("args"), list):
+                    body["args"] = json.dumps(body["args"])
+                updated = _update_workflow_agent(agent_id, body)
+                if updated:
+                    self._send_json(updated)
+                else:
+                    self._send_json({"error": "Agent not found"}, 404)
+                return
+
+            # Global update of a workflow — system rows may only toggle 'enabled'.
+            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
+            if m:
+                workflow_id = m.group(1)
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                existing = _get_workflow(workflow_id)
+                if not existing:
+                    self._send_json({"error": "Workflow not found"}, 404)
+                    return
+                if existing.get("system"):
+                    non_enabled_keys = {k for k in body if k != "enabled"}
+                    if non_enabled_keys:
+                        self._send_json({"error": "system_workflow"}, 403)
+                        return
+                if "steps" in body and isinstance(body["steps"], list):
+                    body["steps"] = json.dumps(body["steps"])
+                for field in ("trigger_json", "on_success_json"):
+                    if field in body and body[field] is not None and not isinstance(body[field], str):
+                        body[field] = json.dumps(body[field])
+                updated = _update_workflow(workflow_id, body)
+                if updated:
+                    self._send_json(updated)
+                else:
+                    self._send_json({"error": "Workflow not found"}, 404)
                 return
 
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
@@ -6056,7 +7157,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "id": body["id"],
                     "name": body.get("name", body["id"]),
                     "path": body["path"],
-                    "description": body.get("description", ""),
                     "active": True,
                 }
                 try:
@@ -6081,6 +7181,64 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 conn.close()
                 cli.regenerate_dashboard(new_project)
                 self._send_json(result, 201)
+                return
+
+            # Install feedbacks via git clone — global (no project required).
+            if remainder == "/api/settings/feedbacks/install":
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                from constants import FEEDBACKS_REPO_URL
+                install_dir = body.get("install_dir", str(Path.home() / "projects" / "feedbacks"))
+                repo_url = body.get("repo_url", FEEDBACKS_REPO_URL)
+                resolved_dir = Path(os.path.realpath(os.path.expanduser(install_dir)))
+                home = Path.home().resolve()
+                try:
+                    resolved_dir.relative_to(home)
+                except ValueError:
+                    self._send_json({"error": "install_dir must be within home directory"}, 400)
+                    return
+                ALLOWED_REPO_PREFIXES = ("https://github.com/", "https://gitlab.com/")
+                if not any(repo_url.startswith(p) for p in ALLOWED_REPO_PREFIXES):
+                    self._send_json({"error": "repo_url must be a GitHub or GitLab HTTPS URL"}, 400)
+                    return
+                try:
+                    subprocess.Popen(
+                        ["git", "clone", repo_url, str(resolved_dir)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    _set_settings({"feedbacks.home": install_dir})
+                    _feedbacks_cache["result"] = None
+                    self._send_json({"ok": True, "message": f"git clone started → {install_dir}", "install_dir": install_dir})
+                except Exception as e:
+                    self._send_json({"error": f"Failed to clone feedbacks: {e}"}, 500)
+                return
+
+            # Global create of a workflow agent — workflow_agents has no
+            # project_id column, so the project-scoped handler logic mirrors here.
+            if remainder == "/api/workflow/agents":
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                agent_id = body.get("id", "").strip()
+                if not agent_id or not re.match(r"^[a-z0-9][a-z0-9_-]*$", agent_id):
+                    self._send_json({"error": "Invalid agent id — must match ^[a-z0-9][a-z0-9_-]*$"}, 400)
+                    return
+                name = body.get("name", agent_id)
+                command = body.get("command", "claude")
+                args = body.get("args", "[]")
+                if isinstance(args, list):
+                    args = json.dumps(args)
+                system_prompt = body.get("system_prompt", "")
+                agent = _create_workflow_agent(agent_id, name, command, args, system_prompt)
+                if agent:
+                    self._send_json(agent, 201)
+                else:
+                    self._send_json({"error": f"Agent '{agent_id}' already exists"}, 409)
                 return
 
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
@@ -7483,6 +8641,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "deactivated": pid})
                 return
 
+            # Global delete of a workflow agent.
+            m = re.match(r"^/api/workflow/agents/([a-z0-9][a-z0-9_-]*)$", remainder)
+            if m:
+                agent_id = m.group(1)
+                if _delete_workflow_agent(agent_id):
+                    self._send_json({"ok": True, "deleted": agent_id})
+                else:
+                    self._send_json({"error": "Agent not found"}, 404)
+                return
+
+            # Global delete of a workflow — system rows refused.
+            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
+            if m:
+                workflow_id = m.group(1)
+                existing = _get_workflow(workflow_id)
+                if not existing:
+                    self._send_json({"error": "Workflow not found"}, 404)
+                    return
+                if existing.get("system"):
+                    self._send_json({"error": "system_workflow"}, 403)
+                    return
+                if _delete_workflow(workflow_id):
+                    self._send_json({"ok": True, "deleted": workflow_id})
+                else:
+                    self._send_json({"error": "Workflow not found"}, 404)
+                return
+
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
                 self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
@@ -7788,14 +8973,16 @@ def main():
     except Exception as _e:
         print(f"  Warning: could not seed default agents: {_e}", file=__import__("sys").stderr)
 
-    # Seed default system workflows for every registered project (idempotent)
+    # Seed default system workflows for every registered project (idempotent).
+    # Post-migration-16 the seeder links the project to existing canonical
+    # workflow rows rather than duplicating them.
     for _proj in list(_PROJECTS_CACHE.values()):
         try:
             _wf_db = get_db()
             _result = _seed_default_workflows(_wf_db, _proj["id"])
             _wf_db.close()
-            if _result["inserted"]:
-                print(f"  Seeded {_result['inserted']} default workflow(s) for project {_proj['id']!r}")
+            if _result.get("linked"):
+                print(f"  Linked {_result['linked']} default workflow(s) to project {_proj['id']!r}")
         except Exception as _e:
             print(f"  Warning: could not seed default workflows for {_proj.get('id')!r}: {_e}",
                   file=__import__("sys").stderr)

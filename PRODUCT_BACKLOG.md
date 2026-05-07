@@ -428,7 +428,6 @@ Each gate-check state should have a unique URL fragment (e.g. #gate/B-05/review)
 - [ ] Navigating to a gate URL re-opens that gate-check panel
 - [ ] Browser back button closes the panel / returns to previous state
 - [ ] Multiple gate panels don't clobber each other's URL state
-Tests: When the readiness gating screen (ill call it ticket view) is open, the URL should change in the browser to reflect the exact screen. There should be a URL always in the browser so that bookmarks and back and forward navigation works in the browser and the user knows where they are.
 
 ### B-06: serve.py HTTP Server + Quick-Edit Controls
 Priority: medium | Status: done

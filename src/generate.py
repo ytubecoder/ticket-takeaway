@@ -92,18 +92,24 @@ def build_nav_rail_css() -> str:
     return """
 :root { --rail-w-collapsed: 48px; --rail-w-expanded: 200px; --rail-w: var(--rail-w-collapsed); }
 body.rail-expanded { --rail-w: var(--rail-w-expanded); }
-body { padding-left: var(--rail-w); transition: padding-left 0.18s ease; }
+body { padding-left: var(--rail-w); }
+body.transitions-on { transition: padding-left 0.18s ease; }
 .nav-rail {
   position: fixed; top: 0; left: 0; bottom: 0; width: var(--rail-w);
   background: var(--bg-surface); border-right: 1px solid var(--border-subtle);
   display: flex; flex-direction: column; z-index: 90;
   transition: width 0.18s ease; overflow: hidden;
 }
+.nav-rail-top {
+  display: flex; align-items: center; gap: 4px;
+  height: 44px; padding: 0 6px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
 .nav-rail-toggle {
-  display: flex; align-items: center; gap: 10px;
-  height: 44px; padding: 0 14px; flex-shrink: 0;
-  background: none; border: none; border-bottom: 1px solid var(--border-subtle);
-  color: var(--text-secondary); cursor: pointer; font: inherit; text-align: left;
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 32px; padding: 0; flex-shrink: 0;
+  background: none; border: none; border-radius: 6px;
+  color: var(--text-secondary); cursor: pointer; font: inherit;
 }
 .nav-rail-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
 .nav-rail-toggle svg { flex-shrink: 0; width: 18px; height: 18px; }
@@ -134,6 +140,40 @@ body.rail-expanded .nav-rail-label { opacity: 1; pointer-events: auto; }
 body:not(.rail-expanded) .nav-rail-footer { padding: 10px 0; text-align: center; font-size: 9px; }
 @media (max-width: 600px) { body { padding-left: var(--rail-w-collapsed); } body.rail-expanded { padding-left: var(--rail-w-collapsed); } body.rail-expanded .nav-rail { width: var(--rail-w-expanded); box-shadow: 4px 0 16px rgba(0,0,0,0.4); } }
 .bounce-page { left: var(--rail-w) !important; width: calc(100vw - var(--rail-w)) !important; }
+/* Project switcher — sits inline next to the toggle icon at the top of the rail. */
+.rail-switcher { position: relative; flex: 1; min-width: 0; }
+body:not(.rail-expanded) .rail-switcher { display: none; }
+.rail-switcher-btn {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 4px 10px; height: 32px;
+  background: transparent; border: 1px solid var(--border-subtle); border-radius: 6px;
+  color: var(--text-primary); cursor: pointer; font: inherit; text-align: left;
+}
+.rail-switcher-btn:hover, .rail-switcher-btn[aria-expanded="true"] { background: var(--bg-hover); border-color: var(--border-default); }
+.rail-switcher-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rail-switcher-label { flex: 1; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-switcher-chevron { width: 10px; height: 10px; opacity: 0.6; flex-shrink: 0; transition: transform 0.15s; }
+.rail-switcher-btn[aria-expanded="true"] .rail-switcher-chevron { transform: rotate(180deg); }
+.rail-switcher-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+  min-width: 200px;
+  background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45); padding: 4px; z-index: 200;
+  display: none; max-height: 60vh; overflow-y: auto;
+}
+.rail-switcher-menu.open { display: block; }
+.rail-switcher-item, .rail-switcher-footer {
+  display: block; padding: 6px 10px; border-radius: 4px;
+  color: var(--text-primary); text-decoration: none; font-size: 13px; white-space: nowrap;
+}
+.rail-switcher-item:hover, .rail-switcher-item:focus-visible,
+.rail-switcher-footer:hover, .rail-switcher-footer:focus-visible { background: var(--bg-hover); outline: none; }
+.rail-switcher-item.current { color: var(--accent); font-weight: 600; }
+.rail-switcher-item.current::after { content: " \\2713"; font-size: 11px; }
+.rail-switcher-divider { height: 1px; background: var(--border-subtle); margin: 4px 2px; }
+.rail-switcher-footer { color: var(--text-secondary); font-size: 12px; }
+/* Hide the legacy on-kanban project switcher; the rail owns it now. */
+.proj-switcher { display: none !important; }
 """
 
 
@@ -175,7 +215,7 @@ def build_nav_rail_js() -> str:
   }
 
   // Reserved first-segment names that are NOT project ids.
-  var RESERVED = {projects:1, api:1, 'static':1, 'favicon.ico':1};
+  var RESERVED = {projects:1, kitchen:1, workflows:1, api:1, 'static':1, 'favicon.ico':1};
 
   function getMeta(name){
     var m = document.querySelector('meta[name="'+name+'"]');
@@ -211,7 +251,7 @@ def build_nav_rail_js() -> str:
   function fallbackPid(){
     try {
       var stored = localStorage.getItem(LAST_PROJ_KEY);
-      if (stored) return stored;
+      if (stored && !RESERVED[stored]) return stored;
     } catch(e){}
     var raw = getMeta('projects-list');
     if (raw) {
@@ -228,11 +268,19 @@ def build_nav_rail_js() -> str:
     var qs = new URLSearchParams(window.location.search);
     if (path === '/projects') return 'projects';
     if (path === '/kitchen') return 'kitchen';
+    if (path === '/workflows') return 'workflows';
     if (path === '/' || path === '') return 'projects';
     if (/\\/journeys/.test(path)) return 'journeys';
-    if (qs.get('bounce') === '1') return 'workflows';
     if (qs.get('settings') === '1') return 'settings';
     return 'kanban';
+  }
+
+  // Per-project view suffix (drops the project prefix). Keeps the user on
+  // the same page when they switch project via the rail dropdown.
+  function currentViewSuffix(){
+    var v = currentView();
+    if (v === 'journeys') return '/journeys';
+    return '/kanban';
   }
 
   function buildItem(view, href, icon, label, id){
@@ -248,28 +296,84 @@ def build_nav_rail_js() -> str:
     var pid = currentPid() || fallbackPid();
     var prefix = pid ? '/'+pid : '';
     // Per-project items: if no project context anywhere, send users to picker.
-    var kanbanHref    = prefix ? prefix+'/'             : '/projects';
+    var kanbanHref    = prefix ? prefix+'/kanban'       : '/projects';
     var journeysHref  = prefix ? prefix+'/journeys'     : '/projects';
-    var workflowsHref = prefix ? prefix+'/?bounce=1'    : '/projects';
-    var settingsHref  = prefix ? prefix+'/?settings=1'  : '/projects';
+    // Workflows is a global cross-project surface — same URL regardless of project.
+    var workflowsHref = '/workflows';
+    var settingsHref  = prefix ? prefix+'/kanban?settings=1' : '/projects';
 
     return ''
-      + '<button class="nav-rail-toggle" id="navRailToggle" data-testid="rail-toggle" '
-      +   'aria-label="Toggle navigation rail" title="Toggle menu">'
-      +   svg('panel-left', 18)
-      +   '<span class="nav-rail-brand">Ticket Takeaway</span>'
-      + '</button>'
+      + '<div class="nav-rail-top">'
+      +   '<button class="nav-rail-toggle" id="navRailToggle" data-testid="rail-toggle" '
+      +     'aria-label="Toggle navigation rail" title="Toggle menu">'
+      +     svg('panel-left', 18)
+      +   '</button>'
+      +   buildSwitcher()
+      + '</div>'
       + '<div class="nav-rail-items">'
       +   buildItem('kanban',   kanbanHref,    'kanban',   'Kanban')
       +   buildItem('journeys', journeysHref,  'route',    'Journeys')
       +   '<div class="nav-rail-divider"></div>'
-      +   buildItem('projects', '/projects',   'grid',     'Projects')
+      +   buildItem('workflows', workflowsHref,'ladle',    'Workflows')
       +   buildItem('kitchen',  '/kitchen',    'flame',    'Kitchen')
-      +   buildItem('workflows', workflowsHref,'ladle',    'Workflows', 'railWorkflowsBtn')
+      +   buildItem('projects', '/projects',   'grid',     'Projects')
       +   buildItem('settings',  settingsHref, 'settings', 'Settings',  'railSettingsBtn')
       + '</div>'
       + '<div class="nav-rail-spacer"></div>'
       + '<div class="nav-rail-footer"></div>';
+  }
+
+  function escHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  function buildSwitcher(){
+    var pmeta = document.querySelector('meta[name="projects-list"]');
+    var cmeta = document.querySelector('meta[name="current-project"]');
+    if (!pmeta) return '';
+    var projects;
+    try { projects = JSON.parse(pmeta.getAttribute('content') || '[]'); }
+    catch(e) { return ''; }
+    if (!Array.isArray(projects) || projects.length === 0) return '';
+    var currentId = cmeta ? cmeta.getAttribute('content') : '';
+    var currentLabel = '';
+    for (var i = 0; i < projects.length; i++) {
+      if (projects[i].id === currentId) { currentLabel = projects[i].name; break; }
+    }
+    if (!currentLabel) currentLabel = currentId || 'Projects';
+    var suffix = currentViewSuffix();
+    var items = projects.map(function(p){
+      var cls = 'rail-switcher-item' + (p.id === currentId ? ' current' : '');
+      return '<a href="/' + encodeURIComponent(p.id) + suffix + '" class="' + cls + '" '
+           + 'role="option" aria-selected="' + (p.id === currentId ? 'true' : 'false') + '" '
+           + 'data-testid="rail-switcher-item-' + escHtml(p.id) + '">'
+           + escHtml(p.name) + '</a>';
+    }).join('');
+    return ''
+      + '<div class="rail-switcher" id="railSwitcher">'
+      +   '<button class="rail-switcher-btn" id="railSwitcherBtn" data-testid="rail-switcher-btn" '
+      +     'aria-haspopup="listbox" aria-expanded="false" '
+      +     'aria-label="Switch project — current: ' + escHtml(currentLabel) + '">'
+      +     '<span class="rail-switcher-label" data-testid="rail-switcher-label">' + escHtml(currentLabel) + '</span>'
+      +     '<svg class="rail-switcher-chevron" viewBox="0 0 10 10" aria-hidden="true">'
+      +       '<polyline points="1,3 5,7 9,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+      +     '</svg>'
+      +   '</button>'
+      +   '<div class="rail-switcher-menu" id="railSwitcherMenu" role="listbox" data-testid="rail-switcher-menu">'
+      +     items
+      +     '<div class="rail-switcher-divider" role="separator"></div>'
+      +     '<a href="/projects?new=1" class="rail-switcher-footer" data-testid="rail-switcher-add-project">+ Add new project</a>'
+      +   '</div>'
+      + '</div>';
+  }
+
+  function closeSwitcher(){
+    var menu = document.getElementById('railSwitcherMenu');
+    var btn = document.getElementById('railSwitcherBtn');
+    if (menu) menu.classList.remove('open');
+    if (btn)  btn.setAttribute('aria-expanded', 'false');
   }
 
   function mount(){
@@ -283,6 +387,11 @@ def build_nav_rail_js() -> str:
     document.body.classList.toggle('rail-expanded', expanded);
   }
   applyCollapse();
+  // Enable padding-left transition only after the initial layout commits,
+  // preventing a slide-in animation on fresh page load (navigation to kanban).
+  requestAnimationFrame(function(){ requestAnimationFrame(function(){
+    document.body.classList.add('transitions-on');
+  }); });
 
   // Wire interactions once at document level — survives DOM rebuilds.
   document.addEventListener('click', function(e){
@@ -292,15 +401,23 @@ def build_nav_rail_js() -> str:
       var on = !document.body.classList.contains('rail-expanded');
       localStorage.setItem(KEY, on ? '1' : '0');
       applyCollapse();
+      closeSwitcher();
       return;
     }
-    // Kanban only: intercept Workflows/Settings to open inline panel/drawer.
-    var wf = e.target.closest('#railWorkflowsBtn');
-    if (wf && document.getElementById('bounceToggleBtn')) {
+    // Project switcher toggle.
+    var sw = e.target.closest('#railSwitcherBtn');
+    if (sw) {
       e.preventDefault();
-      document.getElementById('bounceToggleBtn').click();
+      var menu = document.getElementById('railSwitcherMenu');
+      if (!menu) return;
+      var open = !menu.classList.contains('open');
+      menu.classList.toggle('open', open);
+      sw.setAttribute('aria-expanded', open ? 'true' : 'false');
       return;
     }
+    // Click outside the switcher closes it.
+    if (!e.target.closest('#railSwitcher')) closeSwitcher();
+    // Kanban only: intercept Settings to open the inline drawer instead of navigating.
     var st = e.target.closest('#railSettingsBtn');
     if (st && document.getElementById('settingsToggleBtn')) {
       e.preventDefault();
@@ -309,14 +426,20 @@ def build_nav_rail_js() -> str:
     }
   });
 
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeSwitcher();
+  });
+
   function autoOpen(){
     var qs = new URLSearchParams(window.location.search);
-    if (qs.get('bounce') === '1') {
-      var b = document.getElementById('bounceToggleBtn');
-      if (b) b.click();
-    } else if (qs.get('settings') === '1') {
+    if (qs.get('settings') === '1') {
       var s = document.getElementById('settingsToggleBtn');
       if (s) s.click();
+    } else if (qs.get('bounce') === '1') {
+      // Legacy "Manage in project" deep-link from /workflows still uses ?bounce=1
+      // to surface the per-project workflows drawer.
+      var b = document.getElementById('bounceToggleBtn');
+      if (b) b.click();
     }
   }
 
@@ -325,6 +448,297 @@ def build_nav_rail_js() -> str:
   } else {
     mount();
     autoOpen();
+  }
+})();
+"""
+
+
+# ---------------------------------------------------------------------------
+# Settings drawer (rail-anchored, global) — used by non-kanban pages.
+# The kanban view embeds its own inline drawer that adds scenario sections
+# on top of the global theme + feedbacks shell; keep the markup/JS in sync.
+# ---------------------------------------------------------------------------
+
+def build_settings_drawer_css() -> str:
+    """CSS for the rail-anchored settings drawer + its inner controls."""
+    return """
+.settings-toggle {
+  font-size: 15px; background: none; border: none; color: var(--text-tertiary);
+  cursor: pointer; padding: 8px 12px; border-radius: 6px; line-height: 1;
+  transition: color 0.15s, background 0.15s; min-width: 36px; min-height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.settings-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.settings-drawer {
+  /* z-index below the rail (90) so the open animation appears to slide out
+     from behind the rail's right edge — the rail visually covers the drawer
+     until it clears at translateX(0). */
+  position: fixed; top: 0; left: var(--rail-w); height: 100vh; width: 320px; z-index: 50;
+  background: var(--bg-surface); border-right: 1px solid var(--border-default);
+  box-shadow: 8px 0 32px rgba(0,0,0,0.4); display: flex; flex-direction: column;
+  transform: translateX(0); transition: transform 0.25s ease, left 0.18s ease;
+}
+.settings-drawer.hidden { transform: translateX(-100%); pointer-events: none; }
+.settings-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border-subtle);
+}
+.settings-drawer-header h2 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.settings-drawer-close {
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 20px; line-height: 1; padding: 0 4px;
+}
+.settings-drawer-close:hover { color: var(--text-primary); }
+.settings-drawer-close svg { width: 14px; height: 14px; pointer-events: none; }
+.settings-drawer-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.theme-toggle { display: inline-flex; gap: 2px; background: var(--bg-page); border: 1px solid var(--border-default); border-radius: 6px; padding: 2px; }
+.theme-opt { font-size: 14px; padding: 3px 10px; border: none; border-radius: 4px; background: none; color: var(--text-tertiary); cursor: pointer; transition: all 0.15s; font-family: inherit; }
+.theme-opt:hover { color: var(--text-secondary); }
+.theme-opt.active { background: var(--bg-hover); color: var(--text-primary); }
+.settings-section { margin-bottom: 20px; }
+.settings-section-title {
+  font-size: 11px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 12px;
+}
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 0; gap: 10px;
+}
+.settings-row label { font-size: 12px; color: var(--text-secondary); flex-shrink: 0; }
+.settings-row input[type="text"] {
+  font-size: 11px; padding: 4px 8px; border-radius: 5px; flex: 1;
+  border: 1px solid var(--border-default); background: var(--bg-card);
+  color: var(--text-primary); font-family: monospace; outline: none; min-width: 0;
+}
+.settings-row input[type="text"]:focus { border-color: var(--accent); }
+.settings-toggle-switch { position: relative; display: inline-block; width: 32px; height: 18px; flex-shrink: 0; }
+.settings-toggle-switch input { opacity: 0; width: 0; height: 0; }
+.settings-toggle-slider {
+  position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border-default); border-radius: 18px; transition: 0.2s;
+}
+.settings-toggle-slider:before {
+  position: absolute; content: ""; height: 14px; width: 14px; left: 2px; top: 2px;
+  background: var(--text-primary); border-radius: 50%; transition: 0.2s;
+}
+.settings-toggle-switch input:checked + .settings-toggle-slider { background: var(--accent); }
+.settings-toggle-switch input:checked + .settings-toggle-slider:before { transform: translateX(14px); }
+.settings-toggle-switch input:disabled + .settings-toggle-slider { opacity: 0.4; cursor: not-allowed; }
+.settings-status-label { font-size: 11px; color: var(--text-tertiary); flex: 1; text-align: right; }
+.settings-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-default); flex-shrink: 0; }
+.settings-status-dot.ok { background: #10b981; }
+.settings-status-dot.warn { background: #f59e0b; }
+.settings-status-dot.err { background: #ef4444; }
+.settings-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.4; }
+.settings-link { font-size: 11px; color: var(--accent); text-decoration: none; }
+.settings-link:hover { text-decoration: underline; }
+.settings-install-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 5px;
+  border: 1px solid var(--accent); background: rgba(59,130,246,0.12); color: var(--accent);
+  cursor: pointer; font-family: inherit;
+}
+.settings-install-btn:hover { background: rgba(59,130,246,0.22); }
+"""
+
+
+def build_settings_drawer_html(close_icon_svg: str) -> str:
+    """Drawer markup: a hidden toggle button (rail clicks dispatch to it) +
+    the slide-out drawer with theme + feedbacks sections."""
+    return f"""
+<button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings" style="display:none">{_svg_icon('settings', 16)}</button>
+<div id="settings-drawer" class="settings-drawer hidden">
+  <div class="settings-drawer-header">
+    <h2>Settings</h2>
+    <button class="settings-drawer-close" id="settingsDrawerClose" aria-label="Close">{close_icon_svg}</button>
+  </div>
+  <div class="settings-drawer-body">
+    <div class="settings-section">
+      <div class="settings-section-title">Appearance</div>
+      <div class="settings-row">
+        <label>Theme</label>
+        <div class="theme-toggle" id="themeToggle">
+          <button class="theme-opt" data-theme="light" title="Light" aria-label="Light theme">&#9788;</button>
+          <button class="theme-opt" data-theme="system" title="System" aria-label="System theme">&#9684;</button>
+          <button class="theme-opt active" data-theme="dark" title="Dark" aria-label="Dark theme">&#9790;</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-title">Feedbacks Integration</div>
+      <div class="settings-row">
+        <label>Enable</label>
+        <label class="settings-toggle-switch">
+          <input type="checkbox" id="settingsFeedbacksEnabled">
+          <span class="settings-toggle-slider"></span>
+        </label>
+        <span class="settings-status-label" id="feedbacksStatusLabel"></span>
+        <span class="settings-status-dot" id="feedbacksStatusDot" title="Feedbacks status"></span>
+      </div>
+      <div class="settings-row">
+        <label>Path</label>
+        <input type="text" id="settingsFeedbacksPath" placeholder="~/projects/feedbacks">
+      </div>
+      <div class="settings-row">
+        <label>Auto-start recording</label>
+        <label class="settings-toggle-switch">
+          <input type="checkbox" id="settingsFeedbacksAutostart">
+          <span class="settings-toggle-slider"></span>
+        </label>
+      </div>
+      <div class="settings-hint" id="settingsAutostartHint">Skip the Start button when opening the recorder &mdash; capture begins immediately.</div>
+      <div class="settings-row">
+        <a class="settings-link" href="{FEEDBACKS_REPO_URL}" target="_blank" rel="noopener">GitHub</a>
+        <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+
+
+def build_settings_drawer_js() -> str:
+    """JS for the global settings drawer: theme toggle + feedbacks wiring +
+    open/close. Reads /api/settings (project-prefix-agnostic — falls back
+    to the unprefixed path on global pages where there's no project)."""
+    return """
+(function(){
+  var toggleBtn = document.getElementById('settingsToggleBtn');
+  var drawer = document.getElementById('settings-drawer');
+  var closeBtn = document.getElementById('settingsDrawerClose');
+  if (!toggleBtn || !drawer) return;
+
+  // Resolve API base: kanban pages set <meta name="edit-api">; non-kanban
+  // pages don't, so fall back to a global '/api' which serves the same
+  // global settings/feedbacks endpoints.
+  var apiMeta = document.querySelector('meta[name="edit-api"]');
+  var API_BASE = apiMeta ? apiMeta.getAttribute('content') : '/api';
+
+  var enabledChk = document.getElementById('settingsFeedbacksEnabled');
+  var pathInput = document.getElementById('settingsFeedbacksPath');
+  var autostartChk = document.getElementById('settingsFeedbacksAutostart');
+  var statusDot = document.getElementById('feedbacksStatusDot');
+  var statusLabel = document.getElementById('feedbacksStatusLabel');
+  var installBtn = document.getElementById('settingsFeedbacksInstall');
+
+  function openDrawer() {
+    drawer.classList.remove('hidden');
+    loadSettings().then(function(){ checkFeedbacksStatus(); });
+  }
+  function closeDrawer() { drawer.classList.add('hidden'); }
+
+  toggleBtn.addEventListener('click', function(){
+    if (drawer.classList.contains('hidden')) openDrawer();
+    else closeDrawer();
+  });
+  if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+
+  document.addEventListener('click', function(e){
+    if (!drawer.classList.contains('hidden') &&
+        !drawer.contains(e.target) &&
+        e.target !== toggleBtn &&
+        !e.target.closest('#settingsToggleBtn') &&
+        !e.target.closest('#railSettingsBtn')) {
+      closeDrawer();
+    }
+  });
+
+  function loadSettings() {
+    return fetch(API_BASE + '/settings')
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if (enabledChk) enabledChk.checked = (data['feedbacks.enabled'] === 'true' || data['feedbacks.enabled'] === 'True' || data['feedbacks.enabled'] === true);
+        if (pathInput) pathInput.value = data['feedbacks.home'] || '';
+        var av = data['feedbacks.autostart'];
+        if (autostartChk) autostartChk.checked = (av === 'true' || av === 'True' || av === true);
+      })
+      .catch(function(){});
+  }
+
+  function saveSettings(patch) {
+    return fetch(API_BASE + '/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    }).catch(function(){});
+  }
+
+  function checkFeedbacksStatus() {
+    if (!statusDot) return;
+    fetch(API_BASE + '/feedbacks/status')
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        statusDot.className = 'settings-status-dot';
+        var label = '';
+        if (!data.installed) { statusDot.classList.add('err'); label = 'Not installed'; }
+        else if (!data.enabled) { label = ''; }
+        else if (data.running) { statusDot.classList.add('ok'); label = 'Server running'; }
+        else { statusDot.classList.add('warn'); label = 'Server not running'; }
+        statusDot.title = label;
+        if (statusLabel) statusLabel.textContent = label;
+        if (enabledChk) {
+          enabledChk.disabled = !data.installed;
+          if (!data.installed) enabledChk.checked = false;
+        }
+        if (pathInput) pathInput.style.opacity = data.installed ? '1' : '0.5';
+      })
+      .catch(function(){});
+  }
+
+  if (enabledChk) enabledChk.addEventListener('change', function(){
+    saveSettings({ 'feedbacks.enabled': enabledChk.checked ? 'true' : 'false' })
+      .then(function(){ checkFeedbacksStatus(); });
+  });
+  if (pathInput) {
+    var pathTimer = null;
+    pathInput.addEventListener('input', function(){
+      clearTimeout(pathTimer);
+      pathTimer = setTimeout(function(){
+        saveSettings({ 'feedbacks.home': pathInput.value })
+          .then(function(){ checkFeedbacksStatus(); });
+      }, 500);
+    });
+  }
+  if (autostartChk) autostartChk.addEventListener('change', function(){
+    saveSettings({ 'feedbacks.autostart': autostartChk.checked ? 'true' : 'false' });
+  });
+  if (installBtn) installBtn.addEventListener('click', function(){
+    installBtn.disabled = true;
+    installBtn.textContent = 'Installing...';
+    fetch(API_BASE + '/settings/feedbacks/install', { method: 'POST' })
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        installBtn.disabled = false;
+        installBtn.textContent = data.ok ? 'Installed' : 'Install';
+        checkFeedbacksStatus();
+      })
+      .catch(function(){
+        installBtn.disabled = false;
+        installBtn.textContent = 'Install';
+      });
+  });
+
+  // Theme toggle wiring
+  var themeToggle = document.getElementById('themeToggle');
+  if (themeToggle) {
+    function applyTheme(t) {
+      if (t === 'system') {
+        var sys = window.matchMedia('(prefers-color-scheme:light)').matches ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', sys);
+      } else {
+        document.documentElement.setAttribute('data-theme', t);
+      }
+      localStorage.setItem('tt-theme', t);
+      themeToggle.querySelectorAll('.theme-opt').forEach(function(b){
+        b.classList.toggle('active', b.getAttribute('data-theme') === t);
+      });
+    }
+    var saved = localStorage.getItem('tt-theme') || 'system';
+    applyTheme(saved);
+    themeToggle.addEventListener('click', function(e){
+      var btn = e.target.closest('.theme-opt');
+      if (!btn) return;
+      applyTheme(btn.getAttribute('data-theme'));
+    });
   }
 })();
 """
@@ -394,7 +808,6 @@ class Project:
     id: str
     name: str
     path: str
-    description: str = ""
     active: bool = True
     tickets: list = field(default_factory=list)
     code_stats: CodeStats = field(default_factory=CodeStats)
@@ -2290,12 +2703,15 @@ a {{ color: var(--accent); text-decoration: none; }}
 }}
 .settings-toggle:hover {{ color: var(--text-primary); background: var(--bg-hover); }}
 .settings-drawer {{
-  position: fixed; top: 0; right: 0; height: 100vh; width: 320px; z-index: 1100;
-  background: var(--bg-surface); border-left: 1px solid var(--border-default);
-  box-shadow: -8px 0 32px rgba(0,0,0,0.4); display: flex; flex-direction: column;
-  transform: translateX(0); transition: transform 0.25s ease;
+  /* z-index below the rail (90) so the open animation appears to slide out
+     from behind the rail's right edge — the rail visually covers the drawer
+     until it clears at translateX(0). */
+  position: fixed; top: 0; left: var(--rail-w); height: 100vh; width: 320px; z-index: 50;
+  background: var(--bg-surface); border-right: 1px solid var(--border-default);
+  box-shadow: 8px 0 32px rgba(0,0,0,0.4); display: flex; flex-direction: column;
+  transform: translateX(0); transition: transform 0.25s ease, left 0.18s ease;
 }}
-.settings-drawer.hidden {{ transform: translateX(100%); pointer-events: none; }}
+.settings-drawer.hidden {{ transform: translateX(-100%); pointer-events: none; }}
 .settings-drawer-header {{
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 20px; border-bottom: 1px solid var(--border-subtle);
@@ -3234,33 +3650,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         <button class="settings-install-btn" id="settingsFeedbacksInstall">Install</button>
       </div>
     </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Managed Files</div>
-      <div class="settings-hint">Files and directories created or managed by Ticket Takeaway in this project.</div>
-      <div id="managedFilesList" class="managed-files-list"></div>
-    </div>
-    <div class="settings-section" id="projectSection">
-      <div class="settings-section-title">Project</div>
-      <form id="projectForm" class="project-form">
-        <label>Name</label>
-        <input type="text" id="projectNameInput" />
-        <label>Path</label>
-        <input type="text" id="projectPathInput" />
-        <label>Description</label>
-        <textarea id="projectDescInput" rows="2"></textarea>
-        <label>ID <span class="pf-ro">(read-only)</span></label>
-        <input type="text" id="projectIdInput" readonly />
-        <div class="pf-row">
-          <label>Active</label>
-          <label class="settings-toggle-switch">
-            <input type="checkbox" id="projectActiveInput">
-            <span class="settings-toggle-slider"></span>
-          </label>
-        </div>
-        <button type="submit" class="pf-save">Save Project</button>
-        <span class="pf-msg" id="projectSaveMsg"></span>
-      </form>
-    </div>
     <div class="settings-section" id="scenariosSection">
       <div class="settings-section-title">Scenarios</div>
       <div id="scenariosList" class="scenarios-list">
@@ -3273,11 +3662,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       <textarea id="draftGoalInput" rows="2" class="draft-goal" placeholder="e.g. user creates a ticket and moves it to WIP"></textarea>
       <button id="draftGenerateBtn" class="draft-btn">Generate Drafts</button>
       <div id="draftResults" class="draft-results"></div>
-    </div>
-    <div class="settings-section" id="dangerSection">
-      <div class="settings-section-title" style="color:#ef4444;">Danger Zone</div>
-      <button id="removeProjectBtn" class="danger-btn">Remove Project</button>
-      <div class="settings-hint">Removes from registry only. Files and tickets are not deleted.</div>
     </div>
   </div>
 </div>
@@ -7537,8 +7921,6 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   function openDrawer() {{
     drawer.classList.remove('hidden');
     loadSettings().then(function() {{ checkFeedbacksStatus(); }});
-    loadManagedFiles();
-    if (typeof loadProject === 'function') loadProject();
     if (typeof loadScenarios === 'function') loadScenarios();
   }}
 
@@ -7636,127 +8018,9 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       }});
   }}
 
-  function loadManagedFiles() {{
-    var container = document.getElementById('managedFilesList');
-    if (!container || !EDIT_API) return;
-    fetch(EDIT_API + '/managed-files')
-      .then(function(r) {{ return r.json(); }})
-      .then(function(files) {{
-        while (container.firstChild) container.removeChild(container.firstChild);
-        files.forEach(function(f) {{
-          var row = document.createElement('div');
-          row.className = 'managed-file-row';
-          var dot = document.createElement('span');
-          dot.className = 'managed-file-dot ' + (f.exists ? 'exists' : 'missing');
-          dot.title = f.exists ? 'Exists' : 'Not created yet';
-          var pathEl = document.createElement('span');
-          pathEl.className = 'managed-file-path';
-          pathEl.textContent = f.path;
-          var desc = document.createElement('span');
-          desc.className = 'managed-file-desc';
-          desc.textContent = f.description;
-          row.appendChild(dot);
-          row.appendChild(pathEl);
-          if (f.gitignored) {{
-            var badge = document.createElement('span');
-            badge.className = 'managed-file-badge';
-            badge.textContent = '.gitignored';
-            row.appendChild(badge);
-          }}
-          row.appendChild(desc);
-          container.appendChild(row);
-        }});
-      }})
-      .catch(function() {{
-        while (container.firstChild) container.removeChild(container.firstChild);
-        var hint = document.createElement('div');
-        hint.className = 'settings-hint';
-        hint.textContent = 'Could not load managed files.';
-        container.appendChild(hint);
-      }});
-  }}
-
-  /* ── Drawer: Project metadata ───────────────────── */
+  /* ── Drawer: Scenarios (project-scoped, project context required) ── */
   var currentPidMeta = document.querySelector('meta[name="current-project"]');
   var currentPid = currentPidMeta ? currentPidMeta.content : null;
-  var projectSection = document.getElementById('projectSection');
-  var projectForm = document.getElementById('projectForm');
-  var projectNameInput = document.getElementById('projectNameInput');
-  var projectPathInput = document.getElementById('projectPathInput');
-  var projectDescInput = document.getElementById('projectDescInput');
-  var projectIdInput = document.getElementById('projectIdInput');
-  var projectActiveInput = document.getElementById('projectActiveInput');
-  var projectSaveMsg = document.getElementById('projectSaveMsg');
-
-  function loadProject() {{
-    if (!projectForm || !currentPid) {{ if (projectSection) projectSection.style.display = 'none'; return; }}
-    fetch('/api/projects')
-      .then(function(r) {{ return r.json(); }})
-      .then(function(data) {{
-        var list = (data && data.projects) || data || [];
-        var proj = null;
-        for (var i = 0; i < list.length; i++) {{
-          if (list[i].id === currentPid) {{ proj = list[i]; break; }}
-        }}
-        if (!proj) return;
-        if (projectNameInput) projectNameInput.value = proj.name || '';
-        if (projectPathInput) projectPathInput.value = proj.path || '';
-        if (projectDescInput) projectDescInput.value = proj.description || '';
-        if (projectIdInput) projectIdInput.value = proj.id || '';
-        if (projectActiveInput) projectActiveInput.checked = proj.active !== false;
-      }})
-      .catch(function() {{}});
-  }}
-
-  if (projectForm) {{
-    projectForm.addEventListener('submit', function(e) {{
-      e.preventDefault();
-      if (!currentPid) return;
-      projectSaveMsg.textContent = '';
-      projectSaveMsg.className = 'pf-msg';
-      fetch('/api/projects/' + currentPid, {{
-        method: 'PUT',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{
-          name: projectNameInput.value,
-          path: projectPathInput.value,
-          description: projectDescInput.value,
-          active: projectActiveInput.checked
-        }})
-      }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, data: j}}; }}); }})
-      .then(function(res) {{
-        if (res.ok) {{ projectSaveMsg.textContent = 'Saved'; projectSaveMsg.className = 'pf-msg ok'; }}
-        else {{ projectSaveMsg.textContent = (res.data && res.data.error) || 'Failed'; projectSaveMsg.className = 'pf-msg err'; }}
-      }}).catch(function() {{
-        projectSaveMsg.textContent = 'Network error'; projectSaveMsg.className = 'pf-msg err';
-      }});
-    }});
-  }}
-
-  /* ── Drawer: Remove Project (Danger Zone) ───────── */
-  var removeBtn = document.getElementById('removeProjectBtn');
-  if (removeBtn) {{
-    removeBtn.addEventListener('click', function() {{
-      if (!currentPid || typeof window.showConfirmModal !== 'function') return;
-      window.showConfirmModal(
-        'Remove Project',
-        'Remove this project from the registry? Tickets and files will not be deleted.',
-        'Remove',
-        function() {{
-          fetch('/api/projects/' + currentPid, {{ method: 'DELETE' }})
-            .then(function(r) {{ return r.json(); }})
-            .then(function(data) {{
-              if (data && data.ok) window.location.href = '/';
-              else if (typeof window.showAppToast === 'function') {{
-                window.showAppToast((data && data.error) || 'Failed to remove', 'error');
-              }}
-            }});
-        }}
-      );
-    }});
-  }}
-
-  /* ── Drawer: Scenarios ──────────────────────────── */
   function scenarioApi(path) {{ return '/' + currentPid + '/api/scenarios' + path; }}
 
   function loadScenarios() {{
@@ -11839,7 +12103,6 @@ def generate_json_output(projects: list[Project]) -> str:
             "id": proj.id,
             "name": proj.name,
             "path": proj.path,
-            "description": proj.description,
             "active": proj.active,
             "code_stats": {
                 "files": cs.files,
@@ -11907,7 +12170,6 @@ def main():
             id=entry.get("id", "unknown"),
             name=entry.get("name", entry.get("id", "Unknown")),
             path=os.path.expanduser(entry.get("path", "")),
-            description=entry.get("description", ""),
             active=entry.get("active", True),
         )
 

@@ -95,14 +95,13 @@ def _set_auto(db_factory, tid="B-1", project_id="p"):
 
 
 def _set_tests_flag(db_factory, tid="B-1", project_id="p"):
-    conn = db_factory()
-    conn.execute(
-        "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) "
-        "VALUES (?, ?, 'tests', 'pytest tests/')",
-        (tid, project_id),
-    )
-    conn.commit()
-    conn.close()
+    """Legacy helper kept as a no-op.
+
+    Migration 15 collapsed the tests/smoke readiness flags into acceptance
+    criteria. Existing tests still call this for narrative clarity; we keep
+    the function as a no-op so the test surface stays stable.
+    """
+    return None
 
 
 def _set_flag(db_factory, key: str, value: str):

@@ -238,19 +238,21 @@ class TestCriteriaCountGte:
 
 class TestFlagSet:
     def test_pass_when_flag_with_content(self, conn):
+        # S/T were collapsed into acceptance_criteria (migration 15). The L
+        # (Learnings) pane is the surviving flag-style readiness slot.
         _make_ticket(conn)
         conn.execute(
             "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) VALUES (?, ?, ?, ?)",
-            ("B-1", "p", "tests", "unit tests added"),
+            ("B-1", "p", "reviewed", "captured what we learned"),
         )
         ctx = _make_ctx(conn)
-        ok, _ = evaluate_condition({"kind": "flag_set", "flag": "T"}, ctx)
+        ok, _ = evaluate_condition({"kind": "flag_set", "flag": "L"}, ctx)
         assert ok
 
     def test_fail_when_flag_absent(self, conn):
         _make_ticket(conn)
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "flag_set", "flag": "T"}, ctx)
+        ok, reason = evaluate_condition({"kind": "flag_set", "flag": "L"}, ctx)
         assert not ok
         assert "not set" in reason
 
@@ -258,10 +260,10 @@ class TestFlagSet:
         _make_ticket(conn)
         conn.execute(
             "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) VALUES (?, ?, ?, ?)",
-            ("B-1", "p", "tests", ""),
+            ("B-1", "p", "reviewed", ""),
         )
         ctx = _make_ctx(conn)
-        ok, _ = evaluate_condition({"kind": "flag_set", "flag": "T"}, ctx)
+        ok, _ = evaluate_condition({"kind": "flag_set", "flag": "L"}, ctx)
         assert not ok
 
 
@@ -298,7 +300,14 @@ class TestDepsClear:
 
 
 class TestTestsCovered:
-    def test_pass_via_tests_flag(self, conn):
+    """tests_covered is now an opt-in predicate (migration 15).
+
+    The legacy "tests readiness flag has content" path is gone — content lives
+    in acceptance criteria. Surviving paths: linked journey or no_test_required.
+    """
+
+    def test_tests_readiness_flag_no_longer_satisfies(self, conn):
+        # A bare 'tests' readiness row no longer satisfies the predicate.
         _make_ticket(conn)
         conn.execute(
             "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) VALUES (?, ?, ?, ?)",
@@ -306,7 +315,7 @@ class TestTestsCovered:
         )
         ctx = _make_ctx(conn)
         ok, _ = evaluate_condition({"kind": "tests_covered"}, ctx)
-        assert ok
+        assert not ok
 
     def test_pass_via_no_test_required(self, conn):
         _make_ticket(conn, no_test_required=1, no_test_required_note="CLI-only tool")

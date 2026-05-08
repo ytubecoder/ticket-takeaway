@@ -39,9 +39,7 @@ MOCK_GATE_RESPONSE = {
     "categories": {
         "D": {"status": "ok", "current_summary": "Description is complete"},
         "C": {"status": "ok", "current_summary": "Criteria defined"},
-        "T": {"status": "ok", "current_summary": "Tests written"},
-        "R": {"status": "ok", "current_summary": "Review done"},
-        "S": {"status": "ok", "current_summary": "Smoke tested"},
+        "L": {"status": "ok", "current_summary": "Learnings captured"},
     },
 }
 

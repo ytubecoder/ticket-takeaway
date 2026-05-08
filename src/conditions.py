@@ -82,13 +82,13 @@ def _eval_flag_set(ctx: dict, p: dict) -> tuple[bool, str]:
     db: sqlite3.Connection = ctx["db"]
     ticket = ctx["ticket"]
     flag = p.get("flag", "")
-    # Map UI flag labels (D/C/S/T/L) to DB flag names
+    # Map UI flag labels (D/C/L) to DB flag names. The L-pane is stored under
+    # the legacy 'reviewed' key. Smoke and Tests collapsed into acceptance
+    # criteria (migration 15) — use criteria_count_gte instead.
     _flag_map = {
         "D": "description",
         "C": "criteria",
-        "S": "smoke",
-        "T": "tests",
-        "L": "learnings",
+        "L": "reviewed",
     }
     db_flag = _flag_map.get(flag, flag.lower())
     row = db.execute(
@@ -355,7 +355,7 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
             {
                 "name": "flag",
                 "type": "flag_select",
-                "options": ["D", "C", "S", "T", "L"],
+                "options": ["D", "C", "L"],
             }
         ],
         "evaluator": _eval_flag_set,

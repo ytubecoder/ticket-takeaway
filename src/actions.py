@@ -272,21 +272,20 @@ def _journey_compiles_and_validates(conn: sqlite3.Connection, project_id: str, j
 
 
 def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
-    """Return (covered, reasons). See docs/KITCHEN.md §7 'Tests covered means'."""
+    """Return (covered, reasons). Opt-in predicate for stricter user gates.
+
+    Migration 15 collapsed the tests/smoke readiness flags into acceptance
+    criteria, so the legacy "tests readiness flag has content" path is gone.
+    Surviving paths:
+      1. A linked journey that compiles + validates.
+      2. Explicit ticket.no_test_required = 1 with a non-empty rationale note.
+    Nothing seeded references this predicate; criteria are the default bar.
+    """
     reasons: list[str] = []
     project_id = ticket["project_id"]
     ticket_id = ticket["id"]
 
-    # Path 1: readiness_flags row with flag='tests' AND non-empty content.
-    tests_row = conn.execute(
-        "SELECT content FROM readiness_flags "
-        "WHERE ticket_id = ? AND project_id = ? AND flag = 'tests'",
-        (ticket_id, project_id),
-    ).fetchone()
-    if tests_row and (tests_row["content"] or "").strip():
-        return (True, ["tests readiness flag has content"])
-
-    # Path 2: any linked journey that compiles + validates.
+    # Path 1: any linked journey that compiles + validates.
     journey_rows = conn.execute(
         "SELECT journey_id FROM journey_tickets "
         "WHERE ticket_id = ? AND project_id = ?",
@@ -296,15 +295,11 @@ def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool,
         if _journey_compiles_and_validates(conn, project_id, journey_id):
             return (True, [f"linked journey {journey_id} compiles+validates"])
 
-    # Path 3: explicit no_test_required with non-empty note.
+    # Path 2: explicit no_test_required with non-empty note.
     if ticket["no_test_required"] == 1 and (ticket["no_test_required_note"] or "").strip():
         return (True, ["no_test_required (explicit)"])
 
     # No path satisfied — explain.
-    if not tests_row:
-        reasons.append("no tests readiness flag")
-    elif not (tests_row["content"] or "").strip():
-        reasons.append("tests readiness flag is empty")
     if journey_rows and not any(
         _journey_compiles_and_validates(conn, project_id, jid) for (jid,) in journey_rows
     ):
@@ -350,10 +345,6 @@ def _ticket_eligibility(conn: sqlite3.Connection, ticket: sqlite3.Row) -> Eligib
     if not deps_ok:
         reasons.extend(dep_reasons)
 
-    tests_ok, test_reasons = _tests_covered(conn, ticket)
-    if not tests_ok:
-        reasons.extend(test_reasons)
-
     if _has_active_run(conn, project_id, "ticket", ticket_id):
         reasons.append("active run already exists")
 
@@ -365,7 +356,6 @@ def _ticket_eligibility(conn: sqlite3.Connection, ticket: sqlite3.Row) -> Eligib
         and (ticket["description"] or "").strip()
         and crit_count > 0
         and deps_ok
-        and tests_ok
         and not _has_active_run(conn, project_id, "ticket", ticket_id)
     )
     return EligibilityResult(eligible=bool(eligible), reasons=tuple(reasons))

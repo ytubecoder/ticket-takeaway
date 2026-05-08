@@ -156,7 +156,10 @@ DEFAULT_WORKFLOWS: list[dict] = [
             }
         ],
     },
-    # 2. Backlog → WIP: full eligibility — replicates current Kitchen _ticket_eligibility
+    # 2. Backlog → WIP: criteria-led eligibility — acceptance criteria are
+    #    the bar. Users wanting stricter test gating can still add the
+    #    `tests_covered` predicate (linked journey or no_test_required) to
+    #    their own workflows.
     {
         "name": "Backlog → WIP",
         "description": "Auto-dispatch Backlog tickets that are fully ready to start work",
@@ -170,7 +173,6 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 {"kind": "has_field", "field": "description"},
                 {"kind": "criteria_count_gte", "value": 1},
                 {"kind": "deps_clear"},
-                {"kind": "tests_covered"},
                 {"kind": "no_active_run"},
             ]
         },
@@ -457,31 +459,38 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str, int]:
-    """Insert missing system workflows for *project_id*; sync canonical fields
-    on existing system rows so seed-definition changes propagate. Idempotent.
+    """Link *project_id* to every default system workflow. Idempotent.
 
-    Existing user (`system=0`) workflows are never touched. For `system=1` rows,
-    description / steps / trigger_json / on_success_json / subject_type are
-    overwritten from the seed definition; `enabled` is preserved (so a user who
-    disabled a default keeps it disabled).
+    Post-migration-16 model: system workflows are first-class single rows.
+    Seeding a project no longer duplicates them — it just inserts (or updates)
+    a row in `workflow_projects(workflow_id, project_id, enabled)`. If a system
+    workflow row for a given default name doesn't exist yet (cold-start install
+    with no migration yet to copy from), we create one canonical row first.
 
-    Returns {"inserted": N, "updated": M, "existing": K}.
+    Workflow body (description / steps / trigger / on_success / subject_type)
+    is refreshed from the seed definition so changes to DEFAULT_WORKFLOWS
+    propagate. Per-project enabled state is preserved on the link row, but if
+    no link exists yet we use the seed's default enabled flag.
+
+    Returns {"linked": N, "updated_body": M, "already_linked": K}.
     """
-    inserted = 0
-    updated = 0
-    existing = 0
+    linked = 0
+    updated_body = 0
+    already_linked = 0
     now = datetime.now(timezone.utc).isoformat()
 
     for wf in DEFAULT_WORKFLOWS:
-        row = db.execute(
-            "SELECT id, description, steps, trigger_json, on_success_json, subject_type "
-            "FROM workflows WHERE name = ? AND system = 1 AND id LIKE ?",
-            (wf["name"], f"{project_id}::%"),
-        ).fetchone()
-
         steps_json = json.dumps(wf["steps"], ensure_ascii=False)
         trigger_json = json.dumps(wf["trigger_json"], ensure_ascii=False)
         on_success_json = json.dumps(wf.get("on_success_json", {}), ensure_ascii=False)
+
+        # Find the canonical workflow row for this template (any system row with
+        # matching name; post-migration there's exactly one).
+        row = db.execute(
+            "SELECT id, description, steps, trigger_json, on_success_json, subject_type "
+            "FROM workflows WHERE name = ? AND system = 1",
+            (wf["name"],),
+        ).fetchone()
 
         if row:
             wf_id = row[0] if not hasattr(row, "keys") else row["id"]
@@ -499,36 +508,45 @@ def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str,
                     "on_success_json=?, subject_type=?, updated_at=? WHERE id=?",
                     (*target, now, wf_id),
                 )
-                updated += 1
-            else:
-                existing += 1
-            continue
+                updated_body += 1
+        else:
+            # Cold start — no canonical row yet, mint one.
+            wf_id = f"sys::{wf['name'].lower().replace(' ', '-').replace('→', 'to')}"
+            db.execute(
+                """
+                INSERT INTO workflows
+                    (id, name, description, steps, created_at, updated_at,
+                     system, enabled, trigger_json, on_success_json, subject_type, project_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    wf_id,
+                    wf["name"],
+                    wf["description"],
+                    steps_json,
+                    now,
+                    now,
+                    wf["system"],
+                    wf["enabled"],
+                    trigger_json,
+                    on_success_json,
+                    wf["subject_type"],
+                ),
+            )
 
-        wf_id = f"{project_id}::sys::{wf['name'].lower().replace(' ', '-').replace('→', 'to')}"
-
-        db.execute(
-            """
-            INSERT INTO workflows
-                (id, name, description, steps, created_at, updated_at,
-                 system, enabled, trigger_json, on_success_json, subject_type, project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                wf_id,
-                wf["name"],
-                wf["description"],
-                steps_json,
-                now,
-                now,
-                wf["system"],
-                wf["enabled"],
-                trigger_json,
-                on_success_json,
-                wf["subject_type"],
-                project_id,
-            ),
-        )
-        inserted += 1
+        # Link this project to the canonical workflow if not already linked.
+        existing_link = db.execute(
+            "SELECT enabled FROM workflow_projects WHERE workflow_id = ? AND project_id = ?",
+            (wf_id, project_id),
+        ).fetchone()
+        if existing_link is None:
+            db.execute(
+                "INSERT INTO workflow_projects (workflow_id, project_id, enabled) VALUES (?, ?, ?)",
+                (wf_id, project_id, wf["enabled"]),
+            )
+            linked += 1
+        else:
+            already_linked += 1
 
     db.commit()
-    return {"inserted": inserted, "updated": updated, "existing": existing}
+    return {"linked": linked, "updated_body": updated_body, "already_linked": already_linked}

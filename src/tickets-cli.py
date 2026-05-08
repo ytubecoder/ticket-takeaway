@@ -221,22 +221,33 @@ def parse_backlog(filepath: str) -> list[dict]:
             current_ticket["acceptance_criteria"].append((checked, text_content))
             continue
 
-        # Readiness content: Tests, Reviewed, Smoke
-        if current_ticket and line_stripped.startswith(("Tests:", "Reviewed:", "Smoke:")):
-            flag_label, _, val = line_stripped.partition(":")
-            flag_key = {"Tests": "tests", "Reviewed": "reviewed", "Smoke": "smoke"}[flag_label]
-            current_ticket["readiness_content"][flag_key] = val.strip()
+        # Readiness content: Reviewed (Learnings). Tests/Smoke are no longer
+        # tracked separately — their content moved into acceptance criteria
+        # (migration 15). Legacy `Tests:` / `Smoke:` lines from older markdown
+        # are silently ignored on ingest; the next sync will drop them, along
+        # with any 4-space-indented continuation lines that followed them.
+        if current_ticket and line_stripped.startswith("Reviewed:"):
+            _, _, val = line_stripped.partition(":")
+            current_ticket["readiness_content"]["reviewed"] = val.strip()
+            current_ticket["_swallow_indented"] = False
+            continue
+        if current_ticket and line_stripped.startswith(("Tests:", "Smoke:")):
+            current_ticket["_swallow_indented"] = True
             continue
 
         # Indented continuation of readiness content (4-space indent)
-        if current_ticket and line.startswith("    ") and current_ticket.get("readiness_content"):
-            # Append to the most recently set readiness flag
-            last_flag = list(current_ticket["readiness_content"].keys())[-1]
-            current_ticket["readiness_content"][last_flag] += "\n" + line_stripped
-            continue
+        if current_ticket and line.startswith("    "):
+            if current_ticket.get("_swallow_indented"):
+                continue
+            if current_ticket.get("readiness_content"):
+                # Append to the most recently set readiness flag
+                last_flag = list(current_ticket["readiness_content"].keys())[-1]
+                current_ticket["readiness_content"][last_flag] += "\n" + line_stripped
+                continue
 
         # Description
         if current_ticket and line_stripped and not line_stripped.startswith("#"):
+            current_ticket["_swallow_indented"] = False
             if current_ticket["description"]:
                 current_ticket["description"] += " " + line_stripped
             else:
@@ -596,13 +607,14 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
                 check = "x" if c["checked"] else " "
                 lines.append(f"- [{check}] {c['text']}")
 
-            # Readiness content (Tests, Reviewed, Smoke)
+            # Readiness content (Reviewed → Learnings). Tests/Smoke were
+            # collapsed into acceptance criteria in migration 15.
             flags = conn.execute(
                 "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND content != '' ORDER BY flag",
                 (t["id"], project_id)
             ).fetchall()
             for f in flags:
-                label = {"tests": "Tests", "reviewed": "Reviewed", "smoke": "Smoke"}.get(f["flag"])
+                label = {"reviewed": "Reviewed"}.get(f["flag"])
                 if label and f["content"]:
                     content_lines = f["content"].split("\n")
                     lines.append(f"{label}: {content_lines[0]}")
@@ -1145,7 +1157,7 @@ def cmd_accept(args):
 # Subcommand: sync
 # ---------------------------------------------------------------------------
 
-VALID_FLAGS = {"tests", "reviewed", "smoke"}
+VALID_FLAGS = {"reviewed"}
 
 
 def cmd_flag(args):

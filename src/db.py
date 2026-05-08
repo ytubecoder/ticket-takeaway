@@ -662,3 +662,138 @@ def init_db(conn: sqlite3.Connection):
         )
         conn.execute("INSERT INTO _migrations (version) VALUES (14)")
         conn.commit()
+
+    # Migration 15 — collapse the Smoke and Tests readiness flags into
+    # acceptance_criteria. The DCSTL readiness model becomes DCL: Description,
+    # Criteria, Learnings. Migrates non-empty 'tests' / 'smoke' content into
+    # discrete criteria rows (deduped against existing criteria, case-insensitive),
+    # then deletes those readiness_flags rows. Empty 'smoke' rows are also
+    # removed. The `tickets.no_test_required*` columns are left in place; their
+    # only consumer was `_tests_covered`, which is no longer wired into any
+    # default workflow gate.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 15").fetchone():
+        flag_rows = conn.execute(
+            "SELECT ticket_id, project_id, flag, content FROM readiness_flags "
+            "WHERE flag IN ('tests', 'smoke')"
+        ).fetchall()
+        for fr in flag_rows:
+            ticket_id = fr["ticket_id"]
+            project_id = fr["project_id"]
+            content = (fr["content"] or "").strip()
+            if not content:
+                continue
+            existing_rows = conn.execute(
+                "SELECT text, checked, sort_order FROM acceptance_criteria "
+                "WHERE ticket_id = ? AND project_id = ?",
+                (ticket_id, project_id),
+            ).fetchall()
+            existing_norm = {
+                " ".join((r["text"] or "").split()).lower()
+                for r in existing_rows
+            }
+            next_order = max(
+                (r["sort_order"] for r in existing_rows), default=-1
+            ) + 1
+            for raw_line in content.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                checked = 0
+                stripped = line
+                if stripped.startswith(("- ", "* ", "• ")):
+                    stripped = stripped[2:].lstrip()
+                if stripped[:4].lower() in ("[ ] ", "[x] "):
+                    checked = 1 if stripped[1].lower() == "x" else 0
+                    stripped = stripped[4:].lstrip()
+                stripped = stripped.strip()
+                if not stripped:
+                    continue
+                norm = " ".join(stripped.split()).lower()
+                if norm in existing_norm:
+                    continue
+                conn.execute(
+                    "INSERT INTO acceptance_criteria "
+                    "(ticket_id, project_id, text, checked, sort_order) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (ticket_id, project_id, stripped, checked, next_order),
+                )
+                existing_norm.add(norm)
+                next_order += 1
+        conn.execute(
+            "DELETE FROM readiness_flags WHERE flag IN ('tests', 'smoke')"
+        )
+        conn.execute("INSERT INTO _migrations (version) VALUES (15)")
+        conn.commit()
+
+    # Migration 16: First-class workflows + workflow_projects join table.
+    #
+    # Before: each project had its own copy of every system workflow (e.g. 5
+    # projects × 8 templates = 40 rows). Editing one meant editing N copies.
+    #
+    # After: one canonical workflow row per logical template; project linkage
+    # lives in `workflow_projects(workflow_id, project_id, enabled)`. Per-project
+    # enable/disable state moves into the join table; the workflow body is
+    # edit-once-applies-everywhere.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 16").fetchone():
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_projects (
+                workflow_id TEXT NOT NULL,
+                project_id  TEXT NOT NULL,
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (workflow_id, project_id),
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS wf_proj_workflow ON workflow_projects (workflow_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS wf_proj_project ON workflow_projects (project_id)")
+
+        conn.execute("""
+            INSERT OR IGNORE INTO workflow_projects (workflow_id, project_id, enabled)
+            SELECT id, project_id, COALESCE(enabled, 1)
+            FROM workflows
+            WHERE project_id IS NOT NULL
+        """)
+
+        canonical_rows = conn.execute("""
+            SELECT name, MIN(id) AS canonical_id
+            FROM workflows
+            WHERE system = 1
+            GROUP BY name
+        """).fetchall()
+        for r in canonical_rows:
+            name = r["name"]
+            canonical_id = r["canonical_id"]
+            dup_ids = [
+                row["id"] for row in conn.execute(
+                    "SELECT id FROM workflows WHERE system = 1 AND name = ? AND id <> ?",
+                    (name, canonical_id),
+                ).fetchall()
+            ]
+            if not dup_ids:
+                continue
+            placeholders = ",".join("?" * len(dup_ids))
+            conn.execute(f"""
+                INSERT OR REPLACE INTO workflow_projects (workflow_id, project_id, enabled, created_at)
+                SELECT ?, project_id, MAX(enabled), MIN(created_at)
+                FROM workflow_projects
+                WHERE workflow_id IN ({placeholders})
+                GROUP BY project_id
+            """, (canonical_id, *dup_ids))
+            conn.execute(
+                f"DELETE FROM workflow_projects WHERE workflow_id IN ({placeholders})",
+                dup_ids,
+            )
+            conn.execute(
+                f"UPDATE workflow_runs SET workflow_id = ? WHERE workflow_id IN ({placeholders})",
+                (canonical_id, *dup_ids),
+            )
+            conn.execute(
+                f"DELETE FROM workflows WHERE id IN ({placeholders})",
+                dup_ids,
+            )
+
+        conn.execute("UPDATE workflows SET project_id = NULL WHERE system = 1")
+
+        conn.execute("INSERT INTO _migrations (version) VALUES (16)")
+        conn.commit()

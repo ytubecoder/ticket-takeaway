@@ -245,15 +245,20 @@ class TestEligibilityTicket:
         assert not r.eligible
         assert any("automation_mode" in x for x in r.reasons)
 
-    def test_auto_with_no_tests_blocked(self, conn):
+    def test_auto_with_criteria_eligible(self, conn):
+        """After migration 15 the seeded gate is criteria-led — automation auto
+        plus at least one acceptance criterion is enough. Tests are no longer
+        a default gate (users can opt in via tests_covered in their workflows)."""
         _add_ticket(conn); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
-        assert not r.eligible
-        assert any("test" in x.lower() for x in r.reasons)
+        assert r.eligible, r.reasons
 
     def test_no_test_required_satisfies(self, conn):
+        """no_test_required has no effect on the default gate now (the seeded
+        Backlog → WIP trigger no longer evaluates tests_covered) but a ticket
+        marked NTR with criteria is still eligible."""
         _add_ticket(conn); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         set_no_test_required(conn, "p", "B-1", True, "Pure docs change", ActorContext.human())
@@ -369,27 +374,22 @@ class TestEligibilityTicket:
         assert not r.eligible
         assert any("active run" in x for x in r.reasons)
 
-    def test_tests_readiness_with_content_satisfies(self, conn):
+    def test_criteria_alone_satisfies_eligibility(self, conn):
+        """After migration 15 the seeded gate is criteria-led; no test flag required."""
         _add_ticket(conn); conn.commit()
-        conn.execute(
-            "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) "
-            "VALUES ('B-1', 'p', 'tests', 'pytest tests/test_foo.py')"
-        ); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
         assert r.eligible, r.reasons
 
-    def test_tests_readiness_empty_does_not_satisfy(self, conn):
-        _add_ticket(conn); conn.commit()
-        conn.execute(
-            "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) "
-            "VALUES ('B-1', 'p', 'tests', '   ')"
-        ); conn.commit()
+    def test_no_criteria_blocks_eligibility(self, conn):
+        """Tickets with no acceptance criteria are not eligible."""
+        _add_ticket(conn, with_criteria=False); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
         assert not r.eligible
+        assert any("criteria" in x for x in r.reasons)
 
 
 class TestEligibilityUnknown:

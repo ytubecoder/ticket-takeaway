@@ -85,11 +85,14 @@ def _set_auto(conn, tid="B-1", project_id="p"):
 
 
 def _set_tests_flag(conn, tid="B-1", project_id="p", content="pytest tests/test_foo.py"):
-    conn.execute(
-        "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) "
-        "VALUES (?, ?, 'tests', ?)",
-        (tid, project_id, content),
-    )
+    """Legacy helper kept as a no-op for parity tests.
+
+    Migration 15 collapsed the tests/smoke readiness flags into acceptance
+    criteria, and the Backlog → WIP trigger no longer carries tests_covered.
+    Existing tests continue to call this for narrative clarity; we keep the
+    function as a no-op so the test surface stays stable.
+    """
+    return None
 
 
 def _get_legacy_result(conn, tid="B-1", project_id="p"):
@@ -191,9 +194,12 @@ class TestParityBlockedDep:
 
 
 class TestParityNoTestsCovered:
-    """No test coverage path satisfied — both should block."""
+    """After migration 15 the seeded gate is criteria-led — neither path
+    blocks on a missing test flag. We keep these cases to show that the two
+    paths still agree when no test coverage signal is present.
+    """
 
-    def test_no_tests_both_block(self, conn):
+    def test_no_tests_both_pass(self, conn):
         _add_ticket(conn)
         _add_criteria(conn)
         _set_auto(conn)
@@ -201,19 +207,19 @@ class TestParityNoTestsCovered:
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
-        assert legacy.eligible is False
-        assert wf_passed is False
+        assert legacy.eligible is True
+        assert wf_passed is True
 
-    def test_empty_tests_flag_both_block(self, conn):
+    def test_empty_tests_flag_both_pass(self, conn):
         _add_ticket(conn)
         _add_criteria(conn)
         _set_auto(conn)
-        _set_tests_flag(conn, content="   ")  # whitespace only
+        _set_tests_flag(conn, content="   ")  # no-op after migration 15
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
-        assert legacy.eligible is False
-        assert wf_passed is False
+        assert legacy.eligible is True
+        assert wf_passed is True
 
 
 class TestParityActiveRun:
@@ -382,14 +388,18 @@ class TestParityDepDone:
 
 
 class TestParityNoTestRequiredBypass:
-    """no_test_required=1 with note satisfies tests_covered in legacy; also satisfies
-    the tests_covered condition evaluator in the workflow path."""
+    """no_test_required is now an opt-in tests_covered predicate.
+
+    After migration 15 the seeded Backlog → WIP gate no longer evaluates
+    tests_covered, so no_test_required has no effect on the default eligibility
+    paths. We keep this case to confirm both paths still agree (eligible=True)
+    when the field is set.
+    """
 
     def test_no_test_required_both_pass(self, conn):
         _add_ticket(conn, no_test_required=1, no_test_required_note="docs-only change")
         _add_criteria(conn)
         _set_auto(conn)
-        # No tests flag — satisfied via no_test_required.
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -420,10 +430,12 @@ class TestParityCoverage:
             "has_field",
             "criteria_count_gte",
             "deps_clear",
-            "tests_covered",
             "no_active_run",
         }
         assert expected <= kinds, f"Missing conditions: {expected - kinds}"
+        # tests_covered was retired from the seeded gate (migration 15) —
+        # criteria are now the bar. Users can still add it to bespoke workflows.
+        assert "tests_covered" not in kinds
 
     def test_backlog_to_wip_trigger_section_is_backlog(self):
         trigger = _BACKLOG_TO_WIP_TRIGGER

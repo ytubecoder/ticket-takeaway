@@ -109,15 +109,19 @@ def test_post_move_ticket(dashboard_server):
 
 
 def test_post_toggle_readiness_flag(dashboard_server):
-    """POST /api/tickets/{id}/readiness/tests returns 200."""
+    """POST /api/tickets/{id}/readiness/reviewed returns 200.
+
+    'tests' / 'smoke' flags were collapsed into acceptance_criteria
+    (migration 15); 'reviewed' is the surviving flag-style readiness slot.
+    """
     tid = _get_first_ticket_id(dashboard_server)
     status_code, data = api_post(
-        dashboard_server, f"/api/tickets/{tid}/readiness/tests", {}
+        dashboard_server, f"/api/tickets/{tid}/readiness/reviewed", {}
     )
     assert status_code == 200
 
     # Toggle back
-    api_post(dashboard_server, f"/api/tickets/{tid}/readiness/tests", {})
+    api_post(dashboard_server, f"/api/tickets/{tid}/readiness/reviewed", {})
 
 
 # ---------------------------------------------------------------------------
@@ -143,18 +147,18 @@ def test_put_update_ticket(dashboard_server):
 
 
 def test_put_readiness_content(dashboard_server):
-    """PUT /api/tickets/{id}/readiness/tests returns 200."""
+    """PUT /api/tickets/{id}/readiness/reviewed returns 200."""
     tid = _get_first_ticket_id(dashboard_server)
     status_code, data = api_put(
         dashboard_server,
-        f"/api/tickets/{tid}/readiness/tests",
+        f"/api/tickets/{tid}/readiness/reviewed",
         {"content": "smoke test"},
     )
     assert status_code == 200
 
     # Restore
     api_put(
-        dashboard_server, f"/api/tickets/{tid}/readiness/tests", {"content": ""}
+        dashboard_server, f"/api/tickets/{tid}/readiness/reviewed", {"content": ""}
     )
 
 

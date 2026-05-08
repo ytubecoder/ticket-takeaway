@@ -238,13 +238,15 @@ class TestReadinessChanged:
         serve, db_file = serve_mod
         c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
         _seed(c); c.commit(); c.close()
-        ok = serve._toggle_readiness(_proj(), "B-1", "tests")
+        # 'tests' / 'smoke' flags were collapsed in migration 15; 'reviewed'
+        # (Learnings) is the surviving flag-style readiness slot.
+        ok = serve._toggle_readiness(_proj(), "B-1", "reviewed")
         assert ok
         c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
         rows = _events(c, "B-1", "readiness_changed")
         assert len(rows) == 1
         payload = json.loads(rows[0]["payload_json"])
-        assert payload["flag"] == "tests"
+        assert payload["flag"] == "reviewed"
         assert payload["before"]["present"] is False
         assert payload["after"]["present"] is True
 
@@ -252,8 +254,8 @@ class TestReadinessChanged:
         serve, db_file = serve_mod
         c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
         _seed(c); c.commit(); c.close()
-        serve._toggle_readiness(_proj(), "B-1", "tests")  # set
-        serve._toggle_readiness(_proj(), "B-1", "tests")  # clear (toggle)
+        serve._toggle_readiness(_proj(), "B-1", "reviewed")  # set
+        serve._toggle_readiness(_proj(), "B-1", "reviewed")  # clear (toggle)
         c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
         rows = _events(c, "B-1", "readiness_changed")
         assert len(rows) == 2
@@ -265,12 +267,12 @@ class TestReadinessChanged:
         serve, db_file = serve_mod
         c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
         _seed(c); c.commit(); c.close()
-        serve._update_readiness_content(_proj(), "B-1", "tests", "pytest tests/")
+        serve._update_readiness_content(_proj(), "B-1", "reviewed", "what we learned")
         c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
         rows = _events(c, "B-1", "readiness_changed")
         assert len(rows) == 1
         payload = json.loads(rows[0]["payload_json"])
-        assert payload["after"]["content"] == "pytest tests/"
+        assert payload["after"]["content"] == "what we learned"
 
 
 # ---------------------------------------------------------------------------

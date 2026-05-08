@@ -28,6 +28,7 @@ from contextlib import contextmanager
 
 from actions import ActorContext, emit_event, utcnow_iso
 from workspaces import HookResult, run_hook, WorkspaceInfo, mark_bootstrapped
+from workflow_agent_adapters import build_agent_invocation, parse_agent_output
 
 
 # ---------------------------------------------------------------------------
@@ -242,8 +243,23 @@ class AgentRunner(Runner):
             _set_run_status(conn, run_id, "running")
             conn.commit()
 
+        use_adapter = bool(
+            agent_cfg.get("runner_type")
+            or agent_cfg.get("adapter")
+            or agent_cfg.get("args")
+            or agent_cfg.get("prompt_mode")
+            or agent_cfg.get("system_prompt")
+        )
         try:
-            cmd = shlex.split(cmd_str)
+            if use_adapter:
+                invocation = build_agent_invocation(agent_cfg, prompt)
+                cmd = invocation.argv
+                stdin = invocation.stdin
+            else:
+                # Preserve historical WORKFLOW.toml semantics: split the full
+                # command string and pipe the prompt to stdin.
+                cmd = shlex.split(cmd_str)
+                stdin = prompt
         except ValueError as e:
             return self._fail(run_id, project_id, subject_type, subject_id, actor,
                               conn_factory, started, "bad_command", str(e))
@@ -252,7 +268,7 @@ class AgentRunner(Runner):
             r = subprocess.run(
                 cmd,
                 cwd=str(workspace.path),
-                input=prompt,
+                input=stdin,
                 capture_output=True, text=True,
                 timeout=self.DEFAULT_TIMEOUT_S,
             )
@@ -275,7 +291,7 @@ class AgentRunner(Runner):
 
         # ── Phase 3: terminal ─────────────────────────────────────────────
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        stdout_tail = self._tail(r.stdout)
+        stdout_tail = self._tail(parse_agent_output(r.stdout))
         if r.returncode == 0:
             with db_session(conn_factory) as conn:
                 summary = stdout_tail or "agent completed"

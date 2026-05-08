@@ -93,6 +93,12 @@ from journeys import (
 )
 from page_scraper import scan_all_screens, scans_to_json
 from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN_TESTIDS
+from workflow_agent_adapters import (
+    build_agent_command,
+    parse_agent_output,
+    normalize_runner_type,
+    AgentAdapterError,
+)
 
 import html as _html
 
@@ -895,15 +901,28 @@ def _get_workflow_agent(agent_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def _create_workflow_agent(agent_id: str, name: str, command: str, args: str, system_prompt: str) -> dict | None:
+def _create_workflow_agent(
+    agent_id: str,
+    name: str,
+    command: str,
+    args: str,
+    system_prompt: str,
+    runner_type: str = "claude",
+    command_template: str = "",
+    prompt_mode: str = "arg",
+) -> dict | None:
     """Insert a new workflow agent. Returns None on duplicate ID."""
     with _db_lock:
         conn = get_db()
         init_db(conn)
         try:
             conn.execute(
-                "INSERT INTO workflow_agents (id, name, command, args, system_prompt) VALUES (?, ?, ?, ?, ?)",
-                (agent_id, name, command, args, system_prompt),
+                """
+                INSERT INTO workflow_agents
+                    (id, name, command, args, system_prompt, runner_type, command_template, prompt_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (agent_id, name, command, args, system_prompt, runner_type, command_template, prompt_mode),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM workflow_agents WHERE id = ?", (agent_id,)).fetchone()
@@ -916,7 +935,7 @@ def _create_workflow_agent(agent_id: str, name: str, command: str, args: str, sy
 
 def _update_workflow_agent(agent_id: str, updates: dict) -> dict | None:
     """Update an existing workflow agent. Returns updated record or None."""
-    allowed = {"name", "command", "args", "system_prompt"}
+    allowed = {"name", "command", "args", "system_prompt", "runner_type", "command_template", "prompt_mode"}
     fields = {k: v for k, v in updates.items() if k in allowed}
     if not fields:
         return _get_workflow_agent(agent_id)
@@ -978,6 +997,9 @@ def _discover_project_agents(proj: dict) -> list[dict]:
             "command": "claude",
             "args": "[]",
             "system_prompt": "",
+            "runner_type": "claude",
+            "command_template": "",
+            "prompt_mode": "arg",
             "source": "project",
             "editable": False,
         })
@@ -1229,19 +1251,20 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                 prompt_parts.append(prompt_modifier)
 
             prompt = "\n\n---\n\n".join(prompt_parts)
+            agent_label = agent.get("name", agent_id)
 
-            # Run agent CLI
+            # Build agent CLI command through runner adapter
             try:
-                agent_args = json.loads(agent.get("args", "[]")) if isinstance(agent.get("args"), str) else agent.get("args", [])
-            except (json.JSONDecodeError, TypeError):
-                agent_args = []
-
-            cmd = [agent.get("command", "claude")] + agent_args + [
-                "-p", prompt, "--output-format", "json", "--no-session-persistence",
-            ]
+                cmd, stdin_text = build_agent_command(agent, prompt)
+            except AgentAdapterError as e:
+                conversation.append({
+                    "role": "system", "step": step_idx,
+                    "content": f"Agent '{agent_label}' adapter error: {e}",
+                })
+                _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                continue
 
             # Progress entry so the UI shows which agent is running immediately
-            agent_label = agent.get("name", agent_id)
             conversation.append({
                 "role": "system", "step": step_idx,
                 "content": f"Running agent '{agent_label}'…",
@@ -1255,6 +1278,7 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             try:
                 result = subprocess.run(
                     cmd,
+                    input=stdin_text,
                     capture_output=True,
                     text=True,
                     timeout=WORKFLOW_AGENT_TIMEOUT,
@@ -1277,18 +1301,8 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
                     continue
 
-                # Parse response — same pattern as gate-check
-                response_text = result.stdout.strip()
-                try:
-                    response_json = json.loads(response_text)
-                    if isinstance(response_json, dict) and "result" in response_json:
-                        response_content = response_json["result"]
-                    elif isinstance(response_json, dict) and "content" in response_json:
-                        response_content = response_json["content"]
-                    else:
-                        response_content = response_text
-                except json.JSONDecodeError:
-                    response_content = response_text
+                # Parse response from common agent wrappers.
+                response_content = parse_agent_output(result.stdout)
 
                 conversation.append({
                     "role": "agent",
@@ -1339,25 +1353,24 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     )
 
                     try:
-                        agree_args = json.loads(primary_agent.get("args", "[]")) if isinstance(primary_agent.get("args"), str) else primary_agent.get("args", [])
-                    except (json.JSONDecodeError, TypeError):
-                        agree_args = []
+                        agree_cmd, agree_stdin = build_agent_command(primary_agent, agree_prompt)
+                    except AgentAdapterError as e:
+                        conversation.append({
+                            "role": "system", "step": step_idx,
+                            "content": f"Agreement check adapter error: {e}",
+                        })
+                        _update_workflow_run(run_id, current_step=step_idx, conversation=conversation)
+                        continue
 
-                    agree_cmd = [primary_agent.get("command", "claude")] + agree_args + ["-p", agree_prompt, "--output-format", "json"]
                     try:
                         agree_result = subprocess.run(
-                            agree_cmd, capture_output=True, text=True,
+                            agree_cmd, input=agree_stdin, capture_output=True, text=True,
                             timeout=WORKFLOW_AGENT_TIMEOUT,
                             cwd=os.path.expanduser(proj.get("path", ".")),
                         )
-                        agree_text = agree_result.stdout.strip()
+                        agree_text = parse_agent_output(agree_result.stdout)
                         try:
                             agree_json = json.loads(agree_text)
-                            if isinstance(agree_json, dict) and "result" in agree_json:
-                                try:
-                                    agree_json = json.loads(agree_json["result"])
-                                except (json.JSONDecodeError, TypeError):
-                                    agree_json = {"agreed": True, "summary": agree_json["result"]}
                         except json.JSONDecodeError:
                             agree_json = {"agreed": True, "summary": agree_text}
 
@@ -4784,6 +4797,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (json.JSONDecodeError, ValueError):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
+            try:
+                if "args" in body:
+                    body["args"] = _normalize_json_array(body["args"], "args")
+                if "runner_type" in body:
+                    body["runner_type"] = normalize_runner_type(body["runner_type"])
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
             updated = _update_workflow_agent(agent_id, body)
             if updated:
                 self._send_json(updated)
@@ -6096,11 +6117,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             name = body.get("name", agent_id)
             command = body.get("command", "claude")
-            args = body.get("args", "[]")
-            if isinstance(args, list):
-                args = json.dumps(args)
+            try:
+                args = _normalize_json_array(body.get("args", "[]"), "args")
+                runner_type = normalize_runner_type(body.get("runner_type", "claude"))
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
             system_prompt = body.get("system_prompt", "")
-            agent = _create_workflow_agent(agent_id, name, command, args, system_prompt)
+            command_template = body.get("command_template", "") or ""
+            prompt_mode = body.get("prompt_mode", "arg") or "arg"
+            agent = _create_workflow_agent(
+                agent_id,
+                name,
+                command,
+                args,
+                system_prompt,
+                runner_type,
+                command_template,
+                prompt_mode,
+            )
             if agent:
                 self._send_json(agent, 201)
             else:

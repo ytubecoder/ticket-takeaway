@@ -2714,12 +2714,30 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
       <input type="hidden" id="spAgentId" />
       <label for="spAgentNameInput">Name</label>
       <input type="text" id="spAgentNameInput" placeholder="e.g. reviewer" />
-      <label for="spAgentModelInput">Model</label>
-      <input type="text" id="spAgentModelInput" placeholder="e.g. claude-sonnet-4-20250514" />
+      <label for="spAgentRunnerInput">Runner</label>
+      <select id="spAgentRunnerInput">
+        <option value="claude">Claude</option>
+        <option value="hermes">Hermes Agent</option>
+        <option value="openclaw">OpenClaw</option>
+        <option value="opencode">OpenCode</option>
+        <option value="codex">Codex</option>
+        <option value="custom">Custom</option>
+      </select>
+      <label for="spAgentModelInput">Command</label>
+      <input type="text" id="spAgentModelInput" placeholder="e.g. claude, hermes, openclaw" />
+      <label for="spAgentArgsInput">CLI Args (JSON array)</label>
+      <textarea id="spAgentArgsInput" placeholder='["--provider", "openai-codex"]'>[]</textarea>
+      <label for="spAgentTemplateInput">Command Template (optional)</label>
+      <textarea id="spAgentTemplateInput" placeholder='["openclaw", "run", "--prompt", "{{prompt}}"]'></textarea>
+      <label for="spAgentPromptModeInput">Prompt Mode</label>
+      <select id="spAgentPromptModeInput">
+        <option value="arg">Argument</option>
+        <option value="stdin">stdin</option>
+        <option value="append_arg">Append argument</option>
+        <option value="none">None/manual template</option>
+      </select>
       <label for="spAgentRoleInput">Role / System Prompt</label>
       <textarea id="spAgentRoleInput" placeholder="What this agent does..."></textarea>
-      <label for="spAgentTempInput">Temperature</label>
-      <input type="number" id="spAgentTempInput" min="0" max="2" step="0.1" value="0.3" style="width:80px;" />
       <div class="sp-btn-row">
         <button class="sp-btn primary" id="spAgentSaveBtn">Save</button>
         <button class="sp-btn" id="spAgentCancelBtn">Cancel</button>
@@ -7630,9 +7648,12 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
   var cancelBtn = document.getElementById('spAgentCancelBtn');
   var idInput = document.getElementById('spAgentId');
   var nameInput = document.getElementById('spAgentNameInput');
+  var runnerInput = document.getElementById('spAgentRunnerInput');
   var modelInput = document.getElementById('spAgentModelInput');
+  var argsInput = document.getElementById('spAgentArgsInput');
+  var templateInput = document.getElementById('spAgentTemplateInput');
+  var promptModeInput = document.getElementById('spAgentPromptModeInput');
   var roleInput = document.getElementById('spAgentRoleInput');
-  var tempInput = document.getElementById('spAgentTempInput');
   if (!listEl) return;
 
   var editingId = null;
@@ -7661,7 +7682,7 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
 
           var model = document.createElement('span');
           model.className = 'sp-agent-model';
-          model.textContent = a.model || a.command || '';
+          model.textContent = (a.runner_type || 'claude') + ' · ' + (a.command || '');
           row.appendChild(model);
 
           var editBtn = document.createElement('button');
@@ -7672,9 +7693,12 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
             editingId = a.id;
             if (idInput) idInput.value = a.id;
             if (nameInput) nameInput.value = a.name || '';
-            if (modelInput) modelInput.value = a.model || a.command || '';
+            if (runnerInput) runnerInput.value = a.runner_type || 'claude';
+            if (modelInput) modelInput.value = a.command || 'claude';
+            if (argsInput) argsInput.value = typeof a.args === 'string' ? a.args : JSON.stringify(a.args || []);
+            if (templateInput) templateInput.value = a.command_template || '';
+            if (promptModeInput) promptModeInput.value = a.prompt_mode || 'arg';
             if (roleInput) roleInput.value = a.system_prompt || a.prompt || '';
-            if (tempInput) tempInput.value = a.temperature || 0.3;
             if (formEl) formEl.style.display = '';
           }});
           row.appendChild(editBtn);
@@ -7699,9 +7723,12 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     editingId = null;
     if (idInput) idInput.value = '';
     if (nameInput) nameInput.value = '';
-    if (modelInput) modelInput.value = '';
+    if (runnerInput) runnerInput.value = 'claude';
+    if (modelInput) modelInput.value = 'claude';
+    if (argsInput) argsInput.value = '[]';
+    if (templateInput) templateInput.value = '';
+    if (promptModeInput) promptModeInput.value = 'arg';
     if (roleInput) roleInput.value = '';
-    if (tempInput) tempInput.value = '0.3';
     if (formEl) formEl.style.display = '';
   }});
 
@@ -7714,9 +7741,12 @@ body.kitchen-board #kitchenBoardToggleBtn svg {{ stroke: white; }}
     var payload = {{
       id: (idInput ? idInput.value.trim() : '') || (nameInput ? nameInput.value.trim().toLowerCase().replace(/\\s+/g, '-') : ''),
       name: nameInput ? nameInput.value.trim() : '',
+      runner_type: runnerInput ? runnerInput.value : 'claude',
       command: modelInput ? modelInput.value.trim() : 'claude',
-      system_prompt: roleInput ? roleInput.value : '',
-      temperature: tempInput ? parseFloat(tempInput.value) : 0.3
+      args: argsInput ? (argsInput.value.trim() || '[]') : '[]',
+      command_template: templateInput ? templateInput.value.trim() : '',
+      prompt_mode: promptModeInput ? promptModeInput.value : 'arg',
+      system_prompt: roleInput ? roleInput.value : ''
     }};
     var method = editingId ? 'PUT' : 'POST';
     var url = editingId

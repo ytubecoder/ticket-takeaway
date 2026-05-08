@@ -183,12 +183,15 @@ def init_db(conn: sqlite3.Connection):
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 4").fetchone():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS workflow_agents (
-                id            TEXT PRIMARY KEY,
-                name          TEXT NOT NULL,
-                command       TEXT NOT NULL DEFAULT 'claude',
-                args          TEXT NOT NULL DEFAULT '[]',
-                system_prompt TEXT NOT NULL DEFAULT '',
-                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                command          TEXT NOT NULL DEFAULT 'claude',
+                args             TEXT NOT NULL DEFAULT '[]',
+                system_prompt    TEXT NOT NULL DEFAULT '',
+                runner_type      TEXT NOT NULL DEFAULT 'claude',
+                command_template TEXT NOT NULL DEFAULT '',
+                prompt_mode      TEXT NOT NULL DEFAULT 'arg',
+                created_at       TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
         conn.execute("""
@@ -458,4 +461,18 @@ def init_db(conn: sqlite3.Connection):
                 ON activity_events (actor_type, actor_id) WHERE actor_type = 'agent';
         """)
         conn.execute("INSERT INTO _migrations (version) VALUES (8)")
+        conn.commit()
+
+    # Migration 9: Workflow Bounce runner adapters for non-Claude agent CLIs.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 9").fetchone():
+        for col, decl in [
+            ("runner_type", "TEXT NOT NULL DEFAULT 'claude'"),
+            ("command_template", "TEXT NOT NULL DEFAULT ''"),
+            ("prompt_mode", "TEXT NOT NULL DEFAULT 'arg'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE workflow_agents ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass
+        conn.execute("INSERT INTO _migrations (version) VALUES (9)")
         conn.commit()

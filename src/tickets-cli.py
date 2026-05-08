@@ -1418,20 +1418,34 @@ def cmd_agent(args):
         if not rows:
             print("No workflow agents defined.")
         else:
-            print(f"{'ID':<20} {'Name':<25} {'Command':<15} {'Args':<20} {'Prompt'}")
-            print("-" * 95)
+            print(f"{'ID':<20} {'Name':<25} {'Runner':<10} {'Command':<15} {'Args':<20} {'Prompt'}")
+            print("-" * 110)
             for r in rows:
                 prompt_preview = (r["system_prompt"] or "")[:40]
                 if len(r["system_prompt"] or "") > 40:
                     prompt_preview += "..."
-                print(f"{r['id']:<20} {r['name']:<25} {r['command']:<15} {r['args']:<20} {prompt_preview}")
+                runner_type = r["runner_type"] if "runner_type" in r.keys() else "claude"
+                print(f"{r['id']:<20} {r['name']:<25} {runner_type:<10} {r['command']:<15} {r['args']:<20} {prompt_preview}")
 
     elif args.agent_command == "add":
         name = args.name or args.agent_id.replace("-", " ").replace("_", " ").title()
         try:
             conn.execute(
-                "INSERT INTO workflow_agents (id, name, command, args, system_prompt) VALUES (?, ?, ?, ?, ?)",
-                (args.agent_id, name, args.cmd, args.args, args.system_prompt)
+                """
+                INSERT INTO workflow_agents
+                    (id, name, command, args, system_prompt, runner_type, command_template, prompt_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    args.agent_id,
+                    name,
+                    args.cmd,
+                    args.args,
+                    args.system_prompt,
+                    args.runner_type,
+                    args.command_template or "",
+                    args.prompt_mode,
+                )
             )
             conn.commit()
             print(f"Added agent: {args.agent_id} ({name})")
@@ -1450,9 +1464,15 @@ def cmd_agent(args):
             fields["args"] = args.args
         if args.system_prompt is not None:
             fields["system_prompt"] = args.system_prompt
+        if args.runner_type is not None:
+            fields["runner_type"] = args.runner_type
+        if args.command_template is not None:
+            fields["command_template"] = args.command_template
+        if args.prompt_mode is not None:
+            fields["prompt_mode"] = args.prompt_mode
 
         if not fields:
-            print("Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt.", file=sys.stderr)
+            print("Nothing to update. Provide at least one editable field.", file=sys.stderr)
             conn.close()
             sys.exit(1)
 
@@ -1747,6 +1767,14 @@ def main():
     p_agent_add.add_argument("--cmd", default="claude", help="Command to run (default: claude)")
     p_agent_add.add_argument("--args", default="[]", help="JSON array of command args")
     p_agent_add.add_argument("--system-prompt", default="", help="System prompt for the agent")
+    p_agent_add.add_argument("--runner-type", default="claude",
+                             choices=["claude", "hermes", "openclaw", "opencode", "codex", "custom"],
+                             help="Agent CLI adapter type (default: claude)")
+    p_agent_add.add_argument("--command-template", default="",
+                             help="Optional JSON array or shell template with {{prompt}} or {{stdin}}")
+    p_agent_add.add_argument("--prompt-mode", default="arg",
+                             choices=["arg", "stdin", "append_arg", "none", "manual"],
+                             help="Prompt passing mode for custom agents")
 
     p_agent_upd = agent_sub.add_parser("update", help="Update a workflow agent")
     p_agent_upd.add_argument("agent_id", help="Agent ID")
@@ -1754,6 +1782,11 @@ def main():
     p_agent_upd.add_argument("--cmd", help="New command")
     p_agent_upd.add_argument("--args", help="New JSON array of command args")
     p_agent_upd.add_argument("--system-prompt", help="New system prompt")
+    p_agent_upd.add_argument("--runner-type", choices=["claude", "hermes", "openclaw", "opencode", "codex", "custom"],
+                             help="New agent CLI adapter type")
+    p_agent_upd.add_argument("--command-template", help="New JSON array or shell template with {{prompt}} or {{stdin}}")
+    p_agent_upd.add_argument("--prompt-mode", choices=["arg", "stdin", "append_arg", "none", "manual"],
+                             help="New prompt passing mode")
 
     p_agent_rm = agent_sub.add_parser("remove", help="Remove a workflow agent")
     p_agent_rm.add_argument("agent_id", help="Agent ID to remove")

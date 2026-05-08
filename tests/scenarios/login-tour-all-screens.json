@@ -1,0 +1,165 @@
+{
+  "id": "journey-login-tour-all-screens",
+  "title": "Login & Tour All Screens",
+  "tags": [
+    "journey",
+    "auto-compiled"
+  ],
+  "actors": {
+    "user": {
+      "label": "User"
+    }
+  },
+  "seed": {},
+  "viewport": {
+    "width": 1440,
+    "height": 1024
+  },
+  "steps": [
+    {
+      "actor": "user",
+      "action": "open"
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "board-root"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "01-dashboard"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "click",
+      "target": {
+        "testid": "new-ticket-btn"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "new-ticket-title"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "02-new-ticket-panel"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "fill",
+      "target": {
+        "testid": "new-ticket-title"
+      },
+      "value": "Sample ticket from journey tour"
+    },
+    {
+      "actor": "user",
+      "action": "select",
+      "target": {
+        "testid": "new-ticket-section"
+      },
+      "value": "Backlog"
+    },
+    {
+      "actor": "user",
+      "action": "click",
+      "target": {
+        "testid": "new-ticket-submit"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "03-after-create"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "click",
+      "target": {
+        "testid": "settings-toggle"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "04-settings-drawer"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "open"
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "board-root"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "click",
+      "target": {
+        "testid": "bounce-toggle"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "05-workflows-page"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "open",
+      "path": "/journeys"
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "journey-list"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "06-journeys-page"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "open"
+    },
+    {
+      "actor": "user",
+      "action": "wait_for",
+      "target": {
+        "testid": "board-root"
+      }
+    },
+    {
+      "actor": "user",
+      "action": "capture",
+      "capture": {
+        "name": "07-tour-complete"
+      }
+    }
+  ]
+}

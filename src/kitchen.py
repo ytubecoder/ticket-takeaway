@@ -37,6 +37,7 @@ from db import REGISTRY_PATH
 from runners import AgentRunner, NoopRunner, RunOutcome, Runner, ScenarioRunner
 from workspaces import WorkspaceInfo, create_or_reuse, run_hook, workspace_path_for
 from workflow_config import load_workflow_config, load_prompt_template
+from workflow_agent_adapters import infer_runner_type
 
 # Feature flag key stored in the settings table.
 _USE_DB_WORKFLOWS_KEY = "kitchen.use_db_workflows"
@@ -651,6 +652,65 @@ def _list_project_ids(conn: sqlite3.Connection) -> list[str]:
     return [r["project_id"] for r in rows]
 
 
+def _apply_workflow_step_config(
+    config: dict,
+    workflow_meta: dict,
+    get_db: Callable[[], sqlite3.Connection],
+) -> None:
+    """Apply the current DB workflow step to runner config.
+
+    The DB workflow path stores steps in ``workflow_meta``.  A step may provide
+    a prompt_template and an optional workflow_agents.agent_id.  If an agent_id
+    is present and found, its command/args/system_prompt/persist_session become
+    the effective runner agent config for this run.  If no agent_id is present,
+    the project WORKFLOW.toml [agent] config is preserved.
+    """
+    steps = workflow_meta.get("steps", []) or []
+    step_index = int(workflow_meta.get("step_index", 0) or 0)
+    if not steps or step_index >= len(steps):
+        return
+
+    step = steps[step_index] or {}
+    step_template = step.get("prompt_template", "")
+    if step_template:
+        config["_prompt_template"] = step_template
+
+    agent_id = step.get("agent_id")
+    if not agent_id:
+        return
+
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id, name, command, args, system_prompt, persist_session "
+            "FROM workflow_agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return
+
+    agent_cfg = dict(config.get("agent", {}) or {})
+    agent_cfg.update(
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "command": row["command"],
+            "args": row["args"],
+            "system_prompt": row["system_prompt"],
+            "persist_session": row["persist_session"],
+        }
+    )
+    agent_cfg["runner_type"] = infer_runner_type(agent_cfg)
+    config["agent"] = agent_cfg
+    workflow_meta["current_agent"] = {
+        "id": row["id"],
+        "name": row["name"],
+        "command": row["command"],
+    }
+
+
 def _try_claim_and_dispatch(
     get_db: Callable[[], sqlite3.Connection],
     project_id: str,
@@ -684,14 +744,10 @@ def _try_claim_and_dispatch(
     )
 
     # When a workflow is specified, override the prompt template with the
-    # workflow step's prompt_template (substitution happens in the runner).
+    # workflow step's prompt_template (substitution happens in the runner) and
+    # resolve a step-specific workflow_agents row when one is configured.
     if workflow_meta:
-        steps = workflow_meta.get("steps", [])
-        step_index = workflow_meta.get("step_index", 0)
-        if steps and step_index < len(steps):
-            step_template = steps[step_index].get("prompt_template", "")
-            if step_template:
-                config["_prompt_template"] = step_template
+        _apply_workflow_step_config(config, workflow_meta, get_db)
         # Also store workflow context in config so the runner can apply on_success.
         config["_workflow_meta"] = workflow_meta
 

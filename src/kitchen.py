@@ -525,14 +525,21 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
             if project_slots <= 0:
                 continue
 
-            # Load enabled workflows for this project. System workflows come first
-            # so user-defined workflows can shadow them by being evaluated later
-            # (first workflow match wins per subject).
+            # Load enabled workflows for this project. Post-migration-16 the
+            # canonical workflow row may have project_id=NULL (system rows are
+            # shared across projects); per-project enable state lives on
+            # `workflow_projects(workflow_id, project_id, enabled)`. We join
+            # against that table so both system and user workflows surface
+            # uniformly. System workflows come first so user-defined workflows
+            # can shadow them by being evaluated later (first workflow match
+            # wins per subject).
             workflows = conn.execute(
-                "SELECT id, name, trigger_json, on_success_json, steps, system "
-                "FROM workflows "
-                "WHERE enabled = 1 AND project_id = ? "
-                "ORDER BY system DESC, id ASC",
+                "SELECT w.id, w.name, w.trigger_json, w.on_success_json, w.steps, w.system "
+                "FROM workflows w "
+                "INNER JOIN workflow_projects wp "
+                "  ON wp.workflow_id = w.id AND wp.project_id = ? "
+                "WHERE wp.enabled = 1 "
+                "ORDER BY w.system DESC, w.id ASC",
                 (project_id,),
             ).fetchall()
 

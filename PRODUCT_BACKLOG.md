@@ -135,6 +135,16 @@ Spec for feedbacks team: compact recorder widget (?mode=recorder), callback on s
 ### B-43: GitHub branch awareness — link branches to tickets, scan from git/gh, branches dropdown panel
 Priority: high | Status: for-review
 
+### B-61: System workflows fire again + /workflows page polish
+Priority: high | Status: for-review
+Tags: infra, ux
+Migration 16 (committed 2026-05-08, d509c83) collapsed system workflows to a single canonical row with project_id=NULL and moved per-project on/off state into the workflow_projects join table. The kitchen dispatcher SQL was never updated and continued filtering on workflows.project_id, so it loaded zero system workflows for any project — silently disabling Parent auto-promote, Spec → Backlog, Backlog → WIP, WIP → Review, Bug triage, and Plan Check. The Auto-accept and Review → Done rules also couldn't be enabled even if the user wanted to. The /workflows page also had two UX rough edges that this addresses: the 'Edit steps in advanced editor' link sent users to /{some-project}/kanban?bounce=1 — a misleading URL because no advanced editor exists for system rows; and there was no Duplicate button on the global page, only inside the per-project drawer. Fix: - kitchen.py dispatcher now INNER JOINs workflow_projects so both system and user workflows surface uniformly, filtering on wp.enabled and wp.project_id. - _create_workflow seeds a workflow_projects row alongside the workflows insert so new user workflows are immediately dispatch-visible. - _update_workflow mirrors the enabled flag into ALL workflow_projects links for a workflow, so the global toggle reaches the dispatcher. - New global POST /api/workflow/workflows/{id}/duplicate (no project scope; body may specify project_id, defaults to first link). - /workflows page: system rows now show 'body is read-only — Duplicate to create an editable copy' and a Duplicate button. User rows keep a kanban deep-link, renamed 'Open in project to edit steps →' so it's not promising a non-existent advanced editor.
+- [ ] Toggling Enabled on a system workflow on /workflows updates workflow_projects.enabled across all linked projects
+- [ ] Kitchen dispatcher SELECT returns enabled system workflows for a given project (verified: 7 system + 1 user for ticket-takeaway)
+- [ ] /workflows page system rows show explanatory note + Duplicate button; user rows keep an honestly-named 'Open in project to edit steps' link
+- [ ] POST /api/workflow/workflows/{id}/duplicate works at the global path (no project prefix); creates system=0 row + workflow_projects link
+- [ ] Newly created user workflows (via _create_workflow) get a workflow_projects row so the dispatcher join sees them
+
 ## Backlog
 
 ### I-06: 3-line truncated description preview on collapsed cards

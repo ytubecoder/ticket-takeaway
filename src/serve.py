@@ -1339,7 +1339,14 @@ def _create_workflow(
     on_success_json: "str | None" = None,
     subject_type: str = "ticket",
 ) -> dict | None:
-    """Insert a new workflow. steps/trigger_json/on_success_json should be JSON strings."""
+    """Insert a new workflow. steps/trigger_json/on_success_json should be JSON strings.
+
+    Post-migration-16 the dispatcher reads visibility from
+    `workflow_projects(workflow_id, project_id, enabled)`. When project_id is
+    provided, we also insert the matching join row so the new workflow is
+    immediately picked up. Without this, user-created workflows would be
+    invisible to the kitchen tick.
+    """
     with _db_lock:
         conn = get_db()
         init_db(conn)
@@ -1350,6 +1357,12 @@ def _create_workflow(
                 "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
                 (workflow_id, name, description, steps, enabled, trigger_json, on_success_json, subject_type, project_id),
             )
+            if project_id:
+                conn.execute(
+                    "INSERT OR IGNORE INTO workflow_projects (workflow_id, project_id, enabled) "
+                    "VALUES (?, ?, ?)",
+                    (workflow_id, project_id, enabled),
+                )
             conn.commit()
             row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
             conn.close()
@@ -1364,6 +1377,11 @@ def _update_workflow(workflow_id: str, updates: dict) -> dict | None:
 
     For system workflows, only `enabled` may be changed (403 is returned by the
     caller; this function accepts any allowed field to keep the logic clean).
+
+    When `enabled` is in the update set, mirror it into ALL `workflow_projects`
+    links for this workflow. The dispatcher reads visibility from that join
+    table — without this mirror, the column-level toggle on /workflows would
+    update display state but never reach the dispatcher.
     """
     allowed = {"name", "description", "steps", "enabled", "trigger_json", "on_success_json"}
     fields = {k: v for k, v in updates.items() if k in allowed}
@@ -1376,6 +1394,11 @@ def _update_workflow(workflow_id: str, updates: dict) -> dict | None:
         conn = get_db()
         init_db(conn)
         conn.execute(f"UPDATE workflows SET {set_clause} WHERE id = ?", values)
+        if "enabled" in fields:
+            conn.execute(
+                "UPDATE workflow_projects SET enabled = ? WHERE workflow_id = ?",
+                (int(bool(fields["enabled"])), workflow_id),
+            )
         conn.commit()
         row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
         conn.close()
@@ -4793,17 +4816,34 @@ def _render_workflows_view(port: int) -> str:
             else:
                 steps_summary = '<li class="wf-edit-empty">No steps configured.</li>'
             sys_note = (
-                '<div class="wf-edit-note">System workflow — only Enabled may be toggled. Use the advanced editor or duplicate to customize.</div>'
+                '<div class="wf-edit-note">'
+                'System workflow — body is read-only. You can toggle Enabled '
+                'or click <strong>Duplicate</strong> to create an editable copy '
+                'in one of your projects.'
+                '</div>'
                 if is_system else ""
             )
             del_btn = (
-                '<button class="wf-edit-delete" disabled title="System workflows can\'t be deleted; duplicate to customize.">Delete</button>'
+                '<button class="wf-edit-delete" disabled title="System workflows can\'t be deleted; duplicate to create an editable copy.">Delete</button>'
                 if is_system
                 else f'<button class="wf-edit-delete" data-id="{wf_id_attr}">Delete</button>'
             )
+            # System rows route to the per-project Duplicate flow; user rows
+            # keep the kanban deep-link (the bounce panel is where step editing
+            # actually lives for user workflows). Hiding the kanban link on
+            # system rows avoids the misleading "advanced editor" promise —
+            # there is no such editor for system rows anywhere.
+            dup_btn = (
+                f'<button class="wf-edit-duplicate" data-id="{wf_id_attr}">Duplicate</button>'
+                if is_system else ""
+            )
             advanced_link = (
-                f'<a class="wf-edit-advanced" href="{_html.escape(advanced_href)}">Edit steps in advanced editor →</a>'
-                if advanced_href else ""
+                ""
+                if is_system
+                else (
+                    f'<a class="wf-edit-advanced" href="{_html.escape(advanced_href)}">Open in project to edit steps →</a>'
+                    if advanced_href else ""
+                )
             )
 
             row_parts.append(
@@ -4831,6 +4871,7 @@ def _render_workflows_view(port: int) -> str:
                 f'    {advanced_link}'
                 f'    <div class="wf-edit-actions">'
                 f'      <button class="wf-edit-save" data-id="{wf_id_attr}">Save</button>'
+                f'      {dup_btn}'
                 f'      {del_btn}'
                 f'      <span class="wf-edit-msg"></span>'
                 f'    </div>'
@@ -4981,6 +5022,8 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-edit-delete, .ag-edit-delete {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid #ef4444; background: transparent; color: #ef4444; cursor: pointer; font-family: inherit; }}
 .wf-edit-delete:hover:not(:disabled), .ag-edit-delete:hover {{ background: rgba(239,68,68,0.1); }}
 .wf-edit-delete:disabled {{ opacity: 0.45; cursor: not-allowed; }}
+.wf-edit-duplicate {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
+.wf-edit-duplicate:hover {{ border-color: var(--accent); color: var(--accent); }}
 .wf-edit-msg {{ font-size: 11px; color: var(--text-tertiary); }}
 .wf-edit-msg.ok {{ color: #4ade80; }}
 .wf-edit-msg.err {{ color: #ef4444; }}
@@ -5191,6 +5234,50 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
           if (status >= 200 && status < 300) {{
             setMsg(msg, 'Deleted', 'ok');
             setTimeout(() => location.reload(), 400);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // Duplicate a workflow (system or user). Asks the user which project to
+  // own the new copy when there's more than one option, defaults to the
+  // source's first link (server picks if no project_id is sent).
+  document.querySelectorAll('.wf-edit-duplicate').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.wf-edit-panel[data-id="' + id + '"]');
+      var msg = panel ? panel.querySelector('.wf-edit-msg') : null;
+      var wrap = document.querySelector('.wf-row-wrap[data-wf-id="' + id + '"]');
+      var linkedPids = (wrap && wrap.dataset.projects ? wrap.dataset.projects.split(',').filter(Boolean) : []);
+      var allProjects = [];
+      try {{
+        var metaEl = document.querySelector('meta[name="projects-list"]');
+        if (metaEl) {{
+          var parsed = JSON.parse(metaEl.getAttribute('content') || '[]');
+          if (Array.isArray(parsed)) allProjects = parsed.map(function(p) {{ return p.id; }}).filter(Boolean);
+        }}
+      }} catch (e) {{ /* fall through to linked-only */ }}
+      var candidates = linkedPids.length ? linkedPids : allProjects;
+      var targetPid = candidates[0] || '';
+      if (candidates.length > 1) {{
+        var prompt = 'Duplicate into which project?\\n  ' + candidates.join('\\n  ') + '\\n(blank = ' + targetPid + ')';
+        var picked = window.prompt(prompt, targetPid);
+        if (picked === null) return;
+        targetPid = (picked || targetPid).trim();
+      }}
+      setMsg(msg, 'Duplicating…');
+      fetch('/api/workflow/workflows/' + encodeURIComponent(id) + '/duplicate', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(targetPid ? {{project_id: targetPid}} : {{}})
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Duplicated → ' + (data.id || ''), 'ok');
+            setTimeout(() => location.reload(), 600);
           }} else {{
             setMsg(msg, (data && data.error) || 'Failed', 'err');
           }}
@@ -7239,6 +7326,85 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json(agent, 201)
                 else:
                     self._send_json({"error": f"Agent '{agent_id}' already exists"}, 409)
+                return
+
+            # Global duplicate of any workflow (system or user). Body may
+            # specify project_id (target for the new copy) and name. Defaults
+            # to the source's first link, falling back to the first registered
+            # project. Used by the /workflows page Duplicate button so users
+            # can customize a system workflow without leaving the global view.
+            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)/duplicate$", remainder)
+            if m:
+                source_id = m.group(1)
+                source = _get_workflow(source_id)
+                if not source:
+                    self._send_json({"error": "Workflow not found"}, 404)
+                    return
+                try:
+                    body = self._read_body() or {}
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+
+                target_pid = (body.get("project_id") or "").strip()
+                if not target_pid:
+                    # Pick the source's first link, falling back to the first
+                    # registered project. Migrations may strand a system row
+                    # with no links if a project was unregistered — treat that
+                    # as a 400 rather than silently misrouting.
+                    with _db_lock:
+                        conn_lookup = get_db()
+                        init_db(conn_lookup)
+                        link_row = conn_lookup.execute(
+                            "SELECT project_id FROM workflow_projects "
+                            "WHERE workflow_id = ? ORDER BY project_id LIMIT 1",
+                            (source_id,),
+                        ).fetchone()
+                        conn_lookup.close()
+                    if link_row:
+                        target_pid = link_row["project_id"]
+                    else:
+                        with _PROJECTS_CACHE_LOCK:
+                            cache_snapshot = list(_PROJECTS_CACHE.values())
+                        if cache_snapshot:
+                            target_pid = cache_snapshot[0]["id"]
+                if not target_pid:
+                    self._send_json({"error": "No target project available"}, 400)
+                    return
+
+                new_name = (body.get("name") or "").strip() or f"{source.get('name', source_id)} (copy)"
+                import uuid as _uuid
+                base_id = re.sub(r"[^a-z0-9_-]+", "-", new_name.lower()).strip("-") or _uuid.uuid4().hex[:8]
+                candidate = base_id
+                n = 2
+                while _get_workflow(candidate):
+                    candidate = f"{base_id}-{n}"
+                    n += 1
+                    if n > 100:
+                        candidate = f"{base_id}-{_uuid.uuid4().hex[:6]}"
+                        break
+
+                steps = source.get("steps", "[]")
+                if isinstance(steps, (list, dict)):
+                    steps = json.dumps(steps)
+                trigger_json = source.get("trigger_json")
+                if trigger_json is not None and not isinstance(trigger_json, str):
+                    trigger_json = json.dumps(trigger_json)
+                on_success_json = source.get("on_success_json")
+                if on_success_json is not None and not isinstance(on_success_json, str):
+                    on_success_json = json.dumps(on_success_json)
+
+                wf = _create_workflow(
+                    candidate, new_name, source.get("description", ""), steps,
+                    project_id=target_pid,
+                    enabled=int(source.get("enabled", 1)),
+                    trigger_json=trigger_json,
+                    on_success_json=on_success_json,
+                    subject_type=source.get("subject_type", "ticket"),
+                )
+                if wf:
+                    self._send_json(wf, 201)
+                else:
+                    self._send_json({"error": "Failed to duplicate workflow"}, 500)
                 return
 
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):

@@ -59,7 +59,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        SECTION_PREFIX, STATUSES, VALID_STATUSES_BY_SECTION,
                        compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
-                       WORKFLOW_AGENT_TIMEOUT, WORKFLOW_RUN_STATUSES)
+                       WORKFLOW_AGENT_TIMEOUT, WORKFLOW_RUN_STATUSES,
+                       GATE_BANNER_BY_SECTION, EVENT_KIND_LABELS, EVENT_KIND_ICONS)
 from db import get_db, init_db
 from actions import (
     move_ticket as _actions_move_ticket,
@@ -3135,6 +3136,7 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "automation_eligibility_reasons": eligibility_reasons,
         "tags": tags,
         "branches": branches,
+        "is_container": bool(row["is_container"]) if "is_container" in row.keys() else False,
     }
 
 
@@ -4294,6 +4296,1057 @@ body {{ background: var(--bg-page); color: var(--text-primary); font-family: -ap
 </html>'''
 
 
+# ---------------------------------------------------------------------------
+# Lane B — Full-page ticket view
+# ---------------------------------------------------------------------------
+
+_EVENT_KIND_SUMMARY_MAP = {
+    "run_started":       lambda p: f"Run #{p.get('run_id','')} started (kind: {p.get('runner_kind','agent')})",
+    "run_succeeded":     lambda p: f"Run #{p.get('run_id','')} succeeded — {(p.get('summary','') or '')[:80]}",
+    "run_failed":        lambda p: f"Run #{p.get('run_id','')} failed — {(p.get('error_class','') or p.get('error_message','') or '')[:80]}",
+    "run_cancelled":     lambda p: f"Run #{p.get('run_id','')} cancelled",
+    "section_change":    lambda p: f"{p.get('before','?')} → {p.get('after','?')}",
+    "status_change":     lambda p: f"{p.get('before','?')} → {p.get('after','?')}",
+    "criteria_check":    lambda p: f"criterion {'checked' if p.get('after') else 'unchecked'}",
+    "criteria_added":    lambda p: f"+ {p.get('text','criterion')}",
+    "hook_started":      lambda p: f"hook '{p.get('hook','')}' started",
+    "hook_succeeded":    lambda p: f"hook '{p.get('hook','')}' succeeded",
+    "hook_failed":       lambda p: f"hook '{p.get('hook','')}' failed",
+    "workspace_created": lambda p: f"workspace at {p.get('path','?')} ({'new' if not p.get('reused') else 'reused'})",
+    "agent_output":      lambda p: (p.get('summary','') or '')[:100],
+    "pause_set":         lambda p: f"paused (reason: {p.get('reason','') or 'none'})",
+    "pause_cleared":     lambda p: f"resumed (was: {p.get('before','?')})",
+    "handoff_recorded":  lambda p: f"handoff recorded for run #{p.get('run_id','')}",
+    "input_provided":    lambda p: f"user responded ({p.get('kind','text')})",
+    "field_changed":     lambda p: f"{p.get('field','?')} changed",
+}
+
+_RUN_LINK_EVENT_KINDS = frozenset({
+    "run_started", "run_succeeded", "run_failed", "run_cancelled",
+    "handoff_recorded", "agent_output",
+})
+
+
+def _event_summary(event_kind: str, payload: dict) -> str:
+    """Return a one-line human summary for an activity event payload."""
+    fn = _EVENT_KIND_SUMMARY_MAP.get(event_kind)
+    if fn:
+        try:
+            return fn(payload) or ""
+        except Exception:
+            pass
+    return ""
+
+
+def _render_ticket_tab_overview(ticket: dict, proj: dict, port: int) -> str:
+    """Render the Overview tab body for the full-page ticket view."""
+    import html as _h
+
+    pid = _safe_attr(proj["id"])
+    api_base = f"http://localhost:{port}/{pid}/api"
+    tid = _h.escape(ticket["id"])
+    title = _h.escape(ticket["title"] or "")
+    section = ticket.get("section", "Ideas")
+    status = _h.escape(ticket.get("status", ""))
+    priority = _h.escape(ticket.get("priority", "medium"))
+    description = _h.escape(ticket.get("description", "") or "")
+    parent = _h.escape(ticket.get("parent", "") or "")
+    gate_banner = _h.escape(GATE_BANNER_BY_SECTION.get(section, ""))
+    is_container = ticket.get("is_container", False)
+
+    criteria = ticket.get("acceptance_criteria", [])
+    total_c = len(criteria)
+    done_c = sum(1 for c in criteria if c.get("checked"))
+
+    # Build criteria pill
+    if total_c == 0:
+        crit_pill = '<span class="tp-crit-pill tp-crit-zero">0 criteria</span>'
+    elif done_c == total_c:
+        crit_pill = f'<span class="tp-crit-pill tp-crit-done">{done_c}/{total_c}</span>'
+    elif done_c > 0:
+        crit_pill = f'<span class="tp-crit-pill tp-crit-progress">{done_c}/{total_c}</span>'
+    else:
+        crit_pill = f'<span class="tp-crit-pill tp-crit-empty">0/{total_c}</span>'
+
+    # Criteria list HTML
+    criteria_items_html = ""
+    for i, c in enumerate(criteria):
+        chk = "checked" if c.get("checked") else ""
+        text_esc = _h.escape(c.get("text", ""))
+        criteria_items_html += (
+            f'<li class="tp-criterion {chk}" data-index="{i}">'
+            f'<input type="checkbox" {"checked" if chk else ""} '
+            f'  data-criterion-index="{i}" data-ticket-id="{tid}" class="tp-crit-check"> '
+            f'<span class="tp-crit-text">{text_esc}</span>'
+            f'<button class="tp-crit-ask-ai btn btn-ghost btn-sm" data-index="{i}" '
+            f'  title="Ask AI to help fulfil this criterion">Ask AI</button>'
+            f'</li>'
+        )
+
+    tags_html = ""
+    for tag in ticket.get("tags", []):
+        tags_html += f'<span class="tag-pill">{_h.escape(tag)}</span>'
+
+    depends_html = ""
+    for dep in ticket.get("depends", []):
+        dep_esc = _h.escape(dep)
+        depends_html += (
+            f'<a class="tp-dep-link" href="/{pid}/tickets/{dep_esc}">{dep_esc}</a> '
+        )
+
+    # Container children panel
+    children_panel = ""
+    if is_container:
+        with _db_lock:
+            conn = get_db(); init_db(conn)
+            from actions import get_children_summary as _get_children_summary
+            children_summary = _get_children_summary(conn, proj["id"], ticket["id"])
+            children_rows = conn.execute(
+                "SELECT id, title, section, status, priority FROM tickets "
+                "WHERE parent = ? AND project_id = ? AND archived = 0 ORDER BY sort_order ASC",
+                (ticket["id"], proj["id"]),
+            ).fetchall()
+            conn.close()
+
+        total_ch = children_summary["total"]
+        done_ch = children_summary["done"]
+        child_cards_html = ""
+        for ch in children_rows:
+            ch_section_slug = {
+                "Ideas": "ideas", "Backlog": "backlog", "WIP": "wip",
+                "For Review": "review", "Done": "done",
+            }.get(ch["section"], "backlog")
+            child_cards_html += (
+                f'<a class="tp-child-card tp-child-{ch_section_slug}" '
+                f'   href="/{pid}/tickets/{_h.escape(ch["id"])}">'
+                f'  <span class="tp-child-id">{_h.escape(ch["id"])}</span>'
+                f'  <span class="tp-child-title">{_h.escape(ch["title"] or "")}</span>'
+                f'  <span class="tp-child-section">{_h.escape(ch["section"])}</span>'
+                f'</a>'
+            )
+        children_panel = f'''
+<div class="tp-section" id="tp-section-children">
+  <div class="tp-section-header">
+    <h3>Children <span class="tp-crit-pill tp-crit-{ "done" if done_ch == total_ch and total_ch > 0 else "progress" if done_ch > 0 else "empty"}">{done_ch}/{total_ch} done</span></h3>
+  </div>
+  <div class="tp-children-grid">
+    {child_cards_html or "<span class='tp-empty'>No children yet.</span>"}
+  </div>
+</div>'''
+
+    container_badge = '<span class="tp-container-badge">Container</span>' if is_container else ""
+
+    return f'''
+<div class="tp-gate-banner">{gate_banner}</div>
+
+<div class="tp-section" id="tp-section-criteria">
+  <div class="tp-section-header">
+    <h3>Acceptance Criteria {crit_pill}</h3>
+  </div>
+  <ul class="tp-criteria-list" id="tp-criteria-list" data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
+    {criteria_items_html or "<li class='tp-empty'>No criteria yet.</li>"}
+  </ul>
+  <div class="tp-criteria-add">
+    <input type="text" id="tp-crit-input" placeholder="+ Add criterion and press Enter" class="tp-input">
+    <button id="tp-crit-add-btn" class="btn btn-primary btn-sm">Add</button>
+  </div>
+</div>
+
+<div class="tp-section" id="tp-section-description">
+  <div class="tp-section-header">
+    <h3>Description</h3>
+  </div>
+  <textarea class="tp-editor" id="tp-desc-editor" data-field="description" data-ticket-id="{tid}"
+    data-api-base="{_safe_attr(api_base)}" placeholder="No description yet. Click to write one.">{description}</textarea>
+</div>
+
+{children_panel}
+
+<div class="tp-section" id="tp-section-meta">
+  <div class="tp-section-header"><h3>Details</h3></div>
+  <dl class="tp-meta-list">
+    <dt>Tags</dt><dd>{tags_html or "<span class='tp-empty'>none</span>"}</dd>
+    <dt>Parent</dt><dd>{f'<a href="/{pid}/tickets/{parent}">{parent}</a>' if parent else "<span class='tp-empty'>none</span>"}</dd>
+    <dt>Dependencies</dt><dd>{depends_html or "<span class='tp-empty'>none</span>"}</dd>
+    <dt>Container</dt>
+    <dd>
+      <label class="tp-toggle-label">
+        <input type="checkbox" id="tp-container-toggle" {"checked" if is_container else ""}
+          data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
+        Container ticket
+      </label>
+    </dd>
+  </dl>
+</div>
+'''
+
+
+def _render_ticket_tab_activity(ticket: dict, proj: dict, port: int) -> str:
+    """Render the Activity tab body for the full-page ticket view."""
+    pid = _safe_attr(proj["id"])
+    tid = _safe_attr(ticket["id"])
+    api_base = f"http://localhost:{port}/{pid}/api"
+    return f'''
+<div class="tp-activity-header">
+  <span>Activity timeline — newest first. Polls every 5s while focused.</span>
+</div>
+<div id="tp-activity-feed" class="tp-activity-feed"
+  data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
+  <div class="tp-activity-loading">Loading activity…</div>
+</div>
+<div id="tp-ni-panel" class="tp-ni-panel hidden" data-testid="tp-ni-panel">
+  <!-- Populated by JS when a needs_input run is detected -->
+</div>
+'''
+
+
+def _render_run_detail_shell_html(
+    panel_id: str = "tp-run-detail-panel",
+    header_id: str = "tp-run-detail-header",
+    extra_cls: str = "",
+) -> str:
+    """Return the HTML shell for the per-run detail panel.
+
+    Shared between the ticket Runs tab and the Kitchen side panel.
+    Callers pass distinct IDs so both can coexist on the same page without
+    selector collisions (though currently they live on separate pages).
+    """
+    cls = f"tp-run-detail-panel{' ' + extra_cls if extra_cls else ''}"
+    return f'''<div class="{cls} hidden" id="{panel_id}" data-testid="{panel_id}">
+    <div class="tp-run-detail-header" id="{header_id}"></div>
+    <div class="tp-run-detail-body">
+      <section class="tp-run-section" id="tp-run-stdout-section">
+        <h4>Output</h4>
+        <pre class="tp-run-stdout" id="tp-run-stdout"></pre>
+      </section>
+      <section class="tp-run-section hidden" id="tp-run-handoff-section">
+        <h4>Handoff</h4>
+        <pre class="tp-run-handoff" id="tp-run-handoff"></pre>
+      </section>
+      <section class="tp-run-section hidden" id="tp-run-chat-section">
+        <h4>Chat Transcript</h4>
+        <div class="tp-run-chat" id="tp-run-chat"></div>
+      </section>
+      <section class="tp-run-section hidden" id="tp-run-evidence-section">
+        <h4>Evidence Files</h4>
+        <ul class="tp-run-evidence-list" id="tp-run-evidence-list"></ul>
+      </section>
+    </div>
+  </div>'''
+
+
+def _render_run_detail_js_fn(api_base_var: str = "TP_API_BASE") -> str:
+    """Return the renderRunDetail(run, events, apiBase) JS function definition.
+
+    The function accepts an optional third argument `apiBase` that overrides
+    the module-level api_base_var for the evidence fetch. This lets Kitchen pass
+    the per-project API base at call time without a closure race condition.
+    Shared between ticket Runs tab and Kitchen side panel.
+    """
+    return f"""
+function renderRunDetail(run, events, apiBase) {{
+  if (!apiBase) apiBase = {api_base_var};
+  var runDetailPanel = document.getElementById('tp-run-detail-panel');
+  if (!runDetailPanel) return;
+  runDetailPanel.classList.remove('hidden');
+  var header = document.getElementById('tp-run-detail-header');
+  if (header) {{
+    var statusColor = run.status === 'succeeded' ? 'var(--green)' :
+      run.status === 'failed' ? 'var(--red)' : 'var(--text-secondary)';
+    var durationStr = run.duration_ms ? ' · ' + _fmtDuration(run.duration_ms) : '';
+    var agentStr = (run.workflow_meta && run.workflow_meta.workflow_name)
+      ? ' · ' + esc(run.workflow_meta.workflow_name) : '';
+    var exitStr = (run.exit_code !== null && run.exit_code !== undefined)
+      ? ' · exit ' + run.exit_code : '';
+    header.innerHTML = 'Run #' + run.id +
+      ' <span style="color:' + statusColor + '">' + esc(run.status) + '</span>' +
+      durationStr + agentStr + exitStr;
+  }}
+  // Stdout.
+  var stdoutEl = document.getElementById('tp-run-stdout');
+  if (stdoutEl) {{ stdoutEl.textContent = run.summary || '(no output)'; }}
+  // Reset hidden sections.
+  var handoffSec = document.getElementById('tp-run-handoff-section');
+  var chatSec = document.getElementById('tp-run-chat-section');
+  var evidSec = document.getElementById('tp-run-evidence-section');
+  if (handoffSec) handoffSec.classList.add('hidden');
+  if (chatSec) chatSec.classList.add('hidden');
+  if (evidSec) evidSec.classList.add('hidden');
+  // Handoff + chat.
+  try {{
+    var meta = JSON.parse(run.metadata_json || run.workflow_meta && JSON.stringify(run.workflow_meta) || '{{}}');
+    if (meta.handoff && Object.keys(meta.handoff).length) {{
+      var handoffEl = document.getElementById('tp-run-handoff');
+      if (handoffEl) handoffEl.textContent = JSON.stringify(meta.handoff, null, 2);
+      if (handoffSec) handoffSec.classList.remove('hidden');
+    }}
+    if (meta.chat && meta.chat.length) {{
+      var chatEl = document.getElementById('tp-run-chat');
+      if (chatEl) {{
+        chatEl.innerHTML = meta.chat.map(function(entry) {{
+          return '<div class="tp-chat-entry ' + esc(entry.role) + '">' +
+            '<div class="tp-chat-role">' + esc(entry.role) + '</div>' +
+            '<div>' + esc(entry.content) + '</div></div>';
+        }}).join('');
+        if (chatSec) chatSec.classList.remove('hidden');
+      }}
+    }}
+  }} catch(e) {{}}
+  // Evidence.
+  fetch(apiBase + '/runs/' + run.id + '/evidence')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      var files = data.files || [];
+      if (!files.length) return;
+      var listEl = document.getElementById('tp-run-evidence-list');
+      if (listEl) {{
+        listEl.innerHTML = files.map(function(f) {{
+          return '<li style="font-size:12px;padding:2px 0;">' + esc(f.name) +
+            ' <span style="color:var(--text-tertiary)">(' + Math.round(f.size/1024) + 'KB)</span></li>';
+        }}).join('');
+        if (evidSec) evidSec.classList.remove('hidden');
+      }}
+    }}).catch(function() {{}});
+}}"""
+
+
+def _render_ticket_tab_runs(ticket: dict, proj: dict, port: int) -> str:
+    """Render the Runs tab body — list of past/active runs with per-run detail panel.
+
+    Uses the shared _render_run_detail_shell_html() helper for the panel markup.
+    The JS renderRunDetail() function is also defined via _render_run_detail_js_fn()
+    and inlined in the ticket page's script block (see _render_ticket_page).
+    """
+    pid = _safe_attr(proj["id"])
+    tid = _safe_attr(ticket["id"])
+    api_base = f"http://localhost:{port}/{pid}/api"
+    detail_shell = _render_run_detail_shell_html()
+    return f'''
+<div class="tp-runs-layout" data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
+  <div class="tp-runs-list" id="tp-runs-list">
+    <div class="tp-activity-loading">Loading runs…</div>
+  </div>
+  <!-- Per-run detail panel (shared component from _render_run_detail_shell_html) -->
+  {detail_shell}
+</div>
+'''
+
+
+def _render_ticket_tab_files(ticket: dict, proj: dict, port: int) -> str:
+    """Render the Files tab body — attachments list + placeholder for MD files."""
+    pid = _safe_attr(proj["id"])
+    tid = _safe_attr(ticket["id"])
+    api_base = f"http://localhost:{port}/{pid}/api"
+    return f'''
+<div class="tp-files-layout" data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
+  <div id="tp-attachments-list" class="tp-files-list">
+    <div class="tp-activity-loading">Loading attachments…</div>
+  </div>
+  <div class="tp-files-placeholder">
+    <span class="tp-empty">Linked markdown files — coming soon.</span>
+  </div>
+</div>
+'''
+
+
+def _render_ticket_tab_graph(ticket: dict, proj: dict, port: int) -> str:
+    """Render the Graph tab body — dependency graph placeholder."""
+    return '''
+<div class="tp-graph-placeholder">
+  <div class="tp-empty tp-empty-large">Dependency graph — coming soon.</div>
+</div>
+'''
+
+
+def _render_ticket_page(proj: dict, port: int, ticket_id: str, tab: str = "overview") -> str | None:
+    """Render the full-page ticket view for /{project_id}/tickets/{ticket_id}?tab=.
+
+    Returns None if the ticket is not found.
+    Tabs: overview (default) | activity | runs | files | graph
+
+    Lane C handoff note: the per-run detail component lives in
+    _render_ticket_tab_runs() inside #tp-run-detail-panel. Extract it into
+    _render_run_detail_component(run_id, run_dict, proj, port) when building
+    the Kitchen side panel so both surfaces share the same markup.
+    """
+    import html as _h
+
+    ticket = _get_ticket_json(proj["id"], ticket_id)
+    if ticket is None:
+        return None
+
+    pid = _safe_attr(proj["id"])
+    name = _safe_attr(proj.get("name", proj["id"]))
+    api_base = f"http://localhost:{port}/{pid}/api"
+    tid = _h.escape(ticket["id"])
+    title = _h.escape(ticket["title"] or "")
+    section = ticket.get("section", "Ideas")
+    status = _h.escape(ticket.get("status", ""))
+    priority = _h.escape(ticket.get("priority", "medium"))
+    is_container = ticket.get("is_container", False)
+
+    valid_tabs = ("overview", "activity", "runs", "files", "graph")
+    if tab not in valid_tabs:
+        tab = "overview"
+
+    # Render the active tab body.
+    if tab == "overview":
+        tab_body = _render_ticket_tab_overview(ticket, proj, port)
+    elif tab == "activity":
+        tab_body = _render_ticket_tab_activity(ticket, proj, port)
+    elif tab == "runs":
+        tab_body = _render_ticket_tab_runs(ticket, proj, port)
+    elif tab == "files":
+        tab_body = _render_ticket_tab_files(ticket, proj, port)
+    else:
+        tab_body = _render_ticket_tab_graph(ticket, proj, port)
+
+    # Build tab nav.
+    def _tab_link(t: str, label: str) -> str:
+        active_cls = " tp-tab-active" if t == tab else ""
+        return (
+            f'<a class="tp-tab{active_cls}" href="/{pid}/tickets/{tid}?tab={t}">'
+            f'{label}</a>'
+        )
+
+    tabs_html = (
+        _tab_link("overview", "Overview")
+        + _tab_link("activity", "Activity")
+        + _tab_link("runs", "Runs")
+        + _tab_link("files", "Files")
+        + _tab_link("graph", "Graph")
+    )
+
+    # Readiness dots.
+    criteria = ticket.get("acceptance_criteria", [])
+    total_c = len(criteria)
+    done_c = sum(1 for c in criteria if c.get("checked"))
+    has_desc = bool(ticket.get("description", "").strip())
+    has_reviewed = bool(ticket.get("readiness_flags", {}).get("reviewed"))
+    container_badge = '<span class="tp-container-badge">Container</span>' if is_container else ""
+
+    rail_css = gen.build_nav_rail_css()
+    rail_html = gen.build_nav_rail_html()
+    rail_js = gen.build_nav_rail_js()
+    drawer_css = gen.build_settings_drawer_css()
+    drawer_html = gen.build_settings_drawer_html(gen._svg_icon('x', 14))
+    drawer_js = gen.build_settings_drawer_js()
+
+    with _PROJECTS_CACHE_LOCK:
+        projects_meta_json = json.dumps([
+            {"id": p["id"], "name": p.get("name", p["id"])}
+            for p in _PROJECTS_CACHE.values()
+        ])
+
+    # Serialise event kind maps to JS.
+    event_labels_js = json.dumps(EVENT_KIND_LABELS)
+    event_icons_js = json.dumps(EVENT_KIND_ICONS)
+    event_summary_map_js = json.dumps({
+        k: v.__doc__ or k for k, v in _EVENT_KIND_SUMMARY_MAP.items()
+    })
+
+    return f'''<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{tid} — {title}</title>
+<meta name="current-project" content="{pid}">
+<meta name="edit-api" content="{api_base}">
+<meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
+<script>
+(function(){{
+  var s=localStorage.getItem('tt-theme');
+  if(s==='light')document.documentElement.setAttribute('data-theme','light');
+  else if(s==='dark')document.documentElement.setAttribute('data-theme','dark');
+  else document.documentElement.setAttribute('data-theme',
+    window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');
+}})();
+</script>
+<style>
+:root, [data-theme="dark"] {{
+  --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
+  --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
+  --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
+  --accent: #3b82f6; --green: #22c55e; --red: #ef4444; --yellow: #eab308;
+}}
+[data-theme="light"] {{
+  --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
+  --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
+  --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
+  --accent: #2563eb; --green: #16a34a; --red: #dc2626; --yellow: #ca8a04;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: var(--bg-page); color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh; }}
+a {{ color: var(--accent); text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+/* Header */
+.tp-header {{ display: flex; align-items: center; gap: 12px; padding: 8px 20px;
+  border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); flex-wrap: wrap; }}
+.tp-header-id {{ font-family: "SF Mono", Monaco, monospace; font-size: 13px;
+  color: var(--accent); font-weight: 600; flex-shrink: 0; }}
+.tp-header-title {{ font-size: 15px; font-weight: 600; flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.tp-back {{ font-size: 12px; color: var(--text-secondary); flex-shrink: 0; }}
+.tp-back:hover {{ color: var(--text-primary); }}
+/* Meta strip */
+.tp-meta-strip {{ display: flex; align-items: center; gap: 8px; padding: 6px 20px;
+  border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface);
+  font-size: 12px; flex-wrap: wrap; }}
+.tp-chip {{ display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
+  border-radius: 12px; background: var(--bg-hover); border: 1px solid var(--border-default);
+  color: var(--text-secondary); font-size: 11px; }}
+.tp-chip.priority-high {{ border-color: rgba(239,68,68,0.3); color: var(--red); }}
+.tp-chip.priority-medium {{ border-color: rgba(234,179,8,0.3); color: var(--yellow); }}
+.tp-chip.priority-low {{ border-color: rgba(156,163,175,0.3); }}
+.tp-container-badge {{ display: inline-flex; padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  background: rgba(59,130,246,0.15); color: var(--accent); border: 1px solid rgba(59,130,246,0.3); }}
+/* Tab nav */
+.tp-tabs {{ display: flex; gap: 0; padding: 0 20px;
+  border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }}
+.tp-tab {{ padding: 10px 16px; font-size: 13px; font-weight: 500;
+  color: var(--text-secondary); border-bottom: 2px solid transparent;
+  text-decoration: none; transition: color 0.15s; }}
+.tp-tab:hover {{ color: var(--text-primary); text-decoration: none; }}
+.tp-tab-active {{ color: var(--text-primary); border-bottom-color: var(--accent); }}
+/* Content area */
+.tp-content {{ padding: 24px; max-width: 900px; }}
+/* Sections */
+.tp-section {{ background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
+.tp-section-header {{ display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }}
+.tp-section-header h3 {{ font-size: 13px; font-weight: 600; }}
+/* Gate banner */
+.tp-gate-banner {{ background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2);
+  border-radius: 6px; padding: 8px 14px; font-size: 12px; color: var(--text-secondary);
+  margin-bottom: 16px; }}
+/* Criteria */
+.tp-criteria-list {{ list-style: none; padding: 0; }}
+.tp-criterion {{ display: flex; align-items: center; gap: 8px; padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle); font-size: 13px; }}
+.tp-criterion:last-child {{ border-bottom: none; }}
+.tp-criterion.checked .tp-crit-text {{ text-decoration: line-through; opacity: 0.6; }}
+.tp-crit-check {{ flex-shrink: 0; cursor: pointer; }}
+.tp-crit-text {{ flex: 1; }}
+.tp-crit-ask-ai {{ opacity: 0; font-size: 10px; padding: 2px 6px; }}
+.tp-criterion:hover .tp-crit-ask-ai {{ opacity: 0.7; }}
+.tp-criteria-add {{ display: flex; gap: 8px; margin-top: 10px; }}
+.tp-input {{ background: var(--bg-card); border: 1px solid var(--border-default);
+  border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--text-primary);
+  flex: 1; }}
+.tp-input:focus {{ outline: none; border-color: var(--accent); }}
+/* Criteria pill */
+.tp-crit-pill {{ display: inline-block; padding: 1px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: 600; }}
+.tp-crit-zero {{ background: var(--bg-hover); color: var(--text-tertiary); }}
+.tp-crit-empty {{ background: var(--bg-hover); color: var(--text-secondary); }}
+.tp-crit-progress {{ background: rgba(234,179,8,0.15); color: var(--yellow); }}
+.tp-crit-done {{ background: rgba(34,197,94,0.15); color: var(--green); }}
+/* Editor */
+.tp-editor {{ width: 100%; min-height: 120px; background: var(--bg-card);
+  border: 1px solid var(--border-default); border-radius: 6px; padding: 10px;
+  font-size: 13px; color: var(--text-primary); resize: vertical; font-family: inherit; }}
+.tp-editor:focus {{ outline: none; border-color: var(--accent); }}
+/* Meta list */
+.tp-meta-list {{ display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 13px; }}
+.tp-meta-list dt {{ color: var(--text-secondary); font-weight: 500; }}
+.tp-meta-list dd {{ color: var(--text-primary); }}
+/* Children grid */
+.tp-children-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px; }}
+.tp-child-card {{ display: flex; flex-direction: column; gap: 4px; padding: 10px;
+  background: var(--bg-card); border: 1px solid var(--border-default); border-radius: 6px;
+  text-decoration: none; color: var(--text-primary); transition: background 0.15s; }}
+.tp-child-card:hover {{ background: var(--bg-hover); text-decoration: none; }}
+.tp-child-id {{ font-family: "SF Mono", Monaco, monospace; font-size: 10px;
+  color: var(--accent); }}
+.tp-child-title {{ font-size: 12px; }}
+.tp-child-section {{ font-size: 10px; color: var(--text-tertiary); }}
+.tp-child-ideas {{ border-left: 3px solid var(--text-tertiary); }}
+.tp-child-backlog {{ border-left: 3px solid var(--accent); }}
+.tp-child-wip {{ border-left: 3px solid var(--yellow); }}
+.tp-child-review {{ border-left: 3px solid #a855f7; }}
+.tp-child-done {{ border-left: 3px solid var(--green); }}
+/* Toggle */
+.tp-toggle-label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }}
+/* Activity feed */
+.tp-activity-feed {{ max-width: 700px; }}
+.tp-activity-item {{ display: flex; gap: 12px; padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle); font-size: 12px; }}
+.tp-activity-item:last-child {{ border-bottom: none; }}
+.tp-activity-icon {{ width: 24px; height: 24px; flex-shrink: 0; display: flex;
+  align-items: center; justify-content: center; border-radius: 50%;
+  background: var(--bg-hover); color: var(--text-secondary); }}
+.tp-activity-body {{ flex: 1; min-width: 0; }}
+.tp-activity-label {{ font-weight: 600; color: var(--text-primary); }}
+.tp-activity-summary {{ color: var(--text-secondary); margin-top: 2px; }}
+.tp-activity-meta {{ color: var(--text-tertiary); font-size: 11px; margin-top: 2px; }}
+.tp-activity-run-link {{ font-size: 11px; color: var(--accent); }}
+/* Runs layout */
+.tp-runs-layout {{ display: grid; grid-template-columns: 280px 1fr; gap: 16px; }}
+.tp-runs-list {{ background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: 8px; overflow: hidden; max-height: 600px; overflow-y: auto; }}
+.tp-run-row {{ padding: 10px 14px; border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer; font-size: 12px; transition: background 0.15s; }}
+.tp-run-row:hover {{ background: var(--bg-hover); }}
+.tp-run-row.active {{ background: rgba(59,130,246,0.1); }}
+.tp-run-row:last-child {{ border-bottom: none; }}
+.tp-run-detail-panel {{ background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 16px; overflow-y: auto; max-height: 600px; }}
+.tp-run-detail-header {{ font-size: 13px; font-weight: 600; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle); }}
+.tp-run-section {{ margin-bottom: 16px; }}
+.tp-run-section h4 {{ font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }}
+.tp-run-stdout {{ font-family: "SF Mono", Monaco, monospace; font-size: 11px;
+  background: var(--bg-card); padding: 10px; border-radius: 6px;
+  white-space: pre-wrap; max-height: 300px; overflow-y: auto; color: var(--text-primary); }}
+.tp-run-chat {{ font-size: 12px; }}
+.tp-chat-entry {{ margin-bottom: 10px; padding: 8px; border-radius: 6px; }}
+.tp-chat-entry.user {{ background: rgba(59,130,246,0.1); }}
+.tp-chat-entry.agent {{ background: var(--bg-card); }}
+.tp-chat-entry.agent_marker {{ background: rgba(234,179,8,0.1); font-family: monospace;
+  font-size: 11px; }}
+.tp-chat-role {{ font-weight: 600; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--text-secondary); margin-bottom: 4px; }}
+/* Files */
+.tp-files-layout {{ display: flex; flex-direction: column; gap: 16px; }}
+.tp-files-list {{ background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 16px; }}
+/* Graph placeholder */
+.tp-graph-placeholder {{ display: flex; align-items: center; justify-content: center;
+  min-height: 200px; }}
+/* Needs-input panel */
+.tp-ni-panel {{ background: var(--bg-surface); border: 1px solid rgba(59,130,246,0.3);
+  border-radius: 8px; padding: 16px; margin-top: 16px; }}
+.tp-ni-panel.tp-ni-propose {{ border-color: rgba(234,179,8,0.3); }}
+.tp-ni-header {{ font-size: 13px; font-weight: 600; margin-bottom: 10px; }}
+.tp-ni-prompt {{ font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; }}
+.tp-ni-textarea {{ width: 100%; min-height: 80px; background: var(--bg-card);
+  border: 1px solid var(--border-default); border-radius: 6px; padding: 8px;
+  font-size: 12px; color: var(--text-primary); resize: vertical; font-family: inherit; }}
+.tp-ni-actions {{ display: flex; gap: 8px; margin-top: 8px; }}
+.tp-propose-items {{ list-style: none; padding: 0; margin-bottom: 12px; }}
+.tp-propose-item {{ display: flex; align-items: flex-start; gap: 8px; padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle); font-size: 12px; }}
+.tp-propose-item:last-child {{ border-bottom: none; }}
+.tp-propose-label {{ font-size: 10px; text-transform: uppercase; color: var(--text-tertiary);
+  font-weight: 600; width: 80px; flex-shrink: 0; margin-top: 2px; }}
+/* Buttons */
+.btn {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px;
+  border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; border: 1px solid;
+  transition: background 0.15s; }}
+.btn-primary {{ background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.3);
+  color: var(--accent); }}
+.btn-primary:hover {{ background: rgba(59,130,246,0.25); }}
+.btn-ghost {{ background: transparent; border-color: var(--border-default);
+  color: var(--text-secondary); }}
+.btn-ghost:hover {{ background: var(--bg-hover); color: var(--text-primary); }}
+.btn-sm {{ padding: 4px 10px; font-size: 11px; }}
+/* Misc */
+.tp-empty {{ color: var(--text-tertiary); font-size: 12px; font-style: italic; }}
+.tp-empty-large {{ font-size: 14px; }}
+.tp-activity-loading {{ padding: 20px; color: var(--text-tertiary); font-size: 12px; }}
+.hidden {{ display: none !important; }}
+{rail_css}
+{drawer_css}
+</style>
+</head>
+<body>
+{rail_html}
+<div class="tp-header">
+  <a class="tp-back" href="/{pid}/">← Kanban</a>
+  <span class="tp-header-id">{tid}</span>
+  {container_badge}
+  <span class="tp-header-title">{title}</span>
+</div>
+<div class="tp-meta-strip">
+  <span class="tp-chip priority-{priority}">{priority}</span>
+  <span class="tp-chip">{status}</span>
+  <span class="tp-chip">{_h.escape(section)}</span>
+  {'<span class="tp-chip" style="color:var(--green);">D</span>' if has_desc else ""}
+  {'<span class="tp-chip tp-crit-pill tp-crit-done">C</span>' if total_c > 0 and done_c == total_c else
+   f'<span class="tp-chip tp-crit-pill tp-crit-progress">{done_c}/{total_c}</span>' if total_c > 0 else
+   '<span class="tp-chip tp-crit-pill tp-crit-zero">C</span>'}
+  {'<span class="tp-chip" style="color:var(--green);">L</span>' if has_reviewed else ""}
+</div>
+<div class="tp-tabs">
+  {tabs_html}
+</div>
+<div class="tp-content">
+  {tab_body}
+</div>
+{drawer_html}
+<script>
+var EVENT_KIND_LABELS = {event_labels_js};
+var EVENT_KIND_ICONS  = {event_icons_js};
+var TP_API_BASE = {json.dumps(api_base)};
+var TP_TICKET_ID = {json.dumps(ticket["id"])};
+var TP_PROJECT_ID = {json.dumps(proj["id"])};
+var TP_PORT = {port};
+
+// ── Relative timestamp ────────────────────────────────────────────
+function relativeTime(iso) {{
+  if (!iso) return '';
+  var d = new Date(iso); var now = Date.now(); var diff = now - d.getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
+  return Math.floor(diff/86400000) + 'd ago';
+}}
+
+// ── Criteria interactions ─────────────────────────────────────────
+document.addEventListener('change', function(e) {{
+  var chk = e.target.closest('.tp-crit-check');
+  if (!chk) return;
+  var idx = parseInt(chk.dataset.criterionIndex, 10);
+  var ticketId = chk.dataset.ticketId;
+  var body = chk.checked ? {{check_criteria: idx+1}} : {{uncheck_criteria: idx+1}};
+  fetch(TP_API_BASE + '/tickets/' + encodeURIComponent(ticketId), {{
+    method: 'PUT',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify(body),
+  }}).catch(console.error);
+}});
+
+// ── Criteria add ──────────────────────────────────────────────────
+var critInput = document.getElementById('tp-crit-input');
+var critAddBtn = document.getElementById('tp-crit-add-btn');
+function addCriterion() {{
+  var text = critInput ? critInput.value.trim() : '';
+  if (!text) return;
+  fetch(TP_API_BASE + '/tickets/' + encodeURIComponent(TP_TICKET_ID), {{
+    method: 'PUT',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{add_criteria: text}}),
+  }}).then(function() {{
+    critInput.value = '';
+    window.location.reload();
+  }}).catch(console.error);
+}}
+if (critAddBtn) critAddBtn.addEventListener('click', addCriterion);
+if (critInput) critInput.addEventListener('keydown', function(e) {{
+  if (e.key === 'Enter') {{ e.preventDefault(); addCriterion(); }}
+}});
+
+// ── Description auto-save ─────────────────────────────────────────
+var descEditor = document.getElementById('tp-desc-editor');
+if (descEditor) {{
+  var descTimer = null;
+  descEditor.addEventListener('input', function() {{
+    clearTimeout(descTimer);
+    descTimer = setTimeout(function() {{
+      fetch(TP_API_BASE + '/tickets/' + encodeURIComponent(TP_TICKET_ID), {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{description: descEditor.value}}),
+      }}).catch(console.error);
+    }}, 1000);
+  }});
+}}
+
+// ── Container toggle ──────────────────────────────────────────────
+var containerToggle = document.getElementById('tp-container-toggle');
+if (containerToggle) {{
+  containerToggle.addEventListener('change', function() {{
+    fetch(TP_API_BASE + '/tickets/' + encodeURIComponent(TP_TICKET_ID), {{
+      method: 'PUT',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{is_container: containerToggle.checked}}),
+    }}).then(function() {{ window.location.reload(); }}).catch(console.error);
+  }});
+}}
+
+// ── Activity feed ─────────────────────────────────────────────────
+var activityFeed = document.getElementById('tp-activity-feed');
+var activityPollTimer = null;
+function esc(s) {{
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}}
+function renderActivityEvent(ev) {{
+  var label = EVENT_KIND_LABELS[ev.event_kind] || ev.event_kind;
+  var summary = '';
+  var p = ev.payload || {{}};
+  // Generate one-line summary from payload.
+  if (ev.event_kind === 'run_started') summary = 'Run #' + (p.run_id||'') + ' started';
+  else if (ev.event_kind === 'run_succeeded') summary = 'Run #' + (p.run_id||'') + ' succeeded — ' + esc((p.summary||'').substring(0,80));
+  else if (ev.event_kind === 'run_failed') summary = 'Run #' + (p.run_id||'') + ' failed — ' + esc((p.error_class||p.error_message||'').substring(0,80));
+  else if (ev.event_kind === 'run_cancelled') summary = 'Run #' + (p.run_id||'') + ' cancelled';
+  else if (ev.event_kind === 'section_change') summary = esc(p.before||'?') + ' → ' + esc(p.after||'?');
+  else if (ev.event_kind === 'status_change') summary = esc(p.before||'?') + ' → ' + esc(p.after||'?');
+  else if (ev.event_kind === 'criteria_check') summary = 'criterion ' + (p.after ? 'checked' : 'unchecked');
+  else if (ev.event_kind === 'criteria_added') summary = '+ ' + esc(p.text||'criterion');
+  else if (ev.event_kind === 'field_changed') summary = esc(p.field||'?') + ' changed';
+  else if (ev.event_kind === 'handoff_recorded') summary = 'Handoff for run #' + (p.run_id||'');
+  else if (ev.event_kind === 'input_provided') summary = 'User responded (' + esc(p.kind||'text') + ')';
+  else if (ev.event_kind === 'agent_output') summary = esc((p.summary||'').substring(0,100));
+  else if (ev.event_kind === 'workspace_created') summary = esc(p.path||'?');
+  else if (ev.event_kind === 'pause_set') summary = 'paused — ' + esc(p.reason||'');
+  else if (ev.event_kind === 'pause_cleared') summary = 'resumed';
+
+  var runLink = '';
+  var runLinkKinds = {{'run_started':1,'run_succeeded':1,'run_failed':1,'run_cancelled':1,'handoff_recorded':1,'agent_output':1}};
+  if (runLinkKinds[ev.event_kind] && ev.run_id) {{
+    runLink = ' <a class="tp-activity-run-link" href="/{pid}/tickets/{tid}?tab=runs" onclick="sessionStorage.setItem(\'tp-select-run\',\'' + ev.run_id + '\')">View run</a>';
+  }}
+
+  var actor = ev.actor_type === 'agent' ? 'Agent' : (ev.actor_type === 'system' ? 'System' : 'Human');
+  return '<div class="tp-activity-item">' +
+    '<div class="tp-activity-icon">' + esc(label.charAt(0)) + '</div>' +
+    '<div class="tp-activity-body">' +
+      '<div class="tp-activity-label">' + esc(label) + runLink + '</div>' +
+      (summary ? '<div class="tp-activity-summary">' + summary + '</div>' : '') +
+      '<div class="tp-activity-meta">' + esc(relativeTime(ev.occurred_at)) + ' · ' + esc(actor) + '</div>' +
+    '</div>' +
+    '</div>';
+}}
+function loadActivity() {{
+  if (!activityFeed) return;
+  fetch(TP_API_BASE + '/tickets/' + encodeURIComponent(TP_TICKET_ID) + '/activity?limit=50')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      var events = data.events || [];
+      if (events.length === 0) {{
+        activityFeed.innerHTML = '<div class="tp-empty tp-activity-loading">No activity yet.</div>';
+      }} else {{
+        activityFeed.innerHTML = events.map(renderActivityEvent).join('');
+      }}
+      // Check for needs_input run and render chat/propose panel.
+      _checkNeedsInputRun();
+    }})
+    .catch(function() {{ /* ignore */ }});
+}}
+function startActivityPoll() {{
+  if (!activityFeed) return;
+  loadActivity();
+  activityPollTimer = setInterval(function() {{
+    if (document.hasFocus()) loadActivity();
+  }}, 5000);
+}}
+function stopActivityPoll() {{
+  if (activityPollTimer) {{ clearInterval(activityPollTimer); activityPollTimer = null; }}
+}}
+
+// ── Needs-input panel ─────────────────────────────────────────────
+var niPanel = document.getElementById('tp-ni-panel');
+function _checkNeedsInputRun() {{
+  fetch(TP_API_BASE + '/runs?ticket=' + encodeURIComponent(TP_TICKET_ID) + '&limit=1')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      var runs = data.runs || [];
+      if (!runs.length || runs[0].status !== 'needs_input') {{
+        if (niPanel) niPanel.classList.add('hidden');
+        return;
+      }}
+      var run = runs[0];
+      _renderNiPanel(run);
+    }}).catch(function() {{}});
+}}
+function _renderNiPanel(run) {{
+  if (!niPanel) return;
+  var kind = run.needs_input_kind || 'text';
+  var promptText = '';
+  try {{ var p = JSON.parse(run.needs_input_prompt || '{{}}');
+    promptText = p.ask || JSON.stringify(p.propose || p, null, 2); }} catch(e) {{}}
+  niPanel.classList.remove('hidden', 'tp-ni-propose');
+  if (kind === 'propose') niPanel.classList.add('tp-ni-propose');
+
+  if (kind === 'text') {{
+    niPanel.innerHTML =
+      '<div class="tp-ni-header">Agent is asking for input</div>' +
+      '<div class="tp-ni-prompt" id="tp-ni-prompt-text">' + esc(promptText) + '</div>' +
+      '<textarea class="tp-ni-textarea" id="tp-ni-text-reply" data-testid="tp-ni-text-reply" placeholder="Your reply..." rows="4"></textarea>' +
+      '<div class="tp-ni-actions">' +
+        '<button class="btn btn-primary" id="tp-ni-send" data-testid="tp-ni-send" data-run-id="' + run.id + '" data-kind="text">Send</button>' +
+        '<button class="btn btn-ghost" id="tp-ni-cancel">Cancel</button>' +
+      '</div>';
+  }} else {{
+    // Propose kind — build merge UI.
+    var proposeData = {{}};
+    try {{ proposeData = JSON.parse(run.needs_input_prompt || '{{}}').propose || {{}}; }} catch(e) {{}}
+    var items = '';
+    if (proposeData.description) {{
+      items += '<li class="tp-propose-item"><input type="checkbox" name="tp-propose-desc" checked> <span class="tp-propose-label">Description</span><span>' + esc(proposeData.description) + '</span></li>';
+    }}
+    (proposeData.add_criteria || []).forEach(function(c, i) {{
+      items += '<li class="tp-propose-item"><input type="checkbox" name="tp-propose-add-crit" data-idx="'+i+'" checked> <span class="tp-propose-label">+ Criterion</span><span>' + esc(c) + '</span></li>';
+    }});
+    (proposeData.remove_criteria || []).forEach(function(c, i) {{
+      items += '<li class="tp-propose-item"><input type="checkbox" name="tp-propose-rm-crit" data-idx="'+i+'" checked> <span class="tp-propose-label">- Criterion</span><span>' + esc(c) + '</span></li>';
+    }});
+    (proposeData.add_tags || []).forEach(function(t, i) {{
+      items += '<li class="tp-propose-item"><input type="checkbox" name="tp-propose-add-tag" data-idx="'+i+'" checked> <span class="tp-propose-label">+ Tag</span><span>' + esc(t) + '</span></li>';
+    }});
+    (proposeData.remove_tags || []).forEach(function(t, i) {{
+      items += '<li class="tp-propose-item"><input type="checkbox" name="tp-propose-rm-tag" data-idx="'+i+'" checked> <span class="tp-propose-label">- Tag</span><span>' + esc(t) + '</span></li>';
+    }});
+    niPanel.innerHTML =
+      '<div class="tp-ni-header">Agent is proposing changes</div>' +
+      '<ul class="tp-propose-items" id="tp-propose-items">' + items + '</ul>' +
+      '<div class="tp-ni-actions">' +
+        '<button class="btn btn-primary" id="tp-ni-send" data-testid="tp-ni-send" data-run-id="' + run.id + '" data-kind="propose" data-propose=\'' + JSON.stringify(proposeData).replace(/'/g,"&#39;") + '\'>Apply selected</button>' +
+        '<button class="btn btn-ghost" id="tp-ni-reject-all">Reject all</button>' +
+      '</div>';
+    var rejectAll = document.getElementById('tp-ni-reject-all');
+    if (rejectAll) {{
+      rejectAll.addEventListener('click', function() {{
+        _sendNiResponse(run.id, 'propose', {{}}, proposeData);
+      }});
+    }}
+  }}
+
+  var sendBtn = document.getElementById('tp-ni-send');
+  if (sendBtn) {{
+    sendBtn.addEventListener('click', function() {{
+      var runId = parseInt(sendBtn.dataset.runId, 10);
+      var k = sendBtn.dataset.kind;
+      if (k === 'text') {{
+        var reply = (document.getElementById('tp-ni-text-reply') || {{}}).value || '';
+        if (!reply.trim()) return;
+        _sendNiResponse(runId, 'text', reply, null);
+      }} else {{
+        // Collect checked items.
+        var proposeData = JSON.parse(sendBtn.dataset.propose || '{{}}');
+        var accepted = {{}};
+        var descChk = document.querySelector('input[name="tp-propose-desc"]');
+        if (descChk && descChk.checked && proposeData.description) accepted.description = proposeData.description;
+        var addCritChecked = Array.from(document.querySelectorAll('input[name="tp-propose-add-crit"]:checked'))
+          .map(function(el) {{ return proposeData.add_criteria[parseInt(el.dataset.idx,10)]; }}).filter(Boolean);
+        if (addCritChecked.length) accepted.add_criteria = addCritChecked;
+        var rmCritChecked = Array.from(document.querySelectorAll('input[name="tp-propose-rm-crit"]:checked'))
+          .map(function(el) {{ return proposeData.remove_criteria[parseInt(el.dataset.idx,10)]; }}).filter(Boolean);
+        if (rmCritChecked.length) accepted.remove_criteria = rmCritChecked;
+        var addTagChecked = Array.from(document.querySelectorAll('input[name="tp-propose-add-tag"]:checked'))
+          .map(function(el) {{ return proposeData.add_tags[parseInt(el.dataset.idx,10)]; }}).filter(Boolean);
+        if (addTagChecked.length) accepted.add_tags = addTagChecked;
+        var rmTagChecked = Array.from(document.querySelectorAll('input[name="tp-propose-rm-tag"]:checked'))
+          .map(function(el) {{ return proposeData.remove_tags[parseInt(el.dataset.idx,10)]; }}).filter(Boolean);
+        if (rmTagChecked.length) accepted.remove_tags = rmTagChecked;
+        _sendNiResponse(runId, 'propose', accepted, proposeData);
+      }}
+    }});
+  }}
+  var cancelBtn = document.getElementById('tp-ni-cancel');
+  if (cancelBtn) {{ cancelBtn.addEventListener('click', function() {{ niPanel.classList.add('hidden'); }}); }}
+}}
+
+function _sendNiResponse(runId, kind, responseOrAccepted, proposeData) {{
+  var body = kind === 'text' ?
+    {{kind: 'text', response: responseOrAccepted}} :
+    {{kind: 'propose', accepted: responseOrAccepted}};
+  fetch(TP_API_BASE + '/runs/' + runId + '/respond', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify(body),
+  }}).then(function() {{
+    if (niPanel) niPanel.classList.add('hidden');
+    loadActivity();
+  }}).catch(console.error);
+}}
+
+// ── Runs list ─────────────────────────────────────────────────────
+var runsListEl = document.getElementById('tp-runs-list');
+var selectedRunId = null;
+function loadRunsList() {{
+  if (!runsListEl) return;
+  fetch(TP_API_BASE + '/runs?ticket=' + encodeURIComponent(TP_TICKET_ID) + '&limit=20')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      var runs = data.runs || [];
+      if (!runs.length) {{
+        runsListEl.innerHTML = '<div class="tp-empty tp-activity-loading">No runs yet.</div>';
+        return;
+      }}
+      runsListEl.innerHTML = runs.map(function(r) {{
+        var cls = 'tp-run-row' + (r.id === selectedRunId ? ' active' : '');
+        var statusColor = r.status === 'succeeded' ? 'var(--green)' :
+          r.status === 'failed' ? 'var(--red)' : 'var(--text-secondary)';
+        return '<div class="' + cls + '" data-run-id="' + r.id + '">' +
+          '<span style="color:' + statusColor + '">' + esc(r.status) + '</span> ' +
+          '<span style="color:var(--text-secondary);font-size:11px;">#' + r.id + '</span>' +
+          '<div style="color:var(--text-tertiary);font-size:11px;margin-top:2px;">' +
+            esc((r.summary||'').substring(0,60)) + '</div>' +
+          '</div>';
+      }}).join('');
+      // Auto-select from sessionStorage (set by activity "View run" link).
+      var autoSelect = sessionStorage.getItem('tp-select-run');
+      if (autoSelect) {{ sessionStorage.removeItem('tp-select-run'); selectRun(parseInt(autoSelect, 10)); }}
+      else if (!selectedRunId && runs.length) selectRun(runs[0].id);
+    }}).catch(function() {{}});
+}}
+function selectRun(runId) {{
+  selectedRunId = runId;
+  // Update active state.
+  document.querySelectorAll('.tp-run-row').forEach(function(el) {{
+    el.classList.toggle('active', parseInt(el.dataset.runId, 10) === runId);
+  }});
+  fetch(TP_API_BASE + '/runs/' + runId)
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      renderRunDetail(data.run || data, data.events || [], TP_API_BASE);
+    }}).catch(function() {{}});
+}}
+document.addEventListener('click', function(e) {{
+  var row = e.target.closest('.tp-run-row');
+  if (row && row.dataset.runId) {{ selectRun(parseInt(row.dataset.runId, 10)); }}
+}});
+// ── Duration formatter (shared with Kitchen) ──────────────────────
+function _fmtDuration(ms) {{
+  if (!ms) return '';
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60); var rs = s % 60;
+  if (m < 60) return m + 'm ' + rs + 's';
+  var h = Math.floor(m / 60); var rm = m % 60;
+  return h + 'h ' + rm + 'm';
+}}
+{_render_run_detail_js_fn("TP_API_BASE")}
+if (runsListEl) loadRunsList();
+
+// ── Files tab ─────────────────────────────────────────────────────
+var filesListEl = document.getElementById('tp-attachments-list');
+if (filesListEl) {{
+  fetch(TP_API_BASE + '/tickets/' + encodeURIComponent(TP_TICKET_ID) + '/attachments')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      var atts = data.attachments || [];
+      if (!atts.length) {{
+        filesListEl.innerHTML = '<div class="tp-empty">No attachments yet.</div>';
+      }} else {{
+        filesListEl.innerHTML = atts.map(function(a) {{
+          return '<div style="padding:6px;font-size:12px;">' + esc(a.filename||a.id) + '</div>';
+        }}).join('');
+      }}
+    }}).catch(function() {{ filesListEl.innerHTML = '<div class="tp-empty">Attachments unavailable.</div>'; }});
+}}
+
+// ── Start activity poll if on activity tab ────────────────────────
+if (activityFeed) startActivityPoll();
+
+// ── Ask AI button ─────────────────────────────────────────────────
+document.addEventListener('click', function(e) {{
+  var btn = e.target.closest('.tp-crit-ask-ai');
+  if (!btn) return;
+  var idx = parseInt(btn.dataset.index, 10);
+  var li = btn.closest('.tp-criterion');
+  var text = li ? (li.querySelector('.tp-crit-text') || {{}}).textContent || '' : '';
+  var prompt = 'Help me satisfy this acceptance criterion for ticket ' +
+    TP_TICKET_ID + ': ' + text;
+  navigator.clipboard.writeText(prompt).catch(function() {{}});
+  btn.textContent = 'Copied';
+  setTimeout(function() {{ btn.textContent = 'Ask AI'; }}, 1500);
+}});
+</script>
+<script>{rail_js}</script>
+<script>{drawer_js}</script>
+</body>
+</html>'''
+
+
 def _aggregate_kitchen_state() -> dict:
     """Aggregate Kitchen state across all registered projects.
 
@@ -4355,11 +5408,23 @@ def _aggregate_kitchen_state() -> dict:
                 pause_reason = am_row["pause_reason"] if am_row else None
 
                 latest = conn.execute(
-                    "SELECT status FROM runs WHERE project_id = ? AND subject_type='ticket' AND subject_id=? "
+                    "SELECT id, status, duration_ms, exit_code, metadata_json "
+                    "FROM runs WHERE project_id = ? AND subject_type='ticket' AND subject_id=? "
                     "ORDER BY id DESC LIMIT 1",
                     (pid, tid),
                 ).fetchone()
                 run_status = latest["status"] if latest else None
+                run_id = latest["id"] if latest else None
+                run_duration_ms = latest["duration_ms"] if latest else None
+                run_exit_code = latest["exit_code"] if latest else None
+                # Extract agent/workflow name from metadata_json.
+                run_agent_name = None
+                if latest and latest["metadata_json"]:
+                    try:
+                        _rm = json.loads(latest["metadata_json"])
+                        run_agent_name = _rm.get("workflow_name")
+                    except Exception:
+                        pass
 
                 if run_status in ("preparing", "running"):
                     counts["running"] += 1
@@ -4372,6 +5437,10 @@ def _aggregate_kitchen_state() -> dict:
                     "section": t["section"], "status": t["status"],
                     "automation_mode": mode, "latest_run_status": run_status,
                     "pause_reason": pause_reason,
+                    "run_id": run_id,
+                    "agent_name": run_agent_name,
+                    "duration_ms": run_duration_ms,
+                    "exit_code": run_exit_code,
                 }
 
                 # Bucket assignment with single-priority placement.
@@ -4463,13 +5532,39 @@ def _render_kitchen_view(port: int) -> str:
                 f'<span class="kv-pause-reason" title="{_html.escape(it["pause_reason"] or "")}">— {_html.escape(it["pause_reason"] or "")}</span>'
                 if it["pause_reason"] else ""
             )
+            # Enhanced columns: agent name, duration, exit code
+            agent_html = (
+                f'<span class="kv-agent">{_html.escape(it["agent_name"])}</span>'
+                if it.get("agent_name") else '<span class="kv-agent"></span>'
+            )
+            dur_ms = it.get("duration_ms")
+            if dur_ms:
+                s = round(dur_ms / 1000)
+                if s < 60:
+                    dur_str = f"{s}s"
+                elif s < 3600:
+                    dur_str = f"{s // 60}m {s % 60}s"
+                else:
+                    dur_str = f"{s // 3600}h {(s % 3600) // 60}m"
+                dur_html = f'<span class="kv-duration">{dur_str}</span>'
+            else:
+                dur_html = '<span class="kv-duration"></span>'
+            exit_code = it.get("exit_code")
+            if exit_code is not None and it.get("latest_run_status") in ("succeeded", "failed", "stalled", "cancelled"):
+                exit_cls = "kv-exit-ok" if exit_code == 0 else "kv-exit-err"
+                exit_html = f'<span class="kv-exit {exit_cls}">{exit_code}</span>'
+            else:
+                exit_html = '<span class="kv-exit"></span>'
+            run_id = it.get("run_id")
+            run_id_attr = f' data-run-id="{run_id}" data-project-id="{_safe_attr(it["project_id"])}"' if run_id else ""
             rows.append(
-                f'<a class="kv-row" href="{ticket_url}" data-project="{_safe_attr(it["project_id"])}">'
+                f'<div class="kv-row" data-project="{_safe_attr(it["project_id"])}"'
+                f' data-ticket-id="{_safe_attr(it["ticket_id"])}" data-ticket-url="{_safe_attr(ticket_url)}"{run_id_attr}>'
                 f'<span class="kv-tid">{_html.escape(it["ticket_id"])}</span>'
                 f'<span class="kv-title">{_html.escape(it["title"])}</span>'
                 f'<span class="kv-proj">{_html.escape(it["project_name"])}</span>'
-                f'{mode_html}{run_html}{pause_html}'
-                f'</a>'
+                f'{agent_html}{dur_html}{exit_html}{mode_html}{run_html}{pause_html}'
+                f'</div>'
             )
         return "".join(rows)
 
@@ -4510,6 +5605,20 @@ def _render_kitchen_view(port: int) -> str:
         {"id": p["id"], "name": p.get("name", p["id"])} for p in state["projects"]
     ])
 
+    # Shared run-detail shell for the Kitchen side panel.
+    # Uses the same IDs as the ticket Runs tab (tp-run-detail-panel etc.) since
+    # Kitchen and the ticket page are separate page loads — no ID collision.
+    kv_run_detail_shell = _render_run_detail_shell_html(
+        panel_id="tp-run-detail-panel",
+        header_id="tp-run-detail-header",
+        extra_cls="kv-run-detail-panel",
+    )
+    # JS function body for renderRunDetail, pointing at the cross-project runs API.
+    # Kitchen uses the global /api/runs/{id}/evidence endpoint (no project prefix needed
+    # since run IDs are globally unique in the DB).
+    kv_run_detail_js = _render_run_detail_js_fn("KV_API_BASE")
+    kv_port_json = json.dumps(port)
+
     return f"""<!doctype html>
 <html data-theme="dark">
 <head>
@@ -4529,20 +5638,23 @@ def _render_kitchen_view(port: int) -> str:
   --bg-page: #0c0c0e; --bg-surface: #151518; --bg-card: #1b1b20; --bg-hover: #232329;
   --border-subtle: #1f1f26; --border-default: #2c2c35; --border-strong: #3c3c47;
   --text-primary: #eaeaed; --text-secondary: #9e9eab; --text-tertiary: #6a6a76;
-  --accent: #3b82f6;
+  --accent: #3b82f6; --green: #22c55e; --red: #ef4444;
 }}
 [data-theme="light"] {{
   --bg-page: #f8f9fa; --bg-surface: #ffffff; --bg-card: #ffffff; --bg-hover: #f3f4f6;
   --border-subtle: #e5e7eb; --border-default: #d1d5db; --border-strong: #9ca3af;
   --text-primary: #111827; --text-secondary: #6b7280; --text-tertiary: #9ca3af;
-  --accent: #2563eb;
+  --accent: #2563eb; --green: #16a34a; --red: #dc2626;
 }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font: 14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; }}
+.kv-layout {{ display: flex; min-height: 100vh; }}
+.kv-main {{ flex: 1; min-width: 0; }}
 .kv-page {{ max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }}
 .kv-header {{ display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }}
 .kv-header h1 {{ margin: 0; font-size: 16px; font-weight: 600; }}
-.kv-header-sub {{ color: var(--text-tertiary); font-size: 12px; }}
+.kv-header-sub {{ color: var(--text-tertiary); font-size: 12px; flex: 1; }}
+.kv-last-updated {{ font-size: 11px; color: var(--text-tertiary); }}
 .kv-bucket {{ margin-bottom: 22px; }}
 .kv-bucket-header {{ display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }}
 .kv-bucket-header h2 {{ margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); font-weight: 700; }}
@@ -4550,12 +5662,18 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .kv-bucket-desc {{ color: var(--text-tertiary); font-size: 12px; }}
 .kv-bucket-list {{ background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }}
 .kv-empty {{ padding: 14px 16px; color: var(--text-tertiary); font-size: 12px; font-style: italic; }}
-.kv-row {{ display: grid; grid-template-columns: 70px 1fr 140px auto auto auto; gap: 10px; padding: 8px 14px; align-items: center; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); text-decoration: none; font-size: 13px; }}
+.kv-row {{ display: grid; grid-template-columns: 70px 1fr 130px 100px 48px 32px auto auto auto; gap: 8px; padding: 8px 14px; align-items: center; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); font-size: 13px; cursor: pointer; transition: background 0.12s; }}
 .kv-row:last-child {{ border-bottom: 0; }}
-.kv-row:hover {{ background: rgba(255,255,255,0.03); }}
+.kv-row:hover {{ background: var(--bg-hover); }}
+.kv-row.kv-row-selected {{ background: rgba(59,130,246,0.08); border-left: 3px solid var(--accent); padding-left: 11px; }}
 .kv-tid {{ font-family: ui-monospace, SF Mono, monospace; font-size: 11px; color: var(--accent); opacity: 0.75; }}
 .kv-title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-.kv-proj {{ font-size: 11px; color: var(--text-tertiary); }}
+.kv-proj {{ font-size: 11px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.kv-agent {{ font-size: 10px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.kv-duration {{ font-size: 10px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }}
+.kv-exit {{ font-size: 10px; font-family: ui-monospace, SF Mono, monospace; font-weight: 700; }}
+.kv-exit-ok {{ color: var(--green); }}
+.kv-exit-err {{ color: var(--red); }}
 .kv-mode, .kv-run {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; text-transform: uppercase; }}
 .kv-mode-auto {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
 .kv-mode-held {{ background: rgba(245,158,11,0.18); color: #f59e0b; }}
@@ -4591,6 +5709,44 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .kv-pause-btn:hover {{ filter: brightness(1.08); }}
 .kv-pause-btn.secondary {{ background: transparent; color: var(--text-secondary); border: 1px solid var(--border-subtle); }}
 .kv-pause-btn.secondary:hover {{ color: var(--text-primary); border-color: var(--text-tertiary); }}
+
+/* Run detail slide-in side panel */
+.kv-run-side-panel {{
+  width: 0; overflow: hidden; border-left: 0 solid var(--border-subtle);
+  background: var(--bg-surface); transition: width 0.2s ease, border-left-width 0.2s;
+  display: flex; flex-direction: column; position: sticky; top: 0; max-height: 100vh;
+}}
+.kv-run-side-panel.open {{
+  width: 440px; border-left-width: 1px;
+}}
+.kv-run-side-panel-inner {{ padding: 16px; overflow-y: auto; flex: 1; }}
+.kv-run-side-panel-header {{ display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border-subtle); }}
+.kv-run-side-panel-title {{ font-size: 13px; font-weight: 600; flex: 1; }}
+.kv-run-close-btn {{ background: none; border: none; cursor: pointer; color: var(--text-secondary);
+  padding: 4px 8px; border-radius: 4px; font-size: 14px; line-height: 1; }}
+.kv-run-close-btn:hover {{ color: var(--text-primary); background: var(--bg-hover); }}
+.kv-run-ticket-link {{ font-size: 11px; color: var(--accent); }}
+
+/* Shared run-detail styles (mirrors ticket page) */
+.tp-run-detail-panel {{ background: transparent; border: none; padding: 0; }}
+.tp-run-detail-panel.hidden {{ display: none; }}
+.tp-run-detail-header {{ font-size: 13px; font-weight: 600; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle); }}
+.tp-run-section {{ margin-bottom: 16px; }}
+.tp-run-section h4 {{ font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }}
+.tp-run-stdout {{ font-family: "SF Mono", Monaco, monospace; font-size: 11px;
+  background: var(--bg-card); padding: 10px; border-radius: 6px;
+  white-space: pre-wrap; max-height: 300px; overflow-y: auto; color: var(--text-primary); }}
+.tp-run-chat {{ font-size: 12px; }}
+.tp-chat-entry {{ margin-bottom: 10px; padding: 8px; border-radius: 6px; }}
+.tp-chat-entry.user {{ background: rgba(59,130,246,0.1); }}
+.tp-chat-entry.agent {{ background: var(--bg-card); }}
+.tp-chat-entry.agent_marker {{ background: rgba(234,179,8,0.1); font-family: monospace; font-size: 11px; }}
+.tp-chat-role {{ font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-secondary); margin-bottom: 4px; }}
+.tp-run-evidence-list {{ list-style: none; padding: 0; }}
+.hidden {{ display: none !important; }}
 </style>
 <style>{rail_css}</style>
 <style>{drawer_css}</style>
@@ -4601,33 +5757,75 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 <header class="kv-header">
   <h1>Kitchen</h1>
   <span class="kv-header-sub">Cross-project work surface — what needs me, what's running, what's ready.</span>
+  <span class="kv-last-updated" id="kv-last-updated" data-testid="kv-last-updated"></span>
 </header>
-<div class="kv-page">
+<div class="kv-layout">
+<div class="kv-main">
+<div class="kv-page" id="kv-page">
   <div class="kv-pause-banner {pause_banner_class}" id="kv-pause-banner" data-testid="kv-pause-banner">
-    <span class="kv-pause-pill">{pause_pill_label}</span>
-    <span class="kv-pause-msg">{pause_msg}</span>
+    <span class="kv-pause-pill" id="kv-pause-pill">{pause_pill_label}</span>
+    <span class="kv-pause-msg" id="kv-pause-msg">{pause_msg}</span>
     <button class="kv-pause-btn" id="kv-pause-btn" data-testid="kv-pause-btn">{pause_btn_label}</button>
   </div>
-  <div class="kv-toolbar" data-testid="kv-project-filter">
+  <div class="kv-toolbar" data-testid="kv-project-filter" id="kv-toolbar">
     <span class="kv-toolbar-label">Projects</span>
     {project_filter_chips}
   </div>
+  <div id="kv-buckets">
   {sections_html}
+  </div>
+</div>
+</div>
+<!-- Run detail side panel -->
+<aside class="kv-run-side-panel" id="kv-run-side-panel" data-testid="kv-run-side-panel">
+  <div class="kv-run-side-panel-inner">
+    <div class="kv-run-side-panel-header">
+      <span class="kv-run-side-panel-title" id="kv-run-panel-title">Run Detail</span>
+      <a class="kv-run-ticket-link hidden" id="kv-run-ticket-link" href="#">View ticket ↗</a>
+      <button class="kv-run-close-btn" id="kv-run-close-btn" data-testid="kv-run-close-btn" title="Close (Esc)">✕</button>
+    </div>
+    {kv_run_detail_shell}
+  </div>
+</aside>
 </div>
 <script>
 (function() {{
-  var btn = document.getElementById('kv-pause-btn');
-  if (btn) btn.addEventListener('click', function() {{
+  var KV_PORT = {kv_port_json};
+  var KV_API_BASE = 'http://localhost:' + KV_PORT;
+
+  // ── Escape helper ──────────────────────────────────────────────────
+  function esc(s) {{
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }}
+
+  // ── Duration formatter ─────────────────────────────────────────────
+  function _fmtDuration(ms) {{
+    if (!ms) return '';
+    var s = Math.round(ms / 1000);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60); var rs = s % 60;
+    if (m < 60) return m + 'm ' + rs + 's';
+    var h = Math.floor(m / 60); var rm = m % 60;
+    return h + 'h ' + rm + 'm';
+  }}
+
+  // ── Shared renderRunDetail (from _render_run_detail_js_fn) ─────────
+  {kv_run_detail_js}
+
+  // ── Pause/resume button ────────────────────────────────────────────
+  var pauseBtn = document.getElementById('kv-pause-btn');
+  if (pauseBtn) pauseBtn.addEventListener('click', function() {{
     var paused = document.getElementById('kv-pause-banner').classList.contains('is-paused');
     var url = '/api/kitchen/' + (paused ? 'resume' : 'pause');
-    btn.disabled = true;
+    pauseBtn.disabled = true;
     fetch(url, {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: '{{}}' }})
       .then(function(r) {{ return r.json(); }})
-      .then(function() {{ window.location.reload(); }})
-      .catch(function() {{ btn.disabled = false; }});
+      .then(function() {{ pollNow(); pauseBtn.disabled = false; }})
+      .catch(function() {{ pauseBtn.disabled = false; }});
   }});
 
-  // Project filter — multi-select chips. Empty selection = show all.
+  // ── Project filter — multi-select chips ───────────────────────────
   var selection = new Set();
 
   function applyFilter() {{
@@ -4636,7 +5834,6 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       var ok = (selection.size === 0) || selection.has(pid);
       row.style.display = ok ? '' : 'none';
     }});
-    // Hide buckets that have no visible rows; update visible count.
     document.querySelectorAll('.kv-bucket').forEach(function(bucket) {{
       var rows = bucket.querySelectorAll('.kv-row');
       var visible = 0;
@@ -4644,33 +5841,212 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       var countEl = bucket.querySelector('.kv-count');
       if (countEl) countEl.textContent = visible;
       var hasAny = rows.length > 0;
-      // When filtering hides every row in a bucket: collapse it. If the
-      // bucket was empty to begin with, leave the "Nothing here." line.
       bucket.classList.toggle('kv-bucket-empty', hasAny && visible === 0);
     }});
   }}
 
-  document.querySelectorAll('.kv-proj-filter').forEach(function(chip) {{
-    chip.addEventListener('click', function() {{
-      var pid = chip.getAttribute('data-project') || '';
-      if (pid === '') {{
-        selection.clear();
-        document.querySelectorAll('.kv-proj-filter').forEach(function(c) {{ c.classList.remove('active'); }});
-        chip.classList.add('active');
-      }} else {{
-        if (selection.has(pid)) {{
-          selection.delete(pid);
-          chip.classList.remove('active');
-        }} else {{
-          selection.add(pid);
+  function _rebindFilterChips() {{
+    document.querySelectorAll('.kv-proj-filter').forEach(function(chip) {{
+      chip.addEventListener('click', function() {{
+        var pid = chip.getAttribute('data-project') || '';
+        if (pid === '') {{
+          selection.clear();
+          document.querySelectorAll('.kv-proj-filter').forEach(function(c) {{ c.classList.remove('active'); }});
           chip.classList.add('active');
+        }} else {{
+          if (selection.has(pid)) {{
+            selection.delete(pid);
+            chip.classList.remove('active');
+          }} else {{
+            selection.add(pid);
+            chip.classList.add('active');
+          }}
+          var allChip = document.querySelector('.kv-proj-filter[data-project=""]');
+          if (allChip) allChip.classList.toggle('active', selection.size === 0);
         }}
-        var allChip = document.querySelector('.kv-proj-filter[data-project=""]');
-        if (allChip) allChip.classList.toggle('active', selection.size === 0);
-      }}
-      applyFilter();
+        applyFilter();
+      }});
     }});
+  }}
+  _rebindFilterChips();
+
+  // ── Last-updated timestamp ─────────────────────────────────────────
+  var lastPollAt = Date.now();
+  var lastUpdatedEl = document.getElementById('kv-last-updated');
+
+  function updateLastUpdatedLabel() {{
+    if (!lastUpdatedEl) return;
+    var diff = Math.round((Date.now() - lastPollAt) / 1000);
+    if (diff < 5) lastUpdatedEl.textContent = 'just now';
+    else if (diff < 60) lastUpdatedEl.textContent = diff + 's ago';
+    else lastUpdatedEl.textContent = Math.floor(diff / 60) + 'm ago';
+  }}
+  setInterval(updateLastUpdatedLabel, 2000);
+
+  // ── Run detail side panel ─────────────────────────────────────────
+  var sidePanel = document.getElementById('kv-run-side-panel');
+  var closePanelBtn = document.getElementById('kv-run-close-btn');
+  var panelTitle = document.getElementById('kv-run-panel-title');
+  var panelTicketLink = document.getElementById('kv-run-ticket-link');
+  var selectedRunId = null;
+  var selectedTicketUrl = null;
+
+  function openRunPanel(runId, ticketUrl, ticketId, projectId) {{
+    selectedRunId = runId;
+    selectedTicketUrl = ticketUrl;
+    body.classList.add('bounce-open');
+    if (sidePanel) sidePanel.classList.add('open');
+    if (panelTitle) panelTitle.textContent = 'Run #' + runId;
+    if (panelTicketLink) {{
+      panelTicketLink.href = ticketUrl;
+      panelTicketLink.textContent = ticketId + ' ↗';
+      panelTicketLink.classList.remove('hidden');
+    }}
+    // Reset the panel content (same ID as ticket tab — tp-run-detail-panel).
+    var panelEl = document.getElementById('tp-run-detail-panel');
+    if (panelEl) panelEl.classList.add('hidden');
+    // Fetch run detail — use per-project API since runs are project-scoped.
+    var apiBase = 'http://localhost:' + KV_PORT + '/' + encodeURIComponent(projectId) + '/api';
+    fetch(apiBase + '/runs/' + runId)
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        renderRunDetail(data.run || data, data.events || [], apiBase);
+      }}).catch(function() {{}});
+    // Highlight selected row.
+    document.querySelectorAll('.kv-row').forEach(function(r) {{
+      r.classList.toggle('kv-row-selected', parseInt(r.dataset.runId, 10) === runId);
+    }});
+  }}
+
+  function closeRunPanel() {{
+    body.classList.remove('bounce-open');
+    if (sidePanel) sidePanel.classList.remove('open');
+    selectedRunId = null;
+    document.querySelectorAll('.kv-row').forEach(function(r) {{ r.classList.remove('kv-row-selected'); }});
+  }}
+
+  if (closePanelBtn) closePanelBtn.addEventListener('click', closeRunPanel);
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape' && sidePanel && sidePanel.classList.contains('open')) closeRunPanel();
   }});
+
+  // Row click — open panel or navigate to ticket (left half = panel, title = navigate).
+  var body = document.body;
+  document.addEventListener('click', function(e) {{
+    var row = e.target.closest('.kv-row');
+    if (!row) return;
+    var runId = row.dataset.runId ? parseInt(row.dataset.runId, 10) : null;
+    var ticketUrl = row.dataset.ticketUrl || '';
+    var projectId = row.dataset.projectId || '';
+    // If clicked on the title cell specifically, navigate.
+    if (e.target.closest('.kv-title') || !runId) {{
+      if (ticketUrl) window.location.href = ticketUrl;
+      return;
+    }}
+    if (runId) {{
+      var tid = (row.querySelector('.kv-tid') || {{}}).textContent || '';
+      openRunPanel(runId, ticketUrl, tid, projectId);
+    }} else if (ticketUrl) {{
+      window.location.href = ticketUrl;
+    }}
+  }});
+
+  // ── In-place DOM diff polling (3s) ────────────────────────────────
+  function _diffBuckets(newState) {{
+    var paused = newState.paused;
+    // Update pause banner.
+    var banner = document.getElementById('kv-pause-banner');
+    if (banner) {{
+      banner.className = 'kv-pause-banner ' + (paused ? 'is-paused' : 'is-running');
+      var pill = document.getElementById('kv-pause-pill');
+      if (pill) pill.textContent = paused ? 'Simulation' : 'Live';
+    }}
+
+    // Rebuild bucket lists in-place using key-based diffing.
+    var buckets = newState.buckets || {{}};
+    Object.keys(buckets).forEach(function(bucketKey) {{
+      var bucketEl = document.querySelector('.kv-bucket[data-bucket="' + bucketKey + '"]');
+      if (!bucketEl) return;
+      var listEl = bucketEl.querySelector('.kv-bucket-list');
+      if (!listEl) return;
+      var items = buckets[bucketKey] || [];
+
+      // Build a map of existing rows by ticket_id.
+      var existingRows = {{}};
+      bucketEl.querySelectorAll('.kv-row[data-ticket-id]').forEach(function(r) {{
+        existingRows[r.dataset.ticketId] = r;
+      }});
+
+      // Build new HTML for each item (keyed on ticket_id for diff).
+      var newHtml = '';
+      if (!items.length) {{
+        newHtml = '<div class="kv-empty">Nothing here.</div>';
+      }} else {{
+        items.forEach(function(it) {{
+          var runId = it.run_id || '';
+          var ticketUrl = '/' + it.project_id + '/?ticket=' + it.ticket_id;
+          var durStr = it.duration_ms ? _fmtDuration(it.duration_ms) : '';
+          var modeHtml = '<span class="kv-mode kv-mode-' + esc(it.automation_mode) + '">' + esc(it.automation_mode) + '</span>';
+          var runHtml = it.latest_run_status ? '<span class="kv-run kv-run-' + esc(it.latest_run_status) + '">' + esc(it.latest_run_status) + '</span>' : '';
+          var exitHtml = '';
+          var terminalStatuses = {{'succeeded':1,'failed':1,'stalled':1,'cancelled':1}};
+          if (it.exit_code !== null && it.exit_code !== undefined && terminalStatuses[it.latest_run_status]) {{
+            var exitCls = it.exit_code === 0 ? 'kv-exit-ok' : 'kv-exit-err';
+            exitHtml = '<span class="kv-exit ' + exitCls + '">' + esc(String(it.exit_code)) + '</span>';
+          }} else {{ exitHtml = '<span class="kv-exit"></span>'; }}
+          var runIdAttr = runId ? ' data-run-id="' + runId + '" data-project-id="' + esc(it.project_id) + '"' : '';
+          newHtml += '<div class="kv-row" data-project="' + esc(it.project_id) +
+            '" data-ticket-id="' + esc(it.ticket_id) +
+            '" data-ticket-url="' + esc(ticketUrl) + '"' + runIdAttr + '>' +
+            '<span class="kv-tid">' + esc(it.ticket_id) + '</span>' +
+            '<span class="kv-title">' + esc(it.title) + '</span>' +
+            '<span class="kv-proj">' + esc(it.project_name) + '</span>' +
+            '<span class="kv-agent">' + esc(it.agent_name || '') + '</span>' +
+            '<span class="kv-duration">' + esc(durStr) + '</span>' +
+            exitHtml + modeHtml + runHtml +
+            '</div>';
+        }});
+      }}
+
+      // Only repaint if content changed (simple string diff).
+      if (listEl.innerHTML !== newHtml) {{
+        listEl.innerHTML = newHtml;
+        // Restore selected highlight if applicable.
+        if (selectedRunId) {{
+          var sel = listEl.querySelector('[data-run-id="' + selectedRunId + '"]');
+          if (sel) sel.classList.add('kv-row-selected');
+        }}
+      }}
+
+      // Update count badge.
+      var countEl = bucketEl.querySelector('.kv-count');
+      if (countEl) countEl.textContent = items.length;
+      bucketEl.classList.toggle('kv-bucket-empty', items.length === 0);
+    }});
+
+    applyFilter();
+  }}
+
+  var _pollTimer = null;
+
+  function pollNow() {{
+    // Skip while side panel is open and editing (bounce-open pattern).
+    if (body.classList.contains('bounce-open')) return;
+    fetch('/api/kitchen')
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        lastPollAt = Date.now();
+        updateLastUpdatedLabel();
+        _diffBuckets(data);
+      }}).catch(function() {{}});
+  }}
+
+  function startPolling() {{
+    if (_pollTimer) return;
+    _pollTimer = setInterval(pollNow, 3000);
+  }}
+
+  startPolling();
 }})();
 </script>
 <script>{rail_js}</script>
@@ -6193,6 +7569,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_html(html)
             return
 
+        # Lane B: Full-page ticket view — GET /{project_id}/tickets/{ticket_id}?tab=
+        m = re.match(r"^/tickets/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            qs = parse_qs(urlparse(self.path).query)
+            tab = (qs.get("tab", ["overview"])[0] or "overview").strip()
+            html = _render_ticket_page(proj, SERVER_PORT, ticket_id, tab)
+            if html is None:
+                self._send_json({"error": "Ticket not found"}, 404)
+                return
+            self._send_html(html)
+            return
+
         # Serve dashboard HTML
         if remainder == "/" or remainder == "/index.html" or remainder == "/kanban":
             html_path = Path(os.path.expanduser(proj.get("path", ""))) / "docs" / "sdlc-dashboard.html"
@@ -6380,6 +7769,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if m:
             atts = _list_attachments(proj["id"], m.group(1))
             self._send_json(atts)
+            return
+
+        # Lane B: paginated activity feed for a ticket.
+        # GET /api/tickets/{id}/activity?limit=50&before=ISO
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/activity$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                limit = max(1, min(int(qs.get("limit", ["50"])[0]), 200))
+            except (ValueError, TypeError):
+                limit = 50
+            before_cursor = (qs.get("before", [""])[0] or "").strip() or None
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                from actions import get_ticket_activity as _get_ticket_activity
+                events = _get_ticket_activity(conn, proj["id"], ticket_id, limit=limit, before=before_cursor)
+                conn.close()
+            next_before = events[-1]["occurred_at"] if len(events) == limit else None
+            self._send_json({"events": events, "next_before": next_before})
             return
 
         # Kitchen (M1b): activity history for a ticket. Newest first.
@@ -7197,6 +8606,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(t or {"ok": True})
             return
 
+        # Handle is_container toggle (Lane B — container ticket flag)
+        if "is_container" in body:
+            val = 1 if body["is_container"] else 0
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                row = conn.execute(
+                    "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                    (ticket_id, project_id)
+                ).fetchone()
+                if row:
+                    tid = row["id"]
+                    conn.execute(
+                        "UPDATE tickets SET is_container = ?, updated_at = ? "
+                        "WHERE id = ? AND project_id = ?",
+                        (val, datetime.now().isoformat(), tid, project_id)
+                    )
+                    _kitchen_emit_event(
+                        conn, project_id, "ticket", tid, "field_changed",
+                        {"field": "is_container", "before": 1 - val, "after": val},
+                        ActorContext.human(),
+                    )
+                    conn.commit()
+                    cli.sync_to_markdown(conn, proj)
+                    cli.regenerate_dashboard(proj)
+                conn.close()
+            t = _get_ticket_json(project_id, ticket_id)
+            self._send_json(t or {"ok": True})
+            return
+
         # Update individual fields
         for field, value in body.items():
             if not _update_ticket_field(proj, ticket_id, field, value):
@@ -7645,34 +9084,125 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if action == "respond":
-                response_text = (body.get("response") or "").strip()
-                if not response_text:
-                    self._send_json({"error": "response is required"}, 400)
+                # Validate run is in needs_input state.
+                if run["status"] != "needs_input":
+                    self._send_json({"error": "run is not waiting for input"}, 409)
                     return
-                # Flip status back to running + emit input_provided.
+                kind = body.get("kind", "text")
+                needs_input_kind = run["needs_input_kind"] if "needs_input_kind" in run.keys() else "text"
+                if kind != needs_input_kind:
+                    self._send_json({
+                        "error": f"payload kind '{kind}' does not match run's "
+                                 f"needs_input_kind '{needs_input_kind}'"
+                    }, 400)
+                    return
+
+                # Build the response payload for AgentRunner.resume_with_response.
+                response_payload: dict = {"kind": kind}
+                if kind == "text":
+                    response_text = (body.get("response") or "").strip()
+                    if not response_text:
+                        self._send_json({"error": "response is required for text kind"}, 400)
+                        return
+                    response_payload["response"] = response_text
+                elif kind == "propose":
+                    response_payload["accepted"] = body.get("accepted") or {}
+                else:
+                    self._send_json({"error": f"unknown kind: {kind}"}, 400)
+                    return
+
+                # Emit input_provided event.
                 with _db_lock:
                     conn = get_db()
-                    conn.execute(
-                        "UPDATE runs SET status = 'running', heartbeat_at = ?, "
-                        "needs_input_prompt = NULL WHERE id = ? AND status = 'needs_input'",
-                        (datetime.now().isoformat(), run_id),
-                    )
+                    excerpt = (response_payload.get("response") or
+                               str(response_payload.get("accepted", {})))[:500]
                     _kitchen_emit_event(
                         conn, run["project_id"], run["subject_type"], run["subject_id"],
                         "input_provided",
-                        {"run_id": run_id, "response_excerpt": response_text[:500]},
+                        {"run_id": run_id, "kind": kind, "response_excerpt": excerpt},
                         ActorContext.human(),
                     )
                     conn.commit(); conn.close()
-                # NOTE: M3 doesn't yet wire the response back into the agent
-                # subprocess — that requires a richer agent integration. For
-                # now the human-side flip happens; the agent itself doesn't see it
-                # until M3+ adds an agent-side input channel.
-                with _db_lock:
-                    conn = get_db()
-                    r = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-                    conn.close()
-                self._send_json(dict(r) if r else {"id": run_id})
+
+                # Dispatch to AgentRunner.resume_with_response in a background thread.
+                # We need workspace info and config from the run record.
+                try:
+                    from runners import AgentRunner as _AgentRunner
+                    from workspaces import WorkspaceInfo as _WorkspaceInfo
+                    from workflow_config import load_workflow_config, load_prompt_template
+
+                    workspace_path_str = run["workspace_path"] if "workspace_path" in run.keys() else None
+                    if workspace_path_str:
+                        ws_path = Path(workspace_path_str)
+                    else:
+                        project_path = _kitchen._resolve_project_path(run["project_id"])
+                        ws_path = Path(project_path) if project_path else Path(".")
+
+                    ws = _WorkspaceInfo(
+                        path=ws_path,
+                        branch="",
+                        base_ref="origin/main",
+                        is_git_worktree=False,
+                        created_now=False,
+                        bootstrapped=True,
+                    )
+
+                    # Load config from project path.
+                    project_path_for_cfg = _kitchen._resolve_project_path(run["project_id"])
+                    if project_path_for_cfg:
+                        cfg = load_workflow_config(project_path_for_cfg)
+                        cfg["_prompt_template"] = load_prompt_template(project_path_for_cfg)
+                        # Restore workflow meta from metadata_json if present.
+                        try:
+                            meta_json = run["metadata_json"] if "metadata_json" in run.keys() else "{}"
+                            meta = json.loads(meta_json or "{}")
+                            if "steps" in meta or "on_success" in meta:
+                                cfg["_workflow_meta"] = meta
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    else:
+                        cfg = {"agent": {"command": "claude -p"}}
+
+                    def _resume_thread():
+                        try:
+                            _AgentRunner.resume_with_response(
+                                run_id=run_id,
+                                response_payload=response_payload,
+                                project_id=run["project_id"],
+                                subject_type=run["subject_type"],
+                                subject_id=run["subject_id"],
+                                workspace=ws,
+                                config=cfg,
+                                conn_factory=get_db,
+                            )
+                        except Exception:
+                            import logging as _logging
+                            _logging.getLogger(__name__).exception(
+                                "resume_with_response failed for run %d", run_id
+                            )
+
+                    t = threading.Thread(
+                        target=_resume_thread,
+                        name=f"kitchen-resume-{run_id}",
+                        daemon=True,
+                    )
+                    t.start()
+                except Exception:
+                    import logging as _logging
+                    _logging.getLogger(__name__).exception(
+                        "Failed to dispatch resume thread for run %d", run_id
+                    )
+                    # Fall back to simple DB flip if dispatch fails.
+                    with _db_lock:
+                        conn = get_db()
+                        conn.execute(
+                            "UPDATE runs SET status = 'running', heartbeat_at = ? "
+                            "WHERE id = ? AND status = 'needs_input'",
+                            (datetime.now().isoformat(), run_id),
+                        )
+                        conn.commit(); conn.close()
+
+                self._send_json({"status": "resumed", "run_id": run_id})
                 return
 
         # Kitchen (M4): file a gap ticket from a red scenario run.

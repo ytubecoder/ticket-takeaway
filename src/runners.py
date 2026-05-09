@@ -15,6 +15,8 @@ and GapAnalyzer are stubs that future milestones flesh out.
 
 from __future__ import annotations
 
+import json
+import logging
 import shlex
 import sqlite3
 import subprocess
@@ -28,6 +30,8 @@ from contextlib import contextmanager
 
 from actions import ActorContext, emit_event, utcnow_iso
 from workspaces import HookResult, run_hook, WorkspaceInfo, mark_bootstrapped
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +91,89 @@ def _set_run_status(
 
 def _heartbeat(conn: sqlite3.Connection, run_id: int) -> None:
     conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ?", (utcnow_iso(), run_id))
+
+
+# ---------------------------------------------------------------------------
+# Interactive-marker helpers
+# ---------------------------------------------------------------------------
+
+def _try_parse_marker(line: str) -> Optional[dict]:
+    """Attempt to parse a line as an interactive marker JSON object.
+
+    Returns the parsed dict if the line is a valid JSON object with an 'ask'
+    or 'propose' key at top level.  Returns None otherwise.  Never raises.
+    """
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        obj = json.loads(stripped)
+        if isinstance(obj, dict) and ("ask" in obj or "propose" in obj):
+            return obj
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return None
+
+
+def _try_parse_handoff(text: str) -> dict:
+    """Scan the last 50 lines of text for the most recent valid handoff JSON.
+
+    A handoff object must be a JSON dict with at least one of:
+        implemented, undone, commands, issues, procedures_followed
+
+    Returns the parsed dict (possibly with only a subset of keys), or {} if
+    no valid handoff object was found.  Never raises.
+    """
+    _HANDOFF_KEYS = frozenset(["implemented", "undone", "commands", "issues", "procedures_followed"])
+    lines = (text or "").splitlines()
+    for line in reversed(lines[-50:]):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            obj = json.loads(stripped)
+            if isinstance(obj, dict) and (_HANDOFF_KEYS & set(obj.keys())):
+                # Normalise: missing keys → empty arrays / null
+                return {
+                    "implemented":          obj.get("implemented") or [],
+                    "undone":               obj.get("undone") or [],
+                    "commands":             obj.get("commands") or [],
+                    "issues":               obj.get("issues") or [],
+                    "procedures_followed":  obj.get("procedures_followed") or [],
+                }
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return {}
+
+
+def _read_run_metadata(conn: sqlite3.Connection, run_id: int) -> dict:
+    """Read and parse runs.metadata_json for a run.  Returns {} on any error."""
+    row = conn.execute("SELECT metadata_json FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if not row:
+        return {}
+    try:
+        return json.loads(row["metadata_json"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _write_run_metadata(conn: sqlite3.Connection, run_id: int, meta: dict) -> None:
+    """Serialise and persist runs.metadata_json."""
+    conn.execute(
+        "UPDATE runs SET metadata_json = ? WHERE id = ?",
+        (json.dumps(meta, ensure_ascii=False), run_id),
+    )
+
+
+def _append_chat_entry(
+    conn: sqlite3.Connection, run_id: int, role: str, content: str
+) -> None:
+    """Append a chat entry to runs.metadata_json.chat[]."""
+    meta = _read_run_metadata(conn, run_id)
+    chat = meta.get("chat") or []
+    chat.append({"role": role, "content": content})
+    meta["chat"] = chat
+    _write_run_metadata(conn, run_id, meta)
 
 
 # ---------------------------------------------------------------------------
@@ -248,11 +335,17 @@ class AgentRunner(Runner):
             return self._fail(run_id, project_id, subject_type, subject_id, actor,
                               conn_factory, started, "bad_command", str(e))
 
+        # Determine whether this agent has persist_session enabled (for resume support).
+        agent_persist_session = bool(agent_cfg.get("persist_session", 0))
+
+        # Build stdin: prior conversation (for resume) + current prompt.
+        stdin_text = self._build_stdin(run_id, prompt, conn_factory)
+
         try:
             r = subprocess.run(
                 cmd,
                 cwd=str(workspace.path),
-                input=prompt,
+                input=stdin_text,
                 capture_output=True, text=True,
                 timeout=self.DEFAULT_TIMEOUT_S,
             )
@@ -273,14 +366,68 @@ class AgentRunner(Runner):
             return self._cancel(run_id, project_id, subject_type, subject_id, actor,
                                 conn_factory, started)
 
+        stdout_text = r.stdout or ""
+
+        # ── Interactive marker detection ──────────────────────────────────
+        # Scan stdout lines for the LAST interactive marker.  The marker takes
+        # precedence over the exit code — an agent that emits a marker should
+        # also exit 0, but we detect the marker regardless of exit code.
+        detected_marker: Optional[dict] = None
+        non_marker_lines: list[str] = []
+        for line in stdout_text.splitlines():
+            m = _try_parse_marker(line)
+            if m is not None:
+                detected_marker = m
+                non_marker_lines = []  # reset — everything before is "context"
+            else:
+                non_marker_lines.append(line)
+
+        if detected_marker is not None:
+            # Transition to needs_input and yield.
+            marker_kind = "propose" if "propose" in detected_marker else "text"
+            context_so_far = "\n".join(non_marker_lines).strip()
+            marker_payload = json.dumps(detected_marker, ensure_ascii=False)
+            with db_session(conn_factory) as conn:
+                # Record agent's last output in the chat log.
+                if context_so_far:
+                    _append_chat_entry(conn, run_id, "agent", context_so_far)
+                # Record the marker itself.
+                _append_chat_entry(conn, run_id, "agent_marker", marker_payload)
+                # Transition run to needs_input.
+                conn.execute(
+                    "UPDATE runs SET status = ?, needs_input_kind = ?, "
+                    "needs_input_prompt = ?, heartbeat_at = ? WHERE id = ?",
+                    ("needs_input", marker_kind, marker_payload, utcnow_iso(), run_id),
+                )
+                conn.commit()
+            # Return a pseudo-outcome that tells the caller this run is paused.
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            return RunOutcome(
+                run_id=run_id,
+                final_status="needs_input",
+                duration_ms=elapsed_ms,
+                summary=f"waiting for {marker_kind} input",
+            )
+
         # ── Phase 3: terminal ─────────────────────────────────────────────
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        stdout_tail = self._tail(r.stdout)
+        stdout_tail = self._tail(stdout_text)
         if r.returncode == 0:
             with db_session(conn_factory) as conn:
                 summary = stdout_tail or "agent completed"
                 _set_run_status(conn, run_id, "succeeded",
                                 summary=summary, exit_code=r.returncode, finished=True)
+                # Append final agent output to chat log.
+                if stdout_tail:
+                    _append_chat_entry(conn, run_id, "agent", stdout_tail)
+                # Parse and store handoff JSON if present.
+                handoff = _try_parse_handoff(stdout_text)
+                if handoff:
+                    meta = _read_run_metadata(conn, run_id)
+                    meta["handoff"] = handoff
+                    _write_run_metadata(conn, run_id, meta)
+                    emit_event(conn, project_id, subject_type, subject_id, "handoff_recorded",
+                               {"run_id": run_id, "handoff": handoff}, actor)
                 emit_event(conn, project_id, subject_type, subject_id, "agent_output",
                            {"run_id": run_id, "summary": summary}, actor)
                 emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
@@ -293,18 +440,321 @@ class AgentRunner(Runner):
             # to step_index+1 and dispatch a follow-on run instead of applying on_success.
             if workflow_meta and subject_type == "ticket":
                 self._apply_on_success(
-                    workflow_meta, project_id, subject_id, actor, conn_factory
+                    workflow_meta, project_id, subject_id, actor, conn_factory,
+                    stdout_text=stdout_text,
                 )
             return RunOutcome(run_id=run_id, final_status="succeeded",
                               duration_ms=elapsed_ms, summary=summary)
 
         # Non-zero exit → failed.
         err_msg = self._tail(r.stderr) or stdout_tail or f"exit {r.returncode}"
+        # Still try handoff parsing on failed runs — agent may have partially succeeded.
+        with db_session(conn_factory) as conn:
+            handoff = _try_parse_handoff(stdout_text)
+            if handoff:
+                meta = _read_run_metadata(conn, run_id)
+                meta["handoff"] = handoff
+                _write_run_metadata(conn, run_id, meta)
+                conn.commit()
         return self._fail(run_id, project_id, subject_type, subject_id, actor,
                           conn_factory, started, "non_zero_exit", err_msg,
                           exit_code=r.returncode, stdout_for_summary=stdout_tail)
 
     # ── helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_stdin(
+        run_id: int,
+        prompt: str,
+        conn_factory: Callable[[], sqlite3.Connection],
+    ) -> str:
+        """Build the stdin payload for the agent subprocess.
+
+        For a fresh run: just the prompt.
+        For a resumed run (chat history exists): reconstruct conversation from
+        metadata_json.chat[] and append the prompt as the latest user turn.
+
+        The format is a plain-text transcript that most Claude-compatible CLIs
+        can interpret as conversation context.
+        """
+        try:
+            conn = conn_factory()
+            try:
+                meta = _read_run_metadata(conn, run_id)
+            finally:
+                conn.close()
+        except Exception:
+            meta = {}
+
+        chat = meta.get("chat") or []
+        if not chat:
+            return prompt
+
+        # Reconstruct conversation as a simple text block so the agent sees
+        # prior context when resumed.  CLIs that support --continue / session
+        # resumption use a different mechanism; this covers the stdin path.
+        lines = []
+        for entry in chat:
+            role = entry.get("role", "agent")
+            content = entry.get("content", "")
+            label = "User" if role == "user" else "Assistant"
+            lines.append(f"[{label}]\n{content}\n")
+        lines.append(f"[User]\n{prompt}\n")
+        return "\n".join(lines)
+
+    @classmethod
+    def resume_with_response(
+        cls,
+        run_id: int,
+        response_payload: dict,
+        project_id: str,
+        subject_type: str,
+        subject_id: str,
+        workspace: WorkspaceInfo,
+        config: dict,
+        conn_factory: Callable[[], sqlite3.Connection],
+        cancel_event=None,
+    ) -> RunOutcome:
+        """Resume a needs_input run after the user has provided a response.
+
+        response_payload shapes:
+          text kind:    {"kind": "text", "response": "<user reply>"}
+          propose kind: {"kind": "propose", "accepted": {...fields...}}
+
+        For 'propose' kind: applies accepted parts to the ticket BEFORE re-launching
+        the agent, so the agent's next turn sees the ticket in its updated state.
+
+        The existing run row is reused (same run_id).  The conversation history in
+        metadata_json.chat[] is preserved and the response is appended, so the
+        agent subprocess receives the full conversation on stdin.
+        """
+        actor = ActorContext.agent(run_id)
+        started = time.monotonic()
+        kind = response_payload.get("kind", "text")
+
+        # Apply accepted proposal fields before re-launching the agent.
+        if kind == "propose":
+            accepted = response_payload.get("accepted") or {}
+            cls._apply_proposal_to_ticket(
+                run_id, accepted, project_id, subject_id, actor, conn_factory
+            )
+
+        # Build the resume prompt from the response.
+        if kind == "text":
+            user_response_text = str(response_payload.get("response") or "")
+        elif kind == "propose":
+            accepted = response_payload.get("accepted") or {}
+            # Summarise what was accepted so the agent knows.
+            parts = []
+            if accepted.get("description"):
+                parts.append("description update accepted")
+            if accepted.get("add_criteria"):
+                parts.append(f"added criteria: {accepted['add_criteria']}")
+            if accepted.get("remove_criteria"):
+                parts.append(f"removed criteria: {accepted['remove_criteria']}")
+            if accepted.get("add_tags"):
+                parts.append(f"added tags: {accepted['add_tags']}")
+            if accepted.get("remove_tags"):
+                parts.append(f"removed tags: {accepted['remove_tags']}")
+            user_response_text = (
+                "User accepted: " + ("; ".join(parts) if parts else "nothing")
+                if accepted else "User declined the proposal."
+            )
+        else:
+            user_response_text = str(response_payload.get("response") or "")
+
+        # Append the user response to the chat log.
+        with db_session(conn_factory) as conn:
+            _append_chat_entry(conn, run_id, "user", user_response_text)
+            # Reset needs_input state so the run can restart.
+            conn.execute(
+                "UPDATE runs SET status = ?, needs_input_kind = NULL, "
+                "needs_input_prompt = NULL, heartbeat_at = ? WHERE id = ?",
+                ("running", utcnow_iso(), run_id),
+            )
+            conn.commit()
+
+        # Re-launch the agent with the resume prompt (full chat as stdin).
+        agent_cfg = config.get("agent", {})
+        cmd_str = (agent_cfg.get("command") or "").strip()
+        if not cmd_str:
+            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
+                               conn_factory, started, "missing_command",
+                               "agent command is empty on resume")
+
+        try:
+            cmd = shlex.split(cmd_str)
+        except ValueError as e:
+            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
+                               conn_factory, started, "bad_command", str(e))
+
+        stdin_text = cls._build_stdin(run_id, user_response_text, conn_factory)
+
+        try:
+            r = subprocess.run(
+                cmd,
+                cwd=str(workspace.path),
+                input=stdin_text,
+                capture_output=True, text=True,
+                timeout=cls.DEFAULT_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as e:
+            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
+                               conn_factory, started, "timeout",
+                               f"agent timed out after {cls.DEFAULT_TIMEOUT_S}s",
+                               stdout_for_summary=(e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")))
+        except FileNotFoundError as e:
+            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
+                               conn_factory, started, "agent_not_found", str(e))
+        except (OSError, subprocess.SubprocessError) as e:
+            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
+                               conn_factory, started, "subprocess_error", str(e))
+
+        if cancel_event is not None and cancel_event.is_set():
+            return cls()._cancel(run_id, project_id, subject_type, subject_id, actor,
+                                 conn_factory, started)
+
+        stdout_text = r.stdout or ""
+
+        # Check for another interactive marker in the resumed output.
+        detected_marker: Optional[dict] = None
+        non_marker_lines: list[str] = []
+        for line in stdout_text.splitlines():
+            m = _try_parse_marker(line)
+            if m is not None:
+                detected_marker = m
+                non_marker_lines = []
+            else:
+                non_marker_lines.append(line)
+
+        if detected_marker is not None:
+            marker_kind = "propose" if "propose" in detected_marker else "text"
+            context_so_far = "\n".join(non_marker_lines).strip()
+            marker_payload = json.dumps(detected_marker, ensure_ascii=False)
+            with db_session(conn_factory) as conn:
+                if context_so_far:
+                    _append_chat_entry(conn, run_id, "agent", context_so_far)
+                _append_chat_entry(conn, run_id, "agent_marker", marker_payload)
+                conn.execute(
+                    "UPDATE runs SET status = ?, needs_input_kind = ?, "
+                    "needs_input_prompt = ?, heartbeat_at = ? WHERE id = ?",
+                    ("needs_input", marker_kind, marker_payload, utcnow_iso(), run_id),
+                )
+                conn.commit()
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            return RunOutcome(
+                run_id=run_id,
+                final_status="needs_input",
+                duration_ms=elapsed_ms,
+                summary=f"waiting for {marker_kind} input",
+            )
+
+        # Terminal — same as the main execute() path.
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        stdout_tail = cls._tail(stdout_text)
+        workflow_meta = config.get("_workflow_meta")
+        if r.returncode == 0:
+            with db_session(conn_factory) as conn:
+                summary = stdout_tail or "agent completed"
+                _set_run_status(conn, run_id, "succeeded",
+                                summary=summary, exit_code=r.returncode, finished=True)
+                if stdout_tail:
+                    _append_chat_entry(conn, run_id, "agent", stdout_tail)
+                handoff = _try_parse_handoff(stdout_text)
+                if handoff:
+                    meta = _read_run_metadata(conn, run_id)
+                    meta["handoff"] = handoff
+                    _write_run_metadata(conn, run_id, meta)
+                    emit_event(conn, project_id, subject_type, subject_id, "handoff_recorded",
+                               {"run_id": run_id, "handoff": handoff}, actor)
+                emit_event(conn, project_id, subject_type, subject_id, "agent_output",
+                           {"run_id": run_id, "summary": summary}, actor)
+                emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
+                           {"run_id": run_id, "summary": summary, "duration_ms": elapsed_ms}, actor)
+                conn.commit()
+            if workflow_meta and subject_type == "ticket":
+                cls._apply_on_success(
+                    workflow_meta, project_id, subject_id, actor, conn_factory,
+                    stdout_text=stdout_text,
+                )
+            return RunOutcome(run_id=run_id, final_status="succeeded",
+                              duration_ms=elapsed_ms, summary=summary)
+
+        err_msg = cls._tail(r.stderr) or stdout_tail or f"exit {r.returncode}"
+        with db_session(conn_factory) as conn:
+            handoff = _try_parse_handoff(stdout_text)
+            if handoff:
+                meta = _read_run_metadata(conn, run_id)
+                meta["handoff"] = handoff
+                _write_run_metadata(conn, run_id, meta)
+                conn.commit()
+        return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
+                           conn_factory, started, "non_zero_exit", err_msg,
+                           exit_code=r.returncode, stdout_for_summary=stdout_tail)
+
+    @staticmethod
+    def _apply_proposal_to_ticket(
+        run_id: int,
+        accepted: dict,
+        project_id: str,
+        ticket_id: str,
+        actor,
+        conn_factory: Callable[[], sqlite3.Connection],
+    ) -> None:
+        """Apply accepted parts of a 'propose' marker to the ticket.
+
+        accepted may contain:
+          description:      str — new description
+          add_criteria:     list[str]
+          remove_criteria:  list[str] — criteria text to remove (exact or partial match)
+          add_tags:         list[str]
+          remove_tags:      list[str]
+        """
+        if not accepted:
+            return
+        try:
+            from actions import update_ticket  # type: ignore[import]
+
+            update_kwargs: dict = {}
+            if accepted.get("description"):
+                update_kwargs["description"] = accepted["description"]
+            if accepted.get("add_tags"):
+                update_kwargs["add_tags"] = list(accepted["add_tags"])
+            if accepted.get("remove_tags"):
+                update_kwargs["remove_tags"] = list(accepted["remove_tags"])
+
+            conn = conn_factory()
+            try:
+                if update_kwargs:
+                    update_ticket(conn, project_id, ticket_id, actor=actor, **update_kwargs)
+
+                # Handle criteria add/remove (update_ticket supports add_criteria).
+                if accepted.get("add_criteria"):
+                    for crit_text in accepted["add_criteria"]:
+                        if crit_text and crit_text.strip():
+                            conn.execute(
+                                "INSERT OR IGNORE INTO acceptance_criteria "
+                                "(ticket_id, project_id, text, checked, sort_order) "
+                                "SELECT ?, ?, ?, 0, COALESCE(MAX(sort_order)+1, 0) "
+                                "FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
+                                (ticket_id, project_id, crit_text.strip(), ticket_id, project_id),
+                            )
+                if accepted.get("remove_criteria"):
+                    for crit_text in accepted["remove_criteria"]:
+                        if crit_text and crit_text.strip():
+                            conn.execute(
+                                "DELETE FROM acceptance_criteria "
+                                "WHERE ticket_id = ? AND project_id = ? "
+                                "AND text = ?",
+                                (ticket_id, project_id, crit_text.strip()),
+                            )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            _log.exception(
+                "Failed to apply proposal to ticket %r (run %d)", ticket_id, run_id
+            )
 
     @staticmethod
     def _render_prompt(template: str, subject_id: str) -> str:
@@ -372,20 +822,24 @@ class AgentRunner(Runner):
         ticket_id: str,
         actor,
         conn_factory: Callable[[], sqlite3.Connection],
+        stdout_text: str = "",
     ) -> None:
         """Apply on_success_json actions from a DB workflow after a successful run.
 
         Supported actions:
-          move_to:        move ticket to the named section (legacy alias of move_section)
-          move_section:   move target ticket to the named section
-          set_status:     set target ticket status
-          add_tags:       list[str] — tags to add (creates if missing)
-          remove_tags:    list[str] — tags to remove
-          accept_ticket:  truthy → call actions.accept_ticket() for the target
-                          (refuses silently if preconditions fail)
-          apply_to:       'self' (default) | 'parent' — when 'parent', all the
-                          above effects target the ticket's parent instead.
-                          If parent is missing, the effect block is skipped.
+          move_to:              move ticket to the named section (legacy alias of move_section)
+          move_section:         move target ticket to the named section
+          set_status:           set target ticket status
+          add_tags:             list[str] — tags to add (creates if missing)
+          remove_tags:          list[str] — tags to remove
+          accept_ticket:        truthy → call actions.accept_ticket() for the target
+                                (refuses silently if preconditions fail)
+          set_readiness_content: {"flag": "<flag>", "from": "stdout"|"<literal>"}
+                                Set content for a readiness flag. When from="stdout",
+                                the agent's stdout (sans interactive markers) is used.
+          apply_to:             'self' (default) | 'parent' — when 'parent', all the
+                                above effects target the ticket's parent instead.
+                                If parent is missing, the effect block is skipped.
         """
         on_success = workflow_meta.get("on_success") or {}
         if not on_success:
@@ -419,6 +873,7 @@ class AgentRunner(Runner):
                 add_tags = on_success.get("add_tags") or []
                 remove_tags = on_success.get("remove_tags") or []
                 accept = on_success.get("accept_ticket")
+                set_readiness = on_success.get("set_readiness_content")
 
                 if move_to:
                     move_ticket(conn, project_id, target_id, move_to, actor=actor)
@@ -464,12 +919,35 @@ class AgentRunner(Runner):
                         )
                     # else: silently skip — preconditions not met.
 
+                # set_readiness_content: write into a readiness flag
+                if set_readiness and isinstance(set_readiness, dict):
+                    flag_key = (set_readiness.get("flag") or "").lower()
+                    # Map UI letter flags to DB flag names (mirrors conditions.py _eval_flag_set).
+                    _flag_map = {"d": "description", "c": "criteria", "l": "reviewed"}
+                    db_flag = _flag_map.get(flag_key, flag_key)
+                    from_spec = set_readiness.get("from", "")
+                    if from_spec == "stdout":
+                        # Strip marker lines from stdout before using as content.
+                        content_lines = [
+                            line for line in (stdout_text or "").splitlines()
+                            if _try_parse_marker(line) is None
+                        ]
+                        content = "\n".join(content_lines).strip()
+                    else:
+                        content = str(from_spec)
+                    if db_flag and content:
+                        conn.execute(
+                            "INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by) "
+                            "VALUES (?, ?, ?, ?, ?) "
+                            "ON CONFLICT (ticket_id, project_id, flag) DO UPDATE SET content = excluded.content",
+                            (target_id, project_id, db_flag, content, "workflow"),
+                        )
+
                 conn.commit()
             finally:
                 conn.close()
         except Exception:
-            import logging as _logging
-            _logging.getLogger(__name__).exception(
+            _log.exception(
                 "on_success actions failed for workflow %r ticket %r",
                 workflow_meta.get("workflow_id"), ticket_id,
             )

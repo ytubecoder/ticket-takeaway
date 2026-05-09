@@ -774,6 +774,7 @@ class Ticket:
     automation_eligible: bool = False
     tags: list = field(default_factory=list)
     branches: list = field(default_factory=list)  # list of dicts: name, pr_number, pr_status, ahead, behind
+    is_container: bool = False
 
     @property
     def slug(self) -> str:
@@ -1068,6 +1069,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         except Exception:
             branches = []
 
+        is_container = bool(r["is_container"]) if "is_container" in r.keys() else False
         tickets.append(Ticket(
             id=r["id"],
             title=r["title"],
@@ -1091,6 +1093,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             automation_eligible=automation_eligible,
             tags=tags,
             branches=branches,
+            is_container=is_container,
         ))
 
     conn.close()
@@ -1725,6 +1728,18 @@ a {{ color: var(--accent); text-decoration: none; }}
 [data-theme="light"] .branch-pill.pr-closed {{ background: rgba(220,38,38,0.1); color: #dc2626; }}
 .tag-filter-btn {{ font-size: 11px !important; }}
 .card-id {{ font-size: 10px; color: var(--accent); opacity: 0.6; font-family: var(--font-mono); font-weight: 600; flex-shrink: 0; }}
+/* Lane B: criteria X/Y pill on kanban cards */
+.card-crit-pill {{ display: inline-block; padding: 1px 6px; border-radius: 8px;
+  font-size: 10px; font-weight: 600; flex-shrink: 0; margin-left: 4px; }}
+.card-crit-pill.crit-zero {{ background: var(--bg-hover); color: var(--text-tertiary); }}
+.card-crit-pill.crit-empty {{ background: var(--bg-hover); color: var(--text-secondary); }}
+.card-crit-pill.crit-progress {{ background: rgba(234,179,8,0.15); color: #eab308; }}
+.card-crit-pill.crit-done {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
+/* Lane B: container badge */
+.card-container-badge {{ display: inline-block; padding: 1px 6px; border-radius: 8px;
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+  background: rgba(59,130,246,0.15); color: var(--accent); border: 1px solid rgba(59,130,246,0.25);
+  flex-shrink: 0; margin-left: 2px; }}
 
 /* Kitchen badge — small status dot indicating automation state. M1a only renders
    it when there's something meaningful (auto, held, or an actual run); manual
@@ -5155,7 +5170,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       }});
     }}
 
-    // Open button — works in both server mode and file:// mode
+    // Open button — navigates to full-page ticket view when served; falls back
+    // to the overlay in file:// mode (no edit-api) or via a quick-peek click.
     document.addEventListener('click', function(e) {{
       var btn = e.target.closest('.card-open-btn');
       if (!btn) return;
@@ -5164,8 +5180,27 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       e.stopPropagation();
       e.preventDefault();
       clearTimeout(card._clickTimer);
+      // In server mode (edit-api meta present): navigate to full-page route.
+      var editMeta = document.querySelector('meta[name="edit-api"]');
+      var projMeta = document.querySelector('meta[name="current-project"]');
+      if (editMeta && projMeta && btn.dataset.openFullPage) {{
+        var pid = projMeta.content;
+        var tid = card.dataset.itemId;
+        window.location.href = '/' + encodeURIComponent(pid) + '/tickets/' + encodeURIComponent(tid);
+        return;
+      }}
+      // Fallback: open floating overlay (file:// mode or quick-peek).
       if (window.openDetailOverlay) window.openDetailOverlay(card.dataset.itemId, null);
     }}, true);
+
+    // Quick-peek: single click on card body (not meta/buttons) still opens overlay.
+    document.addEventListener('click', function(e) {{
+      if (e.target.closest('.card-open-btn') || e.target.closest('.card-meta') ||
+          e.target.closest('.card-top') || e.target.closest('.action-btn') ||
+          e.target.closest('.card-pp-btn') || e.target.closest('.card-run-now-btn') ||
+          e.target.closest('.card-record-btn')) return;
+      // Card body click in server mode does nothing extra (full page is via button).
+    }});
 
     // Expose for overlay gate-check integration and testability
     window.showToast = showToast;
@@ -11845,6 +11880,26 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         pp_html = ""
     kb_html = pp_html + kb_html
 
+    # Criteria pill (X/Y) — shown in card top area
+    criteria_all = t.acceptance_criteria if t.acceptance_criteria else []
+    crit_total = len(criteria_all)
+    crit_done = sum(1 for (chk, _) in criteria_all if chk)
+    if crit_total == 0:
+        crit_pill_html = '<span class="card-crit-pill crit-zero" title="No criteria">0 criteria</span>'
+    elif crit_done == crit_total:
+        crit_pill_html = f'<span class="card-crit-pill crit-done" title="{crit_done}/{crit_total} criteria done">{crit_done}/{crit_total}</span>'
+    elif crit_done > 0:
+        crit_pill_html = f'<span class="card-crit-pill crit-progress" title="{crit_done}/{crit_total} criteria done">{crit_done}/{crit_total}</span>'
+    else:
+        crit_pill_html = f'<span class="card-crit-pill crit-empty" title="0/{crit_total} criteria done">0/{crit_total}</span>'
+
+    # Container badge and child-progress pill (overrides criteria pill for containers)
+    is_container = getattr(t, 'is_container', False)
+    container_badge_html = ""
+    if is_container:
+        container_badge_html = '<span class="card-container-badge">Container</span>'
+        crit_pill_html = ""  # replaced by child progress pill below
+
     # Tags
     tags_list = getattr(t, 'tags', [])
     tags_attr = f' data-tags="{escape(" ".join(tags_list))}"' if tags_list else ''
@@ -11884,6 +11939,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     branch_attr = ' data-has-branch="true"' if branches_list else ""
     pr_attr = f' data-pr-status="{escape(pr_state)}"' if pr_state else ""
 
+    container_attr = ' data-is-container="true"' if is_container else ""
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
@@ -11894,10 +11950,11 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{" data-eligible=" + chr(34) + "true" + chr(34) if t.automation_eligible else ""}'
         f'{" data-run-status=" + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ""}'
         f'{" data-automation-for-review=" + chr(34) + "1" + chr(34) if t.automation_for_review else ""}'
-        f'{draft_attr}{tags_attr}{branch_attr}{pr_attr}>\n'
+        f'{draft_attr}{tags_attr}{branch_attr}{pr_attr}{container_attr}>\n'
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'
-        f'<span class="card-title">{title_esc}</span>{child_badge_html}{att_badge_html}</div>\n'
+        f'{container_badge_html}'
+        f'<span class="card-title">{title_esc}</span>{crit_pill_html}{child_badge_html}{att_badge_html}</div>\n'
         f'{tags_html}'
         f'{branches_html}'
         f'        <div class="card-meta">'
@@ -11905,7 +11962,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{kb_html}'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
         f'<button class="card-run-now-btn" data-testid="card-run-now-{id_esc}" data-ticket-id="{id_esc}" title="Run now" aria-label="Run now for {id_esc}">{_svg_icon("play", 12)}</button>'
-        f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details" aria-label="Open {id_esc}">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
+        f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open full ticket page" aria-label="Open {id_esc}" data-open-full-page="true">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
         f'{readiness_html}'
         f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'
         f'{git_html}'
@@ -12000,7 +12057,23 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
             release_badge = f'<span class="release-badge">{escape(t.release_tag)}</span>'
 
         readiness_html = _render_readiness_row(t)
-        open_btn = f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open ticket details">{_svg_icon("arrow-up-right", 12)}</button>'
+        open_btn = f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open full ticket page" data-open-full-page="true">{_svg_icon("arrow-up-right", 12)}</button>'
+
+        # Criteria pill for list rows
+        lr_crit_all = t.acceptance_criteria if t.acceptance_criteria else []
+        lr_crit_total = len(lr_crit_all)
+        lr_crit_done = sum(1 for (chk, _) in lr_crit_all if chk)
+        lr_is_container = getattr(t, 'is_container', False)
+        if lr_is_container:
+            lr_crit_pill = '<span class="card-container-badge">Container</span>'
+        elif lr_crit_total == 0:
+            lr_crit_pill = '<span class="card-crit-pill crit-zero">0 criteria</span>'
+        elif lr_crit_done == lr_crit_total:
+            lr_crit_pill = f'<span class="card-crit-pill crit-done">{lr_crit_done}/{lr_crit_total}</span>'
+        elif lr_crit_done > 0:
+            lr_crit_pill = f'<span class="card-crit-pill crit-progress">{lr_crit_done}/{lr_crit_total}</span>'
+        else:
+            lr_crit_pill = f'<span class="card-crit-pill crit-empty">0/{lr_crit_total}</span>'
 
         list_tags_list = getattr(t, 'tags', [])
         list_tags_attr = f' data-tags="{escape(" ".join(list_tags_list))}"' if list_tags_list else ''
@@ -12024,6 +12097,7 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
             f'<span class="priority-dot {t.priority}"></span>'
             f'<span class="card-id">{id_esc}</span>'
             f'<span class="card-title">{title_esc}</span>'
+            f'{lr_crit_pill}'
             f'<span class="status-badge {status_class}">{status_class}</span>'
             f'{commit_badge}{release_badge}'
             f'{child_badge_html}{open_btn}</div>\n'

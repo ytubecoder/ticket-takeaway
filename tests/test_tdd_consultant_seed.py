@@ -313,22 +313,20 @@ class TestPlanCheckWorkflowManifest:
 # ---------------------------------------------------------------------------
 
 class TestSeedDefaultWorkflowsWithPlanCheck:
-    def test_inserts_seven_system_workflows(self, conn):
-        # Phase A migration: Review → Done replaced by Parent auto-promote +
-        # Auto-accept reviewed tickets, increasing the seed count to 7.
+    def test_links_nine_system_workflows(self, conn):
+        # Lane A (factory-talk) raised the count from 7 to 9. Migration-16 model:
+        # seeder creates canonical rows then inserts workflow_projects links.
         result = seed_default_workflows(conn, PROJECT_ID)
-        assert result["inserted"] == 7
+        assert result["linked"] == 9
         count = conn.execute(
-            "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT COUNT(*) FROM workflows WHERE system = 1",
         ).fetchone()[0]
-        assert count == 7
+        assert count == 9
 
     def test_plan_check_seeded_for_project(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         row = conn.execute(
-            "SELECT name, system FROM workflows WHERE name = 'Plan Check' AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT name, system FROM workflows WHERE name = 'Plan Check' AND system = 1",
         ).fetchone()
         assert row is not None
         assert row["system"] == 1
@@ -336,8 +334,7 @@ class TestSeedDefaultWorkflowsWithPlanCheck:
     def test_plan_check_trigger_json_stored_as_null(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         row = conn.execute(
-            "SELECT trigger_json FROM workflows WHERE name = 'Plan Check' AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT trigger_json FROM workflows WHERE name = 'Plan Check' AND system = 1",
         ).fetchone()
         assert row is not None
         assert row["trigger_json"] == "null"
@@ -345,8 +342,7 @@ class TestSeedDefaultWorkflowsWithPlanCheck:
     def test_plan_check_on_success_json_stored_as_empty_object(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         row = conn.execute(
-            "SELECT on_success_json FROM workflows WHERE name = 'Plan Check' AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT on_success_json FROM workflows WHERE name = 'Plan Check' AND system = 1",
         ).fetchone()
         assert row is not None
         assert json.loads(row["on_success_json"]) == {}
@@ -354,15 +350,14 @@ class TestSeedDefaultWorkflowsWithPlanCheck:
     def test_plan_check_step3_use_resume_in_stored_steps(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         row = conn.execute(
-            "SELECT steps FROM workflows WHERE name = 'Plan Check' AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT steps FROM workflows WHERE name = 'Plan Check' AND system = 1",
         ).fetchone()
         steps = json.loads(row["steps"])
         assert len(steps) == 3
         assert steps[2].get("use_resume") is True
 
-    def test_idempotent_second_run_still_seven(self, conn):
+    def test_idempotent_second_run_still_nine(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         second = seed_default_workflows(conn, PROJECT_ID)
-        assert second["inserted"] == 0
-        assert second["existing"] == 7
+        assert second["linked"] == 0
+        assert second["already_linked"] == 9

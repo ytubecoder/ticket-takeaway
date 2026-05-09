@@ -35,6 +35,8 @@ Parse the `## For Review` section. Collect all `###` entries.
 
 If no items found, report: "Nothing to review." and stop.
 
+**Full-page ticket view:** For a detailed look at any ticket before or during review, open `/{project_id}/tickets/{ticket_id}?tab=overview` in the browser. The Activity tab (`?tab=activity`) shows a timeline of decisions; the Runs tab (`?tab=runs`) shows agent run history.
+
 ### Step 3: Sort and Group
 
 1. **Sort oldest first** — by numeric part of ID (e.g., B-5 before B-12)

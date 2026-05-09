@@ -666,6 +666,7 @@ def add_ticket(
     draft: bool = False,
     source_attachment_id: Optional[int] = None,
     tags: Optional[list[str]] = None,
+    is_container: int = 0,
 ) -> str:
     """Add a new ticket.  Auto-generates the ID from *section* prefix.
 
@@ -677,10 +678,11 @@ def add_ticket(
 
     conn.execute(
         "INSERT INTO tickets (id, project_id, title, priority, status, "
-        "section, description, parent, sort_order, draft, source_attachment_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "section, description, parent, sort_order, draft, source_attachment_id, is_container) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ticket_id, project_id, title, priority, status,
-         section, description, parent, sort_order, int(draft), source_attachment_id),
+         section, description, parent, sort_order, int(draft), source_attachment_id,
+         1 if is_container else 0),
     )
 
     if tags:
@@ -717,6 +719,7 @@ def update_ticket(
     remove_tags: Optional[list[str]] = None,
     add_branches: Optional[list[str]] = None,
     remove_branches: Optional[list[str]] = None,
+    is_container: Optional[int] = None,
     actor: ActorContext = ActorContext.human(),
 ) -> str:
     """Partial update of a ticket.  Only fields that are not None/sentinel are changed.
@@ -747,6 +750,8 @@ def update_ticket(
         updates["parent"] = parent if parent else None
     if summary is not None:
         updates["summary"] = summary
+    if is_container is not None:
+        updates["is_container"] = 1 if is_container else 0
 
     if updates:
         updates["updated_at"] = datetime.now().isoformat()
@@ -1353,3 +1358,165 @@ def _maybe_promote_parent(
         emit_event(conn, project_id, "ticket", parent_id, "section_change",
                    {"before": old_parent_section, "after": "For Review"},
                    ActorContext.system())
+
+
+# ---------------------------------------------------------------------------
+# Lane B helpers — activity feed, children rollup, children prompt tokens.
+# These are pure DB reads; no mutations, no commits.
+# ---------------------------------------------------------------------------
+
+def get_ticket_activity(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+    limit: int = 50,
+    before: Optional[str] = None,
+) -> list[dict]:
+    """Return activity_events for a ticket, newest-first, with optional cursor.
+
+    Uses the (project_id, subject_type, subject_id, occurred_at DESC) index.
+    Pagination cursor `before` is an ISO-8601 timestamp (exclusive upper bound).
+
+    Returns a list of event dicts:
+        {id, occurred_at, actor_type, actor_id, event_kind, payload, run_id}
+    where run_id is extracted from payload['run_id'] when present.
+    """
+    limit = max(1, min(limit, 500))
+
+    # Resolve canonical ID (subject_id stored case-sensitively by emit_event).
+    row = conn.execute(
+        "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+        (ticket_id, project_id),
+    ).fetchone()
+    tid = row["id"] if row else ticket_id
+
+    if before:
+        rows = conn.execute(
+            "SELECT id, actor_type, actor_id, event_kind, payload_json, "
+            "       occurred_at, discarded_run_id "
+            "FROM activity_events "
+            "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+            "  AND occurred_at < ? "
+            "ORDER BY occurred_at DESC, id DESC LIMIT ?",
+            (project_id, tid, before, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, actor_type, actor_id, event_kind, payload_json, "
+            "       occurred_at, discarded_run_id "
+            "FROM activity_events "
+            "WHERE project_id = ? AND subject_type = 'ticket' AND subject_id = ? "
+            "ORDER BY occurred_at DESC, id DESC LIMIT ?",
+            (project_id, tid, limit),
+        ).fetchall()
+
+    events = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        events.append({
+            "id": r["id"],
+            "occurred_at": r["occurred_at"],
+            "actor_type": r["actor_type"],
+            "actor_id": r["actor_id"],
+            "event_kind": r["event_kind"],
+            "payload": payload,
+            "run_id": payload.get("run_id"),
+            "discarded_run_id": r["discarded_run_id"],
+        })
+    return events
+
+
+def get_children_summary(
+    conn: sqlite3.Connection,
+    project_id: str,
+    parent_id: str,
+) -> dict:
+    """Return a rollup of children for a container ticket.
+
+    Returns:
+        {
+            total: int,
+            done: int,                       # section == 'Done'
+            count_by_section: {section: n},
+            count_by_status: {status: n},
+        }
+    """
+    rows = conn.execute(
+        "SELECT section, status FROM tickets "
+        "WHERE parent = ? AND project_id = ? AND archived = 0",
+        (parent_id, project_id),
+    ).fetchall()
+
+    count_by_section: dict[str, int] = {}
+    count_by_status: dict[str, int] = {}
+    done = 0
+    for r in rows:
+        count_by_section[r["section"]] = count_by_section.get(r["section"], 0) + 1
+        count_by_status[r["status"]] = count_by_status.get(r["status"], 0) + 1
+        if r["section"] == "Done":
+            done += 1
+
+    return {
+        "total": len(rows),
+        "done": done,
+        "count_by_section": count_by_section,
+        "count_by_status": count_by_status,
+    }
+
+
+def render_children_tokens(
+    conn: sqlite3.Connection,
+    project_id: str,
+    parent_id: str,
+    template: str,
+) -> str:
+    """Expand {{children.summary}} and {{children.criteria}} in a prompt template.
+
+    This is a post-processing step used on top of the runners.py ticket-field
+    substitution.  It is called server-side (e.g. from the "ask AI" button in
+    the full-page ticket view) and also available for future runner integration.
+
+    {{children.summary}}  — plain-text block describing each child's section/status.
+    {{children.criteria}} — concatenated acceptance criteria from all children,
+                            each item prefixed with the child ID.
+    """
+    if "{{children." not in template:
+        return template
+
+    children = conn.execute(
+        "SELECT id, title, section, status FROM tickets "
+        "WHERE parent = ? AND project_id = ? AND archived = 0 ORDER BY sort_order ASC",
+        (parent_id, project_id),
+    ).fetchall()
+
+    # Build summary block.
+    if children:
+        summary_lines = []
+        for c in children:
+            summary_lines.append(
+                f"- {c['id']}: {c['title']} [{c['section']} / {c['status']}]"
+            )
+        summary_text = "\n".join(summary_lines)
+    else:
+        summary_text = "(no children)"
+
+    # Build criteria block.
+    crit_lines = []
+    for c in children:
+        crit_rows = conn.execute(
+            "SELECT text, checked FROM acceptance_criteria "
+            "WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
+            (c["id"], project_id),
+        ).fetchall()
+        for cr in crit_rows:
+            marker = "[x]" if cr["checked"] else "[ ]"
+            crit_lines.append(f"{c['id']}: {marker} {cr['text']}")
+    criteria_text = "\n".join(crit_lines) if crit_lines else "(none)"
+
+    result = template
+    result = result.replace("{{children.summary}}", summary_text)
+    result = result.replace("{{children.criteria}}", criteria_text)
+    return result

@@ -12,6 +12,58 @@ Take raw ideas and turn them into specified, backlog-ready tickets. Walk through
 
 ---
 
+## Default Behaviour — Orchestrator Interview
+
+When the `Spec -> Backlog` system workflow is enabled (it is by default), adding a ticket to Ideas automatically triggers the **Orchestrator** system agent in interactive mode. You do not need to run `/spec` manually — the Orchestrator opens a chat panel in the ticket's Activity view and walks the user through the specification.
+
+### What the Orchestrator does
+
+1. Reads the ticket's current title and any existing description/criteria.
+2. Asks strategic questions via the `{"ask": "...", "context": "..."}` marker — each ask surfaces a chat prompt in the ticket view, pauses the run (`status = needs_input, needs_input_kind = text`), and resumes when the user replies.
+3. When it has enough to write a good spec, it emits a `{"propose": {"description": "...", "add_criteria": [...], "add_tags": [...]}}` marker — this pauses the run again (`needs_input_kind = propose`) and surfaces a merge-UI picker where the user accepts or declines individual items.
+4. Accepted items are written to the ticket. The run completes. The ticket auto-moves to Backlog via the workflow's `on_success: { move_to: Backlog }` effect.
+
+The chat transcript is stored in the run record (visible in the ticket's Runs tab) but is NOT promoted to the Activity feed. The Activity feed shows only outcomes: `description_updated`, `criteria_added`, `tags_added`, `run_succeeded`.
+
+### Triggering the Orchestrator manually
+
+If the auto-trigger is disabled or you want to re-run the interview on an existing ticket:
+
+```bash
+# Find the Spec->Backlog workflow ID (it's a system workflow)
+python3 ~/.claude/ticket-takeaway/tickets-cli.py workflow list
+
+# Trigger via API (replace project-id and ticket-id)
+curl -X POST http://localhost:8787/{project-id}/api/tickets/{ticket-id}/run-now \
+  -H 'Content-Type: application/json' \
+  -d '{"workflow_id": "spec-to-backlog"}'
+```
+
+Or from the ticket detail UI: open the full-page ticket view (`/{project}/tickets/{id}`), select the `Spec -> Backlog` workflow from the dropdown, and click Run.
+
+### Reading the merge UI
+
+When the Orchestrator emits a `propose` payload, the ticket view shows a picker:
+
+- Each proposed criterion is shown as a checkbox — accept the ones you want, decline the rest.
+- The description is shown as a text block — accept or edit inline.
+- Tags are shown as chips — toggle on/off.
+- Click "Apply" to write accepted items. Click "Decline all" to dismiss and let the Orchestrator continue (it may ask follow-up questions).
+
+---
+
+## Manual Override — `/spec`
+
+`/spec` is the human-driven path. Use it when:
+
+- The auto-trigger is disabled.
+- You want to spec a ticket interactively without running an agent.
+- You prefer writing the spec yourself and just want the CLI scaffolding.
+
+Same end shape as the Orchestrator path: description + at least one criterion -> move to Backlog.
+
+---
+
 ## Mode Detection
 
 | Invocation | Mode |
@@ -187,6 +239,12 @@ A ticket meets the specification gate when it has:
 2. At least one **acceptance criterion** (`- [ ]` item)
 
 That's the minimum. The more the user invests in the spec, the better the build phase will go — but we don't block on perfection. A ticket with a one-line description and two criteria is better than an idea sitting in limbo.
+
+Criteria are the primary concept. The gate banner in the full-page ticket view (`/{project}/tickets/{id}?tab=overview`) reads:
+
+> "Add a description and at least one criterion to auto-move to Backlog."
+
+Each criterion on the overview tab has an "ask AI" button that prompts the project's default agent to help fulfill it.
 
 ---
 

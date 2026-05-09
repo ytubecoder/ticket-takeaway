@@ -797,3 +797,35 @@ def init_db(conn: sqlite3.Connection):
 
         conn.execute("INSERT INTO _migrations (version) VALUES (16)")
         conn.commit()
+
+    # Migration 17 — Factory-talk primitives.
+    #
+    # Three idempotent ALTER TABLE additions:
+    #   1. tickets.is_container       — cosmetic flag for container/epic rendering
+    #   2. workflow_agents.system     — mirrors workflows.system; agents can now
+    #                                  be system-flagged (Orchestrator/Worker/Validator)
+    #   3. runs.needs_input_kind      — distinguishes the two interactive pause
+    #                                  shapes: 'text' (free-text reply) vs 'propose'
+    #                                  (structured patch accept/decline). NULL on all
+    #                                  non-interactive runs.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 17").fetchone():
+        cols_tickets = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+        if "is_container" not in cols_tickets:
+            conn.execute(
+                "ALTER TABLE tickets ADD COLUMN is_container INTEGER NOT NULL DEFAULT 0"
+            )
+
+        cols_agents = {row["name"] for row in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()}
+        if "system" not in cols_agents:
+            conn.execute(
+                "ALTER TABLE workflow_agents ADD COLUMN system INTEGER NOT NULL DEFAULT 0"
+            )
+
+        cols_runs = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        if "needs_input_kind" not in cols_runs:
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN needs_input_kind TEXT"
+            )
+
+        conn.execute("INSERT INTO _migrations (version) VALUES (17)")
+        conn.commit()

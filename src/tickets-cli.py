@@ -999,8 +999,7 @@ def cmd_add(args):
     init_db(conn)
     ingest_markdown(conn, proj)
 
-    ticket_id = add_ticket(
-        conn, project_id, args.title,
+    add_kwargs = dict(
         section=section,
         priority=args.priority or "medium",
         description=args.description or "",
@@ -1008,6 +1007,10 @@ def cmd_add(args):
         draft=args.draft,
         tags=args.tag,
     )
+    if args.container:
+        add_kwargs["is_container"] = 1
+
+    ticket_id = add_ticket(conn, project_id, args.title, **add_kwargs)
     conn.commit()
 
     sync_to_markdown(conn, proj)
@@ -1069,6 +1072,8 @@ def cmd_update(args):
         kwargs["add_branches"] = args.add_branch
     if args.remove_branch:
         kwargs["remove_branches"] = args.remove_branch
+    if args.container is not None:
+        kwargs["is_container"] = 1 if args.container else 0
 
     try:
         tid = update_ticket(conn, project_id, args.id, **kwargs)
@@ -1411,6 +1416,93 @@ def cmd_watch(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: criteria
+# ---------------------------------------------------------------------------
+
+def cmd_criteria(args):
+    """Manage acceptance criteria on a ticket."""
+    projects = load_registry()
+    proj = find_project(projects, args.project)
+    project_id = proj["id"]
+
+    conn = get_db()
+    init_db(conn)
+    ingest_markdown(conn, proj)
+
+    if args.criteria_command == "list":
+        ticket = conn.execute(
+            "SELECT id, title FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (args.id, project_id)
+        ).fetchone()
+        if not ticket:
+            print(f"Ticket {args.id} not found.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        rows = conn.execute(
+            "SELECT sort_order, checked, text FROM acceptance_criteria "
+            "WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
+            (ticket["id"], project_id)
+        ).fetchall()
+        if not rows:
+            print(f"{ticket['id']}: {ticket['title']} — no criteria yet")
+        else:
+            print(f"{ticket['id']}: {ticket['title']}")
+            for i, r in enumerate(rows, start=1):
+                mark = "x" if r["checked"] else " "
+                print(f"  {i}. [{mark}] {r['text']}")
+
+    elif args.criteria_command == "add":
+        try:
+            tid = update_ticket(conn, project_id, args.id, add_criteria=[args.text])
+        except (ValueError, IndexError) as e:
+            print(str(e), file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
+        print(f"Added criterion to {tid}")
+
+    elif args.criteria_command == "remove":
+        try:
+            tid = update_ticket(conn, project_id, args.id, remove_criteria=args.n)
+        except (ValueError, IndexError) as e:
+            print(str(e), file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
+        print(f"Removed criterion {args.n} from {tid}")
+
+    elif args.criteria_command == "check":
+        try:
+            tid = update_ticket(conn, project_id, args.id, check_criteria=args.n)
+        except (ValueError, IndexError) as e:
+            print(str(e), file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
+        print(f"Checked criterion {args.n} on {tid}")
+
+    elif args.criteria_command == "uncheck":
+        try:
+            tid = update_ticket(conn, project_id, args.id, uncheck_criteria=args.n)
+        except (ValueError, IndexError) as e:
+            print(str(e), file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        regenerate_dashboard(proj)
+        print(f"Unchecked criterion {args.n} on {tid}")
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: agent
 # ---------------------------------------------------------------------------
 
@@ -1477,6 +1569,35 @@ def cmd_agent(args):
         conn.execute("DELETE FROM workflow_agents WHERE id = ?", (args.agent_id,))
         conn.commit()
         print(f"Removed agent: {args.agent_id}")
+
+    elif args.agent_command == "set-default":
+        # Verify the agent exists
+        row = conn.execute(
+            "SELECT id FROM workflow_agents WHERE id = ?", (args.agent_id,)
+        ).fetchone()
+        if not row:
+            print(f"Error: Agent '{args.agent_id}' not found.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+        projects = load_registry()
+        if args.project:
+            target = [find_project(projects, args.project)]
+        else:
+            target = resolve_project_id(projects, None)
+
+        for proj in target:
+            # Settings table is global (key/value, no project_id column).
+            # Use "{project_id}.agent.default" as the namespaced key so each
+            # project can have an independent default.
+            setting_key = f"{proj['id']}.agent.default"
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (setting_key, args.agent_id)
+            )
+        conn.commit()
+        proj_names = ", ".join(p["id"] for p in target)
+        print(f"Default agent set to '{args.agent_id}' for: {proj_names}")
 
     conn.close()
 
@@ -1671,6 +1792,7 @@ def main():
     p_add.add_argument("--description", help="Description text")
     p_add.add_argument("--tag", action="append", help="Add tag (repeatable)")
     p_add.add_argument("--draft", action="store_true", help="Create as draft ticket")
+    p_add.add_argument("--container", action="store_true", default=False, help="Mark as container (epic) ticket")
 
     # update
     p_upd = sub.add_parser("update", help="Update a ticket")
@@ -1693,6 +1815,9 @@ def main():
     p_upd.add_argument("--add-branch", action="append", help="Link branch (repeatable)")
     p_upd.add_argument("--remove-branch", action="append", help="Unlink branch (repeatable)")
     p_upd.add_argument("--confirm", action="store_true", help="Confirm a draft ticket (set draft=false)")
+    container_grp = p_upd.add_mutually_exclusive_group()
+    container_grp.add_argument("--container", dest="container", action="store_const", const=True, default=None, help="Mark ticket as container (epic)")
+    container_grp.add_argument("--no-container", dest="container", action="store_const", const=False, help="Clear container flag")
 
     # move
     p_move = sub.add_parser("move", help="Move ticket to section")
@@ -1739,6 +1864,30 @@ def main():
     p_unreg.add_argument("id", help="Project ID to deactivate")
     p_unreg.add_argument("--delete-tickets", action="store_true", help="Also delete tickets from DB (destructive)")
 
+    # criteria
+    p_crit = sub.add_parser("criteria", help="Manage acceptance criteria on a ticket")
+    p_crit.add_argument("project", help="Project ID")
+    crit_sub = p_crit.add_subparsers(dest="criteria_command", required=True)
+
+    p_crit_list = crit_sub.add_parser("list", help="List criteria for a ticket")
+    p_crit_list.add_argument("id", help="Ticket ID")
+
+    p_crit_add = crit_sub.add_parser("add", help="Add a criterion to a ticket")
+    p_crit_add.add_argument("id", help="Ticket ID")
+    p_crit_add.add_argument("text", help="Criterion text")
+
+    p_crit_rm = crit_sub.add_parser("remove", help="Remove Nth criterion (1-indexed)")
+    p_crit_rm.add_argument("id", help="Ticket ID")
+    p_crit_rm.add_argument("n", type=int, help="Criterion index (1-indexed)")
+
+    p_crit_check = crit_sub.add_parser("check", help="Mark Nth criterion as done (1-indexed)")
+    p_crit_check.add_argument("id", help="Ticket ID")
+    p_crit_check.add_argument("n", type=int, help="Criterion index (1-indexed)")
+
+    p_crit_uncheck = crit_sub.add_parser("uncheck", help="Unmark Nth criterion (1-indexed)")
+    p_crit_uncheck.add_argument("id", help="Ticket ID")
+    p_crit_uncheck.add_argument("n", type=int, help="Criterion index (1-indexed)")
+
     # agent
     p_agent = sub.add_parser("agent", help="Manage workflow agents")
     agent_sub = p_agent.add_subparsers(dest="agent_command", required=True)
@@ -1761,6 +1910,10 @@ def main():
 
     p_agent_rm = agent_sub.add_parser("remove", help="Remove a workflow agent")
     p_agent_rm.add_argument("agent_id", help="Agent ID to remove")
+
+    p_agent_setdef = agent_sub.add_parser("set-default", help="Set the project default agent (stored in settings as agent.default)")
+    p_agent_setdef.add_argument("agent_id", help="Agent ID to set as default")
+    p_agent_setdef.add_argument("--project", help="Project ID (default: auto-detect or all)")
 
     # workflow
     p_wf = sub.add_parser("workflow", help="Manage workflow definitions")
@@ -1822,6 +1975,7 @@ def main():
         "seek": cmd_seek,
         "register": cmd_register,
         "unregister": cmd_unregister,
+        "criteria": cmd_criteria,
         "agent": cmd_agent,
         "workflow": cmd_workflow,
         "branches": cmd_branches,

@@ -304,6 +304,11 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 {"kind": "section_equals", "value": "WIP"},
                 {"kind": "status_equals", "value": "in-progress"},
                 {"kind": "has_field", "field": "commit_hash"},
+                # The per-ticket automation toggle is the master switch for
+                # every system workflow that mutates a ticket. Without this,
+                # a user who toggled automation off on a specific ticket would
+                # still get auto-moved on commit — surprising behaviour.
+                {"kind": "automation_mode", "value": "auto"},
                 # TODO: add "tests_pass" condition once a test-runner integration exists
                 {"kind": "no_active_run"},
             ]
@@ -325,8 +330,9 @@ DEFAULT_WORKFLOWS: list[dict] = [
     },
     # 4a. Parent auto-promote: when ALL children of a parent reach a terminal status
     #     (done / for-review / bug-fixed), promote the parent to For Review.
-    #     System workflow — bypasses automation_mode filter so it fires against
-    #     any ticket that has children. Zero steps → applied via NoopRunner.
+    #     Like every other section-mutating system workflow, gated by the
+    #     parent ticket's per-ticket automation toggle so the user's master
+    #     switch is honoured uniformly. Zero steps → applied via NoopRunner.
     {
         "name": "Parent auto-promote",
         "description": (
@@ -346,6 +352,8 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 # Every child must be done / for-review / bug-fixed.
                 {"kind": "children_all_status_in",
                  "value": ["done", "for-review", "bug-fixed"]},
+                # Honour the per-ticket automation toggle uniformly.
+                {"kind": "automation_mode", "value": "auto"},
             ]
         },
         "on_success_json": {
@@ -371,6 +379,8 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 {"kind": "section_equals", "value": "For Review"},
                 {"kind": "status_equals", "value": "done"},
                 {"kind": "children_no_open_bugs"},
+                # Honour the per-ticket automation toggle uniformly.
+                {"kind": "automation_mode", "value": "auto"},
             ]
         },
         "on_success_json": {
@@ -426,6 +436,8 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 {"kind": "section_equals", "value": "Done"},
                 # lacks_readiness_flag triggers when the 'reviewed' (L) flag is NOT set.
                 {"kind": "lacks_readiness_flag", "flag": "L"},
+                # Honour the per-ticket automation toggle uniformly.
+                {"kind": "automation_mode", "value": "auto"},
                 {"kind": "no_active_run"},
             ]
         },
@@ -467,6 +479,8 @@ DEFAULT_WORKFLOWS: list[dict] = [
         "trigger_json": {
             "all_of": [
                 {"kind": "has_tag", "value": ["sprint-current"]},
+                # Honour the per-ticket automation toggle uniformly.
+                {"kind": "automation_mode", "value": "auto"},
                 {"kind": "no_active_run"},
             ]
         },

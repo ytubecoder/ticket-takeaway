@@ -547,10 +547,15 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
                 continue
 
             # Two candidate subject pools:
-            #   - auto_subjects:   tickets with automation_mode='auto' (used by user workflows)
-            #   - all_subjects:    every non-draft/non-archived ticket (used by system workflows)
-            # System workflows must fire regardless of automation_mode, so we
-            # evaluate them against the wider pool.
+            #   - auto_subjects:   tickets with automation_mode='auto' (master
+            #                      gate for user workflows; safety net so user
+            #                      workflows missing the predicate can't sneak
+            #                      past the per-ticket toggle).
+            #   - all_subjects:    every non-draft/non-archived ticket. System
+            #                      workflows iterate this, but each system
+            #                      workflow's trigger now includes an explicit
+            #                      automation_mode='auto' predicate (workflows_seed.py)
+            #                      so the master switch is honoured uniformly.
             auto_subjects = conn.execute(
                 "SELECT t.id FROM tickets t "
                 "JOIN automation_subjects s ON s.subject_id = t.id "

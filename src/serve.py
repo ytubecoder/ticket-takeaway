@@ -1417,6 +1417,81 @@ def _delete_workflow(workflow_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def _preview_workflow_matches(workflow: dict, sample_limit: int = 5) -> dict:
+    """Evaluate this workflow's trigger against every linked project's tickets.
+
+    Returns ``{count, by_project, samples, manual}``. ``manual`` is True when
+    the workflow has no trigger (no auto-fire predicate), in which case count
+    is 0 and samples is empty. The caller renders this inline on /workflows so
+    users can see operationalised behaviour at a glance.
+    """
+    import json as _json
+    from conditions import build_subject_context, evaluate_trigger
+
+    trigger_raw = workflow.get("trigger_json")
+    if trigger_raw in (None, "", "null"):
+        return {
+            "count": 0,
+            "manual": True,
+            "by_project": {},
+            "samples": [],
+        }
+    try:
+        trigger = _json.loads(trigger_raw) if isinstance(trigger_raw, str) else trigger_raw
+    except (_json.JSONDecodeError, TypeError):
+        return {"count": 0, "manual": False, "by_project": {}, "samples": [], "error": "trigger_json invalid"}
+
+    workflow_id = workflow.get("id")
+    samples: list[dict] = []
+    by_project: dict[str, int] = {}
+    total = 0
+
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        link_rows = conn.execute(
+            "SELECT project_id, enabled FROM workflow_projects WHERE workflow_id = ? AND enabled = 1",
+            (workflow_id,),
+        ).fetchall()
+
+        # Collect non-draft / non-archived tickets for each linked project. We
+        # evaluate the trigger predicate against every candidate; keeping the
+        # iteration narrow per project avoids context-cost blow-up on big DBs.
+        for link in link_rows:
+            pid = link["project_id"]
+            ticket_rows = conn.execute(
+                "SELECT id, title FROM tickets "
+                "WHERE project_id = ? AND archived = 0 AND draft = 0",
+                (pid,),
+            ).fetchall()
+            project_count = 0
+            for t in ticket_rows:
+                try:
+                    ctx = build_subject_context(conn, pid, t["id"])
+                    passed, _reasons = evaluate_trigger(trigger, ctx)
+                except Exception:
+                    passed = False
+                if passed:
+                    project_count += 1
+                    total += 1
+                    if len(samples) < sample_limit:
+                        samples.append({
+                            "id": t["id"],
+                            "title": t["title"],
+                            "project_id": pid,
+                        })
+            if project_count:
+                by_project[pid] = project_count
+        conn.close()
+
+    return {
+        "count": total,
+        "manual": False,
+        "by_project": by_project,
+        "samples": samples,
+    }
+
+
 def _list_workflow_runs(project_id: str, ticket_id: str) -> list[dict]:
     """Return all workflow runs for a ticket, with parsed conversation."""
     with _db_lock:
@@ -6165,96 +6240,149 @@ def _render_workflows_view(port: int) -> str:
                 return p["id"]
         return projects[0]["id"] if projects else ""
 
+    # Trigger / on_success sentence translator — used to render plain English
+    # under each workflow row so users can tell at a glance what fires it.
+    from trigger_describe import describe_trigger, describe_on_success
+
+    def _build_row_html(wf: dict) -> str:
+        applies_html = _applies_to_html(wf)
+        target_pid = _pick_manage_target(wf)
+        advanced_href = f"/{_safe_attr(target_pid)}/kanban?bounce=1" if target_pid else ""
+        linked_pids = ",".join(l["project_id"] for l in (wf.get("links") or []))
+        wf_id = wf["id"]
+        wf_id_attr = _safe_attr(wf_id)
+        is_system = bool(wf.get("system"))
+        enabled_checked = " checked" if int(wf.get("enabled") or 0) else ""
+        steps_list = wf.get("steps") or []
+        step_count = len(steps_list)
+        run_count = wf.get("run_count", 0)
+        step_label = f"{step_count} step{'s' if step_count != 1 else ''}"
+        run_label = f"{run_count} run{'s' if run_count != 1 else ''}"
+
+        trigger_sentence = describe_trigger(wf.get("trigger_json"))
+        effect_sentence = describe_on_success(wf.get("on_success_json"))
+        is_manual = trigger_sentence.startswith("Manual run only")
+
+        if steps_list:
+            steps_summary = "".join(
+                f'<li>{i + 1}. {_html.escape(str((s or {}).get("agent") or (s or {}).get("agent_id") or (s or {}).get("name") or "step"))}</li>'
+                for i, s in enumerate(steps_list)
+            )
+        else:
+            steps_summary = '<li class="wf-edit-empty">No steps configured.</li>'
+
+        sys_note = (
+            '<div class="wf-edit-note">'
+            'System workflow — body is read-only. You can toggle Enabled '
+            'or click <strong>Duplicate</strong> to create an editable copy '
+            'in one of your projects.'
+            '</div>'
+            if is_system else ""
+        )
+        del_btn = (
+            '<button class="wf-edit-delete" disabled title="System workflows can\'t be deleted; duplicate to create an editable copy.">Delete</button>'
+            if is_system
+            else f'<button class="wf-edit-delete" data-id="{wf_id_attr}">Delete</button>'
+        )
+        dup_btn = (
+            f'<button class="wf-edit-duplicate" data-id="{wf_id_attr}">Duplicate</button>'
+            if is_system else ""
+        )
+        advanced_link = (
+            ""
+            if is_system
+            else (
+                f'<a class="wf-edit-advanced" href="{_html.escape(advanced_href)}">Open in project to edit steps →</a>'
+                if advanced_href else ""
+            )
+        )
+
+        # Live-match badge: hidden by default; JS fetches /preview and fills.
+        # Manual workflows show a static "manual" tag instead so the row
+        # doesn't promise auto-fire counts that won't materialise.
+        if is_manual:
+            match_badge = '<span class="wf-match wf-match-manual" title="Manual run only">manual</span>'
+        else:
+            match_badge = (
+                f'<span class="wf-match wf-match-loading" data-wf-match="{wf_id_attr}" title="Live count of tickets that match this trigger right now">…</span>'
+            )
+
+        # Trigger and effect lines — primary readable content of the row.
+        trigger_html = f'<div class="wf-trigger">{_html.escape(trigger_sentence)}</div>'
+        effect_html = (
+            f'<div class="wf-effect">{_html.escape(effect_sentence)}</div>'
+            if effect_sentence else ""
+        )
+
+        # Meta strip: enabled count, steps, runs, applies-to.
+        meta_parts = [
+            f'<span class="wf-meta-item">{step_label}</span>',
+            f'<span class="wf-meta-item">{run_label}</span>',
+            f'<span class="wf-meta-item">{wf["enabled_link_count"]}/{wf["link_count"]} projects on</span>',
+        ]
+        meta_strip = '<div class="wf-meta">' + " · ".join(meta_parts) + f'  <span class="wf-applies">{applies_html}</span></div>'
+
+        return (
+            f'<div class="wf-row-wrap" data-scope="{wf["scope"]}" data-projects="{_safe_attr(linked_pids)}" data-wf-id="{wf_id_attr}" data-system="{1 if is_system else 0}" data-testid="wf-row-{wf_id_attr}">'
+            f'  <div class="wf-row">'
+            f'    <div class="wf-main">'
+            f'      <div class="wf-name-line">'
+            f'        <span class="wf-name">{_html.escape(wf.get("name", "Unnamed"))}</span>'
+            f'        {match_badge}'
+            f'      </div>'
+            f'      {trigger_html}'
+            f'      {effect_html}'
+            f'      {meta_strip}'
+            f'    </div>'
+            f'    <div class="wf-cell wf-actions">'
+            f'      <label class="wf-edit-switch wf-row-switch" title="Enable or disable across all linked projects"><input type="checkbox" data-field="enabled"{enabled_checked} data-wf-toggle="{wf_id_attr}"><span class="wf-edit-slider"></span></label>'
+            f'      <button class="wf-edit-toggle" data-id="{wf_id_attr}">Edit</button>'
+            f'    </div>'
+            f'  </div>'
+            f'  <div class="wf-edit-panel" data-id="{wf_id_attr}" hidden>'
+            f'    {sys_note}'
+            f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(wf.get("name", ""))}"></div>'
+            f'    <div class="wf-edit-row"><label>Description</label><textarea data-field="description" rows="2">{_html.escape(wf.get("description", ""))}</textarea></div>'
+            f'    <div class="wf-edit-row"><label>Enabled</label>'
+            f'      <label class="wf-edit-switch"><input type="checkbox" data-field="enabled"{enabled_checked}><span class="wf-edit-slider"></span></label>'
+            f'    </div>'
+            f'    <div class="wf-edit-row"><label>Steps</label><ul class="wf-edit-steps">{steps_summary}</ul></div>'
+            f'    {advanced_link}'
+            f'    <div class="wf-edit-actions">'
+            f'      <button class="wf-edit-save" data-id="{wf_id_attr}">Save</button>'
+            f'      {dup_btn}'
+            f'      {del_btn}'
+            f'      <span class="wf-edit-msg"></span>'
+            f'    </div>'
+            f'  </div>'
+            f'</div>'
+        )
+
     if not workflows:
         rows_html = '<div class="wf-empty">No workflows yet. Open a project and add one from the Workflows panel.</div>'
     else:
-        row_parts = []
-        for wf in workflows:
-            scope_html = _scope_badge(wf["scope"], wf["scope_label"])
-            applies_html = _applies_to_html(wf)
-            target_pid = _pick_manage_target(wf)
-            advanced_href = f"/{_safe_attr(target_pid)}/kanban?bounce=1" if target_pid else ""
-            desc = wf.get("description") or ""
-            desc_html = (
-                f'<div class="wf-desc">{_html.escape(desc)}</div>' if desc else ""
-            )
-            linked_pids = ",".join(l["project_id"] for l in (wf.get("links") or []))
-            wf_id = wf["id"]
-            wf_id_attr = _safe_attr(wf_id)
-            is_system = bool(wf.get("system"))
-            enabled_checked = " checked" if int(wf.get("enabled") or 0) else ""
-            steps_list = wf.get("steps") or []
-            if steps_list:
-                steps_summary = "".join(
-                    f'<li>{i + 1}. {_html.escape(str((s or {}).get("agent") or (s or {}).get("agent_id") or (s or {}).get("name") or "step"))}</li>'
-                    for i, s in enumerate(steps_list)
-                )
-            else:
-                steps_summary = '<li class="wf-edit-empty">No steps configured.</li>'
-            sys_note = (
-                '<div class="wf-edit-note">'
-                'System workflow — body is read-only. You can toggle Enabled '
-                'or click <strong>Duplicate</strong> to create an editable copy '
-                'in one of your projects.'
-                '</div>'
-                if is_system else ""
-            )
-            del_btn = (
-                '<button class="wf-edit-delete" disabled title="System workflows can\'t be deleted; duplicate to create an editable copy.">Delete</button>'
-                if is_system
-                else f'<button class="wf-edit-delete" data-id="{wf_id_attr}">Delete</button>'
-            )
-            # System rows route to the per-project Duplicate flow; user rows
-            # keep the kanban deep-link (the bounce panel is where step editing
-            # actually lives for user workflows). Hiding the kanban link on
-            # system rows avoids the misleading "advanced editor" promise —
-            # there is no such editor for system rows anywhere.
-            dup_btn = (
-                f'<button class="wf-edit-duplicate" data-id="{wf_id_attr}">Duplicate</button>'
-                if is_system else ""
-            )
-            advanced_link = (
-                ""
-                if is_system
-                else (
-                    f'<a class="wf-edit-advanced" href="{_html.escape(advanced_href)}">Open in project to edit steps →</a>'
-                    if advanced_href else ""
-                )
-            )
+        # Group rows by scope. Scope is a *grouping* now, not a filter, so
+        # there's no toolbar to hide rows — users see everything organised
+        # under headers and use project filters to narrow further.
+        sys_rows = [_build_row_html(wf) for wf in workflows if wf["scope"] == "system"]
+        usr_rows = [_build_row_html(wf) for wf in workflows if wf["scope"] == "user"]
 
-            row_parts.append(
-                f'<div class="wf-row-wrap" data-scope="{wf["scope"]}" data-projects="{_safe_attr(linked_pids)}" data-wf-id="{wf_id_attr}" data-system="{1 if is_system else 0}" data-testid="wf-row-{wf_id_attr}">'
-                f'  <div class="wf-row">'
-                f'    <div class="wf-main">'
-                f'      <div class="wf-name">{_html.escape(wf.get("name", "Unnamed"))}</div>'
-                f'      {desc_html}'
-                f'    </div>'
-                f'    <div class="wf-cell">{scope_html}</div>'
-                f'    <div class="wf-cell wf-applies">{applies_html}</div>'
-                f'    <div class="wf-cell wf-num">{wf["step_count"]} step{"s" if wf["step_count"] != 1 else ""}</div>'
-                f'    <div class="wf-cell wf-num">{wf["enabled_link_count"]}/{wf["link_count"]} on</div>'
-                f'    <div class="wf-cell wf-num">{wf["run_count"]} run{"s" if wf["run_count"] != 1 else ""}</div>'
-                f'    <div class="wf-cell"><button class="wf-edit-toggle" data-id="{wf_id_attr}">Edit</button></div>'
-                f'  </div>'
-                f'  <div class="wf-edit-panel" data-id="{wf_id_attr}" hidden>'
-                f'    {sys_note}'
-                f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(wf.get("name", ""))}"></div>'
-                f'    <div class="wf-edit-row"><label>Description</label><textarea data-field="description" rows="2">{_html.escape(wf.get("description", ""))}</textarea></div>'
-                f'    <div class="wf-edit-row"><label>Enabled</label>'
-                f'      <label class="wf-edit-switch"><input type="checkbox" data-field="enabled"{enabled_checked}><span class="wf-edit-slider"></span></label>'
-                f'    </div>'
-                f'    <div class="wf-edit-row"><label>Steps</label><ul class="wf-edit-steps">{steps_summary}</ul></div>'
-                f'    {advanced_link}'
-                f'    <div class="wf-edit-actions">'
-                f'      <button class="wf-edit-save" data-id="{wf_id_attr}">Save</button>'
-                f'      {dup_btn}'
-                f'      {del_btn}'
-                f'      <span class="wf-edit-msg"></span>'
-                f'    </div>'
-                f'  </div>'
-                f'</div>'
+        groups = []
+        if sys_rows:
+            groups.append(
+                '<div class="wf-group" data-scope="system">'
+                f'  <h3 class="wf-group-header">System workflows <span class="wf-group-count">{len(sys_rows)}</span><span class="wf-group-hint">Built-in rules; body read-only, duplicate to customize</span></h3>'
+                f'  <div class="wf-group-body">{"".join(sys_rows)}</div>'
+                '</div>'
             )
-        rows_html = "".join(row_parts)
+        if usr_rows:
+            groups.append(
+                '<div class="wf-group" data-scope="user">'
+                f'  <h3 class="wf-group-header">User workflows <span class="wf-group-count">{len(usr_rows)}</span><span class="wf-group-hint">Created by you; fully editable</span></h3>'
+                f'  <div class="wf-group-body">{"".join(usr_rows)}</div>'
+                '</div>'
+            )
+        rows_html = "".join(groups) or '<div class="wf-empty">No workflows yet.</div>'
 
     # Build the Agents tab rows. Custom agents only — discovered agents need a
     # project context; the global tab keeps it simple.
@@ -6351,30 +6479,45 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-filter.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
 .wf-proj-filter.active {{ background: rgba(34,197,94,0.18); border-color: rgba(34,197,94,0.45); color: #4ade80; }}
 .wf-proj-filter[data-project=""].active {{ background: var(--bg-hover); border-color: var(--border-default); color: var(--text-primary); }}
-.wf-list {{ background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }}
+.wf-list {{ display: flex; flex-direction: column; gap: 18px; }}
+.wf-group {{ background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }}
+.wf-group-header {{ margin: 0; padding: 10px 14px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-secondary); display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-page); }}
+.wf-group-count {{ display: inline-block; min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--bg-card); color: var(--text-tertiary); font-size: 10px; font-weight: 600; text-align: center; letter-spacing: 0; }}
+.wf-group-hint {{ margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-tertiary); font-size: 11px; }}
+.wf-group-body {{ display: flex; flex-direction: column; }}
 .wf-row-wrap {{ border-bottom: 1px solid var(--border-subtle); }}
 .wf-row-wrap:last-child {{ border-bottom: 0; }}
-.wf-row {{ display: grid; grid-template-columns: minmax(220px, 1.4fr) 90px minmax(180px, 1fr) 80px 80px 80px 70px; gap: 12px; padding: 10px 14px; align-items: center; font-size: 13px; }}
-.wf-applies {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }}
-.wf-applies-pill {{ font-size: 10px; padding: 2px 7px; border-radius: 999px; background: rgba(34,197,94,0.14); color: #4ade80; border: 1px solid rgba(34,197,94,0.32); white-space: nowrap; }}
+.wf-row {{ display: grid; grid-template-columns: 1fr auto; gap: 16px; padding: 12px 16px; align-items: flex-start; font-size: 13px; }}
+.wf-row:hover {{ background: rgba(255,255,255,0.025); }}
+[data-theme="light"] .wf-row:hover {{ background: rgba(0,0,0,0.02); }}
+.wf-main {{ min-width: 0; display: flex; flex-direction: column; gap: 4px; }}
+.wf-name-line {{ display: flex; align-items: center; gap: 10px; }}
+.wf-name {{ font-weight: 600; color: var(--text-primary); font-size: 14px; }}
+.wf-trigger {{ color: var(--text-secondary); font-size: 12.5px; line-height: 1.45; }}
+.wf-effect {{ color: var(--text-tertiary); font-size: 12px; line-height: 1.45; font-style: italic; }}
+.wf-meta {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--text-tertiary); font-size: 11px; }}
+.wf-meta-item {{ font-variant-numeric: tabular-nums; }}
+.wf-applies {{ display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; margin-left: 4px; }}
+.wf-applies-pill {{ font-size: 10px; padding: 1px 7px; border-radius: 999px; background: rgba(34,197,94,0.14); color: #4ade80; border: 1px solid rgba(34,197,94,0.32); white-space: nowrap; }}
 .wf-applies-pill.disabled {{ background: rgba(107,114,128,0.12); color: var(--text-tertiary); border-color: var(--border-subtle); text-decoration: line-through; opacity: 0.7; }}
-.wf-applies-more {{ font-size: 10px; padding: 2px 7px; color: var(--text-tertiary); }}
-.wf-applies-all {{ font-size: 11px; color: #6b9eff; font-weight: 600; }}
-.wf-applies-empty {{ font-size: 11px; color: var(--text-tertiary); font-style: italic; }}
-.wf-row:hover {{ background: rgba(255,255,255,0.03); }}
-.wf-main {{ min-width: 0; }}
-.wf-name {{ font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.wf-desc {{ color: var(--text-tertiary); font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.wf-applies-more {{ font-size: 10px; padding: 1px 7px; color: var(--text-tertiary); }}
+.wf-applies-all {{ font-size: 10px; color: #6b9eff; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: rgba(59,130,246,0.12); }}
+.wf-applies-empty {{ font-size: 10px; color: var(--text-tertiary); font-style: italic; }}
 .wf-cell {{ font-size: 12px; color: var(--text-secondary); }}
 .wf-num {{ font-variant-numeric: tabular-nums; color: var(--text-tertiary); }}
-.wf-scope-badge {{ font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; }}
-.wf-scope-system {{ background: rgba(168,85,247,0.18); color: #c084fc; }}
-.wf-scope-user {{ background: rgba(59,130,246,0.18); color: #6b9eff; }}
+.wf-actions {{ display: flex; align-items: center; gap: 10px; }}
+.wf-row-switch {{ flex: 0 0 auto; }}
+.wf-match {{ display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 1px 8px; border-radius: 999px; font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }}
+.wf-match-loading {{ background: var(--bg-card); color: var(--text-tertiary); border: 1px solid var(--border-subtle); }}
+.wf-match-zero {{ background: var(--bg-card); color: var(--text-tertiary); border: 1px solid var(--border-subtle); }}
+.wf-match-some {{ background: rgba(34,197,94,0.14); color: #4ade80; border: 1px solid rgba(34,197,94,0.32); }}
+.wf-match-manual {{ background: rgba(168,85,247,0.14); color: #c084fc; border: 1px solid rgba(168,85,247,0.32); }}
 .wf-empty {{ padding: 32px 20px; color: var(--text-tertiary); text-align: center; font-style: italic; font-size: 13px; }}
 .wf-edit-toggle, .ag-edit-toggle {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
 .wf-edit-toggle:hover, .ag-edit-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
 .wf-edit-toggle.active, .ag-edit-toggle.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
 .wf-edit-panel, .ag-edit-panel {{ padding: 14px 18px 16px; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 10px; }}
+.wf-edit-panel[hidden], .ag-edit-panel[hidden] {{ display: none; }}
 [data-theme="light"] .wf-edit-panel, [data-theme="light"] .ag-edit-panel {{ background: rgba(0,0,0,0.02); }}
 .wf-edit-row {{ display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: start; }}
 .wf-edit-row label {{ font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding-top: 6px; }}
@@ -6434,12 +6577,6 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 
   <div class="wf-tab-pane active" data-tab-pane="workflows">
     <div class="wf-toolbar" data-testid="wf-filter-bar">
-      <span class="wf-toolbar-label">Scope</span>
-      <button class="wf-filter active" data-filter="all">All <span class="wf-num">{len(workflows)}</span></button>
-      <button class="wf-filter" data-filter="system">System <span class="wf-num">{sum(1 for w in workflows if w['scope'] == 'system')}</span></button>
-      <button class="wf-filter" data-filter="user">User <span class="wf-num">{sum(1 for w in workflows if w['scope'] == 'user')}</span></button>
-    </div>
-    <div class="wf-toolbar wf-toolbar-projects" data-testid="wf-project-filter">
       <span class="wf-toolbar-label">Projects</span>
       <button class="wf-proj-filter active" data-project="" data-testid="wf-proj-all">All projects</button>
       {''.join(f'<button class="wf-proj-filter" data-project="{_safe_attr(p["id"])}" data-testid="wf-proj-{_safe_attr(p["id"])}">{_html.escape(p["name"])} <span class="wf-num">{sum(1 for w in workflows if any(l["project_id"] == p["id"] for l in (w.get("links") or [])))}</span></button>' for p in projects)}
@@ -6471,12 +6608,10 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 </div>
 <script>
 (function() {{
-  var scopeFilter = 'all';
   var projectSelection = new Set();
 
   function applyFilters() {{
     document.querySelectorAll('[data-tab-pane="workflows"] .wf-row-wrap').forEach(function(row) {{
-      var scopeOk = (scopeFilter === 'all' || row.dataset.scope === scopeFilter);
       var rowProjects = (row.dataset.projects || '').split(',').filter(Boolean);
       var projOk;
       if (projectSelection.size === 0) {{
@@ -6484,18 +6619,14 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       }} else {{
         projOk = rowProjects.some(function(pid) {{ return projectSelection.has(pid); }});
       }}
-      row.style.display = (scopeOk && projOk) ? '' : 'none';
+      row.style.display = projOk ? '' : 'none';
+    }});
+    // Hide whole groups whose rows are all filtered out
+    document.querySelectorAll('[data-tab-pane="workflows"] .wf-group').forEach(function(g) {{
+      var visible = Array.from(g.querySelectorAll('.wf-row-wrap')).some(function(r) {{ return r.style.display !== 'none'; }});
+      g.style.display = visible ? '' : 'none';
     }});
   }}
-
-  document.querySelectorAll('.wf-filter').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-      document.querySelectorAll('.wf-filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      scopeFilter = btn.dataset.filter;
-      applyFilters();
-    }});
-  }});
 
   document.querySelectorAll('.wf-proj-filter').forEach(function(btn) {{
     btn.addEventListener('click', function() {{
@@ -6661,6 +6792,65 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
         .catch(e => setMsg(msg, String(e), 'err'));
     }});
   }});
+
+  // Row-level Enabled toggle (the small switch outside the edit panel) — saves
+  // immediately with no Edit panel round-trip. Server also mirrors into
+  // workflow_projects so the dispatcher actually sees the change.
+  document.querySelectorAll('input[data-wf-toggle]').forEach(function(input) {{
+    input.addEventListener('change', function() {{
+      var id = input.dataset.wfToggle;
+      var enabled = input.checked ? 1 : 0;
+      var wrap = document.querySelector('.wf-row-wrap[data-wf-id="' + id + '"]');
+      // Also reflect in the in-panel checkbox so they don't get out of sync
+      var inPanel = document.querySelector('.wf-edit-panel[data-id="' + id + '"] input[data-field="enabled"]');
+      if (inPanel) inPanel.checked = !!enabled;
+      input.disabled = true;
+      fetch('/api/workflow/workflows/' + encodeURIComponent(id), {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{enabled: enabled}})
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          input.disabled = false;
+          if (status < 200 || status >= 300) {{
+            // Revert UI on error
+            input.checked = !enabled;
+            if (inPanel) inPanel.checked = !enabled;
+            console.error('toggle failed', data);
+          }}
+        }})
+        .catch(e => {{ input.disabled = false; input.checked = !enabled; console.error(e); }});
+    }});
+  }});
+
+  // Live-match preview: for every non-manual row, fetch how many tickets
+  // currently match the trigger and surface the count inline. Cached for the
+  // page lifetime; users see fresh numbers on reload.
+  function loadPreviews() {{
+    var badges = document.querySelectorAll('.wf-match[data-wf-match]');
+    badges.forEach(function(badge) {{
+      var id = badge.dataset.wfMatch;
+      fetch('/api/workflow/workflows/' + encodeURIComponent(id) + '/preview')
+        .then(r => r.ok ? r.json() : null)
+        .then(function(d) {{
+          if (!d) return;
+          badge.classList.remove('wf-match-loading');
+          var n = d.count || 0;
+          if (n === 0) {{
+            badge.textContent = '0 match';
+            badge.classList.add('wf-match-zero');
+            badge.title = 'No tickets currently match this trigger';
+          }} else {{
+            badge.textContent = n + ' match' + (n === 1 ? '' : 'es');
+            badge.classList.add('wf-match-some');
+            var tip = (d.samples || []).map(function(s) {{ return s.id + ' ' + (s.title || ''); }}).join('\\n');
+            if (tip) badge.title = tip;
+          }}
+        }})
+        .catch(function() {{ /* leave the dot in loading state */ }});
+    }});
+  }}
+  loadPreviews();
 
   // Agent row Edit toggle + Save + Delete
   document.querySelectorAll('.ag-edit-toggle').forEach(function(btn) {{
@@ -7404,7 +7594,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        path = unquote(urlparse(self.path).path)
         proj, remainder = _resolve_project_from_path(path)
 
         # ── Global routes (proj is None) ────────────────────────────
@@ -7536,6 +7726,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Global workflows list — all workflows across all projects.
             if remainder == "/api/workflow/workflows":
                 self._send_json({"workflows": _list_workflows()})
+                return
+
+            # Live preview: how many tickets currently match this workflow's
+            # trigger? Returns count + sample tickets across all linked projects.
+            # Sized for inline display on the /workflows page — capped to keep
+            # the response under ~5 KB even on large boards.
+            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.%-]*)/preview$", remainder)
+            if m:
+                workflow_id = m.group(1)
+                wf = _get_workflow(workflow_id)
+                if not wf:
+                    self._send_json({"error": "Workflow not found"}, 404)
+                    return
+                preview = _preview_workflow_matches(wf)
+                self._send_json(preview)
                 return
 
             # Legacy backward compat: --project flag redirects bare /api/ routes
@@ -8196,7 +8401,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Not found"}, 404)
 
     def do_PUT(self):
-        path = urlparse(self.path).path
+        path = unquote(urlparse(self.path).path)
         proj, remainder = _resolve_project_from_path(path)
 
         # ── Global routes ───────────────────────────────────────────
@@ -8266,7 +8471,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             # Global update of a workflow — system rows may only toggle 'enabled'.
-            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
+            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.%-]*)$", remainder)
             if m:
                 workflow_id = m.group(1)
                 try:
@@ -8419,7 +8624,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Update workflow (Phase 3A: system workflow guard + new fields)
-        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.%-]*)$", remainder)
         if m:
             workflow_id = m.group(1)
             try:
@@ -8647,7 +8852,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json(t or {"ok": True})
 
     def do_POST(self):
-        path = urlparse(self.path).path
+        path = unquote(urlparse(self.path).path)
         proj, remainder = _resolve_project_from_path(path)
 
         # ── Global routes ───────────────────────────────────────────
@@ -8772,7 +8977,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # to the source's first link, falling back to the first registered
             # project. Used by the /workflows page Duplicate button so users
             # can customize a system workflow without leaving the global view.
-            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)/duplicate$", remainder)
+            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.%-]*)/duplicate$", remainder)
             if m:
                 source_id = m.group(1)
                 source = _get_workflow(source_id)
@@ -10120,7 +10325,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # Duplicate workflow — clones any workflow (including system rows, regardless
         # of enabled state) into a new user-owned (system=0) row.
-        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)/duplicate$", remainder)
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.%-]*)/duplicate$", remainder)
         if m:
             source_id = m.group(1)
             existing = _get_workflow(source_id, project_id=proj["id"])
@@ -10308,7 +10513,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Not found"}, 404)
 
     def do_DELETE(self):
-        path = urlparse(self.path).path
+        path = unquote(urlparse(self.path).path)
         proj, remainder = _resolve_project_from_path(path)
 
         # ── Global routes ───────────────────────────────────────────
@@ -10348,7 +10553,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             # Global delete of a workflow — system rows refused.
-            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
+            m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.%-]*)$", remainder)
             if m:
                 workflow_id = m.group(1)
                 existing = _get_workflow(workflow_id)
@@ -10429,7 +10634,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Delete workflow (Phase 3A: system workflow guard, Phase 3 fix: project-scoped)
-        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.-]*)$", remainder)
+        m = re.match(r"^/api/workflow/workflows/([a-z0-9][a-z0-9_:.%-]*)$", remainder)
         if m:
             workflow_id = m.group(1)
             existing = _get_workflow(workflow_id, project_id=proj["id"])

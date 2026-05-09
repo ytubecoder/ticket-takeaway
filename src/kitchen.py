@@ -546,26 +546,12 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
             if not workflows:
                 continue
 
-            # Two candidate subject pools:
-            #   - auto_subjects:   tickets with automation_mode='auto' (master
-            #                      gate for user workflows; safety net so user
-            #                      workflows missing the predicate can't sneak
-            #                      past the per-ticket toggle).
-            #   - all_subjects:    every non-draft/non-archived ticket. System
-            #                      workflows iterate this, but each system
-            #                      workflow's trigger now includes an explicit
-            #                      automation_mode='auto' predicate (workflows_seed.py)
-            #                      so the master switch is honoured uniformly.
-            auto_subjects = conn.execute(
-                "SELECT t.id FROM tickets t "
-                "JOIN automation_subjects s ON s.subject_id = t.id "
-                "  AND s.project_id = t.project_id AND s.subject_type = 'ticket' "
-                "WHERE t.project_id = ? AND t.archived = 0 AND t.draft = 0 "
-                "  AND s.automation_mode = 'auto' "
-                "ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
-                "         WHEN 'low' THEN 2 ELSE 3 END, t.created_at ASC, t.id ASC",
-                (project_id,),
-            ).fetchall()
+            # Single subject pool: every non-draft, non-archived ticket. System
+            # and user workflows iterate the same set — there are no privileged
+            # workflows. The per-ticket automation toggle is enforced by an
+            # `automation_mode='auto'` trigger predicate (which every default
+            # system workflow includes; user-authored workflows can opt into or
+            # out of that predicate as their use case requires).
             all_subjects = conn.execute(
                 "SELECT t.id FROM tickets t "
                 "WHERE t.project_id = ? AND t.archived = 0 AND t.draft = 0 "
@@ -573,16 +559,7 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
                 "         WHEN 'low' THEN 2 ELSE 3 END, t.created_at ASC, t.id ASC",
                 (project_id,),
             ).fetchall()
-
-            auto_ids = {s["id"] for s in auto_subjects}
-            # Iterate over the union (system workflows can fire on any ticket;
-            # user workflows only on auto-mode tickets — we'll filter per-workflow).
-            seen: set = set()
-            ordered_ids: list[str] = []
-            for s in all_subjects:
-                if s["id"] not in seen:
-                    seen.add(s["id"])
-                    ordered_ids.append(s["id"])
+            ordered_ids: list[str] = [s["id"] for s in all_subjects]
 
             for ticket_id in ordered_ids:
                 if slots <= 0 or project_slots <= 0:
@@ -592,13 +569,12 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
                 if _has_active_run(conn, project_id, "ticket", ticket_id):
                     continue
 
-                # Try each workflow in order — first match dispatches.
+                # Try each workflow in order — first match dispatches. System
+                # workflows are evaluated before user workflows (ORDER BY system
+                # DESC in the workflows query above) so the platform's defaults
+                # take precedence on identical-trigger overlaps; users can
+                # disable a system workflow per-project to flip that bias.
                 for wf in workflows:
-                    is_system = bool(wf["system"])
-                    # User workflows still respect automation_mode='auto' filter.
-                    if not is_system and ticket_id not in auto_ids:
-                        continue
-
                     try:
                         trigger_raw = wf["trigger_json"]
                         # Workflows with null trigger_json are manual-only — skip.

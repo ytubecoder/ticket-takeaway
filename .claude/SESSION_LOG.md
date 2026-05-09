@@ -1,5 +1,33 @@
 # Session Log
 
+## 2026-05-08→09 — Workflows fixed end-to-end: dispatcher regression, /workflows UX, system/user symmetry
+
+### Summary
+- Found that migration 16 (canonical workflows + `workflow_projects` join table) had silently broken the kitchen dispatcher: its SQL still filtered on `workflows.project_id = ?`, but migration 16 nulled that column for system rows. Result: zero system workflows had been firing for ~3 weeks (Parent auto-promote, Spec → Backlog, Backlog → WIP, WIP → Review, Bug triage all dormant). Fixed dispatcher to JOIN `workflow_projects`. Fixed `_create_workflow` to seed the join row for new user workflows. Fixed global PUT to mirror `enabled` into all linked projects. Logged as B-61.
+- Reworked `/workflows` page from dense card grid → line items: each row shows name + plain-English trigger sentence ("When the ticket is in Backlog, it has a description, ...") + effect sentence ("Then move ticket to WIP, set status to in-progress.") + meta strip + match badge ("0 match" / "5 matches" / "manual"). Scope is a header-based grouping now, not a filter. Added `src/trigger_describe.py` translator with `describe_trigger()`, `describe_on_success()`, `predicate_rows()`, `effect_rows()`. New `GET /api/workflow/workflows/{id}/preview` returns count + samples for the live badge.
+- Edit panel now surfaces structured Trigger and Effects sections so the rule logic is visible inline — fixes the "looks empty" problem for zero-step rules like Auto-accept where Steps is intentionally blank.
+- Made every default system workflow's trigger include `automation_mode='auto'` (Parent auto-promote, WIP → Review, Auto-accept, Done → Learnings, Sprint tag rotation) so the per-ticket toggle is the master switch uniformly. Removed orphan "Review → Done" workflow that wasn't in the seeder.
+- Removed dispatcher pool-filter asymmetry: previously system workflows iterated all tickets while user workflows were hard-clipped to `automation_mode='auto'` tickets via a separate pool gate. Now both iterate the same pool; trigger predicates are the sole authority. System rows still get evaluation precedence on identical-trigger overlaps via `ORDER BY system DESC, id ASC` (deterministic tie-breaker, not a privilege).
+- Added global `POST /api/workflow/workflows/{id}/duplicate` + UI Duplicate button on system rows (project-scoped duplicate already existed). Replaced misleading "Edit steps in advanced editor →" link on system rows with explanatory note + Duplicate; user rows keep the kanban deep-link renamed "Open in project to edit steps →".
+- Bug fixes along the way: `[hidden]` attribute was overridden by `display: flex` on `.wf-edit-panel` so every row shipped with its edit panel open; URL-encoded colons (`%3A`) failed the workflow_id regex so the Duplicate button was silently broken in the browser.
+
+### Lessons Learned
+- **Gotcha:** Post-migration-16 the dispatcher must read from `workflow_projects.enabled` joined to `wp.project_id`, NOT from `workflows.enabled` / `workflows.project_id`. The latter columns are stale for system rows where `project_id IS NULL` after migration 16's collapse. [Promoted to CLAUDE.md]
+- **Accepted:** Per-ticket automation toggle as the universal master switch. Every default system workflow that mutates a ticket includes the `automation_mode='auto'` predicate. Users keep one mental model (the play/pause icon on the ticket card) instead of needing to know which rules respect it.
+- **Accepted:** System and user workflows must be functionally symmetric in the dispatcher. The previous asymmetric pool filter ("user workflows only fire on auto-mode tickets, system workflows can fire on anything") meant the platform could automate in ways its users couldn't — the wrong incentive structure. Privilege now lives only in (a) read-only body for system rows and (b) deterministic precedence on identical-trigger overlaps.
+- **Accepted:** Trigger sentences as the primary readable artifact on /workflows. Users couldn't tell what each rule did from a JSON predicate tree behind an Edit click; rendering it inline as prose ("When ticket is in Backlog AND has a description AND ...") cut the cognitive cost dramatically.
+- **Accepted:** Pattern A (per-ticket trigger evaluation) is the universal automation pattern. The dispatcher already iterates every ticket as its own subject; cross-relationship predicates (`parent_done`, `children_*`) read related state but the mutation target is always the subject. Users can express "fire on each child whose parent is Done" with `section_equals + status_equals + parent_done` predicates, no apply_to:children needed.
+- **Gotcha:** `[hidden]` attribute is overridden by explicit `display: flex` (specificity > UA stylesheet's `display: none`). Always pair display rules on toggle-able panels with `[class][hidden] { display: none }`.
+- **Gotcha:** `encodeURIComponent` encodes `:` to `%3A`. Path regexes with `[a-z0-9_:.-]` won't match. Either decode the path at request entry (chosen approach — `path = unquote(urlparse(self.path).path)` in every `do_*`) or widen the char class to allow `%`. Same trap will hit any other path-segment ID with non-alnum chars.
+
+### Decisions
+- Logged the dispatcher regression as B-61 (review section, infra+ux tags). Capacity for "what was broken silently for 3 weeks" was zero because there's no automated alerting on dispatcher activity — opportunity for a Kitchen heartbeat metric in the future, but not pulled into this session's scope.
+- Sprint tag rotation kept as a disabled-by-default example template, not removed. It demonstrates the tag-mutation `on_success` shape and is useful as a duplicate target. Auto-accept and Done → Learnings stay disabled-by-default — both can do destructive things autonomously, opt-in only.
+- Global "Enabled" toggle on /workflows treats `enabled` as a bulk operation (writes to `workflows.enabled` AND every `workflow_projects.enabled` row for that workflow). For per-project on/off the kanban bounce panel remains the granular surface; the global page is "is this rule live anywhere?".
+- Did NOT remove the `ORDER BY system DESC` tie-breaker. Defensible default — system rows are platform baselines and most user workflows should augment, not duplicate-override. Documented so users know to disable the system row per-project if they want a duplicate to take precedence.
+
+---
+
 ## 2026-04-28→30 — Kitchen: agentic work orchestrator (M1a–M6) on `feat/kitchen`
 
 ### Summary

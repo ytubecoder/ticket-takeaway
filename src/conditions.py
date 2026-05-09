@@ -138,6 +138,73 @@ def _eval_tag_includes(ctx: dict, p: dict) -> tuple[bool, str]:
     return (row is not None, f"tag {tag!r} {'found' if row else 'not found'}")
 
 
+def _eval_has_tag(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if the ticket has ALL of the listed tags (AND semantics).
+
+    trigger_json: {"kind": "has_tag", "value": ["foo", "bar"]}
+    All listed tags must be present on the ticket.
+    """
+    db: sqlite3.Connection = ctx["db"]
+    ticket = ctx["ticket"]
+    tags = p.get("value") or []
+    if isinstance(tags, str):
+        tags = [tags]
+    if not tags:
+        return (True, "no tags required (vacuously true)")
+    existing = {
+        row["tag"]
+        for row in db.execute(
+            "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ?",
+            (ticket["id"], ticket["project_id"]),
+        ).fetchall()
+    }
+    missing = [t for t in tags if t not in existing]
+    if missing:
+        return (False, f"ticket missing required tags: {missing}")
+    return (True, f"ticket has all required tags: {tags}")
+
+
+def _eval_lacks_tag(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if the ticket has NONE of the listed tags.
+
+    trigger_json: {"kind": "lacks_tag", "value": ["bar"]}
+    None of the listed tags may be present on the ticket.
+    """
+    db: sqlite3.Connection = ctx["db"]
+    ticket = ctx["ticket"]
+    tags = p.get("value") or []
+    if isinstance(tags, str):
+        tags = [tags]
+    if not tags:
+        return (True, "no tags to exclude (vacuously true)")
+    existing = {
+        row["tag"]
+        for row in db.execute(
+            "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ?",
+            (ticket["id"], ticket["project_id"]),
+        ).fetchall()
+    }
+    found = [t for t in tags if t in existing]
+    if found:
+        return (False, f"ticket has excluded tags: {found}")
+    return (True, f"ticket lacks all excluded tags: {tags}")
+
+
+def _eval_lacks_readiness_flag(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True if the named readiness flag is NOT set (or has no content).
+
+    trigger_json: {"kind": "lacks_readiness_flag", "flag": "reviewed"}
+    Inverse of flag_set — used to target tickets missing a particular flag.
+    """
+    # Delegate to _eval_flag_set and invert.
+    passed, reason = _eval_flag_set(ctx, p)
+    if passed:
+        flag = p.get("flag", "")
+        return (False, f"readiness flag {flag!r} is already set")
+    flag = p.get("flag", "")
+    return (True, f"readiness flag {flag!r} is not set (trigger condition met)")
+
+
 def _eval_parent_done(ctx: dict, p: dict) -> tuple[bool, str]:
     """True if ticket has no parent, or parent is in Done section."""
     db: sqlite3.Connection = ctx["db"]
@@ -386,6 +453,27 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
         "label": "Ticket has tag",
         "params": [{"name": "value", "type": "text"}],
         "evaluator": _eval_tag_includes,
+    },
+    "has_tag": {
+        "label": "Ticket has all tags (list)",
+        "params": [{"name": "value", "type": "tag_list"}],
+        "evaluator": _eval_has_tag,
+    },
+    "lacks_tag": {
+        "label": "Ticket has none of the tags",
+        "params": [{"name": "value", "type": "tag_list"}],
+        "evaluator": _eval_lacks_tag,
+    },
+    "lacks_readiness_flag": {
+        "label": "Readiness flag is NOT set",
+        "params": [
+            {
+                "name": "flag",
+                "type": "flag_select",
+                "options": ["D", "C", "L"],
+            }
+        ],
+        "evaluator": _eval_lacks_readiness_flag,
     },
     "priority_at_least": {
         "label": "Priority is at least",

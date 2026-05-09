@@ -130,6 +130,73 @@ WORKFLOW_POLL_INTERVAL = 2000  # ms, frontend polling interval
 WORKFLOW_RUN_STATUSES = ("pending", "running", "paused", "completed", "failed", "cancelled")
 
 # ---------------------------------------------------------------------------
+# Gate banners — one-line guidance per section shown above criteria panel.
+# Used by the full-page ticket view (Lane B) to communicate what the user must
+# provide so the automation can advance the ticket.
+# ---------------------------------------------------------------------------
+
+GATE_BANNER_BY_SECTION: dict[str, str] = {
+    "Ideas":      "Add a description and at least one criterion → auto-moves to Backlog.",
+    "Backlog":    "Resolve dependencies → auto-moves to WIP.",
+    "WIP":        "Land a commit → auto-moves to For Review.",
+    "For Review": "All criteria checked + no open bugs → auto-accepts.",
+    "Done":       "Ticket accepted — learnings can be captured in the L flag.",
+    "Bugs":       "Link this bug to a parent ticket and mark it fixed.",
+    "Icebox":     "Shelved. Move back to Backlog when ready to resume.",
+    "Won't Do":   "Closed as won't do. Re-open by moving back to Backlog.",
+}
+
+# ---------------------------------------------------------------------------
+# Activity event kind labels — short human-readable label for each event_kind
+# recorded in the activity_events table.  Used by the Activity tab timeline.
+# ---------------------------------------------------------------------------
+
+EVENT_KIND_LABELS: dict[str, str] = {
+    "run_started":        "Run started",
+    "run_succeeded":      "Run succeeded",
+    "run_failed":         "Run failed",
+    "run_cancelled":      "Run cancelled",
+    "section_change":     "Moved",
+    "status_change":      "Status changed",
+    "criteria_check":     "Criterion checked",
+    "criteria_added":     "Criterion added",
+    "hook_started":       "Hook started",
+    "hook_succeeded":     "Hook succeeded",
+    "hook_failed":        "Hook failed",
+    "workspace_created":  "Workspace created",
+    "agent_output":       "Agent output",
+    "pause_set":          "Paused",
+    "pause_cleared":      "Resumed",
+    "handoff_recorded":   "Handoff recorded",
+}
+
+# ---------------------------------------------------------------------------
+# Activity event kind icons — maps each event_kind to a Lucide-style icon name
+# present in SVG_ICONS in generate.py.  Lane B renders these via _svg_icon().
+# For kinds where no perfect semantic match exists, the closest neighbour is
+# used and a TODO comment is added.
+# ---------------------------------------------------------------------------
+
+EVENT_KIND_ICONS: dict[str, str] = {
+    "run_started":        "play",
+    "run_succeeded":      "check",         # green check on success
+    "run_failed":         "x",             # X on failure
+    "run_cancelled":      "square",        # stop square
+    "section_change":     "arrow-right",
+    "status_change":      "zap",           # TODO: ideal icon would be 'badge' or 'dot'
+    "criteria_check":     "check-square",
+    "criteria_added":     "plus",
+    "hook_started":       "zap",           # TODO: ideal icon would be 'hook' or 'bolt'
+    "hook_succeeded":     "check",
+    "hook_failed":        "x",
+    "workspace_created":  "grid",          # TODO: ideal icon would be 'folder-plus'
+    "agent_output":       "file-text",
+    "pause_set":          "square",        # stop/pause shape
+    "pause_cleared":      "play",
+    "handoff_recorded":   "file-text",     # TODO: ideal icon would be 'clipboard-check'
+}
+
+# ---------------------------------------------------------------------------
 # Feedbacks integration
 # ---------------------------------------------------------------------------
 

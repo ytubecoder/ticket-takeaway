@@ -39,6 +39,7 @@ DEFAULT_AGENTS: list[dict] = [
         "args": "-p",
         "system_prompt": "",   # /plan-check sets none — templates carry the instructions
         "persist_session": 1,
+        "system": 0,
     },
     # Consultant: Codex, sandboxed read-only (mirrors `/plan-check` exactly).
     {
@@ -48,6 +49,96 @@ DEFAULT_AGENTS: list[dict] = [
         "args": "exec -s read-only",
         "system_prompt": "",
         "persist_session": 1,
+        "system": 0,
+    },
+    # Orchestrator: system-flagged. Multi-turn interview agent that uses
+    # interactive markers to gather ticket context from the user, then proposes
+    # a structured patch (description + criteria + tags) via the 'propose'
+    # marker for atomic accept/decline.
+    {
+        "id": "agent_orchestrator",
+        "name": "Orchestrator",
+        "command": "claude",
+        "args": "-p",
+        "system_prompt": (
+            "You are an Orchestrator agent for Ticket Takeaway. Your job is to interview "
+            "the user to gather enough context to write a clear ticket description and at "
+            "least one acceptance criterion.\n\n"
+            "Use the following interactive markers in your stdout output to drive the UI:\n\n"
+            "  1. Ask a question (free-text reply):\n"
+            '     {"ask": "<your question>", "context": "<optional brief context>"}\n\n'
+            "  2. Propose a structured patch for the user to accept/decline:\n"
+            '     {"propose": {"description": "<proposed description>", '
+            '"add_criteria": ["<criterion 1>", ...], '
+            '"remove_criteria": [], '
+            '"add_tags": ["<tag>", ...], '
+            '"remove_tags": []}}\n\n'
+            "Rules:\n"
+            "- Each marker must appear on its own line as valid JSON.\n"
+            "- Emit at most one marker per turn.\n"
+            "- Start by asking 1-2 focused questions to understand the ticket goal.\n"
+            "- After 1-3 rounds of questions, emit a 'propose' marker with your best "
+            "draft. The user will accept/decline individual fields.\n"
+            "- When the user accepts a proposal, you are done. Do not emit another marker.\n"
+            "- Keep your prose responses concise — the ticket record is the output, not the chat.\n"
+        ),
+        "persist_session": 1,
+        "system": 1,
+    },
+    # Worker: system-flagged. Single-turn implementation agent. Returns a
+    # structured handoff JSON as its final stdout line so the runner can parse
+    # implemented/undone/commands/issues/procedures_followed.
+    {
+        "id": "agent_worker",
+        "name": "Worker",
+        "command": "claude",
+        "args": "-p",
+        "system_prompt": (
+            "You are a Worker agent for Ticket Takeaway. Implement the ticket "
+            "described in your prompt fully and autonomously.\n\n"
+            "When you finish, output a structured handoff JSON object as the LAST "
+            "line of your stdout. The object must be valid JSON on a single line with "
+            "at least these keys (use empty arrays if nothing applies):\n\n"
+            '{"implemented": ["<what was done>", ...], '
+            '"undone": ["<what was skipped and why>", ...], '
+            '"commands": [{"cmd": "<shell command>", "exit_code": 0}, ...], '
+            '"issues": ["<problem encountered>", ...], '
+            '"procedures_followed": ["<checklist item>", ...]}\n\n'
+            "Do not add any text after the JSON line. The runner parses that line "
+            "automatically — do not wrap it in backticks or code fences."
+        ),
+        "persist_session": 0,
+        "system": 1,
+    },
+    # Validator: system-flagged. Adversarial acceptance-criteria checker. Ignores
+    # the implementation and evaluates whether each criterion is satisfied from the
+    # outside. Emits a 'propose' marker with criteria checks for user confirmation.
+    {
+        "id": "agent_validator",
+        "name": "Validator",
+        "command": "claude",
+        "args": "-p",
+        "system_prompt": (
+            "You are a Validator agent for Ticket Takeaway. Your role is adversarial: "
+            "re-read the ticket's acceptance criteria and decide, from outside the "
+            "implementation, whether each one is satisfied.\n\n"
+            "Do NOT review the implementation code directly. Instead:\n"
+            "1. Read each acceptance criterion.\n"
+            "2. Determine if it is verifiably met based on observable behaviour or "
+            "evidence in the ticket record.\n"
+            "3. Emit a 'propose' marker summarising your verdict as criteria checks. "
+            "List passing criteria in 'add_criteria' with a tick prefix, failing "
+            "criteria in 'remove_criteria' with a cross prefix, and leave 'description', "
+            "'add_tags', 'remove_tags' empty unless you have a specific recommendation.\n\n"
+            "Interactive marker format (emit on its own line as valid JSON):\n"
+            '{"propose": {"description": "", "add_criteria": ["✓ <criterion>", ...], '
+            '"remove_criteria": ["✗ <failing criterion>", ...], '
+            '"add_tags": [], "remove_tags": []}}\n\n'
+            "Be conservative: only mark a criterion satisfied when you have clear evidence. "
+            "When in doubt, mark it as failing and explain in parentheses."
+        ),
+        "persist_session": 0,
+        "system": 1,
     },
 ]
 
@@ -129,10 +220,16 @@ Consultant's review:
 # ---------------------------------------------------------------------------
 
 DEFAULT_WORKFLOWS: list[dict] = [
-    # 1. Spec → Backlog: Ideas ticket with description + criteria → promote to Backlog
+    # 1. Spec → Backlog: Ideas ticket → Orchestrator interview → promote to Backlog.
+    #    The Orchestrator uses interactive markers (ask/propose) to gather context
+    #    from the user. The run stays in needs_input until the user accepts a proposal.
+    #    On success: ticket moves to Backlog with the filled description + criteria.
     {
         "name": "Spec → Backlog",
-        "description": "Promote Ideas tickets that have a description and acceptance criteria to Backlog",
+        "description": (
+            "Interview the user via the Orchestrator agent to fill in description and "
+            "acceptance criteria for an Ideas ticket, then promote it to Backlog."
+        ),
         "system": 1,
         "enabled": 1,
         "subject_type": "ticket",
@@ -140,29 +237,32 @@ DEFAULT_WORKFLOWS: list[dict] = [
             "all_of": [
                 {"kind": "section_equals", "value": "Ideas"},
                 {"kind": "automation_mode", "value": "auto"},
-                {"kind": "has_field", "field": "description"},
-                {"kind": "criteria_count_gte", "value": 1},
                 {"kind": "no_active_run"},
             ]
         },
         "on_success_json": {"move_to": "Backlog"},
         "steps": [
             {
-                "agent_id": None,
-                "agent_name": "specifier",
-                "prompt_template": _ticket_prompt("Refine the specification for"),
+                "agent_id": "agent_orchestrator",
+                "agent_name": "Orchestrator",
+                "prompt_template": (
+                    "You are starting an interview for ticket {{ticket.id}}: {{ticket.title}}\n\n"
+                    "Current description:\n{{ticket.description}}\n\n"
+                    "Current acceptance criteria:\n{{ticket.acceptance_criteria}}\n\n"
+                    "Interview the user to clarify the goal and produce a crisp description "
+                    "with at least one concrete acceptance criterion. Use the interactive "
+                    "markers (ask/propose) as instructed in your system prompt."
+                ),
                 "on_failure": "pause",
-                "timeout_ms": 300000,
+                "timeout_ms": 900000,  # 15 min — multi-turn interview
             }
         ],
     },
-    # 2. Backlog → WIP: criteria-led eligibility — acceptance criteria are
-    #    the bar. Users wanting stricter test gating can still add the
-    #    `tests_covered` predicate (linked journey or no_test_required) to
-    #    their own workflows.
+    # 2. Backlog → WIP: Worker runs the implementation and emits a handoff JSON.
+    #    The runner parses the handoff automatically (runners._try_parse_handoff).
     {
         "name": "Backlog → WIP",
-        "description": "Auto-dispatch Backlog tickets that are fully ready to start work",
+        "description": "Auto-dispatch Backlog tickets to the Worker agent; captures structured handoff on completion",
         "system": 1,
         "enabled": 1,
         "subject_type": "ticket",
@@ -179,18 +279,23 @@ DEFAULT_WORKFLOWS: list[dict] = [
         "on_success_json": {"move_to": "WIP", "set_status": "in-progress"},
         "steps": [
             {
-                "agent_id": None,
-                "agent_name": "implementer",
-                "prompt_template": _ticket_prompt("Implement"),
+                "agent_id": "agent_worker",
+                "agent_name": "Worker",
+                "prompt_template": (
+                    _ticket_prompt("Implement") + "\n\n"
+                    "When done, output your structured handoff JSON as the LAST line of stdout "
+                    "as instructed in your system prompt. No text after the JSON."
+                ),
                 "on_failure": "pause",
                 "timeout_ms": 600000,
             }
         ],
     },
-    # 3. WIP → Review: ticket in WIP, in-progress, and has a commit hash
+    # 3. WIP → Review: Worker reviews/validates then emits handoff. Handoff is
+    #    automatically captured by the runner into runs.metadata_json.handoff.
     {
         "name": "WIP → Review",
-        "description": "Move WIP tickets to For Review once implementation has a commit",
+        "description": "Move WIP tickets to For Review once implementation has a commit; captures handoff",
         "system": 1,
         "enabled": 1,
         "subject_type": "ticket",
@@ -206,9 +311,13 @@ DEFAULT_WORKFLOWS: list[dict] = [
         "on_success_json": {"move_to": "For Review", "set_status": "for-review"},
         "steps": [
             {
-                "agent_id": None,
-                "agent_name": "reviewer",
-                "prompt_template": _ticket_prompt("Review the implementation for"),
+                "agent_id": "agent_worker",
+                "agent_name": "Worker",
+                "prompt_template": (
+                    _ticket_prompt("Review the implementation for") + "\n\n"
+                    "When done, output your structured handoff JSON as the LAST line of stdout "
+                    "as instructed in your system prompt."
+                ),
                 "on_failure": "pause",
                 "timeout_ms": 300000,
             }
@@ -299,7 +408,75 @@ DEFAULT_WORKFLOWS: list[dict] = [
             }
         ],
     },
-    # 6. Plan Check: Planner → Consultant → Planner (mediator), modelled on /plan-check.
+    # 6. Done → Learnings extraction: Worker summarises ticket history into the L flag.
+    #    Disabled by default — opt-in like Auto-accept. When enabled, fires on any
+    #    Done ticket that doesn't yet have a 'reviewed' (L-flag) readiness entry.
+    {
+        "name": "Done → Learnings extraction",
+        "description": (
+            "When a ticket lands in Done without a Learnings (L) readiness flag, "
+            "ask the Worker agent to summarise lessons from the ticket's history "
+            "and write them into the L flag. Disabled by default."
+        ),
+        "system": 1,
+        "enabled": 0,
+        "subject_type": "ticket",
+        "trigger_json": {
+            "all_of": [
+                {"kind": "section_equals", "value": "Done"},
+                # lacks_readiness_flag triggers when the 'reviewed' (L) flag is NOT set.
+                {"kind": "lacks_readiness_flag", "flag": "L"},
+                {"kind": "no_active_run"},
+            ]
+        },
+        "on_success_json": {
+            "set_readiness_content": {"flag": "reviewed", "from": "stdout"},
+        },
+        "steps": [
+            {
+                "agent_id": "agent_worker",
+                "agent_name": "Worker",
+                "prompt_template": (
+                    "Ticket {{ticket.id}}: {{ticket.title}} has been completed.\n\n"
+                    "Description:\n{{ticket.description}}\n\n"
+                    "Acceptance criteria:\n{{ticket.acceptance_criteria}}\n\n"
+                    "Summarise the key lessons learned from working on this ticket. "
+                    "Focus on: what worked, what didn't, what would be done differently, "
+                    "and any reusable patterns or pitfalls discovered. "
+                    "Write the summary as plain prose (2-5 paragraphs). "
+                    "Output ONLY the summary text followed by your handoff JSON on the last line."
+                ),
+                "on_failure": "pause",
+                "timeout_ms": 300000,
+            }
+        ],
+    },
+    # 7. Sprint tag rotation (example — disabled by default).
+    #    Demonstrates tag-ops on_success effects and has_tag/lacks_tag trigger predicates.
+    #    Clone this to create your own tag rotation workflows.
+    {
+        "name": "Sprint tag rotation",
+        "description": (
+            "Example workflow: rotate 'sprint-current' tag to 'sprint-prev' on tickets "
+            "that carry the sprint-current label. Zero steps — pure tag mutation. "
+            "Disabled by default; clone to create a custom rotation trigger."
+        ),
+        "system": 1,
+        "enabled": 0,
+        "subject_type": "ticket",
+        "trigger_json": {
+            "all_of": [
+                {"kind": "has_tag", "value": ["sprint-current"]},
+                {"kind": "no_active_run"},
+            ]
+        },
+        "on_success_json": {
+            "remove_tags": ["sprint-current"],
+            "add_tags": ["sprint-prev"],
+        },
+        "steps": [],  # Pure mutation — NoopRunner.
+    },
+    # 8. Plan Check: Planner → Consultant → Planner (mediator), modelled on /plan-check.
     #    Step 1 starts Claude warm with ticket context; step 3 resumes Claude's session
     #    so it remembers its own plan when synthesizing the Consultant's review.
     #    Manual trigger only (trigger_json: null).
@@ -410,45 +587,98 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
                 pass  # Malformed steps — leave untouched
 
     # --- insert or sync missing agents ---
+    # Detect whether workflow_agents has the system column (added in migration 17).
+    _agent_cols = {
+        row["name"]
+        for row in db.execute("PRAGMA table_info(workflow_agents)").fetchall()
+    }
+    _has_system_col = "system" in _agent_cols
+
     for agent in DEFAULT_AGENTS:
         row = db.execute(
             "SELECT id FROM workflow_agents WHERE id = ?", (agent["id"],)
         ).fetchone()
         if row:
-            # Ensure canonical fields (like persist_session) stay in sync with
-            # the DEFAULT_AGENTS definition — handles rows landed via migration.
-            db.execute(
-                "UPDATE workflow_agents "
-                "SET name = ?, command = ?, args = ?, persist_session = ? "
-                "WHERE id = ?",
-                (
-                    agent["name"],
-                    agent["command"],
-                    agent["args"],
-                    agent.get("persist_session", 0),
-                    agent["id"],
-                ),
-            )
+            # Ensure canonical fields stay in sync with the DEFAULT_AGENTS definition.
+            if _has_system_col:
+                db.execute(
+                    "UPDATE workflow_agents "
+                    "SET name = ?, command = ?, args = ?, persist_session = ?, system = ? "
+                    "WHERE id = ?",
+                    (
+                        agent["name"],
+                        agent["command"],
+                        agent["args"],
+                        agent.get("persist_session", 0),
+                        agent.get("system", 0),
+                        agent["id"],
+                    ),
+                )
+            else:
+                db.execute(
+                    "UPDATE workflow_agents "
+                    "SET name = ?, command = ?, args = ?, persist_session = ? "
+                    "WHERE id = ?",
+                    (
+                        agent["name"],
+                        agent["command"],
+                        agent["args"],
+                        agent.get("persist_session", 0),
+                        agent["id"],
+                    ),
+                )
             existing += 1
             continue
 
-        db.execute(
-            """
-            INSERT INTO workflow_agents
-                (id, name, command, args, system_prompt, persist_session, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                agent["id"],
-                agent["name"],
-                agent["command"],
-                agent["args"],
-                agent["system_prompt"],
-                agent.get("persist_session", 0),
-                now,
-            ),
-        )
+        if _has_system_col:
+            db.execute(
+                """
+                INSERT INTO workflow_agents
+                    (id, name, command, args, system_prompt, persist_session, system, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent["id"],
+                    agent["name"],
+                    agent["command"],
+                    agent["args"],
+                    agent.get("system_prompt", ""),
+                    agent.get("persist_session", 0),
+                    agent.get("system", 0),
+                    now,
+                ),
+            )
+        else:
+            db.execute(
+                """
+                INSERT INTO workflow_agents
+                    (id, name, command, args, system_prompt, persist_session, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent["id"],
+                    agent["name"],
+                    agent["command"],
+                    agent["args"],
+                    agent.get("system_prompt", ""),
+                    agent.get("persist_session", 0),
+                    now,
+                ),
+            )
         inserted += 1
+
+    # --- set agent.default setting to Orchestrator for all registered projects ---
+    # This is idempotent: only sets the default if no per-project value exists yet.
+    try:
+        existing_default = db.execute(
+            "SELECT value FROM settings WHERE key = 'agent.default'"
+        ).fetchone()
+        if not existing_default:
+            db.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('agent.default', 'agent_orchestrator')"
+            )
+    except Exception:
+        pass  # settings table may not exist on very old DBs — harmless
 
     db.commit()
     return {"inserted": inserted, "existing": existing, "migrated": migrated}

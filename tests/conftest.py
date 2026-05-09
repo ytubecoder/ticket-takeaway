@@ -320,7 +320,8 @@ def api_post(base_url: str, path: str, body: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read()) if e.read() else {}
+        body = e.read()
+        return e.code, json.loads(body) if body else {}
 
 
 def api_put(base_url: str, path: str, body: dict) -> tuple[int, dict]:
@@ -338,7 +339,8 @@ def api_put(base_url: str, path: str, body: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read()) if e.read() else {}
+        body = e.read()
+        return e.code, json.loads(body) if body else {}
 
 
 def api_delete(base_url: str, path: str) -> tuple[int, dict]:
@@ -351,4 +353,5 @@ def api_delete(base_url: str, path: str) -> tuple[int, dict]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read()) if e.read() else {}
+        body = e.read()
+        return e.code, json.loads(body) if body else {}

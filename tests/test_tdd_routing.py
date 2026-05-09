@@ -9,7 +9,7 @@ def test_generate_html_single_project():
     """generate_html() should accept a single Project (not a list)."""
     from generate import generate_html, Project
 
-    proj = Project(id="test-proj", name="Test Project", path="", description="", active=True)
+    proj = Project(id="test-proj", name="Test Project", path="", active=True)
     proj.tickets = []
     html = generate_html(proj)
     assert "Test Project" in html

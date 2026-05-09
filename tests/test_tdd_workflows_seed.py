@@ -66,9 +66,10 @@ class TestMigration9:
 # ---------------------------------------------------------------------------
 
 class TestDefaultWorkflowsManifest:
-    def test_exactly_seven_workflows(self):
-        # Phase A: Review → Done replaced by Parent auto-promote + Auto-accept
-        assert len(DEFAULT_WORKFLOWS) == 7
+    def test_exactly_nine_workflows(self):
+        # Lane A (factory-talk): added "Done → Learnings extraction" and
+        # "Sprint tag rotation", raising the count from 7 to 9.
+        assert len(DEFAULT_WORKFLOWS) == 9
 
     def test_all_have_name(self):
         for wf in DEFAULT_WORKFLOWS:
@@ -134,52 +135,49 @@ class TestDefaultWorkflowsManifest:
 # ---------------------------------------------------------------------------
 
 class TestSeedDefaultWorkflows:
-    def test_inserts_seven_system_workflows(self, conn):
+    def test_links_nine_system_workflows_on_first_run(self, conn):
+        # Lane A raised the count from 7 to 9.  Migration-16 model: seeder
+        # creates/updates canonical rows then inserts workflow_projects links.
         result = seed_default_workflows(conn, PROJECT_ID)
-        assert result["inserted"] == 7
+        assert result["linked"] == 9
         count = conn.execute(
-            "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT COUNT(*) FROM workflows WHERE system = 1",
         ).fetchone()[0]
-        assert count == 7
+        assert count == 9
 
-    def test_existing_is_zero_on_first_run(self, conn):
-        result = seed_default_workflows(conn, PROJECT_ID)
-        assert result["existing"] == 0
-
-    def test_idempotent_second_run(self, conn):
-        first = seed_default_workflows(conn, PROJECT_ID)
+    def test_no_links_outstanding_on_second_run(self, conn):
+        # Idempotent — second call finds all links already present.
+        seed_default_workflows(conn, PROJECT_ID)
         second = seed_default_workflows(conn, PROJECT_ID)
-        assert first["inserted"] == 7
-        assert second["inserted"] == 0
-        assert second["existing"] == 7
+        assert second["linked"] == 0
+        assert second["already_linked"] == 9
 
-    def test_idempotent_count_stays_at_seven(self, conn):
+    def test_idempotent_count_stays_at_nine(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         seed_default_workflows(conn, PROJECT_ID)
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1",
         ).fetchone()[0]
-        assert count == 7
+        assert count == 9
 
-    def test_different_projects_get_independent_workflows(self, conn):
+    def test_different_projects_get_independent_links(self, conn):
+        # Canonical workflow rows are shared; each project gets its own link rows.
         seed_default_workflows(conn, "project-a")
         seed_default_workflows(conn, "project-b")
         count_a = conn.execute(
-            "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE 'project-a::%'"
+            "SELECT COUNT(*) FROM workflow_projects WHERE project_id = 'project-a'"
         ).fetchone()[0]
         count_b = conn.execute(
-            "SELECT COUNT(*) FROM workflows WHERE system = 1 AND id LIKE 'project-b::%'"
+            "SELECT COUNT(*) FROM workflow_projects WHERE project_id = 'project-b'"
         ).fetchone()[0]
-        assert count_a == 7
-        assert count_b == 7
+        assert count_a == 9
+        assert count_b == 9
 
     def test_stored_trigger_json_is_valid_json(self, conn):
         """Auto-fire workflows must be dicts; Plan Check stores JSON null."""
         seed_default_workflows(conn, PROJECT_ID)
         rows = conn.execute(
-            "SELECT trigger_json FROM workflows WHERE system = 1 AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT trigger_json FROM workflows WHERE system = 1",
         ).fetchall()
         for row in rows:
             parsed = json.loads(row["trigger_json"])
@@ -190,8 +188,7 @@ class TestSeedDefaultWorkflows:
         (parent-promote, auto-accept) ship empty step lists; that's allowed."""
         seed_default_workflows(conn, PROJECT_ID)
         rows = conn.execute(
-            "SELECT steps FROM workflows WHERE system = 1 AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT steps FROM workflows WHERE system = 1",
         ).fetchall()
         for row in rows:
             parsed = json.loads(row["steps"])
@@ -224,8 +221,7 @@ class TestSeedDefaultWorkflows:
     def test_all_workflows_have_subject_type_ticket(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         rows = conn.execute(
-            "SELECT subject_type FROM workflows WHERE system = 1 AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT subject_type FROM workflows WHERE system = 1",
         ).fetchall()
         for row in rows:
             assert row["subject_type"] == "ticket"
@@ -234,8 +230,7 @@ class TestSeedDefaultWorkflows:
         """Auto-fire workflows must have all_of/any_of; Plan Check is exempt (null)."""
         seed_default_workflows(conn, PROJECT_ID)
         rows = conn.execute(
-            "SELECT name, trigger_json FROM workflows WHERE system = 1 AND id LIKE ?",
-            (f"{PROJECT_ID}::%",),
+            "SELECT name, trigger_json FROM workflows WHERE system = 1",
         ).fetchall()
         for row in rows:
             if row["trigger_json"] == "null":

@@ -145,6 +145,43 @@ Migration 16 (committed 2026-05-08, d509c83) collapsed system workflows to a sin
 - [ ] POST /api/workflow/workflows/{id}/duplicate works at the global path (no project prefix); creates system=0 row + workflow_projects link
 - [ ] Newly created user workflows (via _create_workflow) get a workflow_projects row so the dispatcher join sees them
 
+### B-63: Lane A — Schema + automation primitives (migration 17, tag predicates, interactive markers, handoff parsing, system agents)
+Priority: high | Status: for-review
+Parent: B-62
+Tags: automation, factory-talk, lane-a
+
+### B-66: Lane D — CLI + skills (--container flags, agent set-default, spec/dashboard SKILL.md updates)
+Priority: medium | Status: for-review
+Parent: B-62
+Tags: factory-talk, lane-d
+
+### B-67: Lane E — Tests (TDD/Smoke/E2E for orchestrator interview, container, gate banner, handoff)
+Priority: medium | Status: for-review
+Parent: B-62
+Tags: factory-talk, lane-e
+
+### B-64: Lane B — Full-page ticket view with tabs (Overview / Activity / Runs / Files / Graph) + chat & merge-UI panels + kanban container/criteria pills
+Priority: high | Status: for-review
+Parent: B-62
+Tags: factory-talk, lane-b, ux
+
+### B-65: Lane C — Kitchen evolution (live polling, per-run side panel, agent/duration/exit-code columns)
+Priority: high | Status: for-review
+Parent: B-62
+Tags: factory-talk, kitchen, lane-c
+
+### B-62: Factory-talk inspired upgrades — orchestrator interview, criteria-as-gate, container tickets, full-page view
+Priority: high | Status: for-review
+Tags: automation, factory-talk, kitchen, ux
+Five lanes shipped from the Factory.ai missions talk. **A**: migration 17 (tickets.is_container, workflow_agents.system, runs.needs_input_kind), tag predicates (has_tag/lacks_tag/lacks_readiness_flag), interactive markers ({"ask":...}/{"propose":...}) in AgentRunner with chat persistence + handoff parsing, three system agents (Orchestrator/Worker/Validator), two new system workflows (Done→Learnings, Sprint tag rotation), three new on_success effects (add_tags/remove_tags/set_readiness_content). **B**: full-page ticket view at /{project}/tickets/{id}?tab=overview|activity|runs|files|graph, gate banner above criteria, X/Y criteria pill on cards, container badge, chat panel + merge-UI panel for needs_input runs, GET /api/tickets/{id}/activity, POST /api/runs/{id}/respond wired to AgentRunner.resume_with_response. **C**: Kitchen 3s polling with in-place DOM diff, 440px slide-in side panel reusing the shared run-detail component from B, agent/duration/exit-code columns, Esc-to-close. **D**: --container CLI flags, agent set-default subcommand, criteria batch ops, Orchestrator interview path documented in spec/SKILL.md + new dashboard/SKILL.md. **E**: 110 new tests covering marker parsing, handoff parsing, tag predicates, migration 17, constants parity, system-agent seeding; 12 pre-existing failures fixed (only 1 unrelated remains). All 791 TDD tests pass.
+- [ ] Migration 17 applied cleanly to live DB
+- [ ] Three system agents seeded (Orchestrator, Worker, Validator)
+- [ ] 10 system workflows present (8 pre-existing + 2 new)
+- [ ] Full-page ticket view renders at /{project}/tickets/{id}?tab=*
+- [ ] Kitchen page evolved with polling + side panel
+- [ ] All TDD tests pass (791/1; 1 unrelated pre-existing failure)
+- [ ] Manual flow: orchestrator interview on a fresh Idea (deferred — needs end-user driving)
+
 ## Backlog
 
 ### I-06: 3-line truncated description preview on collapsed cards
@@ -574,4 +611,10 @@ Priority: medium | Status: wontdo
 ### B-41: Quick edit test ticket
 Priority: medium | Status: wontdo
 Original description text
+
+### I-40: test container ticket
+Priority: medium | Status: wontdo
+
+### I-41: Lane D verification container
+Priority: medium | Status: wontdo
 

@@ -165,6 +165,150 @@ def describe_trigger(trigger_json: "dict | str | None") -> str:
     return "When " + ", ".join(clauses[:-1]) + joiner + clauses[-1] + "."
 
 
+_PREDICATE_LABELS = {
+    "section_equals": "Section is",
+    "section_in": "Section is one of",
+    "status_equals": "Status is",
+    "automation_mode": "Automation mode is",
+    "has_field": "Field is non-empty",
+    "criteria_count_gte": "Acceptance criteria count ≥",
+    "flag_set": "Readiness flag is set",
+    "deps_clear": "All dependencies are done",
+    "tests_covered": "Tests are covered",
+    "no_active_run": "No run already in flight",
+    "tag_includes": "Has tag",
+    "has_tag": "Has all tags",
+    "lacks_tag": "Has none of the tags",
+    "lacks_readiness_flag": "Readiness flag is NOT set",
+    "priority_at_least": "Priority is at least",
+    "parent_done": "Parent is done (or none)",
+    "children_have_open_bugs": "Children include open bugs",
+    "children_no_open_bugs": "All child bugs resolved",
+    "children_all_status_in": "Every child has status",
+    "children_any_status_in": "Any child has status",
+    "has_children": "Has children",
+    "parent_section_not_in": "Parent section NOT in",
+}
+
+
+def _predicate_value(p: dict) -> str:
+    """Render the value side of a predicate as a short string ('Backlog', 'auto', etc).
+
+    Empty string when the predicate is parameter-less ('All dependencies are done').
+    """
+    kind = p.get("kind")
+    if kind in ("deps_clear", "tests_covered", "no_active_run", "parent_done",
+                "children_have_open_bugs", "children_no_open_bugs", "has_children"):
+        return ""
+    if kind == "automation_mode":
+        v = p.get("value")
+        return {"auto": "On", "manual": "Off", "paused": "Paused"}.get(v, str(v))
+    if kind == "has_field":
+        return _humanize_field(p.get("field", "?"))
+    if kind in ("flag_set", "lacks_readiness_flag"):
+        return _humanize_flag(p.get("flag", "?"))
+    if kind in ("status_equals",):
+        return _humanize_status(p.get("value", "?"))
+    if kind == "criteria_count_gte":
+        return str(p.get("value", 1))
+    if kind == "priority_at_least":
+        return str(p.get("value", "?"))
+    # Multi-value predicates
+    vals = p.get("values") if "values" in p else p.get("value")
+    if vals is None:
+        return ""
+    if isinstance(vals, list):
+        if all(isinstance(v, str) for v in vals):
+            return ", ".join(vals) if len(vals) <= 6 else ", ".join(vals[:6]) + f", +{len(vals) - 6} more"
+        return str(vals)
+    return str(vals)
+
+
+def predicate_rows(trigger_json: "dict | str | None") -> list[tuple[str, str, bool]]:
+    """Return [(label, value, is_negation_or_special), …] for the Edit panel.
+
+    Used to render the trigger structure as a read-only list inside the Edit
+    panel, so users can see the rule logic at a glance even on zero-step
+    workflows where "No agent step" might otherwise look like "no logic".
+    Returns an empty list for manual workflows.
+    """
+    if trigger_json in (None, "", "null"):
+        return []
+    if isinstance(trigger_json, str):
+        try:
+            trigger_json = json.loads(trigger_json)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if not trigger_json:
+        return []
+
+    if "all_of" in trigger_json:
+        items = trigger_json["all_of"]
+    elif "any_of" in trigger_json:
+        items = trigger_json["any_of"]
+    else:
+        items = [trigger_json]
+
+    rows: list[tuple[str, str, bool]] = []
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+        if "all_of" in p or "any_of" in p:
+            # Nested groups — flatten one level for display
+            inner = predicate_rows(p)
+            rows.extend(inner)
+            continue
+        kind = p.get("kind", "")
+        label = _PREDICATE_LABELS.get(kind, kind or "(unknown)")
+        value = _predicate_value(p)
+        # 'lacks_*' predicates are negations — the UI will style them differently
+        is_negation = kind.startswith("lacks_") or "no_" in kind
+        rows.append((label, value, is_negation))
+    return rows
+
+
+def effect_rows(on_success_json: "dict | str | None") -> list[tuple[str, str]]:
+    """Return [(label, value), …] for the on_success effects section.
+
+    Empty list when the workflow has no effects (the agent's run output is
+    the entire payload).
+    """
+    if on_success_json in (None, "", "null"):
+        return []
+    if isinstance(on_success_json, str):
+        try:
+            on_success_json = json.loads(on_success_json)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if not on_success_json:
+        return []
+
+    apply_to = (on_success_json.get("apply_to") or "self").lower()
+    target_label = "parent ticket" if apply_to == "parent" else "ticket"
+
+    rows: list[tuple[str, str]] = []
+    move_to = on_success_json.get("move_section") or on_success_json.get("move_to")
+    if move_to:
+        rows.append((f"Move {target_label} to", move_to))
+    if on_success_json.get("set_status"):
+        rows.append(("Set status to", on_success_json["set_status"]))
+    if on_success_json.get("add_tags"):
+        tags = on_success_json["add_tags"]
+        rows.append(("Add tag(s)", ", ".join(tags) if isinstance(tags, list) else str(tags)))
+    if on_success_json.get("remove_tags"):
+        tags = on_success_json["remove_tags"]
+        rows.append(("Remove tag(s)", ", ".join(tags) if isinstance(tags, list) else str(tags)))
+    if on_success_json.get("accept_ticket"):
+        rows.append((f"Accept {target_label}", ""))
+    sr = on_success_json.get("set_readiness_content")
+    if isinstance(sr, dict) and sr.get("flag"):
+        flag = _humanize_flag(sr.get("flag"))
+        src = sr.get("from", "stdout")
+        src_desc = "the agent's stdout" if src == "stdout" else f"“{src}”"
+        rows.append((f"Write {src_desc} into", f"{flag} flag"))
+    return rows
+
+
 def describe_on_success(on_success_json: "dict | str | None") -> str:
     """Render on_success effects as a short sentence ('Then …').
 

@@ -6242,7 +6242,7 @@ def _render_workflows_view(port: int) -> str:
 
     # Trigger / on_success sentence translator — used to render plain English
     # under each workflow row so users can tell at a glance what fires it.
-    from trigger_describe import describe_trigger, describe_on_success
+    from trigger_describe import describe_trigger, describe_on_success, predicate_rows, effect_rows
 
     def _build_row_html(wf: dict) -> str:
         applies_html = _applies_to_html(wf)
@@ -6269,7 +6269,48 @@ def _render_workflows_view(port: int) -> str:
                 for i, s in enumerate(steps_list)
             )
         else:
-            steps_summary = '<li class="wf-edit-empty">No steps configured.</li>'
+            # Zero-step workflows are pure rules — the trigger + effect ARE
+            # the logic. Make that explicit so the panel doesn't look empty.
+            steps_summary = '<li class="wf-edit-empty">Pure rule — no agent step. Logic lives entirely in Trigger and Effects below.</li>'
+
+        # Trigger conditions — list each predicate as a read-only row so users
+        # can see WHY this workflow fires even when it has no agent step.
+        trig_rows = predicate_rows(wf.get("trigger_json"))
+        if trig_rows:
+            trig_items = "".join(
+                f'<li class="wf-cond-item{" wf-cond-neg" if neg else ""}">'
+                f'<span class="wf-cond-label">{_html.escape(label)}</span>'
+                + (f'<span class="wf-cond-value">{_html.escape(value)}</span>' if value else "")
+                + '</li>'
+                for label, value, neg in trig_rows
+            )
+            trigger_block = (
+                '<div class="wf-edit-row"><label>Trigger</label>'
+                f'<ul class="wf-cond-list">{trig_items}</ul></div>'
+            )
+        else:
+            trigger_block = (
+                '<div class="wf-edit-row"><label>Trigger</label>'
+                '<div class="wf-cond-empty">Manual run only — does not auto-fire. '
+                'Run from the ticket detail panel or Run button on the kanban card.</div></div>'
+            )
+
+        # Effects on success — list each on_success entry.
+        eff_rows = effect_rows(wf.get("on_success_json"))
+        if eff_rows:
+            eff_items = "".join(
+                f'<li class="wf-cond-item">'
+                f'<span class="wf-cond-label">{_html.escape(label)}</span>'
+                + (f'<span class="wf-cond-value">{_html.escape(value)}</span>' if value else "")
+                + '</li>'
+                for label, value in eff_rows
+            )
+            effect_block = (
+                '<div class="wf-edit-row"><label>Effects</label>'
+                f'<ul class="wf-cond-list">{eff_items}</ul></div>'
+            )
+        else:
+            effect_block = ""
 
         sys_note = (
             '<div class="wf-edit-note">'
@@ -6346,6 +6387,8 @@ def _render_workflows_view(port: int) -> str:
             f'    <div class="wf-edit-row"><label>Enabled</label>'
             f'      <label class="wf-edit-switch"><input type="checkbox" data-field="enabled"{enabled_checked}><span class="wf-edit-slider"></span></label>'
             f'    </div>'
+            f'    {trigger_block}'
+            f'    {effect_block}'
             f'    <div class="wf-edit-row"><label>Steps</label><ul class="wf-edit-steps">{steps_summary}</ul></div>'
             f'    {advanced_link}'
             f'    <div class="wf-edit-actions">'
@@ -6532,6 +6575,12 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-edit-switch input:checked + .wf-edit-slider::before {{ transform: translateX(16px); }}
 .wf-edit-steps {{ list-style: none; padding: 0; margin: 0; font-size: 12px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }}
 .wf-edit-steps .wf-edit-empty {{ color: var(--text-tertiary); font-style: italic; }}
+.wf-cond-list {{ list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }}
+.wf-cond-item {{ display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px; font-size: 12px; }}
+.wf-cond-item.wf-cond-neg {{ border-color: rgba(168,85,247,0.32); background: rgba(168,85,247,0.06); }}
+.wf-cond-label {{ color: var(--text-secondary); font-weight: 500; }}
+.wf-cond-value {{ color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; padding: 1px 6px; border-radius: 4px; background: var(--bg-page); border: 1px solid var(--border-subtle); }}
+.wf-cond-empty {{ font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 4px 0; }}
 .wf-edit-advanced {{ font-size: 12px; color: var(--accent); text-decoration: none; padding-left: 122px; }}
 .wf-edit-advanced:hover {{ text-decoration: underline; }}
 .wf-edit-note {{ font-size: 11px; color: var(--text-tertiary); padding: 8px 10px; background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); border-radius: 6px; }}

@@ -66,10 +66,11 @@ class TestMigration9:
 # ---------------------------------------------------------------------------
 
 class TestDefaultWorkflowsManifest:
-    def test_exactly_nine_workflows(self):
+    def test_exactly_ten_workflows(self):
         # Lane A (factory-talk): added "Done → Learnings extraction" and
         # "Sprint tag rotation", raising the count from 7 to 9.
-        assert len(DEFAULT_WORKFLOWS) == 9
+        # Migration 18: added "Refresh ticket summary" → 10.
+        assert len(DEFAULT_WORKFLOWS) == 10
 
     def test_all_have_name(self):
         for wf in DEFAULT_WORKFLOWS:
@@ -135,30 +136,31 @@ class TestDefaultWorkflowsManifest:
 # ---------------------------------------------------------------------------
 
 class TestSeedDefaultWorkflows:
-    def test_links_nine_system_workflows_on_first_run(self, conn):
-        # Lane A raised the count from 7 to 9.  Migration-16 model: seeder
+    def test_links_ten_system_workflows_on_first_run(self, conn):
+        # Lane A raised the count from 7 to 9. Migration 18 added
+        # "Refresh ticket summary" → 10. Migration-16 model: seeder
         # creates/updates canonical rows then inserts workflow_projects links.
         result = seed_default_workflows(conn, PROJECT_ID)
-        assert result["linked"] == 9
+        assert result["linked"] == 10
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1",
         ).fetchone()[0]
-        assert count == 9
+        assert count == 10
 
     def test_no_links_outstanding_on_second_run(self, conn):
         # Idempotent — second call finds all links already present.
         seed_default_workflows(conn, PROJECT_ID)
         second = seed_default_workflows(conn, PROJECT_ID)
         assert second["linked"] == 0
-        assert second["already_linked"] == 9
+        assert second["already_linked"] == 10
 
-    def test_idempotent_count_stays_at_nine(self, conn):
+    def test_idempotent_count_stays_at_ten(self, conn):
         seed_default_workflows(conn, PROJECT_ID)
         seed_default_workflows(conn, PROJECT_ID)
         count = conn.execute(
             "SELECT COUNT(*) FROM workflows WHERE system = 1",
         ).fetchone()[0]
-        assert count == 9
+        assert count == 10
 
     def test_different_projects_get_independent_links(self, conn):
         # Canonical workflow rows are shared; each project gets its own link rows.
@@ -170,8 +172,8 @@ class TestSeedDefaultWorkflows:
         count_b = conn.execute(
             "SELECT COUNT(*) FROM workflow_projects WHERE project_id = 'project-b'"
         ).fetchone()[0]
-        assert count_a == 9
-        assert count_b == 9
+        assert count_a == 10
+        assert count_b == 10
 
     def test_stored_trigger_json_is_valid_json(self, conn):
         """Auto-fire workflows must be dicts; Plan Check stores JSON null."""

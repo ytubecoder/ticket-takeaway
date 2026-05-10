@@ -117,6 +117,8 @@ def _describe_predicate(p: dict) -> str:
     if kind == "parent_section_not_in":
         vals = p.get("value") or []
         return f"its parent is NOT in {_join_quoted(vals, ' or ')}"
+    if kind == "summary_stale":
+        return "the cached summary is stale (content changed since last summary)"
     return f"({kind})"
 
 
@@ -188,6 +190,7 @@ _PREDICATE_LABELS = {
     "children_any_status_in": "Any child has status",
     "has_children": "Has children",
     "parent_section_not_in": "Parent section NOT in",
+    "summary_stale": "Cached summary is stale",
 }
 
 
@@ -198,7 +201,8 @@ def _predicate_value(p: dict) -> str:
     """
     kind = p.get("kind")
     if kind in ("deps_clear", "tests_covered", "no_active_run", "parent_done",
-                "children_have_open_bugs", "children_no_open_bugs", "has_children"):
+                "children_have_open_bugs", "children_no_open_bugs", "has_children",
+                "summary_stale"):
         return ""
     if kind == "automation_mode":
         v = p.get("value")

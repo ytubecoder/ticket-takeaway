@@ -110,6 +110,35 @@ DEFAULT_AGENTS: list[dict] = [
         "persist_session": 0,
         "system": 1,
     },
+    # Summarizer: system-flagged. Single-turn one-liner generator. Reads a
+    # ticket's title, description, criteria progress, status, section, and
+    # child summary, and emits exactly one short sentence describing where
+    # the work is up to. Used by the "Refresh ticket summary" system workflow
+    # so the ticket detail overlay can show a Claude-Code-style status line
+    # without paying the LLM cost at view time.
+    {
+        "id": "agent_summarizer",
+        "name": "Summarizer",
+        "command": "claude",
+        "args": "-p",
+        "system_prompt": (
+            "You are a Summarizer agent for Ticket Takeaway. You produce ONE short "
+            "sentence describing where a ticket is up to right now — the tone of "
+            "the brief idle summaries Claude Code shows after long pauses.\n\n"
+            "Rules:\n"
+            "- Output exactly one sentence. No preamble, no JSON, no markdown.\n"
+            "- Aim for 8–20 words. Hard cap at 280 characters.\n"
+            "- Present tense, third-person, declarative. No questions.\n"
+            "- Lead with the work, not the metadata. Mention status/section only "
+            "  when it adds information (e.g. 'blocked on …', 'in review with one "
+            "  open bug').\n"
+            "- If acceptance criteria progress is meaningful (e.g. 3 of 5 checked), "
+            "  weave it in naturally rather than as a fraction dump.\n"
+            "- Skip filler like 'this ticket' or 'the work involves'."
+        ),
+        "persist_session": 0,
+        "system": 1,
+    },
     # Validator: system-flagged. Adversarial acceptance-criteria checker. Ignores
     # the implementation and evaluates whether each criterion is satisfied from the
     # outside. Emits a 'propose' marker with criteria checks for user confirmation.
@@ -489,6 +518,52 @@ DEFAULT_WORKFLOWS: list[dict] = [
             "add_tags": ["sprint-prev"],
         },
         "steps": [],  # Pure mutation — NoopRunner.
+    },
+    # 7b. Refresh ticket summary: Summarizer agent emits a one-sentence status
+    #     line whenever the ticket's content hash differs from the cached one.
+    #     Used to populate ticket.summary_oneliner without paying LLM cost at
+    #     view time. The hash compare in summary_stale guarantees the workflow
+    #     stops firing once the summary catches up — and naturally re-fires when
+    #     the user (or any other workflow) mutates the ticket. The agent's
+    #     stdout sentence is captured by set_summary_oneliner, which also
+    #     refreshes the stored hash atomically. Honours the per-ticket
+    #     automation toggle uniformly with every other system workflow: a
+    #     ticket flipped to manual gets no summary refresh, even though this
+    #     workflow does no business-logic mutation.
+    {
+        "name": "Refresh ticket summary",
+        "description": (
+            "Generate a one-sentence status line for any ticket whose cached "
+            "summary is stale (content has changed since the last summary). "
+            "Powers the idle-style summary in the ticket detail overlay."
+        ),
+        "system": 1,
+        "enabled": 1,
+        "subject_type": "ticket",
+        "trigger_json": {
+            "all_of": [
+                {"kind": "summary_stale"},
+                {"kind": "automation_mode", "value": "auto"},
+                {"kind": "no_active_run"},
+            ]
+        },
+        "on_success_json": {"set_summary_oneliner": True},
+        "steps": [
+            {
+                "agent_id": "agent_summarizer",
+                "agent_name": "Summarizer",
+                "prompt_template": (
+                    "Ticket {{ticket.id}} — {{ticket.title}}\n"
+                    "Section: {{ticket.section}}    Status: {{ticket.status}}\n\n"
+                    "Description:\n{{ticket.description}}\n\n"
+                    "Acceptance criteria:\n{{ticket.acceptance_criteria}}\n\n"
+                    "Write the one-sentence status line as instructed in your "
+                    "system prompt. Output the sentence only — nothing else."
+                ),
+                "on_failure": "pause",
+                "timeout_ms": 60000,
+            }
+        ],
     },
     # 8. Plan Check: Planner → Consultant → Planner (mediator), modelled on /plan-check.
     #    Step 1 starts Claude warm with ticket context; step 3 resumes Claude's session

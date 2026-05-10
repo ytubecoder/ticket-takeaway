@@ -2318,6 +2318,16 @@ a {{ color: var(--accent); text-decoration: none; }}
 .detail-record-btn svg {{ fill: none; stroke: currentColor; stroke-width: 2; }}
 .record-action-btn {{ color: #22c55e !important; border-color: rgba(34,197,94,0.4) !important; }}
 .record-action-btn:hover {{ background: rgba(34,197,94,0.12) !important; }}
+/* One-liner status sentence — sits between the header and the meta strip.
+   Empty/pending states render as a faded placeholder so the layout never
+   shifts when the workflow lands a fresh summary on the next poll. */
+.detail-summary-line {{
+  padding: 6px 20px 10px; font-size: 12.5px; line-height: 1.5;
+  color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle);
+  font-style: italic;
+}}
+.detail-summary-line.is-pending {{ opacity: 0.55; }}
+.detail-summary-line.hidden {{ display: none; }}
 /* Meta strip — fixed below header */
 .detail-meta-strip {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); }}
 .meta-chip {{ display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; font-family: var(--font-sans); background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); cursor: pointer; color: var(--text-secondary); transition: all 0.15s; user-select: none; white-space: nowrap; }}
@@ -5224,6 +5234,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       <button class="detail-record-btn" id="detail-record-btn" style="display:none" title="Record feedback session">{_svg_icon("mic", 14)} Record</button>
       <button class="detail-close" aria-label="Close ticket detail" data-testid="detail-close">{_icon_close}</button>
     </div>
+    <div class="detail-summary-line is-pending" id="detail-summary-line" data-testid="detail-summary-line">Summary pending…</div>
     <div class="detail-meta-strip">
       <span class="meta-chip meta-chip--priority" title="Click to change priority"><span class="chip-dot"></span><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--status" title="Click to change status" data-testid="detail-status"><span class="chip-text"></span></span>
@@ -5962,7 +5973,37 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     _runsPollTimer = setInterval(function() {{
       if (overlay.classList.contains('hidden')) {{ _stopRunsPolling(); return; }}
       loadRuns(ticketId);
+      refreshSummaryLine(ticketId);
     }}, 2000);
+  }}
+
+  // Light-touch refetch that only updates the one-liner summary. Avoids
+  // calling populate() on a poll cycle so any in-flight edits (description
+  // textarea, criteria fields, etc.) are not clobbered.
+  function refreshSummaryLine(ticketId) {{
+    if (!ticketId) return;
+    fetch(EDIT_API + '/tickets/' + encodeURIComponent(ticketId))
+      .then(function(r) {{ return r.ok ? r.json() : null; }})
+      .then(function(d) {{ if (d) populateSummaryLine(d); }})
+      .catch(function() {{ /* silent — next poll retries */ }});
+  }}
+
+  // Ambient overlay poll — always runs at a low cadence while the overlay
+  // is open. Refreshes the summary line and probes for new runs so the
+  // active-run polling self-activates the moment a workflow kicks off (e.g.
+  // the system Refresh-summary workflow firing after a description edit).
+  var _ambientPollTimer = null;
+  function _startAmbientPolling(ticketId) {{
+    if (_ambientPollTimer) return;
+    _ambientPollTimer = setInterval(function() {{
+      if (overlay.classList.contains('hidden')) {{ _stopAmbientPolling(); return; }}
+      refreshSummaryLine(ticketId);
+      // loadRuns will flip _runsPollTimer on if a run has become active.
+      if (!_runsPollTimer) loadRuns(ticketId);
+    }}, 4000);
+  }}
+  function _stopAmbientPolling() {{
+    if (_ambientPollTimer) {{ clearInterval(_ambientPollTimer); _ambientPollTimer = null; }}
   }}
 
   function _stopRunsPolling() {{
@@ -7084,6 +7125,23 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     refreshDCTRS(data);
     populateTags(data);
     populateBranches(data);
+    populateSummaryLine(data);
+  }}
+
+  function populateSummaryLine(data) {{
+    var el = document.getElementById('detail-summary-line');
+    if (!el) return;
+    var text = (data && data.summary_oneliner ? String(data.summary_oneliner) : '').trim();
+    if (text) {{
+      el.textContent = text;
+      el.classList.remove('is-pending');
+    }} else {{
+      // No summary yet — the system workflow will fill it in within the next
+      // dispatcher cycle. Render a faded placeholder so the layout doesn't
+      // shift when the real sentence lands on the next overlay refresh.
+      el.textContent = 'Summary pending…';
+      el.classList.add('is-pending');
+    }}
   }}
 
   /* --- Tags --- */
@@ -7452,6 +7510,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       }}
       // Load live run panel (M3)
       loadRuns(tid);
+      // Ambient summary poll — keeps the one-liner status sentence fresh
+      // while the overlay is open without any user interaction. Self-stops
+      // when the overlay closes.
+      _startAmbientPolling(tid);
       // Preload history so cascade events (system actor) auto-expand on open.
       // The renderer keeps the section collapsed when no system events are present.
       loadHistory(tid);
@@ -7461,6 +7523,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   function closeOverlay() {{
     closeStatusDropdown();
     _stopRunsPolling();
+    _stopAmbientPolling();
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
     currentTicketId = null; currentData = null;

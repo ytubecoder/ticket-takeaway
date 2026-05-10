@@ -94,6 +94,22 @@ def _set_auto(db_factory, tid="B-1", project_id="p"):
     conn.close()
 
 
+def _freeze_summary_hash(db_factory, tid="B-1", project_id="p"):
+    """Pre-populate tickets.summary_hash to current content hash so the
+    Refresh-summary workflow's summary_stale predicate is False on this
+    ticket. Use in tests that want to assert "no workflow is eligible".
+    """
+    from actions import compute_summary_hash
+    conn = db_factory()
+    h = compute_summary_hash(conn, project_id, tid)
+    conn.execute(
+        "UPDATE tickets SET summary_hash = ? WHERE id = ? AND project_id = ?",
+        (h, tid, project_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _set_tests_flag(db_factory, tid="B-1", project_id="p"):
     """Legacy helper kept as a no-op.
 
@@ -275,10 +291,17 @@ class TestDispatchViaWorkflows:
         assert on_success.get("move_to") == "WIP"
 
     def test_no_run_queued_when_no_eligible_ticket(self, db_factory, tmp_path):
-        """If the ticket is in Done (matches no enabled workflow trigger), no run fires."""
+        """If the ticket is in Done (matches no enabled workflow trigger), no run fires.
+
+        Pre-populates summary_hash to the current content hash so the
+        Refresh-summary workflow's summary_stale predicate returns False —
+        otherwise the test ticket's empty hash would trigger a summary run
+        even in Done.
+        """
         _add_ticket(db_factory, tid="B-1", section="Done", status="done")
         _set_auto(db_factory, tid="B-1")
         _set_tests_flag(db_factory, tid="B-1")
+        _freeze_summary_hash(db_factory, tid="B-1")
         _seed_workflows(db_factory)
         _set_flag(db_factory, "kitchen.use_db_workflows", "true")
 
@@ -304,6 +327,10 @@ class TestDispatchViaWorkflows:
         _set_auto(db_factory, tid="B-1")
         # Spec → Backlog trigger checks has_field:description and criteria_count >= 1.
         # Both are satisfied by _add_ticket (which adds description + criteria).
+        # Freeze summary_hash so the Refresh-summary workflow doesn't outrace
+        # Spec → Backlog (lexicographic id order picks the summary one first
+        # otherwise, since both match this Ideas ticket).
+        _freeze_summary_hash(db_factory, tid="B-1")
         _seed_workflows(db_factory)
         _set_flag(db_factory, "kitchen.use_db_workflows", "true")
 

@@ -6452,24 +6452,41 @@ def _render_workflows_view(port: int) -> str:
             except (json.JSONDecodeError, TypeError):
                 args_display = str(args_raw)
             sys_prompt = a.get("system_prompt") or ""
+            ag_is_system = bool(a.get("system"))
+            ag_ro = " readonly" if ag_is_system else ""
+            ag_type_class = "ag-type-system" if ag_is_system else "ag-type-custom"
+            ag_type_label = "system" if ag_is_system else "custom"
+            ag_sys_note = (
+                '<div class="wf-edit-note">'
+                'System agent — body is read-only. The definition lives in '
+                '<code>workflows_seed.py</code>; edit there and restart serve.py.'
+                '</div>'
+                if ag_is_system else ""
+            )
+            ag_del_btn = (
+                '<button class="ag-edit-delete" disabled title="System agents can\'t be deleted; edit workflows_seed.py to remove.">Delete</button>'
+                if ag_is_system
+                else f'<button class="ag-edit-delete" data-id="{aid_attr}">Delete</button>'
+            )
             agent_parts.append(
-                f'<div class="ag-row-wrap" data-agent-id="{aid_attr}" data-testid="ag-row-{aid_attr}">'
+                f'<div class="ag-row-wrap" data-agent-id="{aid_attr}" data-system="{1 if ag_is_system else 0}" data-testid="ag-row-{aid_attr}">'
                 f'  <div class="ag-row">'
                 f'    <div class="ag-main">'
                 f'      <div class="ag-name">{_html.escape(aname)}</div>'
                 f'      <div class="ag-cmd">{_html.escape(cmd)}{(" " + _html.escape(args_display)) if args_display else ""}</div>'
                 f'    </div>'
-                f'    <div class="ag-cell"><span class="ag-type ag-type-custom">custom</span></div>'
+                f'    <div class="ag-cell"><span class="ag-type {ag_type_class}">{ag_type_label}</span></div>'
                 f'    <div class="ag-cell"><button class="ag-edit-toggle" data-id="{aid_attr}">Edit</button></div>'
                 f'  </div>'
                 f'  <div class="ag-edit-panel" data-id="{aid_attr}" hidden>'
-                f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(aname)}"></div>'
-                f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(cmd)}"></div>'
-                f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(args_display)}" placeholder="comma-separated or JSON array"></div>'
-                f'    <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4">{_html.escape(sys_prompt)}</textarea></div>'
+                f'    {ag_sys_note}'
+                f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(aname)}"{ag_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(cmd)}"{ag_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(args_display)}" placeholder="comma-separated or JSON array"{ag_ro}></div>'
+                f'    <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"{ag_ro}>{_html.escape(sys_prompt)}</textarea></div>'
                 f'    <div class="wf-edit-actions">'
-                f'      <button class="ag-edit-save" data-id="{aid_attr}">Save</button>'
-                f'      <button class="ag-edit-delete" data-id="{aid_attr}">Delete</button>'
+                f'      <button class="ag-edit-save" data-id="{aid_attr}"{" disabled" if ag_is_system else ""}>Save</button>'
+                f'      {ag_del_btn}'
                 f'      <span class="wf-edit-msg"></span>'
                 f'    </div>'
                 f'  </div>'
@@ -9014,6 +9031,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             # Global update of a workflow agent — workflow_agents has no
             # project_id column, so the project-scoped handler logic mirrors here.
+            # System agents are read-only (definition lives in workflows_seed.py).
             m = re.match(r"^/api/workflow/agents/([a-z0-9][a-z0-9_-]*)$", remainder)
             if m:
                 agent_id = m.group(1)
@@ -9021,6 +9039,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     body = self._read_body()
                 except (json.JSONDecodeError, ValueError):
                     self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                # Block edits to system agents — same policy as system workflows.
+                with _db_lock:
+                    _ag_conn = get_db(); init_db(_ag_conn)
+                    _ag_row = _ag_conn.execute(
+                        "SELECT system FROM workflow_agents WHERE id = ?", (agent_id,),
+                    ).fetchone()
+                    _ag_conn.close()
+                if _ag_row and int(_ag_row["system"] or 0) == 1:
+                    self._send_json({"error": "system_agent"}, 403)
                     return
                 if isinstance(body.get("args"), list):
                     body["args"] = json.dumps(body["args"])
@@ -11119,10 +11147,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "deactivated": pid})
                 return
 
-            # Global delete of a workflow agent.
+            # Global delete of a workflow agent — system agents refused.
             m = re.match(r"^/api/workflow/agents/([a-z0-9][a-z0-9_-]*)$", remainder)
             if m:
                 agent_id = m.group(1)
+                with _db_lock:
+                    _ag_conn = get_db(); init_db(_ag_conn)
+                    _ag_row = _ag_conn.execute(
+                        "SELECT system FROM workflow_agents WHERE id = ?", (agent_id,),
+                    ).fetchone()
+                    _ag_conn.close()
+                if _ag_row and int(_ag_row["system"] or 0) == 1:
+                    self._send_json({"error": "system_agent"}, 403)
+                    return
                 if _delete_workflow_agent(agent_id):
                     self._send_json({"ok": True, "deleted": agent_id})
                 else:

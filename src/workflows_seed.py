@@ -39,7 +39,7 @@ DEFAULT_AGENTS: list[dict] = [
         "args": "-p",
         "system_prompt": "",   # /plan-check sets none — templates carry the instructions
         "persist_session": 1,
-        "system": 0,
+        "system": 1,
     },
     # Consultant: Codex, sandboxed read-only (mirrors `/plan-check` exactly).
     {
@@ -49,7 +49,7 @@ DEFAULT_AGENTS: list[dict] = [
         "args": "exec -s read-only",
         "system_prompt": "",
         "persist_session": 1,
-        "system": 0,
+        "system": 1,
     },
     # Orchestrator: system-flagged. Multi-turn interview agent that uses
     # interactive markers to gather ticket context from the user, then proposes

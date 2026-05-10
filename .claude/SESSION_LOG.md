@@ -1,5 +1,28 @@
 # Session Log
 
+## 2026-05-10 — Migrate canonical writer to llm-node + origin-relative API base fix
+
+### Summary
+- Migrated the canonical TT writer from WSL to the macOS llm-node. Atomic `sqlite3.backup()` of WSL's live DB → `scp` to llm's runtime path → `pkill` + relaunch llm's serve.py. Verified all 277 tickets, all 17 ticket-takeaway journeys, migrations 1–18, the 6 system agents and 10 system workflows on llm. Stopped WSL serve.py; llm is now the only writer.
+- Fixed a bug that surfaced as soon as we accessed llm via the public Tailscale URL (`https://tt.rhino-balance.ts.net/ticket-takeaway/journeys`): five `_render_*_page()` functions plus the Kitchen run-detail panel hardcoded the client-side API base as `http://localhost:{port}/{pid}/api`. JS in the user's remote browser fetched against *its own* localhost, not the serve host. Switched all six sites to origin-relative `/{pid}/api` so the browser resolves against whatever hostname loaded the page. Promoted the rule to CLAUDE.md as a load-bearing convention for future page renderers.
+- Built `src/diff_dbs.py` — read-only row-by-row comparison of two `tickets.db` files (tickets, criteria, tags, branches, agents, workflows, automation_subjects, settings; counts-only for runs/activity_events). Used as a diagnosis tool when claude-sync is paused; not a merge tool.
+- Pre-migration audit: confirmed via `compare_seed_to_db.py` that `agent_planner` + `agent_consultant` were `system=0` in DB despite being seeded — fixed the seed (`system: 1` for both). After serve restart, audit shows zero drift.
+- Hot-fix workflow validated: scp source straight to llm runtime + restart bypasses the git round-trip, useful for live diagnosis. Followed up with commit + push + pull + redeploy on llm so the four locations (WSL source, WSL runtime, llm source, llm runtime, origin/main) all converge on the same checksum.
+
+### Lessons Learned
+- **Accepted (architectural rule):** Page renderers always use origin-relative API base URLs, never `http://localhost:{port}/...`. The convenience default breaks under any proxy/tunnel/port-forward in ways that are invisible until someone hits the page from a non-localhost browser. The cost of always being origin-relative is zero. Promoted to CLAUDE.md.
+- **Accepted:** PRODUCT_BACKLOG.md is the git-mergeable text form of the tickets table — DB-to-text round-trips on every CLI write. For cross-machine ticket merge there's no need to commit the binary `tickets.db`; the markdown already covers the rows that matter (tickets, criteria, tags, branches, descriptions). Settings/automation_subjects are the only DB-only gaps and they're tiny.
+- **Rejected:** Checking `tickets.db` into git. Binary, doesn't merge (git treats it as a blob; `git merge` becomes "pick a side"), bloats the pack files because every CLI write rewrites the file, and it's multi-project (one DB serves several registry entries) so it would conflate ticket-takeaway's repo with other projects' ticket data. Path is also outside the repo by design.
+- **Rejected:** Using SSH to "merge" two diverged tickets.db files. Unison-style sqlite3.backup snapshots don't preserve a merge basis; there's no useful three-way merge for the binary. The sane move is "pick the canonical writer, copy that DB everywhere, replay any unique work from the other side via the existing CLI."
+- **Gotcha:** Replacing `tickets.db` on disk under a running serve.py does NOT take effect — SQLite holds the file open and pages are cached in process memory. The replacement landed at filesystem level but the open file descriptor and page cache held the pre-replacement state. Restart the process after any DB swap, even if the file is byte-identical to what you intended.
+- **Gotcha:** macOS `python3` is system 3.9, which has no `tomllib` (stdlib only since 3.11). serve.py imports it transitively via `workflow_config`, so the Homebrew Python 3.14 path is required: `/opt/homebrew/Cellar/python@3.14/3.14.4/bin/python3.14`. `python3 serve.py` silently fails with `ModuleNotFoundError: No module named 'tomllib'`; nothing in the WSL setup hits this because system python there is recent enough.
+- **Gotcha:** `growth-console` from another project on this WSL grabs port 8787 if started after our serve.py exits. The 404 shape (`{"detail":"Not Found"}` vs our `{"error":"Not found"}`) is the cleanest tell that you're hitting the wrong server.
+
+### Decisions
+- **llm-node is the canonical TT writer** as of 2026-05-10. WSL serve.py is shut down; ticket-takeaway is reachable from anywhere via the Tailscale Serve URL `https://tt.rhino-balance.ts.net/ticket-takeaway/...`. Future canonical-writer migrations follow the snapshot+scp+restart sequence captured in CLAUDE.md.
+- **Hot-fix via scp + ssh restart is allowed for live diagnosis**, but every hot-fix requires an immediate git round-trip (commit + push + pull + redeploy on llm) so the four file locations don't drift. The runtime copy on llm survives a normal `cp src/* ~/.claude/ticket-takeaway/` only if source matches it — without a commit, the next deploy script silently undoes the fix.
+- **Don't commit tickets.db.** PRODUCT_BACKLOG.md handles the merge-relevant rows. If settings/automation_subjects ever need to round-trip across machines, the answer is a small `db_state.json` text dump committed to the repo, not the binary blob.
+
 ## 2026-05-09→10 — Workflow rules editor + closed-loop linter + system-rows-readonly invariant
 
 ### Summary

@@ -3212,6 +3212,7 @@ def _get_ticket_json_inner(project_id: str, ticket_id: str) -> dict | None:
         "tags": tags,
         "branches": branches,
         "is_container": bool(row["is_container"]) if "is_container" in row.keys() else False,
+        "summary_oneliner": row["summary_oneliner"] if "summary_oneliner" in row.keys() else "",
     }
 
 
@@ -6364,7 +6365,7 @@ def _render_workflows_view(port: int) -> str:
         meta_strip = '<div class="wf-meta">' + " · ".join(meta_parts) + f'  <span class="wf-applies">{applies_html}</span></div>'
 
         return (
-            f'<div class="wf-row-wrap" data-scope="{wf["scope"]}" data-projects="{_safe_attr(linked_pids)}" data-wf-id="{wf_id_attr}" data-system="{1 if is_system else 0}" data-testid="wf-row-{wf_id_attr}">'
+            f'<div class="wf-row-wrap" data-scope="{wf["scope"]}" data-projects="{_safe_attr(linked_pids)}" data-wf-id="{wf_id_attr}" data-system="{1 if is_system else 0}" data-testid="wf-row-{wf_id_attr}" data-trigger-json="{_safe_attr(json.dumps(wf.get("trigger_json") or {}))}" data-on-success-json="{_safe_attr(json.dumps(wf.get("on_success_json") or {}))}">'
             f'  <div class="wf-row">'
             f'    <div class="wf-main">'
             f'      <div class="wf-name-line">'
@@ -6382,15 +6383,18 @@ def _render_workflows_view(port: int) -> str:
             f'  </div>'
             f'  <div class="wf-edit-panel" data-id="{wf_id_attr}" hidden>'
             f'    {sys_note}'
-            f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(wf.get("name", ""))}"></div>'
-            f'    <div class="wf-edit-row"><label>Description</label><textarea data-field="description" rows="2">{_html.escape(wf.get("description", ""))}</textarea></div>'
+            f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(wf.get("name", ""))}"{" readonly" if is_system else ""}></div>'
+            f'    <div class="wf-edit-row"><label>Description</label><textarea data-field="description" rows="2"{" readonly" if is_system else ""}>{_html.escape(wf.get("description", ""))}</textarea></div>'
             f'    <div class="wf-edit-row"><label>Enabled</label>'
             f'      <label class="wf-edit-switch"><input type="checkbox" data-field="enabled"{enabled_checked}><span class="wf-edit-slider"></span></label>'
             f'    </div>'
-            f'    {trigger_block}'
-            f'    {effect_block}'
+            f'    <div class="wf-edit-row wf-edit-rules" data-wf-rules-mount="{wf_id_attr}">'
+            f'      <label>Rules</label>'
+            f'      <div class="wf-rules-editor" data-wf-id="{wf_id_attr}" data-system="{1 if is_system else 0}">'
+            f'        <div class="wf-rules-loading">Loading editor…</div>'
+            f'      </div>'
+            f'    </div>'
             f'    <div class="wf-edit-row"><label>Steps</label><ul class="wf-edit-steps">{steps_summary}</ul></div>'
-            f'    {advanced_link}'
             f'    <div class="wf-edit-actions">'
             f'      <button class="wf-edit-save" data-id="{wf_id_attr}">Save</button>'
             f'      {dup_btn}'
@@ -6583,6 +6587,31 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-cond-empty {{ font-size: 12px; color: var(--text-tertiary); font-style: italic; padding: 4px 0; }}
 .wf-edit-advanced {{ font-size: 12px; color: var(--accent); text-decoration: none; padding-left: 122px; }}
 .wf-edit-advanced:hover {{ text-decoration: underline; }}
+/* Rules editor — Apple-mail style attribute / operation / value rows */
+.wf-rules-editor {{ display: flex; flex-direction: column; gap: 8px; }}
+.wf-rules-loading {{ font-size: 12px; color: var(--text-tertiary); font-style: italic; }}
+.wf-rules-mode {{ font-size: 12px; color: var(--text-secondary); }}
+.wf-rules-mode-sel {{ background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 6px; padding: 2px 6px; font-family: inherit; font-size: 12px; }}
+.wf-rules-list {{ display: flex; flex-direction: column; gap: 6px; }}
+.wf-rule-row {{ display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px; }}
+.wf-rule-row select, .wf-rule-row input[type="text"], .wf-rule-row input[type="number"] {{ background: var(--bg-page); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 4px; padding: 3px 6px; font-size: 12px; font-family: inherit; }}
+.wf-rule-row select[multiple] {{ min-width: 140px; padding: 2px 4px; }}
+.wf-rule-attr, .wf-rule-verb {{ min-width: 140px; }}
+.wf-rule-op {{ min-width: 110px; }}
+.wf-rule-value-wrap {{ flex: 1; }}
+.wf-rule-value {{ width: 100%; }}
+.wf-rule-novalue {{ flex: 1; color: var(--text-tertiary); font-size: 12px; }}
+.wf-rule-del {{ width: 22px; height: 22px; padding: 0; line-height: 1; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-tertiary); border-radius: 4px; cursor: pointer; font-size: 14px; }}
+.wf-rule-del:hover {{ border-color: #ef4444; color: #ef4444; }}
+.wf-rules-add {{ align-self: flex-start; padding: 4px 12px; font-size: 12px; border-radius: 6px; border: 1px dashed var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
+.wf-rules-add:hover {{ border-color: var(--accent); color: var(--accent); border-style: solid; }}
+.wf-rules-action-header {{ font-size: 12px; color: var(--text-secondary); margin-top: 6px; }}
+.wf-rules-applyto {{ background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 6px; padding: 2px 6px; font-family: inherit; font-size: 12px; }}
+.wf-rules-advisory {{ font-size: 11.5px; padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; }}
+.wf-rules-advisory.wf-rules-ok {{ background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.25); color: rgba(34,197,94,0.95); }}
+.wf-rules-advisory.wf-rules-warn {{ background: rgba(234,179,8,0.10); border-color: rgba(234,179,8,0.30); color: rgba(234,179,8,0.95); }}
+.wf-rules-advisory.wf-rules-empty, .wf-rules-advisory.wf-rules-manual {{ background: var(--bg-card); border-color: var(--border-subtle); color: var(--text-tertiary); }}
+.wf-rules-readonly select, .wf-rules-readonly input, .wf-rules-readonly button {{ opacity: 0.6; cursor: not-allowed; }}
 .wf-edit-note {{ font-size: 11px; color: var(--text-tertiary); padding: 8px 10px; background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); border-radius: 6px; }}
 .wf-edit-actions {{ display: flex; align-items: center; gap: 10px; padding-left: 122px; padding-top: 4px; }}
 .wf-edit-save, .ag-edit-save {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; font-family: inherit; font-weight: 600; }}
@@ -6756,6 +6785,13 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       if (!isSystem) {{
         body.name = panel.querySelector('input[data-field="name"]').value;
         body.description = panel.querySelector('textarea[data-field="description"]').value;
+        // Serialize the rules editor (trigger + on_success) for non-system rows
+        var editor = panel.querySelector('.wf-rules-editor[data-rules-mounted="1"]');
+        if (editor) {{
+          var serialised = serialiseRulesEditor(editor);
+          body.trigger_json = serialised.trigger_json;
+          body.on_success_json = serialised.on_success_json;
+        }}
       }}
       body.enabled = panel.querySelector('input[data-field="enabled"]').checked ? 1 : 0;
       setMsg(msg, 'Saving…');
@@ -6773,6 +6809,464 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
           }}
         }})
         .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Workflow rules editor — Apple-style attribute/operation/value rows.
+  // Mounts on demand when the user expands an Edit panel. Catalog is
+  // fetched once and cached.
+  // ─────────────────────────────────────────────────────────────────────
+  var _wfCatalog = null;
+  function getCatalog() {{
+    if (_wfCatalog) return Promise.resolve(_wfCatalog);
+    return fetch('/api/workflow/catalog').then(r => r.json()).then(c => {{
+      _wfCatalog = c; return c;
+    }});
+  }}
+
+  function attrByKey(catalog, key) {{
+    return catalog.attributes.find(function(a) {{ return a.key === key; }});
+  }}
+
+  // Map a single predicate node back to (attrKey, opKey, value)
+  function predicateToRow(catalog, p) {{
+    if (!p || typeof p !== 'object' || !p.kind) return null;
+    var attrKey = catalog.predicate_to_attribute[p.kind];
+    if (!attrKey) return null;
+    var attr = attrByKey(catalog, attrKey);
+    if (!attr) return null;
+    var op = attr.filter_ops.find(function(o) {{ return o.predicate_kind === p.kind; }});
+    if (!op) return null;
+    // Extract value: predicates use various key names — value, values, field, flag
+    var value;
+    if ('values' in p) value = p.values;
+    else if ('value' in p) value = p.value;
+    else if ('field' in p) value = p.field;
+    else if ('flag' in p) value = p.flag;
+    return {{attr: attrKey, op: op.key, value: value}};
+  }}
+
+  function effectsToRows(catalog, on_success) {{
+    var rows = [];
+    if (!on_success || typeof on_success !== 'object') return rows;
+    Object.keys(on_success).forEach(function(k) {{
+      if (k === 'apply_to') return;
+      var attrKey = catalog.effect_to_attribute[k];
+      if (!attrKey) return;
+      var attr = attrByKey(catalog, attrKey);
+      if (!attr) return;
+      var op = attr.action_ops.find(function(o) {{ return o.on_success_key === k; }});
+      if (!op) return;
+      var v = on_success[k];
+      // set_readiness_content uses a {{flag, from}} shape — keep flag as the value control
+      if (k === 'set_readiness_content' && v && typeof v === 'object') {{
+        v = v.flag;
+      }}
+      rows.push({{attr: attrKey, op: op.key, value: v}});
+    }});
+    return rows;
+  }}
+
+  // Build the value-control DOM element for a given control kind
+  function buildValueControl(catalog, controlKind, currentValue) {{
+    var el;
+    var opt = catalog.options || {{}};
+    if (controlKind === 'none') {{
+      el = document.createElement('span');
+      el.className = 'wf-rule-novalue';
+      el.textContent = '';
+    }} else if (controlKind === 'section_select') {{
+      el = document.createElement('select');
+      (opt.sections || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      el.value = currentValue || '';
+    }} else if (controlKind === 'section_multi_select') {{
+      el = document.createElement('select');
+      el.multiple = true; el.size = 4;
+      (opt.sections || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      var vs = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
+      Array.from(el.options).forEach(function(o) {{ o.selected = vs.indexOf(o.value) !== -1; }});
+    }} else if (controlKind === 'status_select') {{
+      el = document.createElement('select');
+      (opt.statuses || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      el.value = currentValue || '';
+    }} else if (controlKind === 'status_multi_select') {{
+      el = document.createElement('select');
+      el.multiple = true; el.size = 4;
+      (opt.statuses || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      var vs = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
+      Array.from(el.options).forEach(function(o) {{ o.selected = vs.indexOf(o.value) !== -1; }});
+    }} else if (controlKind === 'automation_mode_select') {{
+      el = document.createElement('select');
+      (opt.automation_modes || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      el.value = currentValue || 'auto';
+    }} else if (controlKind === 'priority_select') {{
+      el = document.createElement('select');
+      (opt.priorities || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      el.value = currentValue || 'medium';
+    }} else if (controlKind === 'bool_select') {{
+      el = document.createElement('select');
+      [['1', 'yes'], ['0', 'no']].forEach(function(pair) {{
+        var o = document.createElement('option'); o.value = pair[0]; o.textContent = pair[1]; el.appendChild(o);
+      }});
+      el.value = (currentValue === true || currentValue === 1 || currentValue === '1') ? '1' : '0';
+    }} else if (controlKind === 'flag_select') {{
+      el = document.createElement('select');
+      (opt.flags || []).forEach(function(f) {{
+        var o = document.createElement('option'); o.value = f.key; o.textContent = f.label; el.appendChild(o);
+      }});
+      el.value = currentValue || 'D';
+    }} else if (controlKind === 'field_select') {{
+      el = document.createElement('select');
+      (opt.fields || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      el.value = currentValue || 'description';
+    }} else if (controlKind === 'tag_input' || controlKind === 'tag_multi_input') {{
+      el = document.createElement('input');
+      el.type = 'text';
+      el.placeholder = 'comma-separated tags';
+      var vs = Array.isArray(currentValue) ? currentValue.join(', ') : (currentValue || '');
+      el.value = vs;
+    }} else if (controlKind === 'number_input') {{
+      el = document.createElement('input');
+      el.type = 'number'; el.min = '0';
+      el.value = (currentValue !== undefined && currentValue !== null) ? String(currentValue) : '1';
+    }} else {{
+      el = document.createElement('input');
+      el.type = 'text';
+      el.value = currentValue || '';
+    }}
+    el.classList.add('wf-rule-value');
+    return el;
+  }}
+
+  function readValueControl(controlKind, el) {{
+    if (controlKind === 'none') return null;
+    if (controlKind === 'section_multi_select' || controlKind === 'status_multi_select') {{
+      return Array.from(el.selectedOptions).map(function(o) {{ return o.value; }});
+    }}
+    if (controlKind === 'tag_input' || controlKind === 'tag_multi_input') {{
+      return splitCSV(el.value);
+    }}
+    if (controlKind === 'number_input') {{
+      var n = parseInt(el.value, 10);
+      return isFinite(n) ? n : 0;
+    }}
+    if (controlKind === 'bool_select') {{
+      return el.value === '1' ? 1 : 0;
+    }}
+    return el.value;
+  }}
+
+  // Build a single filter row: [Attribute] [Operation] [Value] [×]
+  function buildFilterRow(catalog, current) {{
+    current = current || {{attr: null, op: null, value: null}};
+    var row = document.createElement('div');
+    row.className = 'wf-rule-row wf-rule-filter';
+    // Attribute select
+    var attrSel = document.createElement('select');
+    attrSel.className = 'wf-rule-attr';
+    var pHolder = document.createElement('option');
+    pHolder.value = ''; pHolder.textContent = 'Choose attribute…';
+    attrSel.appendChild(pHolder);
+    catalog.attributes.forEach(function(a) {{
+      if (!a.filter_ops || a.filter_ops.length === 0) return;
+      var o = document.createElement('option'); o.value = a.key; o.textContent = a.label;
+      attrSel.appendChild(o);
+    }});
+    if (current.attr) attrSel.value = current.attr;
+    var opSel = document.createElement('select');
+    opSel.className = 'wf-rule-op';
+    var valWrap = document.createElement('span');
+    valWrap.className = 'wf-rule-value-wrap';
+    var del = document.createElement('button');
+    del.className = 'wf-rule-del'; del.type = 'button'; del.textContent = '×';
+    del.title = 'Remove condition';
+    del.addEventListener('click', function() {{ row.remove(); }});
+
+    function rebuildOps() {{
+      var attr = attrByKey(catalog, attrSel.value);
+      opSel.innerHTML = '';
+      if (!attr) {{ valWrap.innerHTML = ''; return; }}
+      attr.filter_ops.forEach(function(op) {{
+        var o = document.createElement('option');
+        o.value = op.key; o.textContent = op.label;
+        opSel.appendChild(o);
+      }});
+      if (current.op) {{ opSel.value = current.op; current.op = null; }}
+      rebuildValue();
+    }}
+    function rebuildValue() {{
+      var attr = attrByKey(catalog, attrSel.value);
+      if (!attr) {{ valWrap.innerHTML = ''; return; }}
+      var op = attr.filter_ops.find(function(o) {{ return o.key === opSel.value; }});
+      if (!op) {{ valWrap.innerHTML = ''; return; }}
+      valWrap.innerHTML = '';
+      var v = current.value; current.value = null;
+      var ctrl = buildValueControl(catalog, op.value_control, v);
+      valWrap.appendChild(ctrl);
+    }}
+    attrSel.addEventListener('change', function() {{ current.op = null; current.value = null; rebuildOps(); }});
+    opSel.addEventListener('change', rebuildValue);
+    rebuildOps();
+    row.appendChild(attrSel);
+    row.appendChild(opSel);
+    row.appendChild(valWrap);
+    row.appendChild(del);
+    return row;
+  }}
+
+  // Build a single action row: [Verb] [Value] [×] — verbs are flat across attributes
+  function buildActionRow(catalog, current) {{
+    current = current || {{attr: null, op: null, value: null}};
+    var row = document.createElement('div');
+    row.className = 'wf-rule-row wf-rule-action';
+    var verbSel = document.createElement('select');
+    verbSel.className = 'wf-rule-verb';
+    var pHolder = document.createElement('option');
+    pHolder.value = ''; pHolder.textContent = 'Choose action…';
+    verbSel.appendChild(pHolder);
+    // Build flat verb list: "Attribute - operation label" → encoded "attr|op"
+    catalog.attributes.forEach(function(a) {{
+      if (!a.action_ops || a.action_ops.length === 0) return;
+      a.action_ops.forEach(function(op) {{
+        var o = document.createElement('option');
+        o.value = a.key + '|' + op.key;
+        o.textContent = a.label + ' — ' + op.label;
+        verbSel.appendChild(o);
+      }});
+    }});
+    if (current.attr && current.op) verbSel.value = current.attr + '|' + current.op;
+    var valWrap = document.createElement('span');
+    valWrap.className = 'wf-rule-value-wrap';
+    var del = document.createElement('button');
+    del.className = 'wf-rule-del'; del.type = 'button'; del.textContent = '×';
+    del.title = 'Remove action';
+    del.addEventListener('click', function() {{ row.remove(); }});
+
+    function rebuildValue() {{
+      var parts = (verbSel.value || '').split('|');
+      if (parts.length !== 2) {{ valWrap.innerHTML = ''; return; }}
+      var attr = attrByKey(catalog, parts[0]);
+      var op = attr && attr.action_ops.find(function(o) {{ return o.key === parts[1]; }});
+      if (!op) {{ valWrap.innerHTML = ''; return; }}
+      valWrap.innerHTML = '';
+      var v = current.value; current.value = null;
+      var ctrl = buildValueControl(catalog, op.value_control, v);
+      valWrap.appendChild(ctrl);
+    }}
+    verbSel.addEventListener('change', function() {{ current.value = null; rebuildValue(); }});
+    rebuildValue();
+    row.appendChild(verbSel);
+    row.appendChild(valWrap);
+    row.appendChild(del);
+    return row;
+  }}
+
+  function mountRulesEditor(container, catalog, triggerJson, onSuccessJson, isSystem) {{
+    container.innerHTML = '';
+    container.dataset.rulesMounted = '1';
+
+    // Match-mode header: "If [all|any] of the following conditions are met:"
+    var modeWrap = document.createElement('div');
+    modeWrap.className = 'wf-rules-mode';
+    modeWrap.innerHTML = 'If <select class="wf-rules-mode-sel" data-testid="wf-rules-mode"><option value="all_of">all</option><option value="any_of">any</option></select> of the following conditions are met:';
+    var initialMode = (triggerJson && triggerJson.any_of) ? 'any_of' : 'all_of';
+    modeWrap.querySelector('select').value = initialMode;
+
+    // Filter rows
+    var filterList = document.createElement('div');
+    filterList.className = 'wf-rules-list wf-rules-filters';
+    filterList.dataset.testid = 'wf-rules-filters';
+    var filterPredicates = [];
+    if (triggerJson && (triggerJson.all_of || triggerJson.any_of)) {{
+      filterPredicates = triggerJson.all_of || triggerJson.any_of;
+    }} else if (triggerJson && triggerJson.kind) {{
+      filterPredicates = [triggerJson];
+    }}
+    filterPredicates.forEach(function(p) {{
+      var row = predicateToRow(catalog, p);
+      if (row) filterList.appendChild(buildFilterRow(catalog, row));
+    }});
+
+    var addCondBtn = document.createElement('button');
+    addCondBtn.type = 'button';
+    addCondBtn.className = 'wf-rules-add';
+    addCondBtn.textContent = '+ Add condition';
+    addCondBtn.dataset.testid = 'wf-rules-add-condition';
+    addCondBtn.addEventListener('click', function() {{
+      filterList.appendChild(buildFilterRow(catalog, null));
+    }});
+
+    // Action rows
+    var actionHeader = document.createElement('div');
+    actionHeader.className = 'wf-rules-action-header';
+    var applyToSel = document.createElement('select');
+    applyToSel.className = 'wf-rules-applyto';
+    applyToSel.dataset.testid = 'wf-rules-applyto';
+    catalog.apply_to_targets.forEach(function(t) {{
+      var o = document.createElement('option'); o.value = t.key; o.textContent = t.label; applyToSel.appendChild(o);
+    }});
+    var initialApplyTo = (onSuccessJson && onSuccessJson.apply_to) || 'self';
+    applyToSel.value = initialApplyTo;
+    actionHeader.appendChild(document.createTextNode('Then perform these actions on '));
+    actionHeader.appendChild(applyToSel);
+    actionHeader.appendChild(document.createTextNode(':'));
+
+    var actionList = document.createElement('div');
+    actionList.className = 'wf-rules-list wf-rules-actions';
+    actionList.dataset.testid = 'wf-rules-actions';
+    var actionRows = effectsToRows(catalog, onSuccessJson || {{}});
+    actionRows.forEach(function(r) {{ actionList.appendChild(buildActionRow(catalog, r)); }});
+
+    var addActBtn = document.createElement('button');
+    addActBtn.type = 'button';
+    addActBtn.className = 'wf-rules-add';
+    addActBtn.textContent = '+ Add action';
+    addActBtn.dataset.testid = 'wf-rules-add-action';
+    addActBtn.addEventListener('click', function() {{
+      actionList.appendChild(buildActionRow(catalog, null));
+    }});
+
+    // Linter advisory (populated on demand via /api/workflow/lint)
+    var advisory = document.createElement('div');
+    advisory.className = 'wf-rules-advisory';
+    advisory.dataset.testid = 'wf-rules-advisory';
+
+    container.appendChild(modeWrap);
+    container.appendChild(filterList);
+    container.appendChild(addCondBtn);
+    container.appendChild(actionHeader);
+    container.appendChild(actionList);
+    container.appendChild(addActBtn);
+    container.appendChild(advisory);
+
+    if (isSystem) {{
+      // Disable every editable element; surface read-only banner.
+      container.classList.add('wf-rules-readonly');
+      container.querySelectorAll('select, input, button.wf-rules-add, button.wf-rule-del')
+        .forEach(function(el) {{ el.disabled = true; }});
+    }}
+
+    refreshAdvisory(container);
+    container.addEventListener('change', function() {{ refreshAdvisory(container); }});
+  }}
+
+  function serialiseRulesEditor(container) {{
+    var mode = container.querySelector('.wf-rules-mode-sel').value;
+    var catalog = _wfCatalog;
+    var filterRows = container.querySelectorAll('.wf-rule-filter');
+    var predicates = [];
+    filterRows.forEach(function(row) {{
+      var attrKey = row.querySelector('.wf-rule-attr').value;
+      var opKey = row.querySelector('.wf-rule-op').value;
+      if (!attrKey || !opKey) return;
+      var attr = attrByKey(catalog, attrKey);
+      if (!attr) return;
+      var op = attr.filter_ops.find(function(o) {{ return o.key === opKey; }});
+      if (!op) return;
+      var ctrl = row.querySelector('.wf-rule-value');
+      var val = ctrl ? readValueControl(op.value_control, ctrl) : null;
+      var pred = {{kind: op.predicate_kind}};
+      // Map value back to predicate's value field shape based on kind
+      if (op.predicate_kind === 'section_in' || op.predicate_kind === 'parent_section_not_in' ||
+          op.predicate_kind === 'children_all_status_in' || op.predicate_kind === 'children_any_status_in') {{
+        pred.values = Array.isArray(val) ? val : (val ? [val] : []);
+      }} else if (op.predicate_kind === 'has_field') {{
+        pred.field = val;
+      }} else if (op.predicate_kind === 'flag_set' || op.predicate_kind === 'lacks_readiness_flag') {{
+        pred.flag = val;
+      }} else if (op.predicate_kind === 'has_tag' || op.predicate_kind === 'lacks_tag' || op.predicate_kind === 'has_all_tags') {{
+        pred.value = Array.isArray(val) ? val : (val ? [val] : []);
+      }} else if (op.value_control !== 'none') {{
+        pred.value = val;
+      }}
+      predicates.push(pred);
+    }});
+
+    var trigger = predicates.length === 0
+      ? null
+      : (predicates.length === 1 ? predicates[0] : {{[mode]: predicates}});
+
+    var actionRows = container.querySelectorAll('.wf-rule-action');
+    var on_success = {{}};
+    var applyTo = container.querySelector('.wf-rules-applyto').value;
+    if (applyTo && applyTo !== 'self') on_success.apply_to = applyTo;
+    actionRows.forEach(function(row) {{
+      var verb = row.querySelector('.wf-rule-verb').value || '';
+      var parts = verb.split('|');
+      if (parts.length !== 2) return;
+      var attr = attrByKey(catalog, parts[0]);
+      var op = attr && attr.action_ops.find(function(o) {{ return o.key === parts[1]; }});
+      if (!op) return;
+      var ctrl = row.querySelector('.wf-rule-value');
+      var val = ctrl ? readValueControl(op.value_control, ctrl) : null;
+      // set_readiness_content takes a {{flag, from}} object; reconstruct.
+      if (op.on_success_key === 'set_readiness_content') {{
+        var fromSpec = (op.extra && op.extra.from) || 'stdout';
+        on_success[op.on_success_key] = {{flag: val, from: fromSpec}};
+      }} else if (op.on_success_key === 'clear_readiness_flag') {{
+        on_success[op.on_success_key] = val;
+      }} else if (op.on_success_key === 'set_summary_oneliner' || op.on_success_key === 'accept_ticket') {{
+        on_success[op.on_success_key] = true;
+      }} else if (Array.isArray(val) && (op.on_success_key === 'add_tags' || op.on_success_key === 'remove_tags')) {{
+        on_success[op.on_success_key] = val;
+      }} else {{
+        on_success[op.on_success_key] = val;
+      }}
+    }});
+    return {{trigger_json: trigger, on_success_json: Object.keys(on_success).length ? on_success : null}};
+  }}
+
+  function refreshAdvisory(container) {{
+    var advisory = container.querySelector('.wf-rules-advisory');
+    if (!advisory) return;
+    var serialised = serialiseRulesEditor(container);
+    fetch('/api/workflow/lint', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(serialised)
+    }}).then(r => r.json()).then(function(d) {{
+      advisory.className = 'wf-rules-advisory wf-rules-' + (d.status || 'empty');
+      advisory.textContent = d.message || '';
+    }}).catch(function() {{}});
+  }}
+
+  // Mount editor whenever an Edit panel is opened
+  document.querySelectorAll('.wf-edit-toggle').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.wf-edit-panel[data-id="' + id + '"]');
+      if (!panel) return;
+      var editor = panel.querySelector('.wf-rules-editor');
+      if (!editor) return;
+      if (editor.dataset.rulesMounted === '1') return;
+      var wrap = document.querySelector('.wf-row-wrap[data-wf-id="' + id + '"]');
+      var isSystem = wrap && wrap.dataset.system === '1';
+      var triggerJson = null;
+      var onSuccessJson = null;
+      try {{
+        triggerJson = wrap && wrap.dataset.triggerJson ? JSON.parse(wrap.dataset.triggerJson) : null;
+      }} catch (e) {{}}
+      try {{
+        onSuccessJson = wrap && wrap.dataset.onSuccessJson ? JSON.parse(wrap.dataset.onSuccessJson) : null;
+      }} catch (e) {{}}
+      getCatalog().then(function(cat) {{
+        mountRulesEditor(editor, cat, triggerJson, onSuccessJson, isSystem);
+      }});
     }});
   }});
 
@@ -7775,6 +8269,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Global workflows list — all workflows across all projects.
             if remainder == "/api/workflow/workflows":
                 self._send_json({"workflows": _list_workflows()})
+                return
+
+            # Unified attribute catalog for the workflow editor — exposes
+            # every filterable attribute with its filter ops + matching
+            # action ops. UI walks this to render the (Attribute, Operation,
+            # Value) row dropdowns. See conditions.ui_catalog().
+            if remainder == "/api/workflow/catalog":
+                from conditions import ui_catalog
+                self._send_json(ui_catalog())
+                return
+
+            # Linter: given a candidate trigger_json + on_success_json, report
+            # whether at least one action mutates an attribute the trigger
+            # reads (closed-loop principle). UI calls this on edit and on save.
+            if remainder == "/api/workflow/lint":
+                # Body via query string for GET — but most callers POST below.
+                # Fall through to POST handler.
+                self._send_json({"error": "Use POST /api/workflow/lint"}, 405)
                 return
 
             # Live preview: how many tickets currently match this workflow's
@@ -8994,6 +9506,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": True, "message": f"git clone started → {install_dir}", "install_dir": install_dir})
                 except Exception as e:
                     self._send_json({"error": f"Failed to clone feedbacks: {e}"}, 500)
+                return
+
+            # Workflow editor linter — given a candidate trigger_json + on_success_json,
+            # report whether any action mutates an attribute the trigger reads.
+            if remainder == "/api/workflow/lint":
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "Invalid JSON"}, 400)
+                    return
+                from conditions import lint_closed_loop
+                result = lint_closed_loop(
+                    body.get("trigger_json"),
+                    body.get("on_success_json"),
+                )
+                self._send_json(result)
                 return
 
             # Global create of a workflow agent — workflow_agents has no

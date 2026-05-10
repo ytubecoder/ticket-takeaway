@@ -830,6 +830,9 @@ class AgentRunner(Runner):
           move_to:              move ticket to the named section (legacy alias of move_section)
           move_section:         move target ticket to the named section
           set_status:           set target ticket status
+          set_priority:         'low' | 'medium' | 'high'
+          set_automation_mode:  'auto' | 'manual' | 'paused' (with optional pause_reason)
+          set_is_container:     0 | 1 — flip the cosmetic container flag
           add_tags:             list[str] — tags to add (creates if missing)
           remove_tags:          list[str] — tags to remove
           accept_ticket:        truthy → call actions.accept_ticket() for the target
@@ -837,6 +840,11 @@ class AgentRunner(Runner):
           set_readiness_content: {"flag": "<flag>", "from": "stdout"|"<literal>"}
                                 Set content for a readiness flag. When from="stdout",
                                 the agent's stdout (sans interactive markers) is used.
+          clear_readiness_flag: "<flag>" — remove a readiness flag's content row
+          set_summary_oneliner: truthy → write the agent's stdout (first non-empty
+                                line, marker lines stripped) into tickets.summary_oneliner
+                                and refresh tickets.summary_hash atomically. Used by
+                                the "Refresh ticket summary" system workflow.
           apply_to:             'self' (default) | 'parent' — when 'parent', all the
                                 above effects target the ticket's parent instead.
                                 If parent is missing, the effect block is skipped.
@@ -849,6 +857,7 @@ class AgentRunner(Runner):
                 move_ticket,
                 update_ticket,
                 accept_ticket as _accept_ticket,
+                set_automation_mode as _set_automation_mode,
             )
             conn = conn_factory()
             try:
@@ -870,10 +879,15 @@ class AgentRunner(Runner):
                 # Move section: accept move_section (canonical) or move_to (alias).
                 move_to = on_success.get("move_section") or on_success.get("move_to")
                 set_status = on_success.get("set_status")
+                set_priority = on_success.get("set_priority")
+                set_is_container = on_success.get("set_is_container")
+                set_auto_mode = on_success.get("set_automation_mode")
                 add_tags = on_success.get("add_tags") or []
                 remove_tags = on_success.get("remove_tags") or []
                 accept = on_success.get("accept_ticket")
                 set_readiness = on_success.get("set_readiness_content")
+                clear_readiness = on_success.get("clear_readiness_flag")
+                set_summary = on_success.get("set_summary_oneliner")
 
                 if move_to:
                     move_ticket(conn, project_id, target_id, move_to, actor=actor)
@@ -881,12 +895,30 @@ class AgentRunner(Runner):
                 update_kwargs = {}
                 if set_status:
                     update_kwargs["status"] = set_status
+                if set_priority:
+                    update_kwargs["priority"] = set_priority
+                if set_is_container is not None:
+                    update_kwargs["is_container"] = 1 if set_is_container else 0
                 if add_tags:
                     update_kwargs["add_tags"] = list(add_tags) if not isinstance(add_tags, list) else add_tags
                 if remove_tags:
                     update_kwargs["remove_tags"] = list(remove_tags) if not isinstance(remove_tags, list) else remove_tags
                 if update_kwargs:
                     update_ticket(conn, project_id, target_id, actor=actor, **update_kwargs)
+
+                # set_automation_mode: switch the per-ticket automation toggle.
+                if set_auto_mode:
+                    mode_str = str(set_auto_mode).lower() if not isinstance(set_auto_mode, dict) else \
+                        str(set_auto_mode.get("mode", "")).lower()
+                    pause_reason = set_auto_mode.get("pause_reason") if isinstance(set_auto_mode, dict) else None
+                    if mode_str in ("auto", "manual", "paused"):
+                        try:
+                            _set_automation_mode(
+                                conn, project_id, "ticket", target_id,
+                                mode_str, actor=actor, pause_reason=pause_reason,
+                            )
+                        except ValueError:
+                            pass  # invalid mode — silently skip
 
                 if accept:
                     # Verify preconditions: ticket must currently be in
@@ -919,6 +951,29 @@ class AgentRunner(Runner):
                         )
                     # else: silently skip — preconditions not met.
 
+                # set_summary_oneliner: write the agent's stdout sentence into
+                # tickets.summary_oneliner + refresh tickets.summary_hash so the
+                # workflow trigger doesn't fire again on the same content.
+                if set_summary:
+                    from actions import compute_summary_hash  # type: ignore[import]
+                    raw_lines = [
+                        line.strip() for line in (stdout_text or "").splitlines()
+                        if line.strip() and _try_parse_marker(line) is None
+                    ]
+                    sentence = next((ln for ln in raw_lines if ln), "")
+                    # Cap length defensively — the prompt asks for one sentence
+                    # but agents drift. 280 keeps it tweet-sized; trim ellipsis.
+                    if len(sentence) > 280:
+                        sentence = sentence[:277].rstrip() + "…"
+                    if sentence:
+                        fresh_hash = compute_summary_hash(conn, project_id, target_id)
+                        conn.execute(
+                            "UPDATE tickets SET summary_oneliner = ?, summary_hash = ?, "
+                            "updated_at = datetime('now') "
+                            "WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+                            (sentence, fresh_hash, target_id, project_id),
+                        )
+
                 # set_readiness_content: write into a readiness flag
                 if set_readiness and isinstance(set_readiness, dict):
                     flag_key = (set_readiness.get("flag") or "").lower()
@@ -941,6 +996,19 @@ class AgentRunner(Runner):
                             "VALUES (?, ?, ?, ?, ?) "
                             "ON CONFLICT (ticket_id, project_id, flag) DO UPDATE SET content = excluded.content",
                             (target_id, project_id, db_flag, content, "workflow"),
+                        )
+
+                # clear_readiness_flag: remove a flag's row entirely (the
+                # symmetric counterpart of set_readiness_content).
+                if clear_readiness:
+                    flag_key = str(clear_readiness).lower()
+                    _flag_map = {"d": "description", "c": "criteria", "l": "reviewed"}
+                    db_flag = _flag_map.get(flag_key, flag_key)
+                    if db_flag:
+                        conn.execute(
+                            "DELETE FROM readiness_flags "
+                            "WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+                            (target_id, project_id, db_flag),
                         )
 
                 conn.commit()

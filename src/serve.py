@@ -3261,7 +3261,7 @@ def _render_journeys_page(proj: dict, port: int, open_journey_id: str = "") -> s
     """
     pid = _safe_attr(proj["id"])
     name = _safe_attr(proj.get("name", proj["id"]))
-    api_base = f"http://localhost:{port}/{pid}/api"
+    api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
 
     rail_css = gen.build_nav_rail_css()
     rail_html = gen.build_nav_rail_html()
@@ -4419,7 +4419,7 @@ def _render_ticket_tab_overview(ticket: dict, proj: dict, port: int) -> str:
     import html as _h
 
     pid = _safe_attr(proj["id"])
-    api_base = f"http://localhost:{port}/{pid}/api"
+    api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
     tid = _h.escape(ticket["id"])
     title = _h.escape(ticket["title"] or "")
     section = ticket.get("section", "Ideas")
@@ -4561,7 +4561,7 @@ def _render_ticket_tab_activity(ticket: dict, proj: dict, port: int) -> str:
     """Render the Activity tab body for the full-page ticket view."""
     pid = _safe_attr(proj["id"])
     tid = _safe_attr(ticket["id"])
-    api_base = f"http://localhost:{port}/{pid}/api"
+    api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
     return f'''
 <div class="tp-activity-header">
   <span>Activity timeline — newest first. Polls every 5s while focused.</span>
@@ -4695,7 +4695,7 @@ def _render_ticket_tab_runs(ticket: dict, proj: dict, port: int) -> str:
     """
     pid = _safe_attr(proj["id"])
     tid = _safe_attr(ticket["id"])
-    api_base = f"http://localhost:{port}/{pid}/api"
+    api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
     detail_shell = _render_run_detail_shell_html()
     return f'''
 <div class="tp-runs-layout" data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
@@ -4712,7 +4712,7 @@ def _render_ticket_tab_files(ticket: dict, proj: dict, port: int) -> str:
     """Render the Files tab body — attachments list + placeholder for MD files."""
     pid = _safe_attr(proj["id"])
     tid = _safe_attr(ticket["id"])
-    api_base = f"http://localhost:{port}/{pid}/api"
+    api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
     return f'''
 <div class="tp-files-layout" data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
   <div id="tp-attachments-list" class="tp-files-list">
@@ -4753,7 +4753,7 @@ def _render_ticket_page(proj: dict, port: int, ticket_id: str, tab: str = "overv
 
     pid = _safe_attr(proj["id"])
     name = _safe_attr(proj.get("name", proj["id"]))
-    api_base = f"http://localhost:{port}/{pid}/api"
+    api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
     tid = _h.escape(ticket["id"])
     title = _h.escape(ticket["title"] or "")
     section = ticket.get("section", "Ideas")
@@ -5982,7 +5982,7 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
     var panelEl = document.getElementById('tp-run-detail-panel');
     if (panelEl) panelEl.classList.add('hidden');
     // Fetch run detail — use per-project API since runs are project-scoped.
-    var apiBase = 'http://localhost:' + KV_PORT + '/' + encodeURIComponent(projectId) + '/api';
+    var apiBase = '/' + encodeURIComponent(projectId) + '/api';
     fetch(apiBase + '/runs/' + runId)
       .then(function(r) {{ return r.json(); }})
       .then(function(data) {{

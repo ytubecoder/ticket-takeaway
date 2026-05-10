@@ -1466,9 +1466,17 @@ def generate_html(project: Project) -> str:
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="gen-ts" content="{gen_ts}">
 <meta name="schema-version" content="2">
+<meta name="theme-color" content="#0c0c0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tickets">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%233b82f6'/%3E%3Cstop offset='100%25' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='3' y='2' width='26' height='28' rx='4' fill='url(%23g)'/%3E%3Ccircle cx='3' cy='12' r='3.5' fill='%230a0a0b'/%3E%3Ccircle cx='29' cy='12' r='3.5' fill='%230a0a0b'/%3E%3Cline x1='6.5' y1='12' x2='25.5' y2='12' stroke='%230a0a0b' stroke-width='1' stroke-dasharray='2.5 2'/%3E%3Crect x='8' y='5' width='11' height='2.5' rx='1.2' fill='%23ffffffcc'/%3E%3Crect x='8' y='16' width='16' height='1.5' rx='.7' fill='%23ffffff55'/%3E%3Crect x='8' y='19.5' width='12' height='1.5' rx='.7' fill='%23ffffff33'/%3E%3Crect x='8' y='23' width='14' height='1.5' rx='.7' fill='%23ffffff22'/%3E%3C/svg%3E">
 <title>Ticket Takeaway — {escape(project_short)}</title>
 <script>
@@ -1494,6 +1502,15 @@ window.unwrapList = function(data, primaryKey) {{
   }}
   return [];
 }};
+// Register PWA service worker — install banner + offline shell on mobile.
+// SW only intercepts navigations + static assets; /api/* always hits network.
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {{
+  window.addEventListener('load', function() {{
+    navigator.serviceWorker.register('/sw.js', {{ scope: '/' }}).catch(function(err) {{
+      console.warn('[pwa] sw register failed:', err);
+    }});
+  }});
+}}
 </script>
 <style>
 :root, [data-theme="dark"] {{
@@ -3537,6 +3554,42 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   border: none; background: none; padding: 2px 4px;
 }}
 .sp-step-item .sp-step-del:hover {{ color: #ef4444; }}
+
+/* ─── Mobile / PWA — narrow viewport tweaks ─────────────────────── */
+/* Stacks the kanban vertically, expands tap targets, and turns the */
+/* ticket detail overlay into a fullscreen sheet for installable use. */
+@media (max-width: 760px) {{
+  .kanban {{ flex-direction: column; overflow-x: visible; padding: 12px; gap: 10px; }}
+  .column {{ flex: 0 0 auto; min-width: 0; width: 100%; max-height: none; }}
+  .column-body {{ overflow-y: visible; max-height: none; }}
+  .column-header {{ position: static; padding: 12px 14px; }}
+  .column-name {{ font-size: 13px; }}
+
+  .card {{ padding: 12px 14px; }}
+  .card-title {{ font-size: 14px; line-height: 1.35; }}
+  .card-meta {{ gap: 10px; min-height: 28px; }}
+  .card-id {{ font-size: 12px; }}
+
+  /* Bigger hit areas — minimum ~36px so nothing is fiddly with a thumb. */
+  .priority-dot, .column-dot {{ width: 14px; height: 14px; }}
+  .status-badge, .card-crit-pill {{ padding: 4px 10px; font-size: 12px; }}
+  .card-open-btn {{ width: 28px; height: 28px; }}
+
+  /* Header / filter bar wrap to multiple rows. */
+  .header-row1, .header-row2 {{ flex-wrap: wrap; gap: 8px; }}
+  .header-stats {{ margin-left: 0; }}
+  .filter-bar {{ flex-wrap: wrap; gap: 8px; padding: 10px 12px; }}
+
+  /* Bottom sections (Bugs, Done, Icebox, Won't Do) keep their list */
+  /* layout but get more breathing room. */
+  .bottom-section-header {{ padding: 12px 14px; }}
+  .bottom-section-body {{ overflow-y: visible; max-height: none; }}
+
+  /* Detail overlay → fullscreen sheet (no rounded corners, no margin). */
+  .detail-panel {{ width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; border: 0; }}
+  .detail-header {{ padding: 12px 14px; padding-top: max(12px, env(safe-area-inset-top)); }}
+  .detail-body {{ padding: 14px 14px; padding-bottom: max(14px, env(safe-area-inset-bottom)); }}
+}}
 </style>
 </head>
 <body>

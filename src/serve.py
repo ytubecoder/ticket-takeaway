@@ -165,6 +165,31 @@ def _safe_attr(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# PWA — shared head tags + service worker registration script
+# ---------------------------------------------------------------------------
+# Single source for the manifest link, theme colors, and apple-touch metadata
+# so every top-level page renders identical install / standalone-mode hints.
+
+PWA_HEAD_TAGS = (
+    '<meta name="theme-color" content="#0c0c0e" media="(prefers-color-scheme: dark)">'
+    '<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">'
+    '<meta name="apple-mobile-web-app-capable" content="yes">'
+    '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">'
+    '<meta name="apple-mobile-web-app-title" content="Tickets">'
+    '<meta name="mobile-web-app-capable" content="yes">'
+    '<link rel="manifest" href="/manifest.webmanifest">'
+    '<link rel="apple-touch-icon" href="/icon-180.png">'
+    "<script>"
+    "if('serviceWorker' in navigator && (location.protocol==='https:'"
+    "||location.hostname==='localhost'||location.hostname==='127.0.0.1')){"
+    "window.addEventListener('load',function(){"
+    "navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(function(e){"
+    "console.warn('[pwa] sw register failed:',e);});});}"
+    "</script>"
+)
+
+
+# ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------
 
@@ -3280,8 +3305,9 @@ def _render_journeys_page(proj: dict, port: int, open_journey_id: str = "") -> s
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>{name} — Journeys</title>
+{PWA_HEAD_TAGS}
 <meta name="current-project" content="{pid}">
 <meta name="edit-api" content="{api_base}">
 <meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
@@ -4825,8 +4851,9 @@ def _render_ticket_page(proj: dict, port: int, ticket_id: str, tab: str = "overv
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>{tid} — {title}</title>
+{PWA_HEAD_TAGS}
 <meta name="current-project" content="{pid}">
 <meta name="edit-api" content="{api_base}">
 <meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
@@ -5699,8 +5726,9 @@ def _render_kitchen_view(port: int) -> str:
 <html data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kitchen — Ticket Takeaway</title>
+{PWA_HEAD_TAGS}
 <meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
 <script>
 (function () {{
@@ -6498,8 +6526,9 @@ def _render_workflows_view(port: int) -> str:
 <html data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Workflows — Ticket Takeaway</title>
+{PWA_HEAD_TAGS}
 <meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
 <script>
 (function () {{
@@ -7629,8 +7658,9 @@ def _render_project_picker(port: int) -> str:
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Ticket Takeaway</title>
+{PWA_HEAD_TAGS}
 <meta name="projects-list" content='{_safe_attr(projects_meta_json)}'>
 <script>
 (function(){{
@@ -8145,6 +8175,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8"))
 
+    # ── PWA static assets ───────────────────────────────────────────
+    # SW scope must be the site root for it to intercept project-scoped
+    # navigations, so manifest/sw/icons all live above the routing layer.
+    _STATIC_DIR = Path(__file__).parent / "static"
+    _STATIC_ROUTES = {
+        "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+        "/sw.js":                ("sw.js",                "application/javascript"),
+        "/icon.svg":             ("icon.svg",             "image/svg+xml"),
+        "/icon-180.png":         ("icon-180.png",         "image/png"),
+        "/icon-192.png":         ("icon-192.png",         "image/png"),
+        "/icon-512.png":         ("icon-512.png",         "image/png"),
+    }
+
+    def _try_send_static(self, remainder: str) -> bool:
+        """Serve a PWA static asset if remainder matches. Returns True if handled."""
+        entry = self._STATIC_ROUTES.get(remainder)
+        if entry is None:
+            return False
+        filename, content_type = entry
+        path = self._STATIC_DIR / filename
+        try:
+            body = path.read_bytes()
+        except FileNotFoundError:
+            self.send_response(404); self.end_headers(); return True
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        # Service worker must register at root scope, even when sw.js is fetched
+        # via a path prefix from a future reverse proxy.
+        if remainder == "/sw.js":
+            self.send_header("Service-Worker-Allowed", "/")
+            self.send_header("Cache-Control", "no-cache")
+        else:
+            self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def do_OPTIONS(self):
         """Handle CORS preflight."""
         self.send_response(204)
@@ -8159,6 +8227,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes (proj is None) ────────────────────────────
         if proj is None:
+            # PWA static assets — must be served at root for the service worker
+            # to claim site-wide scope. Returns True if remainder was handled.
+            if self._try_send_static(remainder):
+                return
+
             # Root: redirect to Projects (the picker is the cross-project landing).
             if remainder == "/" or remainder == "":
                 self.send_response(302)

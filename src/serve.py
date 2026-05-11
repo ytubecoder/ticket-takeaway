@@ -104,6 +104,8 @@ from workflows_seed import (
     seed_default_endpoints as _seed_default_endpoints,
 )
 import conditions as _conditions
+from endpoints import extract_session_id as _endpoints_extract_session_id
+from runners import _resolve_argv_for_agent
 
 import html as _html
 
@@ -2141,14 +2143,6 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
 
             prompt = "\n\n---\n\n".join(prompt_parts)
 
-            # Run agent CLI
-            try:
-                agent_args = json.loads(agent.get("args", "[]")) if isinstance(agent.get("args"), str) else agent.get("args", [])
-                if isinstance(agent_args, str):
-                    agent_args = [agent_args]
-            except (json.JSONDecodeError, TypeError):
-                agent_args = []
-
             # Read the freshest session_ids from DB (another handler may have updated it)
             fresh_run = _get_workflow_run(run_id)
             session_ids: dict = {}
@@ -2159,18 +2153,37 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     session_ids = {}
             prior_sid = session_ids.get(agent_id)
 
-            command_name = agent.get("command", "claude")
-            # Build the command — persist_session agents get session resume, others get --no-session-persistence
-            if agent.get("persist_session"):
-                if prior_sid:
-                    agent_args = _apply_resume_args(command_name, agent_args, prior_sid)
-                # else: first call for this agent in this run — fresh session, no resume flag
-            else:
-                # --no-session-persistence is a claude-specific flag; codex/others would reject it
-                if command_name.lower() == "claude" and "--no-session-persistence" not in agent_args:
-                    agent_args = agent_args + ["--no-session-persistence"]
+            # For compat (no endpoint_id) non-persist agents: inject --no-session-persistence
+            # into the agent args so the compat Endpoint picks it up via build_invocation.
+            # Real endpoint agents carry this in their endpoint config instead.
+            _agent_for_invocation = agent
+            if not agent.get("endpoint_id") and not agent.get("persist_session"):
+                _cmd_name = agent.get("command", "claude")
+                if _cmd_name.lower() == "claude":
+                    try:
+                        _raw_args = agent.get("args", "[]")
+                        _parsed_args = json.loads(_raw_args) if isinstance(_raw_args, str) else list(_raw_args or [])
+                        if isinstance(_parsed_args, str):
+                            _parsed_args = [_parsed_args]
+                    except (json.JSONDecodeError, TypeError):
+                        _parsed_args = []
+                    if "--no-session-persistence" not in _parsed_args:
+                        _agent_for_invocation = dict(agent)
+                        _agent_for_invocation["args"] = json.dumps(_parsed_args + ["--no-session-persistence"])
 
-            cmd = _build_agent_cmd(command_name, agent_args, prompt)
+            # Determine session_id to pass (only for persist_session agents with a prior session)
+            _session_id_for_agent = prior_sid if agent.get("persist_session") and prior_sid else None
+
+            # Resolve the argv via endpoint abstraction (falls back to compat columns when endpoint_id IS NULL)
+            with _db_lock:
+                _ep_conn = get_db()
+            try:
+                step_ep, cmd = _resolve_argv_for_agent(
+                    _ep_conn, _agent_for_invocation, prompt,
+                    session_id=_session_id_for_agent,
+                )
+            finally:
+                _ep_conn.close()
 
             # Progress entry so the UI shows which agent is running immediately
             agent_label = agent.get("name", agent_id)
@@ -2262,7 +2275,7 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             # Capture session id for persist_session agents
             if agent.get("persist_session"):
                 full_output = "".join(all_output_lines)
-                new_sid = _extract_session_id(command_name, full_output, "", started_at)
+                new_sid = _endpoints_extract_session_id(step_ep, full_output, "", started_at)
                 if new_sid and new_sid != prior_sid:
                     session_ids[agent_id] = new_sid
                     _update_workflow_run(run_id, session_ids=json.dumps(session_ids))
@@ -2318,12 +2331,14 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                         '{"agreed": true/false, "summary": "brief summary", "contention": "point of disagreement or null"}'
                     )
 
+                    with _db_lock:
+                        _agree_ep_conn = get_db()
                     try:
-                        agree_args = json.loads(primary_agent.get("args", "[]")) if isinstance(primary_agent.get("args"), str) else primary_agent.get("args", [])
-                    except (json.JSONDecodeError, TypeError):
-                        agree_args = []
-
-                    agree_cmd = _build_agent_cmd(primary_agent.get("command", "claude"), agree_args, agree_prompt)
+                        _agree_ep, agree_cmd = _resolve_argv_for_agent(
+                            _agree_ep_conn, primary_agent, agree_prompt,
+                        )
+                    finally:
+                        _agree_ep_conn.close()
                     try:
                         agree_result = subprocess.run(
                             agree_cmd, capture_output=True, text=True,

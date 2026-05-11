@@ -29,9 +29,82 @@ from typing import Callable, Optional
 from contextlib import contextmanager
 
 from actions import ActorContext, emit_event, utcnow_iso
+from endpoints import (
+    build_invocation, extract_session_id, get_endpoint, Endpoint,
+    UnsupportedEndpointType, EndpointMisconfigured,
+)
 from workspaces import HookResult, run_hook, WorkspaceInfo, mark_bootstrapped
 
 _log = logging.getLogger(__name__)
+
+# Per-server-boot set to log compat-path warning only once per agent
+_seen_compat_agents: set = set()
+
+
+# ---------------------------------------------------------------------------
+# Agent-field helper — works with dict, sqlite.Row, or dataclass
+# ---------------------------------------------------------------------------
+
+def _agent_field(agent, name, default=None):
+    """Read a field from an agent object that may be a dict, sqlite Row,
+    or dataclass."""
+    if isinstance(agent, dict):
+        return agent.get(name, default)
+    try:
+        return getattr(agent, name)
+    except AttributeError:
+        try:
+            return agent[name]
+        except (KeyError, IndexError, TypeError):
+            return default
+
+
+def _log_compat_path_once(agent_id, command, args):
+    if agent_id in _seen_compat_agents:
+        return
+    _seen_compat_agents.add(agent_id)
+    _log.warning(
+        "runner: agent=%s using compat command=%s args=%s"
+        " — endpoint_id is NULL (legacy or unmigrated)",
+        agent_id, command, args,
+    )
+
+
+def _resolve_argv_for_agent(conn, agent, prompt, session_id=None):
+    """Resolve an agent + prompt into an argv via its endpoint.
+
+    Returns (endpoint, argv). Endpoint is returned so the caller can pass
+    it to extract_session_id after the subprocess completes.
+
+    Falls back to agent's compat command/args ONLY when endpoint_id IS
+    NULL. A non-NULL endpoint_id pointing at a missing endpoint, or any
+    non-cli endpoint, is a hard error (raises EndpointMisconfigured /
+    UnsupportedEndpointType respectively).
+    """
+    agent_id = _agent_field(agent, "id")
+    endpoint_id = _agent_field(agent, "endpoint_id")
+
+    if not endpoint_id:
+        command = _agent_field(agent, "command")
+        args_raw = _agent_field(agent, "args") or "[]"
+        args = json.loads(args_raw) if isinstance(args_raw, str) else list(args_raw)
+        _log_compat_path_once(agent_id, command, args)
+        ep = Endpoint(
+            id=f"_compat:{agent_id}",
+            name=f"compat for {agent_id}",
+            endpoint_type="cli",
+            command=command,
+            args=args,
+        )
+        return ep, build_invocation(ep, prompt, session_id=session_id)
+
+    ep = get_endpoint(conn, endpoint_id)
+    if ep is None:
+        raise EndpointMisconfigured(
+            f"agent {agent_id!r} references endpoint "
+            f"{endpoint_id!r} which does not exist"
+        )
+    return ep, build_invocation(ep, prompt, session_id=session_id)
 
 
 # ---------------------------------------------------------------------------

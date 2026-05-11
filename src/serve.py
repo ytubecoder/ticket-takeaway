@@ -6340,6 +6340,7 @@ def _render_workflows_view(port: int) -> str:
 
     # Build the Agents tab rows. Custom agents only — discovered agents need a
     # project context; the global tab keeps it simple.
+    cli_endpoints = [ep for ep in endpoints if ep.endpoint_type == "cli"]
     if not agents:
         agent_rows_html = '<div class="wf-empty">No custom agents yet. Click "+ New Agent" to create one.</div>'
     else:
@@ -6375,6 +6376,25 @@ def _render_workflows_view(port: int) -> str:
                 if ag_is_system
                 else f'<button class="ag-edit-delete" data-id="{aid_attr}">Delete</button>'
             )
+            # Build endpoint dropdown — default shows CLI-only options
+            current_ep_id = a.get("endpoint_id") or ""
+            ep_options = '<option value=""></option>'
+            for ep in cli_endpoints:
+                sel = " selected" if ep.id == current_ep_id else ""
+                ep_options += f'<option value="{_safe_attr(ep.id)}"{sel}>{_html.escape(ep.name)}</option>'
+            ep_select_disabled = " disabled" if ag_is_system else ""
+            endpoint_field = (
+                f'<div class="wf-edit-row">'
+                f'  <label>Endpoint</label>'
+                f'  <select data-field="endpoint_id" class="agent-endpoint-select"{ep_select_disabled}>'
+                f'    {ep_options}'
+                f'  </select>'
+                f'  <label class="show-all-toggle" style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px;color:var(--text-secondary);cursor:pointer;">'
+                f'    <input type="checkbox" class="show-all-endpoints"{ep_select_disabled}>'
+                f'    Show non-executable types'
+                f'  </label>'
+                f'</div>'
+            )
             agent_parts.append(
                 f'<div class="ag-row-wrap" data-agent-id="{aid_attr}" data-system="{1 if ag_is_system else 0}" data-testid="ag-row-{aid_attr}">'
                 f'  <div class="ag-row">'
@@ -6391,6 +6411,7 @@ def _render_workflows_view(port: int) -> str:
                 f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(cmd)}"{ag_ro}></div>'
                 f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(args_display)}" placeholder="comma-separated or JSON array"{ag_ro}></div>'
                 f'    <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"{ag_ro}>{_html.escape(sys_prompt)}</textarea></div>'
+                f'    {endpoint_field}'
                 f'    <div class="wf-edit-actions">'
                 f'      <button class="ag-edit-save" data-id="{aid_attr}"{" disabled" if ag_is_system else ""}>Save</button>'
                 f'      {ag_del_btn}'
@@ -7440,15 +7461,29 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
   }});
 
   document.querySelectorAll('.ag-edit-save').forEach(function(btn) {{
+    // Skip endpoint save buttons — they have their own handler below
+    if (btn.classList.contains('ep-edit-save')) return;
     btn.addEventListener('click', function() {{
       var id = btn.dataset.id;
       var panel = document.querySelector('.ag-edit-panel[data-id="' + id + '"]');
       var msg = panel.querySelector('.wf-edit-msg');
+      // Confirm when saving with a non-CLI endpoint
+      var epSelect = panel.querySelector('select[data-field="endpoint_id"]');
+      if (epSelect && epSelect.value) {{
+        var selectedOpt = epSelect.options[epSelect.selectedIndex];
+        if (selectedOpt && selectedOpt.textContent.includes('not implemented')) {{
+          if (!confirm('This endpoint type cannot execute in phase 1. ' +
+                       'The agent will fail on next run. Continue?')) {{
+            return;
+          }}
+        }}
+      }}
       var body = {{
         name: panel.querySelector('input[data-field="name"]').value,
         command: panel.querySelector('input[data-field="command"]').value,
         args: JSON.stringify(parseArgs(panel.querySelector('input[data-field="args"]').value)),
-        system_prompt: panel.querySelector('textarea[data-field="system_prompt"]').value
+        system_prompt: panel.querySelector('textarea[data-field="system_prompt"]').value,
+        endpoint_id: epSelect ? (epSelect.value || null) : null
       }};
       setMsg(msg, 'Saving…');
       fetch('/api/workflow/agents/' + encodeURIComponent(id), {{
@@ -7486,6 +7521,35 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
           }}
         }})
         .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // Show-all endpoints toggle — re-fetches /api/endpoints and repopulates the
+  // per-agent endpoint dropdown, adding non-CLI options with a ⚠ warning label.
+  document.querySelectorAll('.show-all-endpoints').forEach(function(cb) {{
+    cb.addEventListener('change', async function() {{
+      var select = cb.closest('.wf-edit-row').querySelector('select');
+      if (!select) return;
+      var current = select.value;
+      try {{
+        var r = await fetch('/api/endpoints');
+        var data = await r.json();
+        var allEndpoints = data.endpoints || [];
+        select.innerHTML = '<option value=""></option>';
+        allEndpoints.forEach(function(ep) {{
+          if (!cb.checked && ep.endpoint_type !== 'cli') return;
+          var label = ep.endpoint_type === 'cli'
+            ? ep.name
+            : (ep.name + ' ⚠ execution not implemented');
+          var opt = document.createElement('option');
+          opt.value = ep.id;
+          opt.textContent = label;
+          if (ep.id === current) opt.selected = true;
+          select.appendChild(opt);
+        }});
+      }} catch (e) {{
+        console.error('Failed to fetch endpoints', e);
+      }}
     }});
   }});
 

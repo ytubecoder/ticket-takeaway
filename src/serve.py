@@ -6395,12 +6395,18 @@ def _render_workflows_view(port: int) -> str:
                 f'  </label>'
                 f'</div>'
             )
+            # Build ag-cmd summary: show endpoint name or a warning if none set.
+            ep_lookup = {ep.id: ep.name for ep in cli_endpoints}
+            if current_ep_id and current_ep_id in ep_lookup:
+                ag_cmd_summary = ep_lookup[current_ep_id]
+            else:
+                ag_cmd_summary = "⚠ no endpoint"
             agent_parts.append(
                 f'<div class="ag-row-wrap" data-agent-id="{aid_attr}" data-system="{1 if ag_is_system else 0}" data-testid="ag-row-{aid_attr}">'
                 f'  <div class="ag-row">'
                 f'    <div class="ag-main">'
                 f'      <div class="ag-name">{_html.escape(aname)}</div>'
-                f'      <div class="ag-cmd">{_html.escape(cmd)}{(" " + _html.escape(args_display)) if args_display else ""}</div>'
+                f'      <div class="ag-cmd">{_html.escape(ag_cmd_summary)}</div>'
                 f'    </div>'
                 f'    <div class="ag-cell"><span class="ag-type {ag_type_class}">{ag_type_label}</span></div>'
                 f'    <div class="ag-cell"><button class="ag-edit-toggle" data-id="{aid_attr}">Edit</button></div>'
@@ -6408,8 +6414,6 @@ def _render_workflows_view(port: int) -> str:
                 f'  <div class="ag-edit-panel" data-id="{aid_attr}" hidden>'
                 f'    {ag_sys_note}'
                 f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(aname)}"{ag_ro}></div>'
-                f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(cmd)}"{ag_ro}></div>'
-                f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(args_display)}" placeholder="comma-separated or JSON array"{ag_ro}></div>'
                 f'    <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"{ag_ro}>{_html.escape(sys_prompt)}</textarea></div>'
                 f'    {endpoint_field}'
                 f'    <div class="wf-edit-actions">'
@@ -6680,8 +6684,6 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       <div class="wf-edit-panel">
         <div class="wf-edit-row"><label>ID</label><input type="text" data-field="id" placeholder="lowercase-with-dashes"></div>
         <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name"></div>
-        <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="claude"></div>
-        <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" placeholder="comma-separated or JSON array"></div>
         <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"></textarea></div>
         <div class="wf-edit-actions">
           <button class="ag-edit-save" id="ag-new-save">Create</button>
@@ -7480,8 +7482,6 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       }}
       var body = {{
         name: panel.querySelector('input[data-field="name"]').value,
-        command: panel.querySelector('input[data-field="command"]').value,
-        args: JSON.stringify(parseArgs(panel.querySelector('input[data-field="args"]').value)),
         system_prompt: panel.querySelector('textarea[data-field="system_prompt"]').value,
         endpoint_id: epSelect ? (epSelect.value || null) : null
       }};
@@ -7575,8 +7575,6 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       var body = {{
         id: newForm.querySelector('input[data-field="id"]').value.trim(),
         name: newForm.querySelector('input[data-field="name"]').value.trim(),
-        command: newForm.querySelector('input[data-field="command"]').value.trim() || 'claude',
-        args: JSON.stringify(parseArgs(newForm.querySelector('input[data-field="args"]').value)),
         system_prompt: newForm.querySelector('textarea[data-field="system_prompt"]').value
       }};
       if (!body.id) {{ setMsg(newMsg, 'ID is required', 'err'); return; }}

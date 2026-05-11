@@ -132,6 +132,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_planner",
         "name": "Planner",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": "",   # /plan-check sets none — templates carry the instructions
@@ -142,6 +143,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_consultant",
         "name": "Consultant",
+        "endpoint_id": "codex-exec-readonly",
         "command": "codex",
         "args": "exec -s read-only",
         "system_prompt": "",
@@ -155,6 +157,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_orchestrator",
         "name": "Orchestrator",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -188,6 +191,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_worker",
         "name": "Worker",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -216,6 +220,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_summarizer",
         "name": "Summarizer",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -242,6 +247,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_validator",
         "name": "Validator",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -709,6 +715,62 @@ DEFAULT_WORKFLOWS: list[dict] = [
 
 
 # ---------------------------------------------------------------------------
+# Seeder — endpoints (global, run once at startup)
+# ---------------------------------------------------------------------------
+
+def seed_default_endpoints(db) -> dict:
+    """Upsert DEFAULT_ENDPOINTS into the endpoints table.
+
+    Returns {"upserted": n, "skipped_collision": m}.
+    System rows always overwrite. If a system=0 row already exists with
+    the same id as a DEFAULT_ENDPOINTS entry, log and skip.
+    """
+    import json as _json
+    upserted = 0
+    skipped = 0
+    for ep in DEFAULT_ENDPOINTS:
+        existing = db.execute(
+            "SELECT system FROM endpoints WHERE id = ?", (ep.id,)
+        ).fetchone()
+        if existing is not None and existing[0] == 0:
+            print(f"WARN seed: skipping system endpoint {ep.id} — "
+                  f"user row with same id exists, please rename")
+            skipped += 1
+            continue
+        db.execute("""
+            INSERT INTO endpoints (id, name, endpoint_type, provider, model,
+                base_url, api_key_env, command, args, prompt_mode,
+                timeout_s, capabilities, session_config, system)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,
+                endpoint_type=excluded.endpoint_type,
+                provider=excluded.provider,
+                model=excluded.model,
+                base_url=excluded.base_url,
+                api_key_env=excluded.api_key_env,
+                command=excluded.command,
+                args=excluded.args,
+                prompt_mode=excluded.prompt_mode,
+                timeout_s=excluded.timeout_s,
+                capabilities=excluded.capabilities,
+                session_config=excluded.session_config,
+                system=excluded.system
+            WHERE endpoints.system = 1
+        """, (
+            ep.id, ep.name, ep.endpoint_type, ep.provider, ep.model,
+            ep.base_url, ep.api_key_env, ep.command,
+            _json.dumps(ep.args), ep.prompt_mode, ep.timeout_s,
+            _json.dumps(ep.capabilities), _json.dumps(ep.session_config),
+            ep.system,
+        ))
+        upserted += 1
+    db.commit()
+    print(f"INFO seed: endpoints_upserted={upserted} endpoints_skipped_collision={skipped}")
+    return {"upserted": upserted, "skipped_collision": skipped}
+
+
+# ---------------------------------------------------------------------------
 # Seeder — agents (global, run once at startup)
 # ---------------------------------------------------------------------------
 
@@ -773,12 +835,14 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
                 pass  # Malformed steps — leave untouched
 
     # --- insert or sync missing agents ---
-    # Detect whether workflow_agents has the system column (added in migration 17).
+    # Detect whether workflow_agents has the system column (added in migration 17)
+    # and the endpoint_id column (added in migration 19).
     _agent_cols = {
         row["name"]
         for row in db.execute("PRAGMA table_info(workflow_agents)").fetchall()
     }
     _has_system_col = "system" in _agent_cols
+    _has_endpoint_id_col = "endpoint_id" in _agent_cols
 
     for agent in DEFAULT_AGENTS:
         row = db.execute(
@@ -786,7 +850,22 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
         ).fetchone()
         if row:
             # Ensure canonical fields stay in sync with the DEFAULT_AGENTS definition.
-            if _has_system_col:
+            if _has_system_col and _has_endpoint_id_col:
+                db.execute(
+                    "UPDATE workflow_agents "
+                    "SET name = ?, command = ?, args = ?, persist_session = ?, system = ?, endpoint_id = ? "
+                    "WHERE id = ?",
+                    (
+                        agent["name"],
+                        agent["command"],
+                        agent["args"],
+                        agent.get("persist_session", 0),
+                        agent.get("system", 0),
+                        agent.get("endpoint_id"),
+                        agent["id"],
+                    ),
+                )
+            elif _has_system_col:
                 db.execute(
                     "UPDATE workflow_agents "
                     "SET name = ?, command = ?, args = ?, persist_session = ?, system = ? "
@@ -816,7 +895,26 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
             existing += 1
             continue
 
-        if _has_system_col:
+        if _has_system_col and _has_endpoint_id_col:
+            db.execute(
+                """
+                INSERT INTO workflow_agents
+                    (id, name, command, args, system_prompt, persist_session, system, endpoint_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent["id"],
+                    agent["name"],
+                    agent["command"],
+                    agent["args"],
+                    agent.get("system_prompt", ""),
+                    agent.get("persist_session", 0),
+                    agent.get("system", 0),
+                    agent.get("endpoint_id"),
+                    now,
+                ),
+            )
+        elif _has_system_col:
             db.execute(
                 """
                 INSERT INTO workflow_agents

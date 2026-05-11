@@ -101,6 +101,7 @@ from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN
 from workflows_seed import (
     seed_default_workflows as _seed_default_workflows,
     seed_default_agents as _seed_default_agents,
+    seed_default_endpoints as _seed_default_endpoints,
 )
 import conditions as _conditions
 
@@ -11475,6 +11476,14 @@ def main():
 
     # Recover workflow runs stuck in "running" from a previous server session
     _recover_stuck_workflow_runs()
+
+    # Seed default global endpoints (idempotent; no-op until migration 19 creates the table)
+    try:
+        _ep_db = get_db()
+        _seed_default_endpoints(_ep_db)
+        _ep_db.close()
+    except Exception as _e:
+        print(f"  Warning: could not seed default endpoints: {_e}", file=__import__("sys").stderr)
 
     # Seed default global agents (idempotent, runs once regardless of projects)
     try:

@@ -104,7 +104,6 @@ from workflows_seed import (
     seed_default_endpoints as _seed_default_endpoints,
 )
 import conditions as _conditions
-# Aliased to avoid shadowing the legacy _extract_session_id until T12 removes it.
 from endpoints import extract_session_id as _endpoints_extract_session_id
 from runners import _resolve_argv_for_agent
 
@@ -1922,122 +1921,6 @@ def _get_run_evidence(project_id: str, run_id: int) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Streaming subprocess + session persistence helpers
-# ---------------------------------------------------------------------------
-
-def _apply_resume_args(command: str, args: list, session_id: str) -> list:
-    """Inject explicit-session-id resume flags into a CLI invocation.
-
-    codex: replace ``exec`` token with ``exec resume <session_id>`` in the
-    args list (the codex CLI accepts an explicit session id positionally).
-    claude: append ``--resume <session_id>`` (idempotent — replaces existing).
-    Other commands: append ``--resume <session_id>`` as a best-effort fallback.
-    Returns a NEW list — does not mutate args.
-    """
-    out = list(args or [])
-    cmd = (command or "").lower()
-    if cmd == "codex":
-        for i, t in enumerate(out):
-            if t == "exec":
-                # If "resume" already follows "exec", replace/insert session_id only
-                if i + 1 < len(out) and out[i + 1] == "resume":
-                    if i + 2 < len(out) and not out[i + 2].startswith("-"):
-                        out[i + 2] = session_id
-                    else:
-                        out.insert(i + 2, session_id)
-                else:
-                    out.insert(i + 1, "resume")
-                    out.insert(i + 2, session_id)
-                return out
-        # No `exec` token found — append exec resume <session_id>
-        return out + ["exec", "resume", session_id]
-    # Generic / claude path: --resume <session_id>
-    if "--resume" in out:
-        idx = out.index("--resume")
-        if idx + 1 < len(out):
-            out[idx + 1] = session_id
-        else:
-            out.append(session_id)
-        return out
-    return out + ["--resume", session_id]
-
-
-def _extract_session_id(command: str, stdout: str, stderr: str, started_before: float) -> "str | None":
-    """Extract the CLI's session id from process output.
-
-    Best-effort — returns None on failure; callers proceed without persistence.
-
-    codex: looks for a ``Session: <uuid>`` line on stderr (or stdout). Falls
-    back to scanning ~/.codex/sessions/ for the most-recently-modified file
-    with mtime >= started_before.
-
-    claude: looks for JSON output containing "session_id" or a line matching
-    ``session_id: <uuid>``. Falls back to scanning ~/.claude/projects/ similarly.
-    """
-    import glob as _glob
-    cmd = (command or "").lower()
-    UUID_RE = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
-    blob = (stdout or "") + "\n" + (stderr or "")
-    if cmd == "codex":
-        for pat in (
-            r"Session(?:\s*ID)?\s*[:=]\s*(" + UUID_RE + ")",
-            r'"session_id"\s*[:=]\s*"(' + UUID_RE + ')"?',
-            r'session[_\-]?id["\s:=]+(' + UUID_RE + ')',
-        ):
-            m = re.search(pat, blob, re.IGNORECASE)
-            if m:
-                return m.group(1)
-        # Filesystem fallback: find most-recently-modified session file
-        sessions_dir = os.path.expanduser("~/.codex/sessions")
-        if os.path.isdir(sessions_dir):
-            candidates = []
-            for p in _glob.glob(os.path.join(sessions_dir, "*.json")):
-                try:
-                    mt = os.path.getmtime(p)
-                    if mt >= started_before - 1:
-                        candidates.append((mt, p))
-                except OSError:
-                    continue
-            if candidates:
-                candidates.sort(reverse=True)
-                fname = os.path.basename(candidates[0][1])
-                m = re.search(UUID_RE, fname)
-                if m:
-                    return m.group(0)
-        return None
-    if cmd == "claude":
-        for pat in (
-            r'"session_id"\s*:\s*"(' + UUID_RE + ')"',
-            r'session_id\s*[:=]\s*(' + UUID_RE + ')',
-        ):
-            m = re.search(pat, blob, re.IGNORECASE)
-            if m:
-                return m.group(1)
-        return None
-    return None
-
-
-def _build_agent_cmd(command: str, args: list, prompt: str) -> list:
-    """Build the full argv for an agent invocation, per-CLI conventions.
-
-    claude: ``claude [args] -p <prompt> --output-format json`` — prompt via -p,
-    JSON-wrapped result on stdout.
-    codex: ``codex [args] <prompt>`` — prompt is positional; no --output-format
-    flag exists. Output is plain text and parsed as raw text by the caller.
-    other: ``<command> [args] <prompt>`` — best-effort positional fallback.
-    """
-    cmd = (command or "").lower()
-    base = [command] + list(args or [])
-    if cmd == "claude":
-        return base + ["-p", prompt, "--output-format", "json"]
-    if cmd == "codex":
-        return base + [prompt]
-    return base + [prompt]
-
-
-# ---------------------------------------------------------------------------
-# End Phase 2 helpers
-# ---------------------------------------------------------------------------
 
 
 def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow: dict, proj: dict) -> None:
@@ -2154,9 +2037,9 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     session_ids = {}
             prior_sid = session_ids.get(agent_id)
 
-            # T12: this compat arg-handling block can be removed once all agents
-            # have endpoint_id set (no more NULL-endpoint_id compat path).
             # For compat (no endpoint_id) non-persist agents: inject --no-session-persistence
+            # This block remains for the compat (NULL endpoint_id) path, which stays for one
+            # release per spec. Remove when compat columns are dropped.
             # into the agent args so the compat Endpoint picks it up via build_invocation.
             # Real endpoint agents carry this in their endpoint config instead.
             _agent_for_invocation = agent

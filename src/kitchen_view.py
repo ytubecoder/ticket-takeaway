@@ -388,6 +388,27 @@ body {
 }
 .att-proj-empty { font-size: 12px; color: var(--text-tertiary); padding: 6px; }
 
+/* Demo route banner — only injected by JS when location is /kitchen/demo */
+.att-demo-banner {
+  margin: 8px 12px 0 12px;
+  padding: 10px 14px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: var(--text-secondary);
+  font-size: 13px;
+  border-radius: 8px;
+  transition: background 0.25s, border-color 0.25s;
+}
+.att-demo-banner strong { color: var(--accent); font-weight: 700; }
+.att-demo-banner a { color: var(--accent); }
+.att-demo-banner-flash {
+  background: rgba(59, 130, 246, 0.28);
+  border-color: rgba(59, 130, 246, 0.7);
+}
+
+/* Inert cards on the demo route — no pointer cursor to set expectations */
+body[data-demo="1"] .att-card { cursor: default; }
+
 /* Overflow button gets a subtle accent dot when a project filter is active */
 .att-overflow-btn-filtered { position: relative; }
 .att-overflow-btn-filtered::after {
@@ -888,6 +909,33 @@ _JS = r"""
   // The /kitchen/demo route renders mockup state; the live /api/kitchen/feed
   // endpoint would replace it with the empty live DB on the first tick.
   var IS_DEMO = location.pathname === '/kitchen/demo';
+
+  // Demo cards point at IDs that don't exist in the live DB. Clicking would
+  // open the detail overlay for a ghost ticket. Suppress navigation and
+  // explain why with a top banner.
+  if (IS_DEMO) {
+    document.documentElement.setAttribute('data-demo', '1');
+    document.addEventListener('click', function(e){
+      var card = e.target.closest('.att-card');
+      if (!card) return;
+      e.preventDefault();
+      var banner = document.querySelector('.att-demo-banner');
+      if (banner) {
+        banner.classList.add('att-demo-banner-flash');
+        setTimeout(function(){ banner.classList.remove('att-demo-banner-flash'); }, 600);
+      }
+    });
+    document.addEventListener('DOMContentLoaded', function(){
+      document.body.setAttribute('data-demo', '1');
+      var main = document.querySelector('.att-main .att-shell');
+      if (!main) return;
+      var b = document.createElement('div');
+      b.className = 'att-demo-banner';
+      b.innerHTML = '<strong>Demo data</strong> &mdash; cards are inert. '
+                  + 'Visit <a href="/kitchen">/kitchen</a> for the live feed.';
+      main.insertBefore(b, main.firstChild);
+    });
+  }
 
   function tick(){
     if (IS_DEMO || menuOpen || inFlight) return;

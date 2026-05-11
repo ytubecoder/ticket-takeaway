@@ -39,6 +39,7 @@ from actions import (
     capture_commit_hash,
     link_branch, unlink_branch, get_ticket_branches, get_project_branches,
     scan_branches, scan_prs,
+    emit_event, ActorContext,
 )
 
 
@@ -464,6 +465,15 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
                 t["parent"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
+            emit_event(
+                conn, project_id, "ticket", tid, "ticket_created",
+                {
+                    "origin": "markdown_edit",
+                    "source_file": "PRODUCT_BACKLOG.md",
+                    "section": t["section"],
+                },
+                ActorContext.system(),
+            )
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
                 conn.execute(
                     "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
@@ -792,6 +802,15 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
                 t["parent"], t["sort_order"],
                 t.get("commit_hash", ""), t.get("release_tag", ""),
             ))
+            emit_event(
+                conn, project_id, "ticket", tid, "ticket_created",
+                {
+                    "origin": "markdown_edit",
+                    "source_file": "PRODUCT_BACKLOG.md",
+                    "section": t["section"],
+                },
+                ActorContext.system(),
+            )
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
                 conn.execute(
                     "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
@@ -841,6 +860,15 @@ def seed_project(conn: sqlite3.Connection, project: dict) -> int:
 
     # Clear existing data for this project (idempotent)
     conn.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
+    # Wipe prior seed events too — re-seeding is a fresh import, not a history
+    # replay. (Other event_kinds for this subject would still be valid, but
+    # ticket rows have just been deleted, so nothing references them.)
+    conn.execute(
+        "DELETE FROM activity_events "
+        "WHERE project_id = ? AND subject_type = 'ticket' AND event_kind = 'ticket_created' "
+        "AND json_extract(payload_json, '$.origin') = 'seed'",
+        (project_id,),
+    )
 
     for t in tickets:
         conn.execute("""
@@ -854,6 +882,17 @@ def seed_project(conn: sqlite3.Connection, project: dict) -> int:
             t["parent"], t["sort_order"],
             t.get("commit_hash", ""), t.get("release_tag", ""),
         ))
+
+        emit_event(
+            conn, project_id, "ticket", t["id"], "ticket_created",
+            {
+                "origin": "seed",
+                "source_file": "PRODUCT_BACKLOG.md",
+                "section": t["section"],
+                "status": t["status"],
+            },
+            ActorContext.system(),
+        )
 
         # Acceptance criteria
         for i, (checked, text) in enumerate(t["acceptance_criteria"]):

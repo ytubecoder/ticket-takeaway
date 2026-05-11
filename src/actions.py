@@ -716,10 +716,16 @@ def add_ticket(
     source_attachment_id: Optional[int] = None,
     tags: Optional[list[str]] = None,
     is_container: int = 0,
+    actor: ActorContext = ActorContext.human(),
+    emit_created_event: bool = True,
 ) -> str:
     """Add a new ticket.  Auto-generates the ID from *section* prefix.
 
     Returns the new ticket ID.
+
+    Callers that want to emit a richer ticket_created event themselves (e.g.
+    seek attaches scan source-line metadata; seed_project tags origin=seed)
+    should pass emit_created_event=False and call emit_event directly.
     """
     status = DEFAULT_STATUS_BY_SECTION[section]
     ticket_id = auto_generate_id(conn, project_id, section)
@@ -743,6 +749,22 @@ def add_ticket(
                     "VALUES (?, ?, ?)",
                     (ticket_id, project_id, tag),
                 )
+
+    if emit_created_event:
+        # Default origin: 'human' for direct UI/CLI creation, 'agent' when an
+        # agent-actor calls in (e.g. workflow run that spawns a sub-ticket).
+        origin = "agent" if actor.actor_type == "agent" else "human"
+        emit_event(
+            conn, project_id, "ticket", ticket_id, "ticket_created",
+            {
+                "id": ticket_id,
+                "title": title,
+                "section": section,
+                "origin": origin,
+                "draft": bool(draft),
+            },
+            actor,
+        )
 
     return ticket_id
 
@@ -1459,17 +1481,64 @@ def get_ticket_activity(
             (project_id, tid, limit),
         ).fetchall()
 
+    # Resolve agent display names in one batch — for actor_type='agent', actor_id
+    # is a run_id. Kitchen runs (integer ids) carry workflow_name in metadata_json;
+    # workflow_bounce runs (uuid string ids) link to workflows.name.
+    agent_run_ids: set[str] = {
+        r["actor_id"] for r in rows
+        if r["actor_type"] == "agent" and r["actor_id"]
+    }
+    actor_name_by_run: dict[str, str] = {}
+    if agent_run_ids:
+        # Try kitchen runs (numeric ids)
+        numeric_ids = [rid for rid in agent_run_ids if rid.isdigit()]
+        if numeric_ids:
+            placeholders = ",".join("?" * len(numeric_ids))
+            kitchen_rows = conn.execute(
+                f"SELECT id, metadata_json FROM runs WHERE id IN ({placeholders})",
+                numeric_ids,
+            ).fetchall()
+            for kr in kitchen_rows:
+                try:
+                    meta = json.loads(kr["metadata_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                name = meta.get("workflow_name") or meta.get("agent_name")
+                if name:
+                    actor_name_by_run[str(kr["id"])] = name
+        # Try workflow_bounce runs (uuid ids)
+        uuid_ids = [rid for rid in agent_run_ids if not rid.isdigit()]
+        if uuid_ids:
+            placeholders = ",".join("?" * len(uuid_ids))
+            try:
+                wf_rows = conn.execute(
+                    f"SELECT wr.id AS id, w.name AS name "
+                    f"FROM workflow_runs wr LEFT JOIN workflows w ON w.id = wr.workflow_id "
+                    f"WHERE wr.id IN ({placeholders})",
+                    uuid_ids,
+                ).fetchall()
+                for wr in wf_rows:
+                    if wr["name"]:
+                        actor_name_by_run[wr["id"]] = wr["name"]
+            except sqlite3.OperationalError:
+                # workflow_runs table may not exist on minimal schemas
+                pass
+
     events = []
     for r in rows:
         try:
             payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
         except (json.JSONDecodeError, TypeError):
             payload = {}
+        actor_name = None
+        if r["actor_type"] == "agent" and r["actor_id"]:
+            actor_name = actor_name_by_run.get(r["actor_id"])
         events.append({
             "id": r["id"],
             "occurred_at": r["occurred_at"],
             "actor_type": r["actor_type"],
             "actor_id": r["actor_id"],
+            "actor_name": actor_name,
             "event_kind": r["event_kind"],
             "payload": payload,
             "run_id": payload.get("run_id"),

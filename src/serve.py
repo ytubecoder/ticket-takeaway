@@ -8223,6 +8223,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(preview)
                 return
 
+            # GET /api/endpoints — list all configured model endpoints
+            if remainder == "/api/endpoints":
+                from endpoints import list_endpoints
+                conn = get_db()
+                init_db(conn)
+                eps = [vars(ep) for ep in list_endpoints(conn)]
+                conn.close()
+                self._send_json({"endpoints": eps})
+                return
+
             # Legacy backward compat: --project flag redirects bare /api/ routes
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)

@@ -395,6 +395,16 @@ def build_nav_rail_js() -> str:
 
   // Wire interactions once at document level — survives DOM rebuilds.
   document.addEventListener('click', function(e){
+    // Phone-sized viewports treat the expanded rail as an overlay. Auto-collapse
+    // when the user picks any item so the destination page isn't covered by it.
+    // Runs first and never preventDefault — anchors still navigate normally.
+    var picked = e.target.closest('.nav-rail-item, .rail-switcher-item');
+    if (picked && window.matchMedia('(max-width: 760px)').matches) {
+      document.body.classList.remove('rail-expanded');
+      try { localStorage.setItem(KEY, '0'); } catch(_){}
+      closeSwitcher();
+    }
+
     var t = e.target.closest('#navRailToggle');
     if (t) {
       e.preventDefault();
@@ -4139,6 +4149,9 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   }}
 
   filterBtns.forEach(function(btn) {{
+    // Skip action buttons that share .filter-btn styling but aren't filters
+    // (e.g. Seek). They don't carry a data-filter and shouldn't toggle .active.
+    if (!btn.dataset.filter) return;
     btn.addEventListener('click', function() {{
       if (btn.dataset.group === 'all') {{
         filterBtns.forEach(function(b) {{ b.classList.remove('active'); }});
@@ -7781,30 +7794,40 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
   function doSeek(btn, origText) {{
     btn.disabled = true;
+    btn.classList.remove('active');
     btn.textContent = 'Seeking\u2026';
     fetch(EDIT_API + '/seek', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
       body: '{{}}'
     }})
-    .then(function(r) {{ return r.json(); }})
-    .then(function(result) {{
+    .then(function(r) {{
+      return r.json().then(function(j) {{ return {{ ok: r.ok, status: r.status, body: j }}; }});
+    }})
+    .then(function(res) {{
       btn.disabled = false;
       btn.textContent = origText;
+      btn.classList.remove('active');
+      var result = res.body || {{}};
+      if (!res.ok) {{
+        showAppToast('Seek failed: ' + (result.error || ('HTTP ' + res.status)), 'error');
+        return;
+      }}
       if (result.created > 0) {{
         showAppToast(result.created + ' draft(s) created', 'success');
         localStorage.setItem('tt-show-drafts', '1');
         location.reload();
-      }} else if (result.discovered > 0) {{
-        showAppToast('All ' + result.discovered + ' items already tracked', 'success');
+      }} else if (result.skipped_duplicates > 0 || (result.discovered > 0 && result.created === 0)) {{
+        showAppToast('All ' + result.discovered + ' items already tracked \u2014 nothing new', 'success');
       }} else {{
-        showAppToast('No ticket-like items found', 'success');
+        showAppToast('No new ticket-like items found in project files', 'success');
       }}
     }})
-    .catch(function() {{
+    .catch(function(err) {{
       btn.disabled = false;
       btn.textContent = origText;
-      showAppToast('Seek failed', 'error');
+      btn.classList.remove('active');
+      showAppToast('Seek failed: ' + (err && err.message ? err.message : 'network error'), 'error');
     }});
   }}
 

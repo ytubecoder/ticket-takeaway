@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -22,6 +24,101 @@ def _ticket_prompt(action: str) -> str:
         "{{ticket.description}}\n\n"
         "Acceptance criteria:\n{{ticket.acceptance_criteria}}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Endpoint dataclass + seed data
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Endpoint:
+    """Seed-time representation of an endpoints table row.
+
+    Mirrors the SQL columns in migration 19. JSON-shaped fields (args,
+    capabilities, session_config) are held as Python types here and
+    json.dumps()'d at upsert time.
+    """
+    id: str
+    name: str
+    endpoint_type: str = "cli"
+    command: Optional[str] = None
+    args: list = field(default_factory=list)
+    prompt_mode: str = "template"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key_env: Optional[str] = None
+    timeout_s: int = 120
+    capabilities: dict = field(default_factory=dict)
+    session_config: dict = field(default_factory=dict)
+    system: int = 0
+
+
+DEFAULT_ENDPOINTS: list[Endpoint] = [
+    Endpoint(
+        id="claude-cli",
+        name="Claude CLI",
+        endpoint_type="cli",
+        system=1,
+        command="claude",
+        args=["-p", "{prompt}", "--output-format", "json"],
+        prompt_mode="template",
+        capabilities={"sessions": True},
+        session_config={
+            "resume_args": ["-p", "{prompt}", "--output-format", "json",
+                            "--resume", "{session_id}"],
+            "session_id_regex": r'"session_id"\s*:\s*"([0-9a-f-]+)"',
+        },
+    ),
+    Endpoint(
+        id="codex-cli",
+        name="Codex CLI",
+        endpoint_type="cli",
+        system=1,
+        command="codex",
+        args=["{prompt}"],
+        prompt_mode="template",
+        capabilities={"sessions": True},
+        session_config={
+            "resume_args": ["exec", "resume", "{session_id}"],
+            "session_id_regex": r"Session(?:\s+ID)?\s*:\s*([0-9a-f-]+)",
+            "session_id_fallback_dir": "~/.codex/sessions/",
+        },
+    ),
+    Endpoint(
+        id="codex-exec-readonly",
+        name="Codex exec (read-only)",
+        endpoint_type="cli",
+        system=1,
+        command="codex",
+        args=["exec", "-s", "read-only", "{prompt}"],
+        prompt_mode="template",
+        capabilities={"sessions": False},
+    ),
+    Endpoint(
+        id="hermes-cli",
+        name="Hermes CLI",
+        endpoint_type="cli",
+        system=1,
+        command="hermes",
+        args=["chat", "-q", "{prompt}"],
+        prompt_mode="template",
+        capabilities={"sessions": False},
+    ),
+]
+
+# Maps legacy (command, raw_args_tuple) -> canonical endpoint id.
+# Used by migration #19 to pin known system runtimes to seeded ids
+# instead of synthesising duplicate endpoints. raw_args_tuple is the
+# value stored in workflow_agents.args BEFORE _build_agent_cmd's
+# runner-side flag injection.
+KNOWN_CLI_MAPPINGS: dict[tuple, str] = {
+    ("claude", ()): "claude-cli",
+    ("codex", ()): "codex-cli",
+    ("codex", ("exec", "-s", "read-only")): "codex-exec-readonly",
+    ("hermes", ()): "hermes-cli",
+    ("hermes", ("chat",)): "hermes-cli",
+}
 
 
 # ---------------------------------------------------------------------------

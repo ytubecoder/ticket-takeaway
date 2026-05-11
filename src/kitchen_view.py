@@ -42,14 +42,14 @@ _STATE_CHIPS: list[tuple[str, str]] = [
     ("failed", "Failed"),
 ]
 
-# Glyph rendered inside each tile so the color's meaning is legible at a
-# glance. Unicode characters chosen for cross-platform consistency.
-_BUCKET_GLYPHS: dict[str, str] = {
-    "needs_me":          "!",   # something is waiting on you
-    "running":           "▶",   # currently executing
-    "ready_to_delegate": "▷",   # eligible, not yet running
-    "paused_ticket":     "‖",   # ticket-level pause
-    "failed":            "✕",   # last run failed
+# Human-readable label for each Kitchen bucket. Used inline on cards so
+# users can see the run-state without a separate pictorial element.
+_BUCKET_LABELS: dict[str, str] = {
+    "needs_me":          "Needs me",
+    "running":           "Running",
+    "ready_to_delegate": "Ready",
+    "paused_ticket":     "Paused",
+    "failed":            "Failed",
 }
 
 
@@ -72,53 +72,39 @@ def _a(s: Any) -> str:
 # ---------------------------------------------------------------------------
 
 def _card_html(item: dict) -> str:
-    """Render a single ticket card as an <a>."""
+    """Render a single ticket card as an <a>.
+
+    Minimal layout — ticket ID + title on top, then section / kitchen-state /
+    project as plain meta below. A thin left border tinted by the kitchen
+    bucket is the only color cue on the card body. Blue corner dot signals
+    unread / actionable. No pictorial tile, no glyph.
+    """
     ticket_id = item.get("ticket_id", "")
     project_id = item.get("project_id", "")
     # The kanban listens for a #ticket/{id} hash and auto-opens that detail
-    # overlay on load (src/generate.py::_parseTicketHash). Using a query
-    # string instead would land on the kanban with the overlay closed.
+    # overlay (src/generate.py::_parseTicketHash). Query form would just
+    # land on the board with no overlay.
     href = f"/{project_id}/#ticket/{ticket_id}"
     bucket = item.get("bucket", "")
     time_bucket = item.get("time_bucket", "")
     is_unread = bool(item.get("is_unread"))
     title = item.get("title", "")
     project_name = item.get("project_name", project_id)
-    status = item.get("status", "")
     section = item.get("section", "")
+    bucket_label = _BUCKET_LABELS.get(bucket, "")
 
-    unread_html = '<span class="att-unread-dot" aria-label="Unread"></span>' if is_unread else ""
+    meta_parts: list[str] = []
+    if section:
+        meta_parts.append(f'<span class="att-card-section">{_t(section)}</span>')
+    if bucket_label:
+        meta_parts.append(f'<span class="att-card-bucket">{_t(bucket_label)}</span>')
+    if project_name:
+        meta_parts.append(f'<span class="att-card-proj">{_t(project_name)}</span>')
+    meta_inner = '<span class="att-card-dot" aria-hidden="true">·</span>'.join(meta_parts)
 
-    # The tile is a colored, rounded square. Bucket drives its accent. The
-    # glyph inside makes the bucket meaning self-evident without legend.
-    glyph = _BUCKET_GLYPHS.get(bucket, "")
-    tile_html = (
-        f'<span class="att-tile att-tile-{_a(bucket)}" aria-hidden="true" '
-        f'title="{_a(bucket.replace("_", " ").title())}">'
-        f'<span class="att-tile-glyph">{_t(glyph)}</span>'
-        f'{unread_html}'
-        f'</span>'
-    )
-
-    # Section badge (color-coded). Only renders when section is non-empty.
-    section_html = (
-        f'<span class="att-card-section" data-section="{_a(section)}">{_t(section)}</span>'
-        if section else ""
-    )
-
-    body_html = (
-        f'<span class="att-card-body">'
-        f'<span class="att-card-head">'
-        f'<span class="att-card-id">{_t(ticket_id)}</span>'
-        f'<span class="att-card-title">{_t(title)}</span>'
-        f'</span>'
-        f'<span class="att-card-meta">'
-        f'{section_html}'
-        f'<span class="att-card-proj">{_t(project_name)}</span>'
-        f'<span class="att-card-dot" aria-hidden="true">·</span>'
-        f'<span class="att-card-status">{_t(status)}</span>'
-        f'</span>'
-        f'</span>'
+    unread_html = (
+        '<span class="att-unread-dot" aria-label="Unread"></span>'
+        if is_unread else ""
     )
 
     return (
@@ -129,7 +115,14 @@ def _card_html(item: dict) -> str:
         f' data-time-bucket="{_a(time_bucket)}"'
         f' data-section="{_a(section)}"'
         f' data-unread="{"1" if is_unread else "0"}">'
-        f'{tile_html}{body_html}'
+        f'<span class="att-card-body">'
+        f'<span class="att-card-head">'
+        f'<span class="att-card-id">{_t(ticket_id)}</span>'
+        f'<span class="att-card-title">{_t(title)}</span>'
+        f'</span>'
+        f'<span class="att-card-meta">{meta_inner}</span>'
+        f'</span>'
+        f'{unread_html}'
         f'</a>'
     )
 
@@ -301,7 +294,46 @@ body {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  gap: 6px;
 }
+
+/* Live / Paused indicator surfaced in the header — always visible so the
+   system pause state isn't buried under the overflow dots. Tapping it
+   opens the same overflow panel that holds the pause/resume button. */
+.att-header-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1;
+  white-space: nowrap;
+}
+.att-header-status:hover { background: var(--bg-hover); color: var(--text-primary); }
+.att-header-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgba(34,197,94,0.45);
+  animation: att-header-pulse 2.2s ease-in-out infinite;
+}
+.att-header-status.paused .att-header-status-dot {
+  background: #f59e0b;
+  animation: none;
+}
+@keyframes att-header-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.45); }
+  50%      { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
+}
+
 .att-overflow-btn {
   width: 36px;
   height: 36px;
@@ -494,24 +526,6 @@ body[data-demo="1"] .att-card { cursor: default; }
 }
 [data-theme="light"] .att-chip-count { background: rgba(17,24,39,0.05); }
 
-/* Tint each state chip with its tile color so the legend is self-evident.
-   The "active" state for these chips uses the same color (deeper saturation)
-   so the link between filter chip and tile is unmistakable. */
-.att-chip[data-state="needs_me"]          { color: var(--att-tile-needs-fg);  border-color: rgba(245,158, 11,0.35); }
-.att-chip[data-state="running"]           { color: var(--att-tile-running-fg);border-color: rgba( 59,130,246,0.35); }
-.att-chip[data-state="ready_to_delegate"] { color: var(--att-tile-ready-fg);  border-color: rgba( 34,197, 94,0.35); }
-.att-chip[data-state="paused_ticket"]     { color: var(--att-tile-paused-fg); border-color: rgba(148,163,184,0.35); }
-.att-chip[data-state="failed"]            { color: var(--att-tile-failed-fg); border-color: rgba(239, 68, 68,0.35); }
-.att-chip[data-state="needs_me"].active          { background: rgba(245,158, 11,0.22); border-color: rgba(245,158, 11,0.65); color: var(--att-tile-needs-fg);  }
-.att-chip[data-state="running"].active           { background: rgba( 59,130,246,0.22); border-color: rgba( 59,130,246,0.65); color: var(--att-tile-running-fg);}
-.att-chip[data-state="ready_to_delegate"].active { background: rgba( 34,197, 94,0.22); border-color: rgba( 34,197, 94,0.65); color: var(--att-tile-ready-fg);  }
-.att-chip[data-state="paused_ticket"].active     { background: rgba(148,163,184,0.22); border-color: rgba(148,163,184,0.65); color: var(--att-tile-paused-fg); }
-.att-chip[data-state="failed"].active            { background: rgba(239, 68, 68,0.22); border-color: rgba(239, 68, 68,0.65); color: var(--att-tile-failed-fg); }
-.att-chip.active[data-state] .att-chip-count {
-  background: rgba(255,255,255,0.08);
-  color: inherit;
-}
-
 /* Feed & bucket sections */
 .att-feed { display: flex; flex-direction: column; gap: 18px; }
 .att-bucket { display: flex; flex-direction: column; gap: 8px; }
@@ -529,66 +543,41 @@ body[data-demo="1"] .att-card { cursor: default; }
 
 /* Cards */
 .att-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 12px 14px 12px 16px;
   border-radius: 14px;
   background: var(--att-card-bg);
   border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--border-default);
   color: var(--text-primary);
   text-decoration: none;
   transition: background 0.12s, border-color 0.12s, transform 0.08s;
-  min-height: 64px;
+  min-height: 56px;
 }
 .att-card:hover { background: var(--att-card-hover); border-color: var(--border-default); }
+.att-card:hover { border-left-color: var(--border-strong); }
 .att-card:active { transform: scale(0.995); }
 .att-card.att-hidden { display: none; }
 
-.att-tile {
-  position: relative;
-  flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--att-tile-paused-bg);
-  color: var(--att-tile-paused-fg);
-}
-.att-tile-needs_me     { background: var(--att-tile-needs-bg);   color: var(--att-tile-needs-fg); }
-.att-tile-running      { background: var(--att-tile-running-bg); color: var(--att-tile-running-fg); }
-.att-tile-ready_to_delegate { background: var(--att-tile-ready-bg);  color: var(--att-tile-ready-fg); }
-.att-tile-paused_ticket { background: var(--att-tile-paused-bg); color: var(--att-tile-paused-fg); }
-.att-tile-failed       { background: var(--att-tile-failed-bg);  color: var(--att-tile-failed-fg); }
+/* Thin left-border tinted by the Kitchen bucket — the only color cue. */
+.att-card[data-bucket="needs_me"]          { border-left-color: var(--att-tile-needs-fg); }
+.att-card[data-bucket="running"]           { border-left-color: var(--att-tile-running-fg); }
+.att-card[data-bucket="ready_to_delegate"] { border-left-color: var(--att-tile-ready-fg); }
+.att-card[data-bucket="paused_ticket"]     { border-left-color: var(--att-tile-paused-fg); }
+.att-card[data-bucket="failed"]            { border-left-color: var(--att-tile-failed-fg); }
 
-.att-tile-glyph {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 0;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-}
-.att-tile-needs_me .att-tile-glyph { font-size: 22px; }
-.att-tile-running .att-tile-glyph  { animation: att-pulse 1.6s ease-in-out infinite; }
-.att-tile-paused_ticket .att-tile-glyph { font-size: 20px; }
-.att-tile-failed .att-tile-glyph   { font-size: 16px; }
-@keyframes att-pulse {
-  0%, 100% { opacity: 1;    transform: scale(1); }
-  50%      { opacity: 0.55; transform: scale(0.92); }
-}
-
+/* Blue unread dot — top-right of the card */
 .att-unread-dot {
   position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 10px;
-  height: 10px;
+  top: 10px;
+  right: 12px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--accent);
-  border: 2px solid var(--bg-page);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .att-card-body {
@@ -640,29 +629,30 @@ body[data-demo="1"] .att-card { cursor: default; }
   font-weight: 500;
 }
 .att-card-dot { color: var(--text-tertiary); }
-.att-card-status { color: var(--text-tertiary); }
 
-/* Section pill — color-coded so column membership is visible without
-   columns. Colors mirror the kanban's left-border accent per section. */
+/* Section pill — neutral, just a small tag indicating the kanban column. */
 .att-card-section {
   display: inline-block;
-  padding: 1px 8px;
-  border-radius: 8px;
+  padding: 1px 7px;
+  border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.01em;
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-secondary);
   border: 1px solid var(--border-default);
   flex-shrink: 0;
 }
-.att-card-section[data-section="WIP"]        { background: rgba( 59,130,246,0.15); color: #6ea8ff; border-color: rgba( 59,130,246,0.35); }
-.att-card-section[data-section="For Review"] { background: rgba(245,158, 11,0.15); color: #f5b647; border-color: rgba(245,158, 11,0.35); }
-.att-card-section[data-section="Backlog"]    { background: rgba(107,114,128,0.18); color: #b6bcc6; border-color: rgba(107,114,128,0.40); }
-.att-card-section[data-section="Bugs"]       { background: rgba(239, 68, 68,0.15); color: #f87171; border-color: rgba(239, 68, 68,0.35); }
-.att-card-section[data-section="Done"]       { background: rgba( 34,197, 94,0.15); color: #6ee7a3; border-color: rgba( 34,197, 94,0.35); }
-.att-card-section[data-section="Ideas"]      { background: rgba(168, 85,247,0.15); color: #c4a4f7; border-color: rgba(168, 85,247,0.35); }
-.att-card-section[data-section="Icebox"]     { background: rgba(148,163,184,0.12); color: #cbd5e1; border-color: rgba(148,163,184,0.30); }
+
+/* Bucket label — plain text, color matches the card's left border so the
+   user can read "Running" and connect it back to the bucket without a
+   separate pictorial tile. Subtle, not a bright pill. */
+.att-card-bucket { font-weight: 600; }
+.att-card[data-bucket="needs_me"]          .att-card-bucket { color: var(--att-tile-needs-fg); }
+.att-card[data-bucket="running"]           .att-card-bucket { color: var(--att-tile-running-fg); }
+.att-card[data-bucket="ready_to_delegate"] .att-card-bucket { color: var(--att-tile-ready-fg); }
+.att-card[data-bucket="paused_ticket"]     .att-card-bucket { color: var(--att-tile-paused-fg); }
+.att-card[data-bucket="failed"]            .att-card-bucket { color: var(--att-tile-failed-fg); }
 
 /* Empty state */
 .att-empty {
@@ -701,7 +691,7 @@ body[data-demo="1"] .att-card { cursor: default; }
 /* Reduced motion — kill animations */
 @media (prefers-reduced-motion: reduce) {
   .att-overflow-panel,
-  .att-tile-running .att-tile-glyph { animation: none !important; }
+  .att-header-status-dot { animation: none !important; }
   .att-card { transition: none; }
 }
 """
@@ -813,16 +803,26 @@ _JS = r"""
   function wireOverflow(){
     var btn = $('.att-overflow-btn');
     var panel = $('.att-overflow-panel');
+    var headerStatus = $('.att-header-status');
     if (!btn || !panel) return;
-    btn.addEventListener('click', function(e){
-      e.stopPropagation();
+    function toggle(){
       menuOpen = !menuOpen;
       panel.classList.toggle('hidden', !menuOpen);
       btn.setAttribute('aria-expanded', menuOpen ? 'true' : 'false');
-    });
+    }
+    btn.addEventListener('click', function(e){ e.stopPropagation(); toggle(); });
+    // The header Live/Paused indicator opens the same panel so users can
+    // toggle the system pause directly from where they see the state.
+    if (headerStatus) {
+      headerStatus.addEventListener('click', function(e){
+        e.stopPropagation();
+        toggle();
+      });
+    }
     document.addEventListener('click', function(e){
       if (!menuOpen) return;
       if (panel.contains(e.target) || btn.contains(e.target)) return;
+      if (headerStatus && headerStatus.contains(e.target)) return;
       menuOpen = false;
       panel.classList.add('hidden');
       btn.setAttribute('aria-expanded', 'false');
@@ -901,38 +901,27 @@ _JS = r"""
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
-  var BUCKET_GLYPHS = {
-    needs_me:'!', running:'▶', ready_to_delegate:'▷',
-    paused_ticket:'‖', failed:'✕'
+  var BUCKET_LABELS = {
+    needs_me:'Needs me', running:'Running', ready_to_delegate:'Ready',
+    paused_ticket:'Paused', failed:'Failed'
   };
-  function bucketLabel(b){
-    return (b||'').replace(/_/g,' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
-  }
   function renderCard(it){
     var href = '/' + encodeURIComponent(it.project_id || '') +
                '/#ticket/' + encodeURIComponent(it.ticket_id || '');
-    var unread = it.is_unread
-      ? '<span class="att-unread-dot" aria-label="Unread"></span>' : '';
     var bucket = it.bucket || '';
     var section = it.section || '';
-    var tile = '<span class="att-tile att-tile-'+esc(bucket)+'" aria-hidden="true"'
-             + ' title="'+esc(bucketLabel(bucket))+'">'
-             + '<span class="att-tile-glyph">'+esc(BUCKET_GLYPHS[bucket]||'')+'</span>'
-             + unread + '</span>';
-    var sectionPill = section
-      ? '<span class="att-card-section" data-section="'+esc(section)+'">'+esc(section)+'</span>'
-      : '';
-    var body = '<span class="att-card-body">'
-             + '<span class="att-card-head">'
-             + '<span class="att-card-id">'+esc(it.ticket_id||'')+'</span>'
-             + '<span class="att-card-title">'+esc(it.title||'')+'</span>'
-             + '</span>'
-             + '<span class="att-card-meta">'
-             + sectionPill
-             + '<span class="att-card-proj">'+esc(it.project_name||it.project_id||'')+'</span>'
-             + '<span class="att-card-dot" aria-hidden="true">·</span>'
-             + '<span class="att-card-status">'+esc(it.status||'')+'</span>'
-             + '</span></span>';
+    var bucketLbl = BUCKET_LABELS[bucket] || '';
+
+    var dot = '<span class="att-card-dot" aria-hidden="true">·</span>';
+    var parts = [];
+    if (section)   parts.push('<span class="att-card-section">'+esc(section)+'</span>');
+    if (bucketLbl) parts.push('<span class="att-card-bucket">'+esc(bucketLbl)+'</span>');
+    var proj = it.project_name || it.project_id || '';
+    if (proj)      parts.push('<span class="att-card-proj">'+esc(proj)+'</span>');
+    var metaInner = parts.join(dot);
+    var unread = it.is_unread
+      ? '<span class="att-unread-dot" aria-label="Unread"></span>' : '';
+
     return '<a class="att-card" href="'+href+'"'
          + ' data-ticket-id="'+esc(it.ticket_id||'')+'"'
          + ' data-project="'+esc(it.project_id||'')+'"'
@@ -940,7 +929,15 @@ _JS = r"""
          + ' data-time-bucket="'+esc(it.time_bucket||'older')+'"'
          + ' data-section="'+esc(section)+'"'
          + ' data-unread="'+(it.is_unread?'1':'0')+'">'
-         + tile + body + '</a>';
+         + '<span class="att-card-body">'
+         + '<span class="att-card-head">'
+         + '<span class="att-card-id">'+esc(it.ticket_id||'')+'</span>'
+         + '<span class="att-card-title">'+esc(it.title||'')+'</span>'
+         + '</span>'
+         + '<span class="att-card-meta">'+metaInner+'</span>'
+         + '</span>'
+         + unread
+         + '</a>';
   }
 
   function refreshFromServer(){
@@ -970,8 +967,12 @@ _JS = r"""
           var label = $('.att-pause-label');
           var btn = $('.att-pause-btn');
           var note = $('.att-pause-note');
+          var hdr = $('.att-header-status');
+          var hdrLbl = $('.att-header-status-label');
           if (status) status.classList.toggle('paused', STATE_PAUSED);
+          if (hdr) hdr.classList.toggle('paused', STATE_PAUSED);
           if (label) label.textContent = STATE_PAUSED ? 'Paused' : 'Live';
+          if (hdrLbl) hdrLbl.textContent = STATE_PAUSED ? 'Paused' : 'Live';
           if (btn) btn.textContent = STATE_PAUSED ? 'Resume auto-dispatch' : 'Pause auto-dispatch';
           if (note) {
             if (STATE_PAUSED) {
@@ -1117,11 +1118,25 @@ def render_attention_feed(
         f'</div>'
     )
 
+    # Live/Paused state indicator surfaced in the header so users see it
+    # at a glance — clicking opens the same overflow panel that holds the
+    # pause/resume button.
+    header_status_cls = "att-header-status paused" if paused else "att-header-status"
+    header_status = (
+        f'<button class="{header_status_cls}" type="button" '
+        f'aria-label="Toggle auto-dispatch panel" '
+        f'data-att-toggle-overflow="1">'
+        f'<span class="att-header-status-dot" aria-hidden="true"></span>'
+        f'<span class="att-header-status-label">{_t(pause_dot_label)}</span>'
+        f'</button>'
+    )
+
     header_html = (
         f'<header class="att-header" role="banner">'
         f'  <div class="att-header-spacer" aria-hidden="true"></div>'
         f'  <div class="att-header-title">Kitchen</div>'
         f'  <div class="att-header-actions">'
+        f'    {header_status}'
         f'    <button class="att-overflow-btn" type="button" aria-label="More options"'
         f'            aria-haspopup="menu" aria-expanded="false">&middot;&middot;&middot;</button>'
         f'  </div>'

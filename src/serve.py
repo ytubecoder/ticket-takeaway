@@ -9358,6 +9358,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes ───────────────────────────────────────────
         if proj is None:
+            # POST /api/endpoints — create a user endpoint
+            if remainder == "/api/endpoints":
+                from endpoints import (
+                    Endpoint, create_endpoint, EndpointMisconfigured,
+                )
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError) as e:
+                    self._send_json({"error": f"invalid JSON body: {e}"}, 400)
+                    return
+                try:
+                    ep = Endpoint(
+                        id=body.get("id"),
+                        name=body.get("name") or body.get("id"),
+                        endpoint_type=body.get("endpoint_type", "cli"),
+                        command=body.get("command"),
+                        args=body.get("args", []),
+                        prompt_mode=body.get("prompt_mode", "template"),
+                        provider=body.get("provider"),
+                        model=body.get("model"),
+                        base_url=body.get("base_url"),
+                        api_key_env=body.get("api_key_env"),
+                        timeout_s=int(body.get("timeout_s", 120)),
+                        capabilities=body.get("capabilities", {}),
+                        session_config=body.get("session_config", {}),
+                        system=0,  # API can never create system rows
+                    )
+                except (TypeError, ValueError) as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                conn = get_db()
+                init_db(conn)
+                try:
+                    created = create_endpoint(conn, ep)
+                except EndpointMisconfigured as e:
+                    conn.close()
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                except sqlite3.IntegrityError:
+                    conn.close()
+                    self._send_json({"error": f"endpoint {ep.id!r} already exists"}, 409)
+                    return
+                conn.close()
+                self._send_json(vars(created), 201)
+                return
+
             # Kitchen pause/resume (M6) — global control surface.
             if remainder in ("/api/kitchen/pause", "/api/kitchen/resume"):
                 try:

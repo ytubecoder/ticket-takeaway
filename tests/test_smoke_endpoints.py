@@ -6,9 +6,15 @@ WSL but hangs on macOS (~/.claude/ticket-takeaway/CLAUDE.md gotcha:
 socket.getfqdn). Run these tests on WSL.
 """
 import json
+import uuid
 import pytest
 import urllib.request
 import urllib.error
+
+
+def _unique_id(prefix: str) -> str:
+    """Return a unique endpoint ID for a test run to avoid cross-run collisions."""
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture
@@ -67,3 +73,72 @@ def test_get_endpoints_returns_seed(api_url):
     assert "codex-cli" in ids
     assert "codex-exec-readonly" in ids
     assert "hermes-cli" in ids
+
+
+def test_post_creates_user_endpoint(api_url):
+    ep_id = _unique_id("test-user-ep")
+    status, body = _post(api_url, {
+        "id": ep_id,
+        "name": "Test User Endpoint",
+        "endpoint_type": "cli",
+        "command": "echo",
+        "args": ["{prompt}"],
+    })
+    assert status == 201
+    assert body["id"] == ep_id
+    assert body["system"] == 0
+    # cleanup (best-effort; DELETE may not exist yet)
+    _delete(f"{api_url}/{ep_id}")
+
+
+def test_post_rejects_invalid_id(api_url):
+    status, body = _post(api_url, {
+        "id": "bad id with spaces",
+        "name": "x",
+        "endpoint_type": "cli",
+        "command": "echo",
+    })
+    assert status == 400
+    assert "error" in body
+
+
+def test_post_rejects_duplicate_id(api_url):
+    ep_id = _unique_id("dup-test")
+    status, _ = _post(api_url, {
+        "id": ep_id,
+        "name": "x",
+        "endpoint_type": "cli",
+        "command": "echo",
+    })
+    assert status == 201
+    status, _ = _post(api_url, {
+        "id": ep_id,
+        "name": "x",
+        "endpoint_type": "cli",
+        "command": "echo",
+    })
+    assert status == 409
+    _delete(f"{api_url}/{ep_id}")  # best-effort cleanup
+
+
+def test_post_rejects_api_type_without_api_key_env(api_url):
+    status, body = _post(api_url, {
+        "id": _unique_id("api-no-key"),
+        "name": "x",
+        "endpoint_type": "openai_api",
+        "provider": "openai",
+    })
+    assert status == 400
+    assert "api_key_env" in str(body)
+
+
+def test_post_rejects_args_not_array_of_strings(api_url):
+    status, body = _post(api_url, {
+        "id": _unique_id("bad-args"),
+        "name": "x",
+        "endpoint_type": "cli",
+        "command": "echo",
+        "args": ["ok", 42, "also-ok"],
+    })
+    assert status == 400
+    assert "[1]" in str(body) or "index 1" in str(body)

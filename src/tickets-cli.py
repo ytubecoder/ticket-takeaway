@@ -1603,6 +1603,121 @@ def cmd_agent(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: endpoint
+# ---------------------------------------------------------------------------
+
+def cmd_endpoint(args):
+    """Manage runtime endpoints."""
+    conn = get_db()
+    init_db(conn)
+
+    if args.endpoint_command == "list":
+        from endpoints import list_endpoints
+        eps = list_endpoints(conn)
+        if not eps:
+            print("No endpoints defined.")
+        else:
+            if getattr(args, "format", "table") == "json":
+                from dataclasses import asdict
+                print(json.dumps([asdict(e) for e in eps], indent=2, default=str))
+            else:
+                print(f"{'ID':<25} {'TYPE':<10} {'CMD':<15} {'SYS'}")
+                print("-" * 60)
+                for e in eps:
+                    print(f"{e.id:<25} {e.endpoint_type:<10} "
+                          f"{(e.command or ''):<15} {e.system}")
+
+    elif args.endpoint_command == "add":
+        if args.type != "cli":
+            print(
+                f"endpoint add: --type {args.type} requires API endpoint "
+                f"execution support (not in phase 1). Create via the HTTP API "
+                f"instead.",
+                file=sys.stderr,
+            )
+            conn.close()
+            sys.exit(2)
+        from endpoints import Endpoint, create_endpoint, EndpointMisconfigured
+        try:
+            parsed_args = json.loads(args.args) if args.args else []
+        except json.JSONDecodeError as e:
+            print(f"--args is not valid JSON: {e}", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        ep = Endpoint(
+            id=args.id,
+            name=args.name or args.id,
+            endpoint_type="cli",
+            command=args.cmd,
+            args=parsed_args,
+            timeout_s=args.timeout_s,
+        )
+        try:
+            created = create_endpoint(conn, ep)
+        except EndpointMisconfigured as e:
+            print(f"endpoint add: {e}", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        print(f"created endpoint {created.id}")
+
+    elif args.endpoint_command == "update":
+        from endpoints import update_endpoint, EndpointMisconfigured
+        fields = {}
+        if args.name is not None:
+            fields["name"] = args.name
+        if args.cmd is not None:
+            fields["command"] = args.cmd
+        if args.args is not None:
+            try:
+                fields["args"] = json.loads(args.args)
+            except json.JSONDecodeError as e:
+                print(f"--args invalid JSON: {e}", file=sys.stderr)
+                conn.close()
+                sys.exit(2)
+        if args.timeout_s is not None:
+            fields["timeout_s"] = args.timeout_s
+        if not fields:
+            print("Nothing to update. Provide at least one of --name, --cmd, --args, --timeout-s.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        try:
+            updated = update_endpoint(conn, args.id, **fields)
+        except KeyError:
+            print(f"endpoint not found: {args.id}", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        except PermissionError:
+            print(
+                f"endpoint {args.id} is a system row — edit "
+                f"src/workflows_seed.py and restart",
+                file=sys.stderr,
+            )
+            conn.close()
+            sys.exit(2)
+        except EndpointMisconfigured as e:
+            print(f"endpoint update: {e}", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        print(f"updated endpoint {updated.id}")
+
+    elif args.endpoint_command == "remove":
+        from endpoints import delete_endpoint
+        try:
+            n = delete_endpoint(conn, args.id)
+        except KeyError:
+            print(f"endpoint not found: {args.id}", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        except PermissionError:
+            print(f"endpoint {args.id} is a system row — cannot remove", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        print(f"removed endpoint {args.id} (unlinked {n} agents)")
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: workflow
 # ---------------------------------------------------------------------------
 
@@ -1915,6 +2030,31 @@ def main():
     p_agent_setdef.add_argument("agent_id", help="Agent ID to set as default")
     p_agent_setdef.add_argument("--project", help="Project ID (default: auto-detect or all)")
 
+    # endpoint
+    p_ep = sub.add_parser("endpoint", help="Manage runtime endpoints")
+    ep_sub = p_ep.add_subparsers(dest="endpoint_command", required=True)
+
+    ep_list = ep_sub.add_parser("list", help="List all endpoints")
+    ep_list.add_argument("--format", choices=["table", "json"], default="table")
+
+    ep_add = ep_sub.add_parser("add", help="Add an endpoint")
+    ep_add.add_argument("id", help="Endpoint ID")
+    ep_add.add_argument("--type", default="cli", help="Endpoint type (phase 1: cli only)")
+    ep_add.add_argument("--name", default=None, help="Display name (default: same as ID)")
+    ep_add.add_argument("--cmd", required=True, help="Command to run")
+    ep_add.add_argument("--args", default="[]", help="JSON array of command args")
+    ep_add.add_argument("--timeout-s", type=int, default=120, dest="timeout_s", help="Timeout in seconds (default: 120)")
+
+    ep_upd = ep_sub.add_parser("update", help="Update an endpoint")
+    ep_upd.add_argument("id", help="Endpoint ID")
+    ep_upd.add_argument("--name", default=None, help="New display name")
+    ep_upd.add_argument("--cmd", default=None, help="New command")
+    ep_upd.add_argument("--args", default=None, help="New JSON array of command args")
+    ep_upd.add_argument("--timeout-s", type=int, default=None, dest="timeout_s", help="New timeout in seconds")
+
+    ep_rm = ep_sub.add_parser("remove", help="Remove an endpoint")
+    ep_rm.add_argument("id", help="Endpoint ID to remove")
+
     # workflow
     p_wf = sub.add_parser("workflow", help="Manage workflow definitions")
     wf_sub = p_wf.add_subparsers(dest="workflow_command", required=True)
@@ -1977,6 +2117,7 @@ def main():
         "unregister": cmd_unregister,
         "criteria": cmd_criteria,
         "agent": cmd_agent,
+        "endpoint": cmd_endpoint,
         "workflow": cmd_workflow,
         "branches": cmd_branches,
     }

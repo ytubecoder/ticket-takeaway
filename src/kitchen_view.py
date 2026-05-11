@@ -42,6 +42,16 @@ _STATE_CHIPS: list[tuple[str, str]] = [
     ("failed", "Failed"),
 ]
 
+# Glyph rendered inside each tile so the color's meaning is legible at a
+# glance. Unicode characters chosen for cross-platform consistency.
+_BUCKET_GLYPHS: dict[str, str] = {
+    "needs_me":          "!",   # something is waiting on you
+    "running":           "▶",   # currently executing
+    "ready_to_delegate": "▷",   # eligible, not yet running
+    "paused_ticket":     "‖",   # ticket-level pause
+    "failed":            "✕",   # last run failed
+}
+
 
 # ---------------------------------------------------------------------------
 # Small escaping helpers (keep local to dodge serve.py import cycles)
@@ -75,21 +85,35 @@ def _card_html(item: dict) -> str:
     title = item.get("title", "")
     project_name = item.get("project_name", project_id)
     status = item.get("status", "")
+    section = item.get("section", "")
 
     unread_html = '<span class="att-unread-dot" aria-label="Unread"></span>' if is_unread else ""
 
-    # The tile is a colored, rounded square. Bucket drives its accent.
+    # The tile is a colored, rounded square. Bucket drives its accent. The
+    # glyph inside makes the bucket meaning self-evident without legend.
+    glyph = _BUCKET_GLYPHS.get(bucket, "")
     tile_html = (
-        f'<span class="att-tile att-tile-{_a(bucket)}" aria-hidden="true">'
-        f'<span class="att-tile-glyph"></span>'
+        f'<span class="att-tile att-tile-{_a(bucket)}" aria-hidden="true" '
+        f'title="{_a(bucket.replace("_", " ").title())}">'
+        f'<span class="att-tile-glyph">{_t(glyph)}</span>'
         f'{unread_html}'
         f'</span>'
     )
 
+    # Section badge (color-coded). Only renders when section is non-empty.
+    section_html = (
+        f'<span class="att-card-section" data-section="{_a(section)}">{_t(section)}</span>'
+        if section else ""
+    )
+
     body_html = (
         f'<span class="att-card-body">'
+        f'<span class="att-card-head">'
+        f'<span class="att-card-id">{_t(ticket_id)}</span>'
         f'<span class="att-card-title">{_t(title)}</span>'
+        f'</span>'
         f'<span class="att-card-meta">'
+        f'{section_html}'
         f'<span class="att-card-proj">{_t(project_name)}</span>'
         f'<span class="att-card-dot" aria-hidden="true">·</span>'
         f'<span class="att-card-status">{_t(status)}</span>'
@@ -103,6 +127,7 @@ def _card_html(item: dict) -> str:
         f' data-project="{_a(project_id)}"'
         f' data-bucket="{_a(bucket)}"'
         f' data-time-bucket="{_a(time_bucket)}"'
+        f' data-section="{_a(section)}"'
         f' data-unread="{"1" if is_unread else "0"}">'
         f'{tile_html}{body_html}'
         f'</a>'
@@ -469,6 +494,24 @@ body[data-demo="1"] .att-card { cursor: default; }
 }
 [data-theme="light"] .att-chip-count { background: rgba(17,24,39,0.05); }
 
+/* Tint each state chip with its tile color so the legend is self-evident.
+   The "active" state for these chips uses the same color (deeper saturation)
+   so the link between filter chip and tile is unmistakable. */
+.att-chip[data-state="needs_me"]          { color: var(--att-tile-needs-fg);  border-color: rgba(245,158, 11,0.35); }
+.att-chip[data-state="running"]           { color: var(--att-tile-running-fg);border-color: rgba( 59,130,246,0.35); }
+.att-chip[data-state="ready_to_delegate"] { color: var(--att-tile-ready-fg);  border-color: rgba( 34,197, 94,0.35); }
+.att-chip[data-state="paused_ticket"]     { color: var(--att-tile-paused-fg); border-color: rgba(148,163,184,0.35); }
+.att-chip[data-state="failed"]            { color: var(--att-tile-failed-fg); border-color: rgba(239, 68, 68,0.35); }
+.att-chip[data-state="needs_me"].active          { background: rgba(245,158, 11,0.22); border-color: rgba(245,158, 11,0.65); color: var(--att-tile-needs-fg);  }
+.att-chip[data-state="running"].active           { background: rgba( 59,130,246,0.22); border-color: rgba( 59,130,246,0.65); color: var(--att-tile-running-fg);}
+.att-chip[data-state="ready_to_delegate"].active { background: rgba( 34,197, 94,0.22); border-color: rgba( 34,197, 94,0.65); color: var(--att-tile-ready-fg);  }
+.att-chip[data-state="paused_ticket"].active     { background: rgba(148,163,184,0.22); border-color: rgba(148,163,184,0.65); color: var(--att-tile-paused-fg); }
+.att-chip[data-state="failed"].active            { background: rgba(239, 68, 68,0.22); border-color: rgba(239, 68, 68,0.65); color: var(--att-tile-failed-fg); }
+.att-chip.active[data-state] .att-chip-count {
+  background: rgba(255,255,255,0.08);
+  color: inherit;
+}
+
 /* Feed & bucket sections */
 .att-feed { display: flex; flex-direction: column; gap: 18px; }
 .att-bucket { display: flex; flex-direction: column; gap: 8px; }
@@ -521,33 +564,19 @@ body[data-demo="1"] .att-card { cursor: default; }
 .att-tile-failed       { background: var(--att-tile-failed-bg);  color: var(--att-tile-failed-fg); }
 
 .att-tile-glyph {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: currentColor;
-  opacity: 0.85;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
-.att-tile-running .att-tile-glyph {
-  border-radius: 50%;
-  animation: att-pulse 1.6s ease-in-out infinite;
-}
-.att-tile-needs_me .att-tile-glyph { border-radius: 50%; }
-.att-tile-ready_to_delegate .att-tile-glyph { border-radius: 3px; transform: rotate(45deg); }
-.att-tile-paused_ticket .att-tile-glyph {
-  background: transparent;
-  border-left: 4px solid currentColor;
-  border-right: 4px solid currentColor;
-  border-radius: 1px;
-  width: 12px;
-}
-.att-tile-failed .att-tile-glyph {
-  background: transparent;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-}
+.att-tile-needs_me .att-tile-glyph { font-size: 22px; }
+.att-tile-running .att-tile-glyph  { animation: att-pulse 1.6s ease-in-out infinite; }
+.att-tile-paused_ticket .att-tile-glyph { font-size: 20px; }
+.att-tile-failed .att-tile-glyph   { font-size: 16px; }
 @keyframes att-pulse {
-  0%, 100% { opacity: 0.85; transform: scale(1); }
-  50%      { opacity: 0.5;  transform: scale(0.85); }
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.92); }
 }
 
 .att-unread-dot {
@@ -569,6 +598,21 @@ body[data-demo="1"] .att-card { cursor: default; }
   min-width: 0;
   flex: 1;
 }
+.att-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.att-card-id {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  opacity: 0.8;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
 .att-card-title {
   font-size: 14px;
   font-weight: 600;
@@ -578,6 +622,8 @@ body[data-demo="1"] .att-card { cursor: default; }
   overflow: hidden;
   text-overflow: ellipsis;
   letter-spacing: -0.005em;
+  flex: 1;
+  min-width: 0;
 }
 .att-card-meta {
   display: flex;
@@ -595,6 +641,28 @@ body[data-demo="1"] .att-card { cursor: default; }
 }
 .att-card-dot { color: var(--text-tertiary); }
 .att-card-status { color: var(--text-tertiary); }
+
+/* Section pill — color-coded so column membership is visible without
+   columns. Colors mirror the kanban's left-border accent per section. */
+.att-card-section {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+.att-card-section[data-section="WIP"]        { background: rgba( 59,130,246,0.15); color: #6ea8ff; border-color: rgba( 59,130,246,0.35); }
+.att-card-section[data-section="For Review"] { background: rgba(245,158, 11,0.15); color: #f5b647; border-color: rgba(245,158, 11,0.35); }
+.att-card-section[data-section="Backlog"]    { background: rgba(107,114,128,0.18); color: #b6bcc6; border-color: rgba(107,114,128,0.40); }
+.att-card-section[data-section="Bugs"]       { background: rgba(239, 68, 68,0.15); color: #f87171; border-color: rgba(239, 68, 68,0.35); }
+.att-card-section[data-section="Done"]       { background: rgba( 34,197, 94,0.15); color: #6ee7a3; border-color: rgba( 34,197, 94,0.35); }
+.att-card-section[data-section="Ideas"]      { background: rgba(168, 85,247,0.15); color: #c4a4f7; border-color: rgba(168, 85,247,0.35); }
+.att-card-section[data-section="Icebox"]     { background: rgba(148,163,184,0.12); color: #cbd5e1; border-color: rgba(148,163,184,0.30); }
 
 /* Empty state */
 .att-empty {
@@ -833,17 +901,34 @@ _JS = r"""
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
+  var BUCKET_GLYPHS = {
+    needs_me:'!', running:'▶', ready_to_delegate:'▷',
+    paused_ticket:'‖', failed:'✕'
+  };
+  function bucketLabel(b){
+    return (b||'').replace(/_/g,' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
+  }
   function renderCard(it){
     var href = '/' + encodeURIComponent(it.project_id || '') +
                '/#ticket/' + encodeURIComponent(it.ticket_id || '');
     var unread = it.is_unread
       ? '<span class="att-unread-dot" aria-label="Unread"></span>' : '';
     var bucket = it.bucket || '';
-    var tile = '<span class="att-tile att-tile-'+esc(bucket)+'" aria-hidden="true">'
-             + '<span class="att-tile-glyph"></span>' + unread + '</span>';
+    var section = it.section || '';
+    var tile = '<span class="att-tile att-tile-'+esc(bucket)+'" aria-hidden="true"'
+             + ' title="'+esc(bucketLabel(bucket))+'">'
+             + '<span class="att-tile-glyph">'+esc(BUCKET_GLYPHS[bucket]||'')+'</span>'
+             + unread + '</span>';
+    var sectionPill = section
+      ? '<span class="att-card-section" data-section="'+esc(section)+'">'+esc(section)+'</span>'
+      : '';
     var body = '<span class="att-card-body">'
+             + '<span class="att-card-head">'
+             + '<span class="att-card-id">'+esc(it.ticket_id||'')+'</span>'
              + '<span class="att-card-title">'+esc(it.title||'')+'</span>'
+             + '</span>'
              + '<span class="att-card-meta">'
+             + sectionPill
              + '<span class="att-card-proj">'+esc(it.project_name||it.project_id||'')+'</span>'
              + '<span class="att-card-dot" aria-hidden="true">·</span>'
              + '<span class="att-card-status">'+esc(it.status||'')+'</span>'
@@ -853,6 +938,7 @@ _JS = r"""
          + ' data-project="'+esc(it.project_id||'')+'"'
          + ' data-bucket="'+esc(bucket)+'"'
          + ' data-time-bucket="'+esc(it.time_bucket||'older')+'"'
+         + ' data-section="'+esc(section)+'"'
          + ' data-unread="'+(it.is_unread?'1':'0')+'">'
          + tile + body + '</a>';
   }

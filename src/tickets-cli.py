@@ -1525,11 +1525,26 @@ def cmd_agent(args):
                 print(f"{r['id']:<20} {r['name']:<25} {r['command']:<15} {r['args']:<20} {prompt_preview}")
 
     elif args.agent_command == "add":
+        if args.cmd is not None or args.args is not None:
+            print("WARN: --cmd/--args on agent commands are deprecated. "
+                  "Create an endpoint via 'endpoint add' and reference it with "
+                  "--endpoint-id instead. Compat columns will be removed in a "
+                  "future release.", file=sys.stderr)
+        endpoint_id = getattr(args, "endpoint_id", None)
+        if endpoint_id is not None:
+            from endpoints import get_endpoint
+            if get_endpoint(conn, endpoint_id) is None:
+                print(f"endpoint not found: {endpoint_id}", file=sys.stderr)
+                conn.close()
+                sys.exit(2)
+        # Fall back to legacy defaults when --cmd/--args not provided and no endpoint_id
+        cmd_val = args.cmd if args.cmd is not None else "claude"
+        args_val = args.args if args.args is not None else "[]"
         name = args.name or args.agent_id.replace("-", " ").replace("_", " ").title()
         try:
             conn.execute(
-                "INSERT INTO workflow_agents (id, name, command, args, system_prompt) VALUES (?, ?, ?, ?, ?)",
-                (args.agent_id, name, args.cmd, args.args, args.system_prompt)
+                "INSERT INTO workflow_agents (id, name, command, args, system_prompt, endpoint_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (args.agent_id, name, cmd_val, args_val, args.system_prompt, endpoint_id)
             )
             conn.commit()
             print(f"Added agent: {args.agent_id} ({name})")
@@ -1539,6 +1554,18 @@ def cmd_agent(args):
             sys.exit(1)
 
     elif args.agent_command == "update":
+        if args.cmd is not None or args.args is not None:
+            print("WARN: --cmd/--args on agent commands are deprecated. "
+                  "Create an endpoint via 'endpoint add' and reference it with "
+                  "--endpoint-id instead. Compat columns will be removed in a "
+                  "future release.", file=sys.stderr)
+        endpoint_id = getattr(args, "endpoint_id", None)
+        if endpoint_id is not None:
+            from endpoints import get_endpoint
+            if get_endpoint(conn, endpoint_id) is None:
+                print(f"endpoint not found: {endpoint_id}", file=sys.stderr)
+                conn.close()
+                sys.exit(2)
         fields = {}
         if args.name is not None:
             fields["name"] = args.name
@@ -1548,9 +1575,11 @@ def cmd_agent(args):
             fields["args"] = args.args
         if args.system_prompt is not None:
             fields["system_prompt"] = args.system_prompt
+        if endpoint_id is not None:
+            fields["endpoint_id"] = endpoint_id
 
         if not fields:
-            print("Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt.", file=sys.stderr)
+            print("Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt, --endpoint-id.", file=sys.stderr)
             conn.close()
             sys.exit(1)
 
@@ -2012,16 +2041,20 @@ def main():
     p_agent_add = agent_sub.add_parser("add", help="Add a workflow agent")
     p_agent_add.add_argument("agent_id", help="Agent ID")
     p_agent_add.add_argument("--name", help="Display name (default: derived from ID)")
-    p_agent_add.add_argument("--cmd", default="claude", help="Command to run (default: claude)")
-    p_agent_add.add_argument("--args", default="[]", help="JSON array of command args")
+    p_agent_add.add_argument("--cmd", default=None, help="Command to run (deprecated; use --endpoint-id)")
+    p_agent_add.add_argument("--args", default=None, help="JSON array of command args (deprecated; use --endpoint-id)")
     p_agent_add.add_argument("--system-prompt", default="", help="System prompt for the agent")
+    p_agent_add.add_argument("--endpoint-id", default=None, dest="endpoint_id",
+                             help="ID of an endpoint this agent should use")
 
     p_agent_upd = agent_sub.add_parser("update", help="Update a workflow agent")
     p_agent_upd.add_argument("agent_id", help="Agent ID")
     p_agent_upd.add_argument("--name", help="New display name")
-    p_agent_upd.add_argument("--cmd", help="New command")
-    p_agent_upd.add_argument("--args", help="New JSON array of command args")
+    p_agent_upd.add_argument("--cmd", help="New command (deprecated; use --endpoint-id)")
+    p_agent_upd.add_argument("--args", help="New JSON array of command args (deprecated; use --endpoint-id)")
     p_agent_upd.add_argument("--system-prompt", help="New system prompt")
+    p_agent_upd.add_argument("--endpoint-id", default=None, dest="endpoint_id",
+                             help="ID of an endpoint this agent should use")
 
     p_agent_rm = agent_sub.add_parser("remove", help="Remove a workflow agent")
     p_agent_rm.add_argument("agent_id", help="Agent ID to remove")

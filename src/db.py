@@ -3,7 +3,9 @@
 Extracted from tickets-cli.py so it can be imported by both the CLI and serve.py.
 """
 
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from constants import DASHBOARD_DIR, DB_PATH
@@ -854,11 +856,60 @@ def init_db(conn: sqlite3.Connection):
         conn.execute("INSERT INTO _migrations (version) VALUES (18)")
         conn.commit()
 
-    _apply_migration_19(conn)
+    # Migration 19: Backfill ticket_created activity events for existing tickets
+    # that predate the centralised emit in actions.add_ticket. Without this, the
+    # Activity tab on older tickets has no "origin" entry and looks like the
+    # ticket appeared from nowhere. We try to recover the origin where we can:
+    # - Drafts whose description starts with "Source: <type> @ <file>:<line>"
+    #   were created by Seek; we tag origin='seek' with the parsed metadata.
+    # - Everything else gets origin='backfill' (unknown — predates tracking).
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 19").fetchone():
+        import re as _re
+        seek_re = _re.compile(r"^Source:\s+(\S+)\s+@\s+(.+):(\d+)")
+        rows = conn.execute(
+            "SELECT t.id, t.project_id, t.section, t.title, t.draft, "
+            "       t.description, t.created_at "
+            "FROM tickets t "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM activity_events e "
+            "  WHERE e.subject_type = 'ticket' AND e.subject_id = t.id "
+            "    AND e.project_id = t.project_id AND e.event_kind = 'ticket_created'"
+            ")"
+        ).fetchall()
+        for r in rows:
+            payload = {
+                "id": r["id"],
+                "title": r["title"],
+                "section": r["section"],
+                "draft": bool(r["draft"]),
+            }
+            seek_match = seek_re.match(r["description"] or "")
+            if seek_match and r["draft"]:
+                payload["origin"] = "seek"
+                payload["source_type"] = seek_match.group(1)
+                payload["source_file"] = seek_match.group(2)
+                try:
+                    payload["source_line"] = int(seek_match.group(3))
+                except ValueError:
+                    payload["source_line"] = seek_match.group(3)
+            else:
+                payload["origin"] = "backfill"
+            conn.execute(
+                "INSERT INTO activity_events "
+                "(project_id, subject_type, subject_id, actor_type, actor_id, "
+                " event_kind, payload_json, occurred_at) "
+                "VALUES (?, 'ticket', ?, 'system', NULL, 'ticket_created', ?, ?)",
+                (r["project_id"], r["id"], json.dumps(payload, ensure_ascii=False),
+                 r["created_at"] or datetime.now(timezone.utc).isoformat()),
+            )
+        conn.execute("INSERT INTO _migrations (version) VALUES (19)")
+        conn.commit()
+
+    _apply_migration_20(conn)
 
 
-def _apply_migration_19(conn) -> None:
-    """Migration 19: add endpoints table + workflow_agents.endpoint_id,
+def _apply_migration_20(conn) -> None:
+    """Migration 20: add endpoints table + workflow_agents.endpoint_id,
     backfill data from existing workflow_agents.
 
     All work happens in a single transaction. The _migrations row is
@@ -866,7 +917,7 @@ def _apply_migration_19(conn) -> None:
     impossible.
     """
     if conn.execute(
-        "SELECT 1 FROM _migrations WHERE version = 19"
+        "SELECT 1 FROM _migrations WHERE version = 20"
     ).fetchone():
         return
 
@@ -907,7 +958,7 @@ def _apply_migration_19(conn) -> None:
     _backfill_endpoints_from_agents(conn)
 
     # 4. Record version (last step in transaction)
-    conn.execute("INSERT INTO _migrations (version) VALUES (19)")
+    conn.execute("INSERT INTO _migrations (version) VALUES (20)")
     conn.commit()
 
 
@@ -920,7 +971,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
     """
     import json as _json
     import logging as _logging
-    log = _logging.getLogger("migration19")
+    log = _logging.getLogger("migration20")
 
     # Import canonical mappings lazily to avoid circular imports
     try:
@@ -962,7 +1013,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
                 raise ValueError("args is not a list of strings")
         except Exception as e:
             log.warning(
-                f"migration19: agent_id={agent_id} has malformed "
+                f"migration20: agent_id={agent_id} has malformed "
                 f"args={args_text!r}, defaulting to [] ({e})"
             )
             raw_args = []
@@ -1049,7 +1100,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
             counters["remapped"] += 1
 
     log.info(
-        f"migration19: created={counters['created']} "
+        f"migration20: created={counters['created']} "
         f"reused={counters['reused']} "
         f"agents_remapped={counters['remapped']} "
         f"malformed_args_defaulted={counters['malformed_args']} "

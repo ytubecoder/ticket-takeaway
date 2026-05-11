@@ -42,6 +42,7 @@ python3 ~/projects/ticket-takeaway/install.py
 | `src/tickets-cli.py` | `~/.claude/ticket-takeaway/tickets-cli.py` | CLI for all ticket CRUD |
 | `src/generate.py` | `~/.claude/ticket-takeaway/generate.py` | Dashboard HTML generator |
 | `src/generate.py` | `~/.claude/dashboard/generate.py` | Dashboard copy (DASHBOARD_DIR patched) |
+| `src/static/*` | `~/.claude/ticket-takeaway/static/*` | PWA manifest, service worker, icons |
 | `src/skills/ticket-takeaway/SKILL.md` | `~/.claude/skills/ticket-takeaway/SKILL.md` | `/dashboard` skill |
 | `src/skills/review/SKILL.md` | `~/.claude/skills/review/SKILL.md` | `/review` skill |
 | `src/skills/spec/SKILL.md` | `~/.claude/skills/spec/SKILL.md` | `/spec` skill |

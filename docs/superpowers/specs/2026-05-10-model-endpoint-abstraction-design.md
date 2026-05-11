@@ -88,7 +88,7 @@ The runner substitutes `{prompt}` (and `{session_id}` when resuming a session) i
 
 `prompt_mode='stdin'` is reserved (no day-1 endpoint uses it) for future CLIs that read from stdin.
 
-## Schema (migration #19)
+## Schema (migration #20)
 
 ```sql
 CREATE TABLE endpoints (
@@ -132,7 +132,7 @@ ALTER TABLE workflow_agents ADD COLUMN endpoint_id TEXT
 
 ### Migration transactionality
 
-`src/db.py` already wraps each migration as a single-transaction unit: check `_migrations` for the version, do all DDL/DML, INSERT the `_migrations` version row, then `conn.commit()`. Migration #19 follows the same pattern — either the whole migration (CREATE TABLE + ALTER + data backfill + agent rewire) commits, or none of it does. There is no partial-state window. If a future agent finds themselves needing a recovery script for #19, the answer is "it shouldn't be possible — investigate why the transaction half-committed".
+`src/db.py` already wraps each migration as a single-transaction unit: check `_migrations` for the version, do all DDL/DML, INSERT the `_migrations` version row, then `conn.commit()`. Migration #19 follows the same pattern — either the whole migration (CREATE TABLE + ALTER + data backfill + agent rewire) commits, or none of it does. There is no partial-state window. If a future agent finds themselves needing a recovery script for #20, the answer is "it shouldn't be possible — investigate why the transaction half-committed".
 
 ### Data migration (in the same migration step)
 
@@ -144,7 +144,7 @@ The migration has three priorities, in order:
 
 For each existing row in `workflow_agents`:
 
-1. **Compute effective argv** — using a migration-local helper that reproduces today's `_build_agent_cmd(command, args, '{prompt}')` logic with `'{prompt}'` as the literal prompt placeholder. The migration must not call live application code (which is being refactored in step 6 of Rollout) — it carries its own pinned copy of the transformation, so replaying the migration on any future codebase produces identical results. For `command='claude', args=[]` the pinned helper yields `["-p", "{prompt}", "--output-format", "json"]` (command stripped, args only); for `command='codex', args=[]` it yields `["{prompt}"]`. This is the canonical args the endpoint must store — not the legacy `args` field, which omitted the runner-injected flags. If `args` is NULL / empty string / not valid JSON / not an array of strings, log `WARN migration19: agent_id=<id> has malformed args=<repr>, defaulting to []` and treat as `[]` before applying the helper.
+1. **Compute effective argv** — using a migration-local helper that reproduces today's `_build_agent_cmd(command, args, '{prompt}')` logic with `'{prompt}'` as the literal prompt placeholder. The migration must not call live application code (which is being refactored in step 6 of Rollout) — it carries its own pinned copy of the transformation, so replaying the migration on any future codebase produces identical results. For `command='claude', args=[]` the pinned helper yields `["-p", "{prompt}", "--output-format", "json"]` (command stripped, args only); for `command='codex', args=[]` it yields `["{prompt}"]`. This is the canonical args the endpoint must store — not the legacy `args` field, which omitted the runner-injected flags. If `args` is NULL / empty string / not valid JSON / not an array of strings, log `WARN migration20: agent_id=<id> has malformed args=<repr>, defaulting to []` and treat as `[]` before applying the helper.
 
 2. **Group rows by `(command, effective_argv, system)`** — a 3-tuple, not a 2-tuple. Mixed system/user groups never occur because `system` is in the key.
 
@@ -167,7 +167,7 @@ For each existing row in `workflow_agents`:
 
 6. **Log a summary** — counts of: endpoints created, endpoints reused (canonical), agents remapped, malformed-args defaults applied, id collisions resolved. Single log line, structured for grep.
 
-**Idempotency**: rerunning is a no-op. The migration checks `_migrations` for version 19 first (existing pattern). Even if forcibly rerun, the per-row logic checks `endpoint_id IS NOT NULL` and skips.
+**Idempotency**: rerunning is a no-op. The migration checks `_migrations` for version 20 first (existing pattern). Even if forcibly rerun, the per-row logic checks `endpoint_id IS NOT NULL` and skips.
 
 **ID collision with existing user rows**: if the seed's canonical id (`hermes-cli`, `claude-cli`, etc.) collides with a user-created endpoint of the same id, the seed pass refuses to overwrite, logs `WARN seed: skipping system endpoint <id> — user row with same id exists, please rename`, and the system agent reverts to its compat `command`/`args` (which still works). This is the same posture as the existing `compare_seed_to_db.py` audit catches.
 
@@ -418,7 +418,7 @@ Optional `@pytest.mark.real_cli` test that runs an existing system workflow end-
 
 Three log channels, distinct from the user-facing conversation log:
 
-**Migration-time** (one summary log line, structured for grep): `INFO migration19: created=<n> reused=<n> agents_remapped=<n> malformed_args_defaulted=<n> id_collisions_resolved=<n>`. Plus per-row `WARN migration19: ...` lines for each malformed-args default and each id collision.
+**Migration-time** (one summary log line, structured for grep): `INFO migration20: created=<n> reused=<n> agents_remapped=<n> malformed_args_defaulted=<n> id_collisions_resolved=<n>`. Plus per-row `WARN migration20: ...` lines for each malformed-args default and each id collision.
 
 **Seed-time** (per-server-boot): `INFO seed: endpoints_upserted=<n> endpoints_skipped_collision=<n>` plus per-collision `WARN seed: skipping system endpoint <id> — user row with same id exists, please rename`.
 
@@ -430,8 +430,8 @@ These give a maintainer the visibility to answer "is this board still on the com
 
 1. Branch `feat/model-endpoints` (already created)
 2. Write `workflows_seed.py` updates first — `DEFAULT_ENDPOINTS` list, agents rewired to canonical endpoint ids — so migration tests can import the canonical mapping.
-3. Build TDD tests (red): `test_tdd_endpoints.py` covers `build_invocation`, `extract_session_id`, and migration #19 against in-memory DBs.
-4. Implement migration #19 in `src/db.py` (green for migration tests). Verify the single-transaction guarantee holds; verify `PRAGMA foreign_keys=ON` is still active mid-migration.
+3. Build TDD tests (red): `test_tdd_endpoints.py` covers `build_invocation`, `extract_session_id`, and migration #20 against in-memory DBs.
+4. Implement migration #20 in `src/db.py` (green for migration tests). Verify the single-transaction guarantee holds; verify `PRAGMA foreign_keys=ON` is still active mid-migration.
 5. Implement `src/endpoints.py` (green for `build_invocation` and `extract_session_id` tests).
 6. Wire runner through `endpoints.build_invocation`. Remove `_build_agent_cmd`, `_apply_resume_args`, `_extract_session_id` from `serve.py`.
 7. **Compatibility checkpoint** — run all 6 system workflows end-to-end on the dev machine (mocked-subprocess + real-CLI where binaries present). Assert zero `WARN runner: ... using compat command ...` lines emitted for any system agent. If any compat-path warning fires for a system agent, the migration is incomplete — block here, fix it, rerun. Do not proceed to UI work until the checkpoint is green.

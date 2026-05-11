@@ -23,7 +23,7 @@
 | `src/serve.py` | Modify | Remove `_build_agent_cmd` / `_apply_resume_args` / `_extract_session_id`; add `/api/endpoints` CRUD; update `/workflows` HTML |
 | `src/tickets-cli.py` | Modify | Add `endpoint` subcommand group; add `--endpoint-id` to agent commands |
 | `src/compare_seed_to_db.py` | Modify | Add `_audit_endpoints(conn)` |
-| `tests/test_tdd_endpoints.py` | Create | TDD coverage for endpoints module + migration #19 |
+| `tests/test_tdd_endpoints.py` | Create | TDD coverage for endpoints module + migration #20 |
 | `tests/test_smoke_endpoints.py` | Create | API smoke tests for `/api/endpoints` |
 | `tests/test_tdd_consultant_seed.py` | Modify | Update assertions for post-migration schema (endpoint_id present) |
 | `tests/test_tdd_lane_a_primitives.py` | Modify | Update assertions for post-migration schema |
@@ -75,7 +75,7 @@ from typing import Optional
 class Endpoint:
     """Seed-time representation of an endpoints table row.
 
-    Mirrors the SQL columns in migration 19. JSON-shaped fields (args,
+    Mirrors the SQL columns in migration 20. JSON-shaped fields (args,
     capabilities, session_config) are held as Python types here and
     json.dumps()'d at upsert time.
     """
@@ -158,7 +158,7 @@ Add immediately after `DEFAULT_ENDPOINTS`:
 
 ```python
 # Maps legacy (command, raw_args_tuple) -> canonical endpoint id.
-# Used by migration #19 to pin known system runtimes to seeded ids
+# Used by migration #20 to pin known system runtimes to seeded ids
 # instead of synthesising duplicate endpoints. raw_args_tuple is the
 # value stored in workflow_agents.args BEFORE _build_agent_cmd's
 # runner-side flag injection.
@@ -175,7 +175,7 @@ KNOWN_CLI_MAPPINGS: dict[tuple, str] = {
 
 ```bash
 git add src/workflows_seed.py
-git commit -m "feat(seed): add Endpoint dataclass + DEFAULT_ENDPOINTS for migration 19"
+git commit -m "feat(seed): add Endpoint dataclass + DEFAULT_ENDPOINTS for migration 20"
 git push
 ```
 
@@ -584,7 +584,7 @@ git push
 
 ---
 
-### Task 5: Add migration #19 TDD tests
+### Task 5: Add migration #20 TDD tests
 
 **Files:**
 - Modify: `tests/test_tdd_endpoints.py` (append migration tests)
@@ -595,19 +595,19 @@ git push
 # === Migration #19 ===
 
 @pytest.fixture
-def db_pre_migration_19(tmp_path):
-    """Build a sqlite DB with the schema as of migration 18 (so #19 hasn't
+def db_pre_migration_20(tmp_path):
+    """Build a sqlite DB with the schema as of migration 19 (so #20 hasn't
     run yet) and a small set of legacy agent rows for testing the data
     backfill."""
     import db as ttdb
     db_path = tmp_path / "test.db"
 
-    # Use the real init logic but stop before migration 19
+    # Use the real init logic but stop before migration 20
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys=ON")
-    # Replay migrations 1..18 by importing init_db and patching out 19.
+    # Replay migrations 1..19 by importing init_db and patching out 20.
     # Easiest path: call init_db() then sanity-check no endpoints table.
-    with patch.object(ttdb, "_apply_migration_19", lambda c: None,
+    with patch.object(ttdb, "_apply_migration_20", lambda c: None,
                       create=True):
         ttdb.init_db(conn)
     # Insert legacy agent rows
@@ -632,24 +632,24 @@ def db_pre_migration_19(tmp_path):
     return conn, str(db_path)
 
 
-def test_migration_19_canonical_id_for_system_claude(db_pre_migration_19):
+def test_migration_20_canonical_id_for_system_claude(db_pre_migration_20):
     """A system agent with command='claude', args=[] should be rewired
     to the canonical 'claude-cli' endpoint, not a synthesised id."""
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     row = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='agent_planner'"
     ).fetchone()
     assert row[0] == "claude-cli"
 
 
-def test_migration_19_user_agent_does_not_share_system_endpoint(db_pre_migration_19):
+def test_migration_20_user_agent_does_not_share_system_endpoint(db_pre_migration_20):
     """User agent with same (command, args) as system planner must get
     its own user-owned endpoint — grouping key includes 'system'."""
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     user_eid = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='usr_my_claude'"
     ).fetchone()[0]
@@ -665,10 +665,10 @@ def test_migration_19_user_agent_does_not_share_system_endpoint(db_pre_migration
     assert user_ep_system == 0
 
 
-def test_migration_19_unknown_command_creates_synthesised_endpoint(db_pre_migration_19):
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+def test_migration_20_unknown_command_creates_synthesised_endpoint(db_pre_migration_20):
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     eid = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='usr_my_thing'"
     ).fetchone()[0]
@@ -681,10 +681,10 @@ def test_migration_19_unknown_command_creates_synthesised_endpoint(db_pre_migrat
     assert row[2] == 0   # user agent → user endpoint
 
 
-def test_migration_19_malformed_args_defaults_to_empty(db_pre_migration_19, caplog):
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+def test_migration_20_malformed_args_defaults_to_empty(db_pre_migration_20, caplog):
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     # The bad agent should still get an endpoint (default args=[] applied)
     eid = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='agent_bad'"
@@ -694,35 +694,35 @@ def test_migration_19_malformed_args_defaults_to_empty(db_pre_migration_19, capl
     assert any("agent_bad" in r.message for r in caplog.records)
 
 
-def test_migration_19_every_agent_gets_endpoint_id(db_pre_migration_19):
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+def test_migration_20_every_agent_gets_endpoint_id(db_pre_migration_20):
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     nulls = conn.execute(
         "SELECT COUNT(*) FROM workflow_agents WHERE endpoint_id IS NULL"
     ).fetchone()[0]
     assert nulls == 0
 
 
-def test_migration_19_idempotent(db_pre_migration_19):
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+def test_migration_20_idempotent(db_pre_migration_20):
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     snapshot_a = conn.execute("SELECT id, endpoint_id FROM workflow_agents ORDER BY id").fetchall()
     eps_a = conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0]
-    _apply_migration_19(conn)  # rerun
+    _apply_migration_20(conn)  # rerun
     snapshot_b = conn.execute("SELECT id, endpoint_id FROM workflow_agents ORDER BY id").fetchall()
     eps_b = conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0]
     assert snapshot_a == snapshot_b
     assert eps_a == eps_b
 
 
-def test_migration_19_compat_columns_preserved(db_pre_migration_19):
+def test_migration_20_compat_columns_preserved(db_pre_migration_20):
     """The compat fallback requires workflow_agents.command/.args remain
     populated after migration."""
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     row = conn.execute(
         "SELECT command, args FROM workflow_agents WHERE id='agent_planner'"
     ).fetchone()
@@ -730,25 +730,25 @@ def test_migration_19_compat_columns_preserved(db_pre_migration_19):
     assert row[1] == "[]"
 
 
-def test_migration_19_pragma_foreign_keys_still_on(db_pre_migration_19):
-    from db import _apply_migration_19
-    conn, _ = db_pre_migration_19
-    _apply_migration_19(conn)
+def test_migration_20_pragma_foreign_keys_still_on(db_pre_migration_20):
+    from db import _apply_migration_20
+    conn, _ = db_pre_migration_20
+    _apply_migration_20(conn)
     fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     assert fk == 1
 ```
 
 - [ ] **Step 2: Run and verify all migration tests fail**
 
-Run: `python3 -m pytest tests/test_tdd_endpoints.py -v -k migration_19`
+Run: `python3 -m pytest tests/test_tdd_endpoints.py -v -k migration_20`
 
-Expected: all fail with `AttributeError: module 'db' has no attribute '_apply_migration_19'` (or similar).
+Expected: all fail with `AttributeError: module 'db' has no attribute '_apply_migration_20'` (or similar).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add tests/test_tdd_endpoints.py
-git commit -m "test: migration #19 TDD red — covers grouping, canonical-id, malformed args, idempotency"
+git commit -m "test: migration #20 TDD red — covers grouping, canonical-id, malformed args, idempotency"
 git push
 ```
 
@@ -756,7 +756,7 @@ git push
 
 ## Phase C — Schema + Migration
 
-### Task 6: Add `endpoints` table to `src/db.py` (migration #19, schema only)
+### Task 6: Add `endpoints` table to `src/db.py` (migration #20, schema only)
 
 **Files:**
 - Modify: `src/db.py` (add migration function)
@@ -767,10 +767,10 @@ Run: `grep -n "_migrations\|def _apply_migration\|version = " src/db.py | head -
 
 Identify the pattern: each migration is gated by `SELECT 1 FROM _migrations WHERE version = N`, runs its DDL/DML, INSERTs `(N)` into `_migrations`, then `conn.commit()`.
 
-- [ ] **Step 2: Add a `_apply_migration_19` function near the other `_apply_migration_*` functions**
+- [ ] **Step 2: Add a `_apply_migration_20` function near the other `_apply_migration_*` functions**
 
 ```python
-def _apply_migration_19(conn) -> None:
+def _apply_migration_20(conn) -> None:
     """Migration 19: add endpoints table + workflow_agents.endpoint_id,
     backfill data from existing workflow_agents.
 
@@ -779,7 +779,7 @@ def _apply_migration_19(conn) -> None:
     impossible.
     """
     if conn.execute(
-        "SELECT 1 FROM _migrations WHERE version = 19"
+        "SELECT 1 FROM _migrations WHERE version = 20"
     ).fetchone():
         return
 
@@ -820,7 +820,7 @@ def _apply_migration_19(conn) -> None:
     _backfill_endpoints_from_agents(conn)
 
     # 4. Record version (last step in transaction)
-    conn.execute("INSERT INTO _migrations (version) VALUES (19)")
+    conn.execute("INSERT INTO _migrations (version) VALUES (20)")
     conn.commit()
 
 
@@ -830,9 +830,9 @@ def _backfill_endpoints_from_agents(conn) -> None:
     pass   # Stub; implemented in Task 8
 ```
 
-- [ ] **Step 3: Wire migration #19 into the migration runner**
+- [ ] **Step 3: Wire migration #20 into the migration runner**
 
-Find the function that runs migrations sequentially (likely `init_db` or `_run_migrations`). Add `_apply_migration_19(conn)` to the sequence after migration 18.
+Find the function that runs migrations sequentially (likely `init_db` or `_run_migrations`). Add `_apply_migration_20(conn)` to the sequence after migration 18.
 
 - [ ] **Step 4: Run only the schema tests — confirm schema-related ones pass, data tests still fail**
 
@@ -844,7 +844,7 @@ Expected: `pragma_foreign_keys` test should now pass (schema work doesn't disabl
 
 ```bash
 git add src/db.py
-git commit -m "feat(db): migration 19 — endpoints table + workflow_agents.endpoint_id (schema)"
+git commit -m "feat(db): migration 20 — endpoints table + workflow_agents.endpoint_id (schema)"
 git push
 ```
 
@@ -869,7 +869,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
     """
     import json as _json
     import logging as _logging
-    log = _logging.getLogger("migration19")
+    log = _logging.getLogger("migration20")
 
     # Import canonical mappings lazily to avoid circular imports
     try:
@@ -912,7 +912,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
                 raise ValueError("args is not a list of strings")
         except Exception as e:
             log.warning(
-                f"migration19: agent_id={agent_id} has malformed "
+                f"migration20: agent_id={agent_id} has malformed "
                 f"args={args_text!r}, defaulting to [] ({e})"
             )
             raw_args = []
@@ -1000,7 +1000,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
             counters["remapped"] += 1
 
     log.info(
-        f"migration19: created={counters['created']} "
+        f"migration20: created={counters['created']} "
         f"reused={counters['reused']} "
         f"agents_remapped={counters['remapped']} "
         f"malformed_args_defaulted={counters['malformed_args']} "
@@ -1043,9 +1043,9 @@ def _synth_name(command, eff_argv) -> str:
     return f"{command} {summary}".strip()
 ```
 
-- [ ] **Step 2: Run all migration #19 tests**
+- [ ] **Step 2: Run all migration #20 tests**
 
-Run: `python3 -m pytest tests/test_tdd_endpoints.py -v -k migration_19`
+Run: `python3 -m pytest tests/test_tdd_endpoints.py -v -k migration_20`
 
 Expected: all 8 migration tests pass.
 
@@ -1070,7 +1070,7 @@ Expected: prints a list of endpoints (claude-cli, codex-exec-readonly, etc.) and
 
 ```bash
 git add src/db.py
-git commit -m "feat(db): migration 19 data backfill — canonical id mapping + grouped synthesis"
+git commit -m "feat(db): migration 20 data backfill — canonical id mapping + grouped synthesis"
 git push
 ```
 
@@ -2708,7 +2708,7 @@ The new top of the section:
 ```markdown
 **Workflow Bounce** (I-19, extended by I-?? endpoint abstraction): Multi-agent prompt routing system. Users define agents (name + system prompt + endpoint_id) and endpoints (runtime: command + args + capabilities). An agent's runtime configuration lives on its endpoint — many agents can share one endpoint, OpenRouter-style providers are modelled as one endpoint per model. Workflows (ordered steps, each with an agent_id) bounce ticket content through the agent sequence; the runner asks `endpoints.build_invocation(endpoint, prompt)` for the argv. Primary agent (step 1) mediates disagreements.
 
-- **DB tables:** `endpoints` (migration 19), `workflow_agents` (migration 4, gained `endpoint_id` in 19), `workflows`, `workflow_runs` (migration 4)
+- **DB tables:** `endpoints` (migration 20), `workflow_agents` (migration 4, gained `endpoint_id` in 20), `workflows`, `workflow_runs` (migration 4)
 - **API:** `/api/endpoints` (CRUD, system rows 403 on PUT/DELETE), `/api/workflow/agents` (CRUD), `/api/workflow/workflows` (CRUD), ... [keep existing list]
 - **CLI:** `tickets-cli.py endpoint list/add/update/remove`, `tickets-cli.py agent list/add/update/remove` (gained `--endpoint-id`), `tickets-cli.py workflow ...`
 - **UI:** /workflows page has Endpoints, Agents, and Workflows tabs. Agent dropdown for endpoint filters to CLI-only by default with a "show all" toggle.
@@ -2772,7 +2772,7 @@ sleep 3
 
 ```bash
 sqlite3 ~/.claude/ticket-takeaway/tickets.db <<EOF
-SELECT version FROM _migrations WHERE version = 19;
+SELECT version FROM _migrations WHERE version = 20;
 SELECT id, system FROM endpoints;
 SELECT id, endpoint_id FROM workflow_agents WHERE id LIKE 'agent_%';
 EOF

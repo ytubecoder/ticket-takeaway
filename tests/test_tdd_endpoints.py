@@ -216,3 +216,152 @@ def test_extract_session_id_capabilities_false_returns_none():
     ep = Endpoint(id="x", name="x", endpoint_type="cli", command="x",
                   capabilities={"sessions": False})
     assert extract_session_id(ep, "anything", "", 0) is None
+
+
+# === Migration #19 ===
+
+@pytest.fixture
+def db_pre_migration_19(tmp_path):
+    """Build a sqlite DB with the schema as of migration 18 (so #19 hasn't
+    run yet) and a small set of legacy agent rows for testing the data
+    backfill."""
+    import db as ttdb
+    db_path = tmp_path / "test.db"
+
+    # Use the real init logic but stop before migration 19
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    # Replay migrations 1..18 by importing init_db and patching out 19.
+    # If _apply_migration_19 doesn't exist yet, the patch is harmless
+    # (create=True). After T6/T7 lands, this patch prevents premature
+    # migration during fixture setup.
+    with patch.object(ttdb, "_apply_migration_19", lambda c: None,
+                      create=True):
+        ttdb.init_db(conn)
+    # Insert legacy agent rows
+    conn.executemany("""
+        INSERT INTO workflow_agents
+            (id, name, command, args, system_prompt, persist_session, system)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, [
+        # System agents (match canonical mappings)
+        ("agent_planner", "Planner", "claude", "[]", "...", 1, 1),
+        ("agent_worker", "Worker", "claude", "[]", "...", 0, 1),
+        ("agent_consultant", "Consultant", "codex",
+         '["exec", "-s", "read-only"]', "...", 1, 1),
+        # User agent sharing command with system planner
+        ("usr_my_claude", "My Claude", "claude", "[]", "user prompt", 0, 0),
+        # User agent with unknown command
+        ("usr_my_thing", "My Thing", "mytool", '["--flag"]', "...", 0, 0),
+        # Malformed args
+        ("agent_bad", "Bad", "claude", "not json", "...", 0, 0),
+    ])
+    conn.commit()
+    return conn, str(db_path)
+
+
+def test_migration_19_canonical_id_for_system_claude(db_pre_migration_19):
+    """A system agent with command='claude', args=[] should be rewired
+    to the canonical 'claude-cli' endpoint, not a synthesised id."""
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    row = conn.execute(
+        "SELECT endpoint_id FROM workflow_agents WHERE id='agent_planner'"
+    ).fetchone()
+    assert row[0] == "claude-cli"
+
+
+def test_migration_19_user_agent_does_not_share_system_endpoint(db_pre_migration_19):
+    """User agent with same (command, args) as system planner must get
+    its own user-owned endpoint — grouping key includes 'system'."""
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    user_eid = conn.execute(
+        "SELECT endpoint_id FROM workflow_agents WHERE id='usr_my_claude'"
+    ).fetchone()[0]
+    system_eid = conn.execute(
+        "SELECT endpoint_id FROM workflow_agents WHERE id='agent_planner'"
+    ).fetchone()[0]
+    assert user_eid != system_eid
+    assert system_eid == "claude-cli"
+    # The user agent's endpoint should be system=0
+    user_ep_system = conn.execute(
+        "SELECT system FROM endpoints WHERE id=?", (user_eid,)
+    ).fetchone()[0]
+    assert user_ep_system == 0
+
+
+def test_migration_19_unknown_command_creates_synthesised_endpoint(db_pre_migration_19):
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    eid = conn.execute(
+        "SELECT endpoint_id FROM workflow_agents WHERE id='usr_my_thing'"
+    ).fetchone()[0]
+    assert eid is not None
+    row = conn.execute(
+        "SELECT command, args, system FROM endpoints WHERE id=?", (eid,)
+    ).fetchone()
+    assert row[0] == "mytool"
+    assert json.loads(row[1]) == ["--flag", "{prompt}"]   # positional append
+    assert row[2] == 0   # user agent → user endpoint
+
+
+def test_migration_19_malformed_args_defaults_to_empty(db_pre_migration_19, caplog):
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    # The bad agent should still get an endpoint (default args=[] applied)
+    eid = conn.execute(
+        "SELECT endpoint_id FROM workflow_agents WHERE id='agent_bad'"
+    ).fetchone()[0]
+    assert eid is not None
+    # Should have logged a warning naming the agent id
+    assert any("agent_bad" in r.message for r in caplog.records)
+
+
+def test_migration_19_every_agent_gets_endpoint_id(db_pre_migration_19):
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    nulls = conn.execute(
+        "SELECT COUNT(*) FROM workflow_agents WHERE endpoint_id IS NULL"
+    ).fetchone()[0]
+    assert nulls == 0
+
+
+def test_migration_19_idempotent(db_pre_migration_19):
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    snapshot_a = conn.execute("SELECT id, endpoint_id FROM workflow_agents ORDER BY id").fetchall()
+    eps_a = conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0]
+    _apply_migration_19(conn)  # rerun
+    snapshot_b = conn.execute("SELECT id, endpoint_id FROM workflow_agents ORDER BY id").fetchall()
+    eps_b = conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0]
+    assert snapshot_a == snapshot_b
+    assert eps_a == eps_b
+
+
+def test_migration_19_compat_columns_preserved(db_pre_migration_19):
+    """The compat fallback requires workflow_agents.command/.args remain
+    populated after migration."""
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    row = conn.execute(
+        "SELECT command, args FROM workflow_agents WHERE id='agent_planner'"
+    ).fetchone()
+    assert row[0] == "claude"
+    assert row[1] == "[]"
+
+
+def test_migration_19_pragma_foreign_keys_still_on(db_pre_migration_19):
+    from db import _apply_migration_19
+    conn, _ = db_pre_migration_19
+    _apply_migration_19(conn)
+    fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    assert fk == 1

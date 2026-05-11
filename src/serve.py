@@ -193,6 +193,93 @@ PWA_HEAD_TAGS = (
 
 
 # ---------------------------------------------------------------------------
+# Kitchen demo state — populated stub for GET /kitchen/demo so the new
+# layout can be reviewed visually when the live DB has no actionable
+# tickets. Safe to delete once the feature has matured.
+# ---------------------------------------------------------------------------
+
+_DEMO_KITCHEN_STATE = {
+    "paused": False,
+    "totals": {"all": 8, "needs_me": 2, "running": 1,
+               "ready_to_delegate": 3, "paused_ticket": 1, "failed": 1},
+    "projects": [
+        {"id": "ticket-takeaway", "name": "Ticket Takeaway",
+         "counts": {"all": 5, "needs_me": 1, "running": 1,
+                    "ready_to_delegate": 2, "paused_ticket": 0, "failed": 1}},
+        {"id": "goodform", "name": "Goodform",
+         "counts": {"all": 3, "needs_me": 1, "running": 0,
+                    "ready_to_delegate": 1, "paused_ticket": 1, "failed": 0}},
+    ],
+    "items": [
+        {"ticket_id": "B-24", "project_id": "ticket-takeaway",
+         "project_name": "Ticket Takeaway",
+         "title": "Implement CLI endpoint abstraction for project add modal",
+         "section": "WIP", "status": "in-progress", "bucket": "running",
+         "time_bucket": "today", "updated_at": "2026-05-11T13:55:00",
+         "is_unread": True, "automation_mode": "auto",
+         "agent_name": "primary", "latest_run_status": "running",
+         "pause_reason": None},
+        {"ticket_id": "B-31", "project_id": "ticket-takeaway",
+         "project_name": "Ticket Takeaway",
+         "title": "Switch development environment to use new workspaces module",
+         "section": "For Review", "status": "for-review", "bucket": "needs_me",
+         "time_bucket": "today", "updated_at": "2026-05-11T11:00:00",
+         "is_unread": True, "automation_mode": "auto",
+         "agent_name": "reviewer", "latest_run_status": "needs_input",
+         "pause_reason": None},
+        {"ticket_id": "B-29", "project_id": "ticket-takeaway",
+         "project_name": "Ticket Takeaway",
+         "title": "Create PWA version of ticket-takeaway",
+         "section": "Backlog", "status": "proposed",
+         "bucket": "ready_to_delegate", "time_bucket": "today",
+         "updated_at": "2026-05-11T09:00:00",
+         "is_unread": False, "automation_mode": "auto",
+         "agent_name": None, "latest_run_status": None, "pause_reason": None},
+        {"ticket_id": "BUG-12", "project_id": "goodform",
+         "project_name": "Goodform",
+         "title": "Fix project add modal and seek button label overlap",
+         "section": "Bugs", "status": "bug-found", "bucket": "needs_me",
+         "time_bucket": "today", "updated_at": "2026-05-11T08:30:00",
+         "is_unread": True, "automation_mode": "auto",
+         "agent_name": None, "latest_run_status": "needs_input",
+         "pause_reason": None},
+        {"ticket_id": "B-19", "project_id": "goodform",
+         "project_name": "Goodform",
+         "title": "llm-node-logical-ritchie",
+         "section": "Backlog", "status": "proposed",
+         "bucket": "ready_to_delegate", "time_bucket": "yesterday",
+         "updated_at": "2026-05-10T14:00:00",
+         "is_unread": False, "automation_mode": "auto",
+         "agent_name": None, "latest_run_status": None, "pause_reason": None},
+        {"ticket_id": "B-15", "project_id": "ticket-takeaway",
+         "project_name": "Ticket Takeaway",
+         "title": "llm-node-enumerated-hartmanis",
+         "section": "Backlog", "status": "proposed",
+         "bucket": "ready_to_delegate", "time_bucket": "yesterday",
+         "updated_at": "2026-05-10T10:00:00",
+         "is_unread": False, "automation_mode": "auto",
+         "agent_name": None, "latest_run_status": None, "pause_reason": None},
+        {"ticket_id": "B-08", "project_id": "ticket-takeaway",
+         "project_name": "Ticket Takeaway",
+         "title": "Ensure gc-pillars-page work is in main branch",
+         "section": "WIP", "status": "in-progress", "bucket": "failed",
+         "time_bucket": "this_week", "updated_at": "2026-05-08T18:00:00",
+         "is_unread": False, "automation_mode": "auto",
+         "agent_name": "primary", "latest_run_status": "failed",
+         "pause_reason": None},
+        {"ticket_id": "B-03", "project_id": "goodform",
+         "project_name": "Goodform",
+         "title": "Waiting on legal review (paused demo)",
+         "section": "Backlog", "status": "blocked", "bucket": "paused_ticket",
+         "time_bucket": "older", "updated_at": "2026-04-15T10:00:00",
+         "is_unread": False, "automation_mode": "paused",
+         "agent_name": None, "latest_run_status": None,
+         "pause_reason": "Waiting on legal review"},
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------
 
@@ -8089,6 +8176,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     )
                     conn.close()
                 self._send_json(feed)
+                return
+
+            # Visual preview of the attention feed with stub data — lets us
+            # verify the populated layout when the live DB is empty.
+            if remainder == "/kitchen/demo":
+                self._send_html(kitchen_view.render_attention_feed(
+                    _DEMO_KITCHEN_STATE, port=SERVER_PORT,
+                    rail_js=gen.build_nav_rail_js(),
+                    pwa_head_tags=PWA_HEAD_TAGS,
+                ))
                 return
 
             # GET /api/projects — list all projects with ticket counts

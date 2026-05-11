@@ -9001,6 +9001,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "Workflow not found"}, 404)
                 return
 
+            # PUT /api/endpoints/{id} — update a user endpoint
+            m = re.match(r"^/api/endpoints/([a-zA-Z0-9_-]+)$", remainder)
+            if m:
+                endpoint_id = m.group(1)
+                from endpoints import update_endpoint, EndpointMisconfigured
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError) as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                conn = get_db()
+                init_db(conn)
+                try:
+                    updated = update_endpoint(conn, endpoint_id, **body)
+                except KeyError:
+                    conn.close()
+                    self._send_json({"error": "endpoint not found"}, 404)
+                    return
+                except PermissionError:
+                    conn.close()
+                    self._send_json({"error": "system_endpoint"}, 403)
+                    return
+                except EndpointMisconfigured as e:
+                    conn.close()
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                conn.close()
+                self._send_json(vars(updated))
+                return
+
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
                 self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
@@ -11139,6 +11169,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": True, "deleted": workflow_id})
                 else:
                     self._send_json({"error": "Workflow not found"}, 404)
+                return
+
+            # DELETE /api/endpoints/{id} — delete a user endpoint
+            m = re.match(r"^/api/endpoints/([a-zA-Z0-9_-]+)$", remainder)
+            if m:
+                endpoint_id = m.group(1)
+                from endpoints import delete_endpoint
+                conn = get_db()
+                init_db(conn)
+                try:
+                    unlinked = delete_endpoint(conn, endpoint_id)
+                except KeyError:
+                    conn.close()
+                    self._send_json({"error": "endpoint not found"}, 404)
+                    return
+                except PermissionError:
+                    conn.close()
+                    self._send_json({"error": "system_endpoint"}, 403)
+                    return
+                conn.close()
+                if unlinked > 0:
+                    self._send_json({"agents_unlinked": unlinked})
+                else:
+                    self.send_response(204)
+                    self.end_headers()
                 return
 
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):

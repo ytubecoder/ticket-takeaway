@@ -142,3 +142,35 @@ def test_post_rejects_args_not_array_of_strings(api_url):
     })
     assert status == 400
     assert "[1]" in str(body) or "index 1" in str(body)
+
+
+def test_put_updates_user_endpoint(api_url):
+    eid = _unique_id("put-test")
+    _post(api_url, {"id": eid, "name": "x",
+                    "endpoint_type": "cli", "command": "echo"})
+    status, body = _put(f"{api_url}/{eid}", {"name": "renamed"})
+    assert status == 200
+    assert body["name"] == "renamed"
+    _delete(f"{api_url}/{eid}")
+
+
+def test_put_system_endpoint_returns_403(api_url):
+    status, body = _put(f"{api_url}/claude-cli", {"name": "evil"})
+    assert status == 403
+    assert body.get("error") == "system_endpoint"
+
+
+def test_delete_system_endpoint_returns_403(api_url):
+    status, body = _delete(f"{api_url}/claude-cli")
+    assert status == 403
+
+
+def test_delete_user_endpoint_returns_unlinked_count(api_url):
+    eid = _unique_id("del-test")
+    _post(api_url, {"id": eid, "name": "x",
+                    "endpoint_type": "cli", "command": "echo"})
+    status, body = _delete(f"{api_url}/{eid}")
+    # 204 has empty body; 200 has agents_unlinked
+    assert status in (200, 204)
+    if status == 200:
+        assert "agents_unlinked" in body

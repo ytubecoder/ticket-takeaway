@@ -160,3 +160,61 @@ def _validate_for_persist(ep: Endpoint) -> None:
         if not isinstance(a, str):
             raise EndpointMisconfigured(
                 f"args[{i}] must be a string, got {type(a).__name__}")
+
+
+def build_invocation(
+    endpoint: Endpoint, prompt: str, *, session_id: Optional[str] = None
+) -> list[str]:
+    """Build the argv for executing `prompt` against `endpoint`.
+
+    Phase 1: only endpoint_type='cli' is supported.
+    See spec section 'endpoints.build_invocation contract' for details.
+    """
+    if endpoint.endpoint_type != "cli":
+        raise UnsupportedEndpointType(
+            f"endpoint {endpoint.id!r} has type {endpoint.endpoint_type!r}; "
+            f"API endpoint execution is not implemented (phase 1 = CLI only)"
+        )
+    if endpoint.prompt_mode == "stdin":
+        raise NotImplementedError(
+            "prompt_mode='stdin' is reserved for a future phase"
+        )
+    if not isinstance(endpoint.args, list):
+        raise EndpointMisconfigured(
+            f"endpoint {endpoint.id!r} args must be a list, got "
+            f"{type(endpoint.args).__name__}"
+        )
+    for i, a in enumerate(endpoint.args):
+        if not isinstance(a, str):
+            raise EndpointMisconfigured(
+                f"endpoint {endpoint.id!r} args[{i}] must be a string"
+            )
+
+    # Session-resume path: resume_args fully replaces args
+    if session_id is not None:
+        resume_template = (endpoint.session_config or {}).get("resume_args")
+        if resume_template:
+            substituted = _substitute(
+                resume_template, prompt, session_id=session_id)
+            return [endpoint.command] + substituted
+        log.warning(
+            "endpoint=%s advertises sessions but has no resume_args "
+            "template — session resume skipped", endpoint.id,
+        )
+
+    # Normal path
+    substituted = _substitute(endpoint.args, prompt)
+    if "{prompt}" not in " ".join(endpoint.args):
+        substituted.append(prompt)
+    return [endpoint.command] + substituted
+
+
+def _substitute(template: list[str], prompt: str,
+                *, session_id: Optional[str] = None) -> list[str]:
+    out = []
+    for tok in template:
+        new = tok.replace("{prompt}", prompt)
+        if session_id is not None:
+            new = new.replace("{session_id}", session_id)
+        out.append(new)
+    return out

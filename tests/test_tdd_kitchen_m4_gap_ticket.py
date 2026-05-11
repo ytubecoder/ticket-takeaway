@@ -84,15 +84,18 @@ def _file_gap_ticket(serve, project_id, run_id):
     failed_action = gap.get("failed_step_action") or ""
     title = f"[gap:{gap_kind}] {failed_action} step in journey {journey_id}".strip()
     description = f"_Auto-filed from red scenario run #{run_id}._\n\n**Gap kind:** `{gap_kind}`"
+    # Suppress add_ticket's default ticket_created emit; the gap path emits its
+    # own richer event below (mirrors the production handler in serve.py).
     tid = _add_ticket(c, project_id, title,
                       section="Ideas", priority="medium",
-                      description=description, draft=True)
+                      description=description, draft=True,
+                      emit_created_event=False)
     c.execute("INSERT INTO acceptance_criteria (ticket_id, project_id, text) VALUES (?, ?, ?)",
               (tid, project_id, f"Resolve gap from run #{run_id}"))
     c.execute("INSERT OR IGNORE INTO journey_tickets (journey_id, project_id, ticket_id) "
               "VALUES (?, ?, ?)", (journey_id, project_id, tid))
     emit_event(c, project_id, "ticket", tid, "ticket_created",
-               {"id": tid, "title": title, "section": "Ideas",
+               {"origin": "journey_gap", "draft": True, "section": "Ideas",
                 "from_gap_run_id": run_id, "linked_journey": journey_id},
                ActorContext.system())
     c.commit(); c.close()

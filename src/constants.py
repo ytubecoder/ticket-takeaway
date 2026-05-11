@@ -168,6 +168,7 @@ EVENT_KIND_LABELS: dict[str, str] = {
     "pause_set":          "Paused",
     "pause_cleared":      "Resumed",
     "handoff_recorded":   "Handoff recorded",
+    "ticket_created":     "Ticket created",
 }
 
 # ---------------------------------------------------------------------------
@@ -194,6 +195,59 @@ EVENT_KIND_ICONS: dict[str, str] = {
     "pause_set":          "square",        # stop/pause shape
     "pause_cleared":      "play",
     "handoff_recorded":   "file-text",     # TODO: ideal icon would be 'clipboard-check'
+    "ticket_created":     "plus",          # TODO: ideal icon would be 'sparkles' or 'file-plus'
+}
+
+# ---------------------------------------------------------------------------
+# Activity event kind groups — maps each event_kind to a coarse-grained
+# "category" used for filter chips and badge styling on the Activity tab.
+# Multiple event kinds can map to the same group so the user gets a small,
+# scannable filter set without losing event-level detail in the row text.
+# ---------------------------------------------------------------------------
+
+EVENT_KIND_GROUPS: dict[str, str] = {
+    "ticket_created":     "Created",
+    "section_change":     "Moved",
+    "status_change":      "Status",
+    "criteria_check":     "Criteria",
+    "criteria_added":     "Criteria",
+    "field_changed":      "Field",
+    "input_provided":     "Input",
+    "run_started":        "Run",
+    "run_succeeded":      "Run",
+    "run_failed":         "Run",
+    "run_cancelled":      "Run",
+    "agent_output":       "Run",
+    "handoff_recorded":   "Run",
+    "hook_started":       "Hook",
+    "hook_succeeded":     "Hook",
+    "hook_failed":        "Hook",
+    "workspace_created":  "Workspace",
+    "pause_set":          "Pause",
+    "pause_cleared":      "Pause",
+}
+
+# Display order for the filter chip row; groups not in this list are appended
+# alphabetically at the end so new event kinds don't disappear silently.
+EVENT_GROUP_ORDER: list[str] = [
+    "Created", "Moved", "Status", "Criteria",
+    "Run", "Hook", "Workspace", "Field", "Input", "Pause",
+]
+
+# Per-group accent colour. Picked from the existing palette so light & dark
+# themes inherit contrast from CSS variables; values here are direct hex
+# fallbacks for the badge background-tint.
+EVENT_GROUP_COLORS: dict[str, str] = {
+    "Created":   "#22c55e",  # green — birth events
+    "Moved":     "#3b82f6",  # blue — section transitions
+    "Status":    "#a855f7",  # purple — state transitions
+    "Criteria":  "#14b8a6",  # teal — acceptance work
+    "Run":       "#f59e0b",  # amber — agent activity
+    "Hook":      "#f97316",  # orange — automation hooks
+    "Workspace": "#94a3b8",  # slate — infra
+    "Field":     "#64748b",  # slate-darker — text edits
+    "Input":     "#ec4899",  # pink — human-in-the-loop
+    "Pause":     "#ef4444",  # red — interruptions
 }
 
 # ---------------------------------------------------------------------------

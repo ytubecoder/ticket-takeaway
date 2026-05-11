@@ -3,7 +3,9 @@
 Extracted from tickets-cli.py so it can be imported by both the CLI and serve.py.
 """
 
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from constants import DASHBOARD_DIR, DB_PATH
@@ -852,4 +854,53 @@ def init_db(conn: sqlite3.Connection):
             )
 
         conn.execute("INSERT INTO _migrations (version) VALUES (18)")
+        conn.commit()
+
+    # Migration 19: Backfill ticket_created activity events for existing tickets
+    # that predate the centralised emit in actions.add_ticket. Without this, the
+    # Activity tab on older tickets has no "origin" entry and looks like the
+    # ticket appeared from nowhere. We try to recover the origin where we can:
+    # - Drafts whose description starts with "Source: <type> @ <file>:<line>"
+    #   were created by Seek; we tag origin='seek' with the parsed metadata.
+    # - Everything else gets origin='backfill' (unknown — predates tracking).
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 19").fetchone():
+        import re as _re
+        seek_re = _re.compile(r"^Source:\s+(\S+)\s+@\s+(.+):(\d+)")
+        rows = conn.execute(
+            "SELECT t.id, t.project_id, t.section, t.title, t.draft, "
+            "       t.description, t.created_at "
+            "FROM tickets t "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM activity_events e "
+            "  WHERE e.subject_type = 'ticket' AND e.subject_id = t.id "
+            "    AND e.project_id = t.project_id AND e.event_kind = 'ticket_created'"
+            ")"
+        ).fetchall()
+        for r in rows:
+            payload = {
+                "id": r["id"],
+                "title": r["title"],
+                "section": r["section"],
+                "draft": bool(r["draft"]),
+            }
+            seek_match = seek_re.match(r["description"] or "")
+            if seek_match and r["draft"]:
+                payload["origin"] = "seek"
+                payload["source_type"] = seek_match.group(1)
+                payload["source_file"] = seek_match.group(2)
+                try:
+                    payload["source_line"] = int(seek_match.group(3))
+                except ValueError:
+                    payload["source_line"] = seek_match.group(3)
+            else:
+                payload["origin"] = "backfill"
+            conn.execute(
+                "INSERT INTO activity_events "
+                "(project_id, subject_type, subject_id, actor_type, actor_id, "
+                " event_kind, payload_json, occurred_at) "
+                "VALUES (?, 'ticket', ?, 'system', NULL, 'ticket_created', ?, ?)",
+                (r["project_id"], r["id"], json.dumps(payload, ensure_ascii=False),
+                 r["created_at"] or datetime.now(timezone.utc).isoformat()),
+            )
+        conn.execute("INSERT INTO _migrations (version) VALUES (19)")
         conn.commit()

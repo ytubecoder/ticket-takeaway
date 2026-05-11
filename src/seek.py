@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from actions import add_ticket, auto_generate_id
+from actions import add_ticket, auto_generate_id, emit_event, ActorContext
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +343,18 @@ def ingest(conn: sqlite3.Connection, project_id: str, items: list[DiscoveredItem
             priority=item.priority,
             description=description,
             draft=True,
+            emit_created_event=False,
+        )
+        emit_event(
+            conn, project_id, "ticket", tid, "ticket_created",
+            {
+                "origin": "seek",
+                "draft": True,
+                "source_type": item.source_type,
+                "source_file": item.source_file,
+                "source_line": item.source_line,
+            },
+            ActorContext.system(),
         )
         created.append(tid)
     conn.commit()

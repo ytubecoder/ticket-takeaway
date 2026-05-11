@@ -853,3 +853,65 @@ def init_db(conn: sqlite3.Connection):
 
         conn.execute("INSERT INTO _migrations (version) VALUES (18)")
         conn.commit()
+
+    _apply_migration_19(conn)
+
+
+def _apply_migration_19(conn) -> None:
+    """Migration 19: add endpoints table + workflow_agents.endpoint_id,
+    backfill data from existing workflow_agents.
+
+    All work happens in a single transaction. The _migrations row is
+    inserted last, before the implicit commit, so partial state is
+    impossible.
+    """
+    if conn.execute(
+        "SELECT 1 FROM _migrations WHERE version = 19"
+    ).fetchone():
+        return
+
+    # 1. Create endpoints table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS endpoints (
+            id             TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            endpoint_type  TEXT NOT NULL CHECK (endpoint_type IN
+                             ('cli','anthropic_api','openai_api',
+                              'gemini_api','ssh_cli')),
+            provider       TEXT,
+            model          TEXT,
+            base_url       TEXT,
+            api_key_env    TEXT,
+            command        TEXT,
+            args           TEXT NOT NULL DEFAULT '[]',
+            prompt_mode    TEXT NOT NULL DEFAULT 'template'
+                             CHECK (prompt_mode IN ('template','stdin')),
+            timeout_s      INTEGER NOT NULL DEFAULT 120,
+            capabilities   TEXT NOT NULL DEFAULT '{}',
+            session_config TEXT NOT NULL DEFAULT '{}',
+            system         INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+    # 2. Add endpoint_id column to workflow_agents (idempotent guard)
+    cols = {r[1] for r in conn.execute(
+        "PRAGMA table_info(workflow_agents)").fetchall()}
+    if "endpoint_id" not in cols:
+        conn.execute(
+            "ALTER TABLE workflow_agents ADD COLUMN endpoint_id TEXT "
+            "REFERENCES endpoints(id) ON DELETE SET NULL"
+        )
+
+    # 3. Data backfill (Task 7 fills this in — for now just stub it)
+    _backfill_endpoints_from_agents(conn)
+
+    # 4. Record version (last step in transaction)
+    conn.execute("INSERT INTO _migrations (version) VALUES (19)")
+    conn.commit()
+
+
+def _backfill_endpoints_from_agents(conn) -> None:
+    """Backfill endpoints from workflow_agents rows. See Task 7 for
+    full implementation."""
+    pass   # Stub; implemented in Task 7

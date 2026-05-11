@@ -1,20 +1,122 @@
 {
   "gallery-board": {
     "file": "gallery-board.png",
-    "published_at": "2026-04-08T09:23:40.713173+00:00",
+    "published_at": "2026-05-11T22:05:00+00:00",
     "slot": "gallery-board",
-    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/ticket-lifecycle-ui-1775640218/screenshots/board-overview.png"
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban",
+    "notes": "Dark theme kanban overview — Ideas/Backlog/WIP/For Review columns with real tickets"
   },
   "gallery-handoff": {
     "file": "gallery-handoff.png",
-    "published_at": "2026-04-08T09:23:40.713173+00:00",
+    "published_at": "2026-05-11T22:05:00+00:00",
     "slot": "gallery-handoff",
-    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/ticket-lifecycle-ui-1775640218/screenshots/agent-picks-up-ticket.png"
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/tickets/B-62",
+    "notes": "Container ticket detail in For Review state — CONTAINER badge, criteria, children, tags"
   },
   "showcase-detail-edit": {
     "file": "showcase-detail-edit.png",
-    "published_at": "2026-04-08T09:23:38.467327+00:00",
+    "published_at": "2026-05-11T22:05:00+00:00",
     "slot": "showcase-detail-edit",
-    "source_path": "/home/user/projects/ticket-takeaway/.artifacts/scenarios/quick-edit-detail-overlay-1775640216/screenshots/overlay-after-edit.png"
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/tickets/B-17",
+    "notes": "Full-page ticket detail with inline-editable description and criteria"
+  },
+  "tour-board-overview": {
+    "file": "tour-board-overview.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "tour-board-overview",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban"
+  },
+  "tour-detail-overlay": {
+    "file": "tour-detail-overlay.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "tour-detail-overlay",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/tickets/B-17"
+  },
+  "tour-detail-edited": {
+    "file": "tour-detail-edited.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "tour-detail-edited",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/tickets/B-17"
+  },
+  "tour-new-ticket-panel": {
+    "file": "tour-new-ticket-panel.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "tour-new-ticket-panel",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban (+ New panel open)"
+  },
+  "tour-settings": {
+    "file": "tour-settings.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "tour-settings",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban?settings=1"
+  },
+  "kitchen-attention-feed": {
+    "file": "kitchen-attention-feed.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "kitchen-attention-feed",
+    "source_path": "chrome-devtools-mcp://localhost:8788/kitchen/demo",
+    "notes": "Kitchen orchestrator attention feed — All/Needs me/Running/Ready/Paused/Failed filters with grouped ticket cards"
+  },
+  "workflows-list": {
+    "file": "workflows-list.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "workflows-list",
+    "source_path": "chrome-devtools-mcp://localhost:8788/workflows",
+    "notes": "Workflows & Agents page — system + user workflows with enable toggles. Stub for README until model-endpoints + adapter PRs merge."
+  },
+  "journeys-list": {
+    "file": "journeys-list.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "journeys-list",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/journeys"
+  },
+  "journey-timeline": {
+    "file": "journey-timeline.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "journey-timeline",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/journeys/login-tour-all-screens",
+    "notes": "Journey detail with persona, run history, 22 steps timeline. Project switcher dropdown also visible."
+  },
+  "activity-tab": {
+    "file": "activity-tab.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "activity-tab",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/tickets/B-17?tab=activity",
+    "notes": "Activity tab — event type filters (CREATED/MOVED/STATUS/CRITERIA/RUN/HOOK/WORKSPACE/FIELD/INPUT/PAUSE), time filters, HUMAN/SYSTEM origin"
+  },
+  "project-picker": {
+    "file": "project-picker.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "project-picker",
+    "source_path": "chrome-devtools-mcp://localhost:8788/projects",
+    "notes": "8 registered projects with WIP/Backlog/Review counts + switcher dropdown open"
+  },
+  "branches-dropdown": {
+    "file": "branches-dropdown.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "branches-dropdown",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban (Branches dropdown open)",
+    "notes": "GitHub branch awareness — remote branches list grouped with ticket links"
+  },
+  "mobile-shell": {
+    "file": "mobile-shell.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "mobile-shell",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban @ 390x844",
+    "notes": "PWA mobile viewport — responsive kanban with collapsible nav rail"
+  },
+  "filter-bar-active": {
+    "file": "filter-bar-active.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "filter-bar-active",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban (ux tag filter active)",
+    "notes": "Cross-cutting filter — ux tag filter shows only 2 matching tickets across the board"
+  },
+  "theming-light": {
+    "file": "theming-light.png",
+    "published_at": "2026-05-11T22:05:00+00:00",
+    "slot": "theming-light",
+    "source_path": "chrome-devtools-mcp://localhost:8788/ticket-takeaway/kanban (light theme)",
+    "notes": "Light theme variant — pair with gallery-board.png (dark) for side-by-side theming display"
   }
 }

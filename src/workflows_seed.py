@@ -718,14 +718,13 @@ DEFAULT_WORKFLOWS: list[dict] = [
 # Seeder — endpoints (global, run once at startup)
 # ---------------------------------------------------------------------------
 
-def seed_default_endpoints(db) -> dict:
+def seed_default_endpoints(db: sqlite3.Connection) -> dict[str, int]:
     """Upsert DEFAULT_ENDPOINTS into the endpoints table.
 
     Returns {"upserted": n, "skipped_collision": m}.
     System rows always overwrite. If a system=0 row already exists with
     the same id as a DEFAULT_ENDPOINTS entry, log and skip.
     """
-    import json as _json
     upserted = 0
     skipped = 0
     for ep in DEFAULT_ENDPOINTS:
@@ -760,8 +759,8 @@ def seed_default_endpoints(db) -> dict:
         """, (
             ep.id, ep.name, ep.endpoint_type, ep.provider, ep.model,
             ep.base_url, ep.api_key_env, ep.command,
-            _json.dumps(ep.args), ep.prompt_mode, ep.timeout_s,
-            _json.dumps(ep.capabilities), _json.dumps(ep.session_config),
+            json.dumps(ep.args), ep.prompt_mode, ep.timeout_s,
+            json.dumps(ep.capabilities), json.dumps(ep.session_config),
             ep.system,
         ))
         upserted += 1

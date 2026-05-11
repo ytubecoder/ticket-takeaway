@@ -11482,8 +11482,8 @@ def main():
         _ep_db = get_db()
         _seed_default_endpoints(_ep_db)
         _ep_db.close()
-    except Exception as _e:
-        print(f"  Warning: could not seed default endpoints: {_e}", file=__import__("sys").stderr)
+    except sqlite3.OperationalError as _e:
+        print(f"  Warning: endpoints table not ready: {_e}", file=sys.stderr)
 
     # Seed default global agents (idempotent, runs once regardless of projects)
     try:

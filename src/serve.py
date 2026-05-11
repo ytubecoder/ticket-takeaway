@@ -104,8 +104,11 @@ from scenario_drafting import DraftRequest, DraftContext, generate_drafts, KNOWN
 from workflows_seed import (
     seed_default_workflows as _seed_default_workflows,
     seed_default_agents as _seed_default_agents,
+    seed_default_endpoints as _seed_default_endpoints,
 )
 import conditions as _conditions
+from endpoints import extract_session_id as _endpoints_extract_session_id
+from runners import _resolve_argv_for_agent
 
 import html as _html
 
@@ -2029,122 +2032,6 @@ def _get_run_evidence(project_id: str, run_id: int) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Streaming subprocess + session persistence helpers
-# ---------------------------------------------------------------------------
-
-def _apply_resume_args(command: str, args: list, session_id: str) -> list:
-    """Inject explicit-session-id resume flags into a CLI invocation.
-
-    codex: replace ``exec`` token with ``exec resume <session_id>`` in the
-    args list (the codex CLI accepts an explicit session id positionally).
-    claude: append ``--resume <session_id>`` (idempotent — replaces existing).
-    Other commands: append ``--resume <session_id>`` as a best-effort fallback.
-    Returns a NEW list — does not mutate args.
-    """
-    out = list(args or [])
-    cmd = (command or "").lower()
-    if cmd == "codex":
-        for i, t in enumerate(out):
-            if t == "exec":
-                # If "resume" already follows "exec", replace/insert session_id only
-                if i + 1 < len(out) and out[i + 1] == "resume":
-                    if i + 2 < len(out) and not out[i + 2].startswith("-"):
-                        out[i + 2] = session_id
-                    else:
-                        out.insert(i + 2, session_id)
-                else:
-                    out.insert(i + 1, "resume")
-                    out.insert(i + 2, session_id)
-                return out
-        # No `exec` token found — append exec resume <session_id>
-        return out + ["exec", "resume", session_id]
-    # Generic / claude path: --resume <session_id>
-    if "--resume" in out:
-        idx = out.index("--resume")
-        if idx + 1 < len(out):
-            out[idx + 1] = session_id
-        else:
-            out.append(session_id)
-        return out
-    return out + ["--resume", session_id]
-
-
-def _extract_session_id(command: str, stdout: str, stderr: str, started_before: float) -> "str | None":
-    """Extract the CLI's session id from process output.
-
-    Best-effort — returns None on failure; callers proceed without persistence.
-
-    codex: looks for a ``Session: <uuid>`` line on stderr (or stdout). Falls
-    back to scanning ~/.codex/sessions/ for the most-recently-modified file
-    with mtime >= started_before.
-
-    claude: looks for JSON output containing "session_id" or a line matching
-    ``session_id: <uuid>``. Falls back to scanning ~/.claude/projects/ similarly.
-    """
-    import glob as _glob
-    cmd = (command or "").lower()
-    UUID_RE = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
-    blob = (stdout or "") + "\n" + (stderr or "")
-    if cmd == "codex":
-        for pat in (
-            r"Session(?:\s*ID)?\s*[:=]\s*(" + UUID_RE + ")",
-            r'"session_id"\s*[:=]\s*"(' + UUID_RE + ')"?',
-            r'session[_\-]?id["\s:=]+(' + UUID_RE + ')',
-        ):
-            m = re.search(pat, blob, re.IGNORECASE)
-            if m:
-                return m.group(1)
-        # Filesystem fallback: find most-recently-modified session file
-        sessions_dir = os.path.expanduser("~/.codex/sessions")
-        if os.path.isdir(sessions_dir):
-            candidates = []
-            for p in _glob.glob(os.path.join(sessions_dir, "*.json")):
-                try:
-                    mt = os.path.getmtime(p)
-                    if mt >= started_before - 1:
-                        candidates.append((mt, p))
-                except OSError:
-                    continue
-            if candidates:
-                candidates.sort(reverse=True)
-                fname = os.path.basename(candidates[0][1])
-                m = re.search(UUID_RE, fname)
-                if m:
-                    return m.group(0)
-        return None
-    if cmd == "claude":
-        for pat in (
-            r'"session_id"\s*:\s*"(' + UUID_RE + ')"',
-            r'session_id\s*[:=]\s*(' + UUID_RE + ')',
-        ):
-            m = re.search(pat, blob, re.IGNORECASE)
-            if m:
-                return m.group(1)
-        return None
-    return None
-
-
-def _build_agent_cmd(command: str, args: list, prompt: str) -> list:
-    """Build the full argv for an agent invocation, per-CLI conventions.
-
-    claude: ``claude [args] -p <prompt> --output-format json`` — prompt via -p,
-    JSON-wrapped result on stdout.
-    codex: ``codex [args] <prompt>`` — prompt is positional; no --output-format
-    flag exists. Output is plain text and parsed as raw text by the caller.
-    other: ``<command> [args] <prompt>`` — best-effort positional fallback.
-    """
-    cmd = (command or "").lower()
-    base = [command] + list(args or [])
-    if cmd == "claude":
-        return base + ["-p", prompt, "--output-format", "json"]
-    if cmd == "codex":
-        return base + [prompt]
-    return base + [prompt]
-
-
-# ---------------------------------------------------------------------------
-# End Phase 2 helpers
-# ---------------------------------------------------------------------------
 
 
 def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow: dict, proj: dict) -> None:
@@ -2251,14 +2138,6 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
 
             prompt = "\n\n---\n\n".join(prompt_parts)
 
-            # Run agent CLI
-            try:
-                agent_args = json.loads(agent.get("args", "[]")) if isinstance(agent.get("args"), str) else agent.get("args", [])
-                if isinstance(agent_args, str):
-                    agent_args = [agent_args]
-            except (json.JSONDecodeError, TypeError):
-                agent_args = []
-
             # Read the freshest session_ids from DB (another handler may have updated it)
             fresh_run = _get_workflow_run(run_id)
             session_ids: dict = {}
@@ -2269,18 +2148,39 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     session_ids = {}
             prior_sid = session_ids.get(agent_id)
 
-            command_name = agent.get("command", "claude")
-            # Build the command — persist_session agents get session resume, others get --no-session-persistence
-            if agent.get("persist_session"):
-                if prior_sid:
-                    agent_args = _apply_resume_args(command_name, agent_args, prior_sid)
-                # else: first call for this agent in this run — fresh session, no resume flag
-            else:
-                # --no-session-persistence is a claude-specific flag; codex/others would reject it
-                if command_name.lower() == "claude" and "--no-session-persistence" not in agent_args:
-                    agent_args = agent_args + ["--no-session-persistence"]
+            # For compat (no endpoint_id) non-persist agents: inject --no-session-persistence
+            # This block remains for the compat (NULL endpoint_id) path, which stays for one
+            # release per spec. Remove when compat columns are dropped.
+            # into the agent args so the compat Endpoint picks it up via build_invocation.
+            # Real endpoint agents carry this in their endpoint config instead.
+            _agent_for_invocation = agent
+            if not agent.get("endpoint_id") and not agent.get("persist_session"):
+                _cmd_name = agent.get("command", "claude")
+                if _cmd_name.lower() == "claude":
+                    try:
+                        _raw_args = agent.get("args", "[]")
+                        _parsed_args = json.loads(_raw_args) if isinstance(_raw_args, str) else list(_raw_args or [])
+                        if isinstance(_parsed_args, str):
+                            _parsed_args = [_parsed_args]
+                    except (json.JSONDecodeError, TypeError):
+                        _parsed_args = []
+                    if "--no-session-persistence" not in _parsed_args:
+                        _agent_for_invocation = dict(agent)
+                        _agent_for_invocation["args"] = json.dumps(_parsed_args + ["--no-session-persistence"])
 
-            cmd = _build_agent_cmd(command_name, agent_args, prompt)
+            # Determine session_id to pass (only for persist_session agents with a prior session)
+            _session_id_for_agent = prior_sid if agent.get("persist_session") and prior_sid else None
+
+            # Resolve the argv via endpoint abstraction (falls back to compat columns when endpoint_id IS NULL)
+            with _db_lock:
+                _ep_conn = get_db()
+            try:
+                step_ep, cmd = _resolve_argv_for_agent(
+                    _ep_conn, _agent_for_invocation, prompt,
+                    session_id=_session_id_for_agent,
+                )
+            finally:
+                _ep_conn.close()
 
             # Progress entry so the UI shows which agent is running immediately
             agent_label = agent.get("name", agent_id)
@@ -2372,7 +2272,7 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
             # Capture session id for persist_session agents
             if agent.get("persist_session"):
                 full_output = "".join(all_output_lines)
-                new_sid = _extract_session_id(command_name, full_output, "", started_at)
+                new_sid = _endpoints_extract_session_id(step_ep, full_output, "", started_at)
                 if new_sid and new_sid != prior_sid:
                     session_ids[agent_id] = new_sid
                     _update_workflow_run(run_id, session_ids=json.dumps(session_ids))
@@ -2428,12 +2328,14 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                         '{"agreed": true/false, "summary": "brief summary", "contention": "point of disagreement or null"}'
                     )
 
+                    with _db_lock:
+                        _agree_ep_conn = get_db()
                     try:
-                        agree_args = json.loads(primary_agent.get("args", "[]")) if isinstance(primary_agent.get("args"), str) else primary_agent.get("args", [])
-                    except (json.JSONDecodeError, TypeError):
-                        agree_args = []
-
-                    agree_cmd = _build_agent_cmd(primary_agent.get("command", "claude"), agree_args, agree_prompt)
+                        _agree_ep, agree_cmd = _resolve_argv_for_agent(
+                            _agree_ep_conn, primary_agent, agree_prompt,
+                        )
+                    finally:
+                        _agree_ep_conn.close()
                     try:
                         agree_result = subprocess.run(
                             agree_cmd, capture_output=True, text=True,
@@ -6059,7 +5961,7 @@ def _aggregate_workflows_state() -> dict:
 
 
 def _render_workflows_view(port: int) -> str:
-    """Render the global Workflows page — two tabs (Workflows | Agents) with inline edit."""
+    """Render the global Workflows page — three tabs (Workflows | Agents | Endpoints) with inline edit."""
     rail_css = gen.build_nav_rail_css()
     rail_html = gen.build_nav_rail_html()
     rail_js = gen.build_nav_rail_js()
@@ -6072,6 +5974,11 @@ def _render_workflows_view(port: int) -> str:
     projects = state["projects"]
     projects_meta_json = json.dumps(projects)
     agents = _list_workflow_agents()
+
+    from endpoints import list_endpoints as _list_endpoints
+    _ep_conn = get_db()
+    endpoints = _list_endpoints(_ep_conn)
+    _ep_conn.close()
 
     def _scope_badge(scope: str, label: str) -> str:
         cls = {"system": "wf-scope-system", "user": "wf-scope-user"}.get(scope, "wf-scope-user")
@@ -6309,6 +6216,7 @@ def _render_workflows_view(port: int) -> str:
 
     # Build the Agents tab rows. Custom agents only — discovered agents need a
     # project context; the global tab keeps it simple.
+    cli_endpoints = [ep for ep in endpoints if ep.endpoint_type == "cli"]
     if not agents:
         agent_rows_html = '<div class="wf-empty">No custom agents yet. Click "+ New Agent" to create one.</div>'
     else:
@@ -6344,12 +6252,38 @@ def _render_workflows_view(port: int) -> str:
                 if ag_is_system
                 else f'<button class="ag-edit-delete" data-id="{aid_attr}">Delete</button>'
             )
+            # Build endpoint dropdown — default shows CLI-only options
+            current_ep_id = a.get("endpoint_id") or ""
+            ep_options = '<option value=""></option>'
+            for ep in cli_endpoints:
+                sel = " selected" if ep.id == current_ep_id else ""
+                ep_options += f'<option value="{_safe_attr(ep.id)}"{sel}>{_html.escape(ep.name)}</option>'
+            # Endpoint dropdown is always editable — endpoint binding is orthogonal to agent identity.
+            # System agent persona fields (name, system_prompt) stay locked via ag_ro above.
+            endpoint_field = (
+                f'<div class="wf-edit-row">'
+                f'  <label>Endpoint</label>'
+                f'  <select data-field="endpoint_id" class="agent-endpoint-select">'
+                f'    {ep_options}'
+                f'  </select>'
+                f'  <label class="show-all-toggle" style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px;color:var(--text-secondary);cursor:pointer;">'
+                f'    <input type="checkbox" class="show-all-endpoints">'
+                f'    Show non-executable types'
+                f'  </label>'
+                f'</div>'
+            )
+            # Build ag-cmd summary: show endpoint name or a warning if none set.
+            ep_lookup = {ep.id: ep.name for ep in cli_endpoints}
+            if current_ep_id and current_ep_id in ep_lookup:
+                ag_cmd_summary = ep_lookup[current_ep_id]
+            else:
+                ag_cmd_summary = "⚠ no endpoint"
             agent_parts.append(
                 f'<div class="ag-row-wrap" data-agent-id="{aid_attr}" data-system="{1 if ag_is_system else 0}" data-testid="ag-row-{aid_attr}">'
                 f'  <div class="ag-row">'
                 f'    <div class="ag-main">'
                 f'      <div class="ag-name">{_html.escape(aname)}</div>'
-                f'      <div class="ag-cmd">{_html.escape(cmd)}{(" " + _html.escape(args_display)) if args_display else ""}</div>'
+                f'      <div class="ag-cmd">{_html.escape(ag_cmd_summary)}</div>'
                 f'    </div>'
                 f'    <div class="ag-cell"><span class="ag-type {ag_type_class}">{ag_type_label}</span></div>'
                 f'    <div class="ag-cell"><button class="ag-edit-toggle" data-id="{aid_attr}">Edit</button></div>'
@@ -6357,11 +6291,10 @@ def _render_workflows_view(port: int) -> str:
                 f'  <div class="ag-edit-panel" data-id="{aid_attr}" hidden>'
                 f'    {ag_sys_note}'
                 f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(aname)}"{ag_ro}></div>'
-                f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(cmd)}"{ag_ro}></div>'
-                f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(args_display)}" placeholder="comma-separated or JSON array"{ag_ro}></div>'
                 f'    <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"{ag_ro}>{_html.escape(sys_prompt)}</textarea></div>'
+                f'    {endpoint_field}'
                 f'    <div class="wf-edit-actions">'
-                f'      <button class="ag-edit-save" data-id="{aid_attr}"{" disabled" if ag_is_system else ""}>Save</button>'
+                f'      <button class="ag-edit-save" data-id="{aid_attr}">Save</button>'
                 f'      {ag_del_btn}'
                 f'      <span class="wf-edit-msg"></span>'
                 f'    </div>'
@@ -6369,6 +6302,69 @@ def _render_workflows_view(port: int) -> str:
                 f'</div>'
             )
         agent_rows_html = "".join(agent_parts)
+
+    # Build the Endpoints tab rows.
+    _ENDPOINT_TYPES = ("cli", "anthropic_api", "openai_api", "gemini_api", "ssh_cli")
+    if not endpoints:
+        endpoint_rows_html = '<div class="wf-empty">No endpoints yet. Click "+ New Endpoint" to create one.</div>'
+    else:
+        ep_parts = []
+        for ep in endpoints:
+            eid = ep.id
+            eid_attr = _safe_attr(eid)
+            ep_is_system = bool(ep.system)
+            ep_ro = " readonly" if ep_is_system else ""
+            ep_sys_note = (
+                '<div class="wf-edit-note">'
+                'System endpoint — body is read-only. The definition lives in '
+                '<code>workflows_seed.py</code>; edit there and restart serve.py.'
+                '</div>'
+                if ep_is_system else ""
+            )
+            ep_del_btn = (
+                '<button class="ep-edit-delete" disabled title="System endpoints can\'t be deleted.">Delete</button>'
+                if ep_is_system
+                else f'<button class="ep-edit-delete" data-id="{eid_attr}">Delete</button>'
+            )
+            type_options = "".join(
+                f'<option value="{t}"{" selected" if t == ep.endpoint_type else ""}>{t}'
+                + (' ⚠ not executable in phase 1' if t != 'cli' else '')
+                + '</option>'
+                for t in _ENDPOINT_TYPES
+            )
+            mode_options = (
+                f'<option value="template"{" selected" if ep.prompt_mode == "template" else ""}>template</option>'
+                f'<option value="stdin"{" selected" if ep.prompt_mode == "stdin" else ""}>stdin (reserved)</option>'
+            )
+            ep_type_class = "ag-type-system" if ep_is_system else "ag-type-custom"
+            ep_type_label = "system" if ep_is_system else "custom"
+            ep_parts.append(
+                f'<div class="ag-row-wrap" data-ep-id="{eid_attr}" data-system="{1 if ep_is_system else 0}" data-testid="ep-row-{eid_attr}">'
+                f'  <div class="ag-row">'
+                f'    <div class="ag-main">'
+                f'      <div class="ag-name">{_html.escape(ep.name)}</div>'
+                f'      <div class="ag-cmd">{_html.escape(ep.endpoint_type)}{(" · " + _html.escape(ep.command)) if ep.command else ""}</div>'
+                f'    </div>'
+                f'    <div class="ag-cell"><span class="ag-type {ep_type_class}">{ep_type_label}</span></div>'
+                f'    <div class="ag-cell"><button class="ep-edit-toggle" data-id="{eid_attr}">Edit</button></div>'
+                f'  </div>'
+                f'  <div class="ep-edit-panel" data-id="{eid_attr}" hidden>'
+                f'    {ep_sys_note}'
+                f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(ep.name)}"{ep_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Type</label><select data-field="endpoint_type"{ep_ro}>{type_options}</select></div>'
+                f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(ep.command or "")}"{ep_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(json.dumps(ep.args))}" placeholder="JSON array of strings"{ep_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Prompt mode</label><select data-field="prompt_mode"{ep_ro}>{mode_options}</select></div>'
+                f'    <div class="wf-edit-row"><label>Timeout (s)</label><input type="number" data-field="timeout_s" value="{ep.timeout_s}"{ep_ro}></div>'
+                f'    <div class="wf-edit-actions">'
+                f'      <button class="ag-edit-save ep-edit-save" data-id="{eid_attr}"{" disabled" if ep_is_system else ""}>Save</button>'
+                f'      {ep_del_btn}'
+                f'      <span class="wf-edit-msg"></span>'
+                f'    </div>'
+                f'  </div>'
+                f'</div>'
+            )
+        endpoint_rows_html = "".join(ep_parts)
 
     return f"""<!doctype html>
 <html data-theme="dark">
@@ -6454,12 +6450,12 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-match-some {{ background: rgba(34,197,94,0.14); color: #4ade80; border: 1px solid rgba(34,197,94,0.32); }}
 .wf-match-manual {{ background: rgba(168,85,247,0.14); color: #c084fc; border: 1px solid rgba(168,85,247,0.32); }}
 .wf-empty {{ padding: 32px 20px; color: var(--text-tertiary); text-align: center; font-style: italic; font-size: 13px; }}
-.wf-edit-toggle, .ag-edit-toggle {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
-.wf-edit-toggle:hover, .ag-edit-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
-.wf-edit-toggle.active, .ag-edit-toggle.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
-.wf-edit-panel, .ag-edit-panel {{ padding: 14px 18px 16px; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 10px; }}
-.wf-edit-panel[hidden], .ag-edit-panel[hidden] {{ display: none; }}
-[data-theme="light"] .wf-edit-panel, [data-theme="light"] .ag-edit-panel {{ background: rgba(0,0,0,0.02); }}
+.wf-edit-toggle, .ag-edit-toggle, .ep-edit-toggle {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
+.wf-edit-toggle:hover, .ag-edit-toggle:hover, .ep-edit-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
+.wf-edit-toggle.active, .ag-edit-toggle.active, .ep-edit-toggle.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
+.wf-edit-panel, .ag-edit-panel, .ep-edit-panel {{ padding: 14px 18px 16px; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 10px; }}
+.wf-edit-panel[hidden], .ag-edit-panel[hidden], .ep-edit-panel[hidden] {{ display: none; }}
+[data-theme="light"] .wf-edit-panel, [data-theme="light"] .ag-edit-panel, [data-theme="light"] .ep-edit-panel {{ background: rgba(0,0,0,0.02); }}
 .wf-edit-row {{ display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: start; }}
 .wf-edit-row label {{ font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding-top: 6px; }}
 .wf-edit-row input[type="text"], .wf-edit-row textarea {{ width: 100%; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 6px; padding: 6px 10px; font-size: 13px; font-family: inherit; }}
@@ -6510,9 +6506,9 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-edit-actions {{ display: flex; align-items: center; gap: 10px; padding-left: 122px; padding-top: 4px; }}
 .wf-edit-save, .ag-edit-save {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; font-family: inherit; font-weight: 600; }}
 .wf-edit-save:hover, .ag-edit-save:hover {{ filter: brightness(1.1); }}
-.wf-edit-delete, .ag-edit-delete {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid #ef4444; background: transparent; color: #ef4444; cursor: pointer; font-family: inherit; }}
-.wf-edit-delete:hover:not(:disabled), .ag-edit-delete:hover {{ background: rgba(239,68,68,0.1); }}
-.wf-edit-delete:disabled {{ opacity: 0.45; cursor: not-allowed; }}
+.wf-edit-delete, .ag-edit-delete, .ep-edit-delete {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid #ef4444; background: transparent; color: #ef4444; cursor: pointer; font-family: inherit; }}
+.wf-edit-delete:hover:not(:disabled), .ag-edit-delete:hover, .ep-edit-delete:hover:not(:disabled) {{ background: rgba(239,68,68,0.1); }}
+.wf-edit-delete:disabled, .ep-edit-delete:disabled {{ opacity: 0.45; cursor: not-allowed; }}
 .wf-edit-duplicate {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
 .wf-edit-duplicate:hover {{ border-color: var(--accent); color: var(--accent); }}
 .wf-edit-msg {{ font-size: 11px; color: var(--text-tertiary); }}
@@ -6545,6 +6541,7 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
   <div class="wf-tabs" data-testid="wf-tabs">
     <button class="wf-tab active" data-tab="workflows" data-testid="wf-tab-workflows">Workflows</button>
     <button class="wf-tab" data-tab="agents" data-testid="wf-tab-agents">Agents</button>
+    <button class="wf-tab" data-tab="endpoints" data-testid="wf-tab-endpoints">Endpoints</button>
   </div>
 
   <div class="wf-tab-pane active" data-tab-pane="workflows">
@@ -6565,8 +6562,6 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       <div class="wf-edit-panel">
         <div class="wf-edit-row"><label>ID</label><input type="text" data-field="id" placeholder="lowercase-with-dashes"></div>
         <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name"></div>
-        <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="claude"></div>
-        <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" placeholder="comma-separated or JSON array"></div>
         <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"></textarea></div>
         <div class="wf-edit-actions">
           <button class="ag-edit-save" id="ag-new-save">Create</button>
@@ -6576,6 +6571,43 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       </div>
     </div>
     <div class="wf-list" data-testid="ag-list" id="ag-list">{agent_rows_html}</div>
+  </div>
+
+  <div class="wf-tab-pane" data-tab-pane="endpoints">
+    <div class="wf-pane-header">
+      <h2>Model endpoints</h2>
+      <button class="wf-pane-btn" id="ep-new-btn" data-testid="ep-new-btn">+ New Endpoint</button>
+    </div>
+    <div class="ag-new-form" id="ep-new-form" hidden>
+      <div class="wf-edit-panel">
+        <div class="wf-edit-row"><label>ID</label><input type="text" data-field="id" placeholder="lowercase-with-dashes"></div>
+        <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name"></div>
+        <div class="wf-edit-row"><label>Type</label>
+          <select data-field="endpoint_type">
+            <option value="cli" selected>cli</option>
+            <option value="anthropic_api">anthropic_api ⚠ not executable in phase 1</option>
+            <option value="openai_api">openai_api ⚠ not executable in phase 1</option>
+            <option value="gemini_api">gemini_api ⚠ not executable in phase 1</option>
+            <option value="ssh_cli">ssh_cli ⚠ not executable in phase 1</option>
+          </select>
+        </div>
+        <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="claude"></div>
+        <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" placeholder='JSON array e.g. ["-p"]'></div>
+        <div class="wf-edit-row"><label>Prompt mode</label>
+          <select data-field="prompt_mode">
+            <option value="template" selected>template</option>
+            <option value="stdin">stdin (reserved)</option>
+          </select>
+        </div>
+        <div class="wf-edit-row"><label>Timeout (s)</label><input type="number" data-field="timeout_s" value="120"></div>
+        <div class="wf-edit-actions">
+          <button class="ag-edit-save" id="ep-new-save">Create</button>
+          <button class="wf-edit-delete" id="ep-new-cancel">Cancel</button>
+          <span class="wf-edit-msg" id="ep-new-msg"></span>
+        </div>
+      </div>
+    </div>
+    <div class="wf-list" data-testid="ep-list" id="ep-list">{endpoint_rows_html}</div>
   </div>
 </div>
 <script>
@@ -7309,15 +7341,27 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
   }});
 
   document.querySelectorAll('.ag-edit-save').forEach(function(btn) {{
+    // Skip endpoint save buttons — they have their own handler below
+    if (btn.classList.contains('ep-edit-save')) return;
     btn.addEventListener('click', function() {{
       var id = btn.dataset.id;
       var panel = document.querySelector('.ag-edit-panel[data-id="' + id + '"]');
       var msg = panel.querySelector('.wf-edit-msg');
+      // Confirm when saving with a non-CLI endpoint
+      var epSelect = panel.querySelector('select[data-field="endpoint_id"]');
+      if (epSelect && epSelect.value) {{
+        var selectedOpt = epSelect.options[epSelect.selectedIndex];
+        if (selectedOpt && selectedOpt.textContent.includes('not implemented')) {{
+          if (!confirm('This endpoint type cannot execute in phase 1. ' +
+                       'The agent will fail on next run. Continue?')) {{
+            return;
+          }}
+        }}
+      }}
       var body = {{
         name: panel.querySelector('input[data-field="name"]').value,
-        command: panel.querySelector('input[data-field="command"]').value,
-        args: JSON.stringify(parseArgs(panel.querySelector('input[data-field="args"]').value)),
-        system_prompt: panel.querySelector('textarea[data-field="system_prompt"]').value
+        system_prompt: panel.querySelector('textarea[data-field="system_prompt"]').value,
+        endpoint_id: epSelect ? (epSelect.value || null) : null
       }};
       setMsg(msg, 'Saving…');
       fetch('/api/workflow/agents/' + encodeURIComponent(id), {{
@@ -7358,6 +7402,35 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
     }});
   }});
 
+  // Show-all endpoints toggle — re-fetches /api/endpoints and repopulates the
+  // per-agent endpoint dropdown, adding non-CLI options with a ⚠ warning label.
+  document.querySelectorAll('.show-all-endpoints').forEach(function(cb) {{
+    cb.addEventListener('change', async function() {{
+      var select = cb.closest('.wf-edit-row').querySelector('select');
+      if (!select) return;
+      var current = select.value;
+      try {{
+        var r = await fetch('/api/endpoints');
+        var data = await r.json();
+        var allEndpoints = data.endpoints || [];
+        select.innerHTML = '<option value=""></option>';
+        allEndpoints.forEach(function(ep) {{
+          if (!cb.checked && ep.endpoint_type !== 'cli') return;
+          var label = ep.endpoint_type === 'cli'
+            ? ep.name
+            : (ep.name + ' ⚠ execution not implemented');
+          var opt = document.createElement('option');
+          opt.value = ep.id;
+          opt.textContent = label;
+          if (ep.id === current) opt.selected = true;
+          select.appendChild(opt);
+        }});
+      }} catch (e) {{
+        console.error('Failed to fetch endpoints', e);
+      }}
+    }});
+  }});
+
   // New Agent form
   var newBtn = document.getElementById('ag-new-btn');
   var newForm = document.getElementById('ag-new-form');
@@ -7380,8 +7453,6 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       var body = {{
         id: newForm.querySelector('input[data-field="id"]').value.trim(),
         name: newForm.querySelector('input[data-field="name"]').value.trim(),
-        command: newForm.querySelector('input[data-field="command"]').value.trim() || 'claude',
-        args: JSON.stringify(parseArgs(newForm.querySelector('input[data-field="args"]').value)),
         system_prompt: newForm.querySelector('textarea[data-field="system_prompt"]').value
       }};
       if (!body.id) {{ setMsg(newMsg, 'ID is required', 'err'); return; }}
@@ -7401,6 +7472,141 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
           }}
         }})
         .catch(e => setMsg(newMsg, String(e), 'err'));
+    }});
+  }}
+
+  // Endpoint row Edit toggle
+  document.querySelectorAll('.ep-edit-toggle').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.ep-edit-panel[data-id="' + id + '"]');
+      if (!panel) return;
+      var open = !panel.hasAttribute('hidden');
+      if (open) {{
+        panel.setAttribute('hidden', '');
+        btn.classList.remove('active');
+        btn.textContent = 'Edit';
+      }} else {{
+        panel.removeAttribute('hidden');
+        btn.classList.add('active');
+        btn.textContent = 'Close';
+      }}
+    }});
+  }});
+
+  // Endpoint row Save
+  document.querySelectorAll('.ep-edit-save').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.ep-edit-panel[data-id="' + id + '"]');
+      var msg = panel.querySelector('.wf-edit-msg');
+      var argsRaw = panel.querySelector('input[data-field="args"]').value.trim();
+      var argsVal;
+      try {{
+        argsVal = argsRaw ? JSON.parse(argsRaw) : [];
+      }} catch (e) {{
+        argsVal = parseArgs(argsRaw);
+      }}
+      var body = {{
+        name: panel.querySelector('input[data-field="name"]').value,
+        endpoint_type: panel.querySelector('select[data-field="endpoint_type"]').value,
+        command: panel.querySelector('input[data-field="command"]').value,
+        args: argsVal,
+        prompt_mode: panel.querySelector('select[data-field="prompt_mode"]').value,
+        timeout_s: parseInt(panel.querySelector('input[data-field="timeout_s"]').value, 10) || 120
+      }};
+      setMsg(msg, 'Saving…');
+      fetch('/api/endpoints/' + encodeURIComponent(id), {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(body)
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Saved', 'ok');
+            setTimeout(() => location.reload(), 600);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // Endpoint row Delete
+  document.querySelectorAll('.ep-edit-delete').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      if (!confirm('Delete endpoint "' + id + '"?')) return;
+      var panel = document.querySelector('.ep-edit-panel[data-id="' + id + '"]');
+      var msg = panel ? panel.querySelector('.wf-edit-msg') : null;
+      setMsg(msg, 'Deleting…');
+      fetch('/api/endpoints/' + encodeURIComponent(id), {{method: 'DELETE'}})
+        .then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Deleted', 'ok');
+            setTimeout(() => location.reload(), 400);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // New Endpoint form
+  var epNewBtn = document.getElementById('ep-new-btn');
+  var epNewForm = document.getElementById('ep-new-form');
+  var epNewSave = document.getElementById('ep-new-save');
+  var epNewCancel = document.getElementById('ep-new-cancel');
+  var epNewMsg = document.getElementById('ep-new-msg');
+  if (epNewBtn && epNewForm) {{
+    epNewBtn.addEventListener('click', function() {{
+      epNewForm.hidden = !epNewForm.hidden;
+    }});
+  }}
+  if (epNewCancel) {{
+    epNewCancel.addEventListener('click', function() {{
+      epNewForm.hidden = true;
+      setMsg(epNewMsg, '');
+    }});
+  }}
+  if (epNewSave) {{
+    epNewSave.addEventListener('click', function() {{
+      var argsRaw = epNewForm.querySelector('input[data-field="args"]').value.trim();
+      var argsVal;
+      try {{
+        argsVal = argsRaw ? JSON.parse(argsRaw) : [];
+      }} catch (e) {{
+        argsVal = parseArgs(argsRaw);
+      }}
+      var body = {{
+        id: epNewForm.querySelector('input[data-field="id"]').value.trim(),
+        name: epNewForm.querySelector('input[data-field="name"]').value.trim(),
+        endpoint_type: epNewForm.querySelector('select[data-field="endpoint_type"]').value,
+        command: epNewForm.querySelector('input[data-field="command"]').value.trim() || 'claude',
+        args: argsVal,
+        prompt_mode: epNewForm.querySelector('select[data-field="prompt_mode"]').value,
+        timeout_s: parseInt(epNewForm.querySelector('input[data-field="timeout_s"]').value, 10) || 120
+      }};
+      if (!body.id) {{ setMsg(epNewMsg, 'ID is required', 'err'); return; }}
+      if (!body.name) body.name = body.id;
+      setMsg(epNewMsg, 'Creating…');
+      fetch('/api/endpoints', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(body)
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(epNewMsg, 'Created', 'ok');
+            setTimeout(() => location.reload(), 500);
+          }} else {{
+            setMsg(epNewMsg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(epNewMsg, String(e), 'err'));
     }});
   }}
 }})();
@@ -8314,6 +8520,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(preview)
                 return
 
+            # GET /api/endpoints — list all configured model endpoints
+            if remainder == "/api/endpoints":
+                from endpoints import list_endpoints
+                conn = get_db()
+                init_db(conn)
+                eps = [vars(ep) for ep in list_endpoints(conn)]
+                conn.close()
+                self._send_json({"endpoints": eps})
+                return
+
             # Legacy backward compat: --project flag redirects bare /api/ routes
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
@@ -9033,7 +9249,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except (json.JSONDecodeError, ValueError):
                     self._send_json({"error": "Invalid JSON"}, 400)
                     return
-                # Block edits to system agents — same policy as system workflows.
+                # System agents: allow endpoint_id changes (orthogonal config), block all other fields.
                 with _db_lock:
                     _ag_conn = get_db(); init_db(_ag_conn)
                     _ag_row = _ag_conn.execute(
@@ -9041,8 +9257,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     ).fetchone()
                     _ag_conn.close()
                 if _ag_row and int(_ag_row["system"] or 0) == 1:
-                    self._send_json({"error": "system_agent"}, 403)
-                    return
+                    allowed_fields = {"endpoint_id"}
+                    forbidden = set(body.keys()) - allowed_fields
+                    if forbidden:
+                        self._send_json({"error": "system_agent", "forbidden_fields": sorted(forbidden)}, 403)
+                        return
                 if isinstance(body.get("args"), list):
                     body["args"] = json.dumps(body["args"])
                 updated = _update_workflow_agent(agent_id, body)
@@ -9080,6 +9299,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json(updated)
                 else:
                     self._send_json({"error": "Workflow not found"}, 404)
+                return
+
+            # PUT /api/endpoints/{id} — update a user endpoint
+            m = re.match(r"^/api/endpoints/([a-zA-Z0-9_-]+)$", remainder)
+            if m:
+                endpoint_id = m.group(1)
+                from endpoints import update_endpoint, EndpointMisconfigured
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError) as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                conn = get_db()
+                init_db(conn)
+                try:
+                    updated = update_endpoint(conn, endpoint_id, **body)
+                except KeyError:
+                    conn.close()
+                    self._send_json({"error": "endpoint not found"}, 404)
+                    return
+                except PermissionError:
+                    conn.close()
+                    self._send_json({"error": "system_endpoint"}, 403)
+                    return
+                except EndpointMisconfigured as e:
+                    conn.close()
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                conn.close()
+                self._send_json(vars(updated))
                 return
 
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
@@ -9439,6 +9688,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # ── Global routes ───────────────────────────────────────────
         if proj is None:
+            # POST /api/endpoints — create a user endpoint
+            if remainder == "/api/endpoints":
+                from endpoints import (
+                    Endpoint, create_endpoint, EndpointMisconfigured,
+                )
+                try:
+                    body = self._read_body()
+                except (json.JSONDecodeError, ValueError) as e:
+                    self._send_json({"error": f"invalid JSON body: {e}"}, 400)
+                    return
+                try:
+                    ep = Endpoint(
+                        id=body.get("id"),
+                        name=body.get("name") or body.get("id"),
+                        endpoint_type=body.get("endpoint_type", "cli"),
+                        command=body.get("command"),
+                        args=body.get("args", []),
+                        prompt_mode=body.get("prompt_mode", "template"),
+                        provider=body.get("provider"),
+                        model=body.get("model"),
+                        base_url=body.get("base_url"),
+                        api_key_env=body.get("api_key_env"),
+                        timeout_s=int(body.get("timeout_s", 120)),
+                        capabilities=body.get("capabilities", {}),
+                        session_config=body.get("session_config", {}),
+                        system=0,  # API can never create system rows
+                    )
+                except (TypeError, ValueError) as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                conn = get_db()
+                init_db(conn)
+                try:
+                    created = create_endpoint(conn, ep)
+                except EndpointMisconfigured as e:
+                    conn.close()
+                    self._send_json({"error": str(e)}, 400)
+                    return
+                except sqlite3.IntegrityError:
+                    conn.close()
+                    self._send_json({"error": f"endpoint {ep.id!r} already exists"}, 409)
+                    return
+                conn.close()
+                self._send_json(vars(created), 201)
+                return
+
             # Kitchen pause/resume (M6) — global control surface.
             if remainder in ("/api/kitchen/pause", "/api/kitchen/resume"):
                 try:
@@ -11178,6 +11473,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "Workflow not found"}, 404)
                 return
 
+            # DELETE /api/endpoints/{id} — delete a user endpoint
+            m = re.match(r"^/api/endpoints/([a-zA-Z0-9_-]+)$", remainder)
+            if m:
+                endpoint_id = m.group(1)
+                from endpoints import delete_endpoint
+                conn = get_db()
+                init_db(conn)
+                try:
+                    unlinked = delete_endpoint(conn, endpoint_id)
+                except KeyError:
+                    conn.close()
+                    self._send_json({"error": "endpoint not found"}, 404)
+                    return
+                except PermissionError:
+                    conn.close()
+                    self._send_json({"error": "system_endpoint"}, 403)
+                    return
+                conn.close()
+                if unlinked > 0:
+                    self._send_json({"agents_unlinked": unlinked})
+                else:
+                    self.send_response(204)
+                    self.end_headers()
+                return
+
             if _LEGACY_PROJECT_ID and remainder.startswith("/api/"):
                 self.send_response(301)
                 self.send_header("Location", f"/{_LEGACY_PROJECT_ID}{remainder}")
@@ -11470,6 +11790,14 @@ def main():
 
     # Recover workflow runs stuck in "running" from a previous server session
     _recover_stuck_workflow_runs()
+
+    # Seed default global endpoints (idempotent; no-op until migration 19 creates the table)
+    try:
+        _ep_db = get_db()
+        _seed_default_endpoints(_ep_db)
+        _ep_db.close()
+    except sqlite3.OperationalError as _e:
+        print(f"  Warning: endpoints table not ready: {_e}", file=sys.stderr)
 
     # Seed default global agents (idempotent, runs once regardless of projects)
     try:

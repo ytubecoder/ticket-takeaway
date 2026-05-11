@@ -904,3 +904,240 @@ def init_db(conn: sqlite3.Connection):
             )
         conn.execute("INSERT INTO _migrations (version) VALUES (19)")
         conn.commit()
+
+    _apply_migration_20(conn)
+
+
+def _apply_migration_20(conn) -> None:
+    """Migration 20: add endpoints table + workflow_agents.endpoint_id,
+    backfill data from existing workflow_agents.
+
+    All work happens in a single transaction. The _migrations row is
+    inserted last, before the implicit commit, so partial state is
+    impossible.
+    """
+    if conn.execute(
+        "SELECT 1 FROM _migrations WHERE version = 20"
+    ).fetchone():
+        return
+
+    # 1. Create endpoints table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS endpoints (
+            id             TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            endpoint_type  TEXT NOT NULL CHECK (endpoint_type IN
+                             ('cli','anthropic_api','openai_api',
+                              'gemini_api','ssh_cli')),
+            provider       TEXT,
+            model          TEXT,
+            base_url       TEXT,
+            api_key_env    TEXT,
+            command        TEXT,
+            args           TEXT NOT NULL DEFAULT '[]',
+            prompt_mode    TEXT NOT NULL DEFAULT 'template'
+                             CHECK (prompt_mode IN ('template','stdin')),
+            timeout_s      INTEGER NOT NULL DEFAULT 120,
+            capabilities   TEXT NOT NULL DEFAULT '{}',
+            session_config TEXT NOT NULL DEFAULT '{}',
+            system         INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+    # 2. Add endpoint_id column to workflow_agents (idempotent guard)
+    cols = {r[1] for r in conn.execute(
+        "PRAGMA table_info(workflow_agents)").fetchall()}
+    if "endpoint_id" not in cols:
+        conn.execute(
+            "ALTER TABLE workflow_agents ADD COLUMN endpoint_id TEXT "
+            "REFERENCES endpoints(id) ON DELETE SET NULL"
+        )
+
+    # 3. Data backfill (Task 7 fills this in — for now just stub it)
+    _backfill_endpoints_from_agents(conn)
+
+    # 4. Record version (last step in transaction)
+    conn.execute("INSERT INTO _migrations (version) VALUES (20)")
+    conn.commit()
+
+
+def _backfill_endpoints_from_agents(conn) -> None:
+    """Backfill endpoints from workflow_agents rows. Pin known system
+    runtimes to canonical seeded ids; create synthesised endpoints for
+    everything else. Idempotent — skips rows whose endpoint_id is set.
+
+    See spec section 'Data migration' for the full contract.
+    """
+    import json as _json
+    import logging as _logging
+    log = _logging.getLogger("migration20")
+
+    # Import canonical mappings lazily to avoid circular imports
+    try:
+        from workflows_seed import KNOWN_CLI_MAPPINGS
+    except Exception:
+        KNOWN_CLI_MAPPINGS = {}
+
+    def _pinned_build_argv(command, args_list):
+        """Migration-local copy of today's _build_agent_cmd transformation
+        for known commands, with '{prompt}' as the literal prompt token.
+
+        Returns the args-only portion (command stripped), suitable for
+        storing in endpoints.args.
+        """
+        cmd = (command or "").lower()
+        base = list(args_list or [])
+        if cmd == "claude":
+            return base + ["-p", "{prompt}", "--output-format", "json"]
+        if cmd == "codex":
+            return base + ["{prompt}"]
+        return base + ["{prompt}"]
+
+    counters = {"created": 0, "reused": 0, "remapped": 0,
+                "malformed_args": 0, "collisions": 0}
+
+    agents = conn.execute("""
+        SELECT id, command, args, system, persist_session
+        FROM workflow_agents
+        WHERE endpoint_id IS NULL
+    """).fetchall()
+
+    # First pass: compute per-agent tuple
+    plan = []   # list of (agent_id, command, raw_args_tuple, eff_argv_tuple, system, persist)
+    for agent_id, command, args_text, system_flag, persist in agents:
+        try:
+            raw_args = _json.loads(args_text or "[]")
+            if not isinstance(raw_args, list) or not all(
+                    isinstance(x, str) for x in raw_args):
+                raise ValueError("args is not a list of strings")
+        except Exception as e:
+            log.warning(
+                f"migration20: agent_id={agent_id} has malformed "
+                f"args={args_text!r}, defaulting to [] ({e})"
+            )
+            raw_args = []
+            counters["malformed_args"] += 1
+        eff_argv = _pinned_build_argv(command, raw_args)
+        plan.append((agent_id, command, tuple(raw_args), tuple(eff_argv),
+                     system_flag or 0, persist or 0))
+
+    # Group by (command, effective_argv, system)
+    groups = {}
+    for entry in plan:
+        agent_id, command, raw_args, eff_argv, sysflag, persist = entry
+        key = (command, eff_argv, sysflag)
+        groups.setdefault(key, []).append(entry)
+
+    # Resolve each group to an endpoint id (canonical if known, else create)
+    for (command, eff_argv, sysflag), members in groups.items():
+        # Try canonical mapping (system rows only). KNOWN_CLI_MAPPINGS
+        # uses RAW args (pre _build_agent_cmd transformation), so look
+        # up by the raw args of any group member (all members share it).
+        canonical_id = None
+        if sysflag == 1:
+            canonical_id = KNOWN_CLI_MAPPINGS.get(
+                (command, members[0][2]))   # members[0][2] = raw_args tuple
+
+        if canonical_id:
+            endpoint_id = canonical_id
+            # Ensure the row exists as a placeholder; the seed pass that
+            # runs at server startup will upsert the canonical fields.
+            # For now insert a minimal row so the FK is valid.
+            existing = conn.execute(
+                "SELECT 1 FROM endpoints WHERE id = ?", (endpoint_id,)
+            ).fetchone()
+            if not existing:
+                conn.execute("""
+                    INSERT INTO endpoints
+                      (id, name, endpoint_type, command, args, system)
+                    VALUES (?, ?, 'cli', ?, ?, 1)
+                """, (endpoint_id, endpoint_id, command,
+                      _json.dumps(list(eff_argv))))
+                counters["created"] += 1
+            else:
+                counters["reused"] += 1
+        else:
+            # Synthesise a new endpoint
+            endpoint_id = _synthesise_endpoint_id(
+                conn, command, list(eff_argv), sysflag)
+            sessions = 1 if any(p for *_, p in members) else 0
+            session_config = {}
+            if command == "claude":
+                session_config = {
+                    "resume_args": list(eff_argv) +
+                                   ["--resume", "{session_id}"],
+                    "session_id_regex":
+                        r'"session_id"\s*:\s*"([0-9a-f-]+)"',
+                }
+            elif command == "codex":
+                session_config = {
+                    "resume_args": ["exec", "resume", "{session_id}"],
+                    "session_id_regex":
+                        r"Session(?:\s+ID)?\s*:\s*([0-9a-f-]+)",
+                    "session_id_fallback_dir": "~/.codex/sessions/",
+                }
+            conn.execute("""
+                INSERT INTO endpoints
+                  (id, name, endpoint_type, command, args,
+                   capabilities, session_config, system)
+                VALUES (?, ?, 'cli', ?, ?, ?, ?, ?)
+            """, (endpoint_id,
+                  _synth_name(command, list(eff_argv)),
+                  command,
+                  _json.dumps(list(eff_argv)),
+                  _json.dumps({"sessions": bool(sessions)}),
+                  _json.dumps(session_config),
+                  sysflag))
+            counters["created"] += 1
+
+        # Remap every member agent to this endpoint
+        for agent_id, *_ in members:
+            conn.execute(
+                "UPDATE workflow_agents SET endpoint_id = ? WHERE id = ?",
+                (endpoint_id, agent_id),
+            )
+            counters["remapped"] += 1
+
+    log.info(
+        f"migration20: created={counters['created']} "
+        f"reused={counters['reused']} "
+        f"agents_remapped={counters['remapped']} "
+        f"malformed_args_defaulted={counters['malformed_args']} "
+        f"id_collisions_resolved={counters['collisions']}"
+    )
+
+
+def _synthesise_endpoint_id(conn, command, eff_argv, sysflag) -> str:
+    """Generate a unique slugified id from command + args. On collision,
+    append -2, -3, ..."""
+    import re as _re
+    base = command or "endpoint"
+    if eff_argv and len(eff_argv) > 0:
+        # Use first non-placeholder arg if available
+        non_placeholder = next(
+            (a for a in eff_argv
+             if a and not (a.startswith("{") and a.endswith("}"))),
+            None,
+        )
+        if non_placeholder:
+            base = f"{base}-{non_placeholder}"
+    slug = _re.sub(r"[^a-zA-Z0-9_-]+", "-", base).strip("-").lower()
+    if sysflag == 0:
+        slug = f"usr-{slug}"
+    candidate = slug
+    n = 2
+    while conn.execute(
+        "SELECT 1 FROM endpoints WHERE id = ?", (candidate,)
+    ).fetchone():
+        candidate = f"{slug}-{n}"
+        n += 1
+    return candidate
+
+
+def _synth_name(command, eff_argv) -> str:
+    summary = " ".join(
+        a for a in eff_argv
+        if not (a and a.startswith("{") and a.endswith("}"))
+    )[:50]
+    return f"{command} {summary}".strip()

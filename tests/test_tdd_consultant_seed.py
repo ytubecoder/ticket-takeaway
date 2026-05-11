@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from db import get_db, init_db
 from workflows_seed import (
     seed_default_agents,
+    seed_default_endpoints,
     seed_default_workflows,
     DEFAULT_AGENTS,
     DEFAULT_WORKFLOWS,
@@ -32,11 +33,16 @@ from workflows_seed import (
 
 @pytest.fixture
 def conn():
-    """In-memory DB with full schema (all migrations including 11)."""
+    """In-memory DB with full schema (all migrations including 11).
+
+    Endpoints are pre-seeded so that seed_default_agents can satisfy the
+    FK constraint on workflow_agents.endpoint_id (added in migration 19).
+    """
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys=ON")
     init_db(c)
+    seed_default_endpoints(c)
     return c
 
 

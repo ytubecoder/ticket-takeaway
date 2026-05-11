@@ -1564,11 +1564,26 @@ def cmd_agent(args):
                 print(f"{r['id']:<20} {r['name']:<25} {r['command']:<15} {r['args']:<20} {prompt_preview}")
 
     elif args.agent_command == "add":
+        if args.cmd is not None or args.args is not None:
+            print("WARN: --cmd/--args on agent commands are deprecated. "
+                  "Create an endpoint via 'endpoint add' and reference it with "
+                  "--endpoint-id instead. Compat columns will be removed in a "
+                  "future release.", file=sys.stderr)
+        endpoint_id = getattr(args, "endpoint_id", None)
+        if endpoint_id is not None:
+            from endpoints import get_endpoint
+            if get_endpoint(conn, endpoint_id) is None:
+                print(f"endpoint not found: {endpoint_id}", file=sys.stderr)
+                conn.close()
+                sys.exit(2)
+        # Fall back to legacy defaults when --cmd/--args not provided and no endpoint_id
+        cmd_val = args.cmd if args.cmd is not None else "claude"
+        args_val = args.args if args.args is not None else "[]"
         name = args.name or args.agent_id.replace("-", " ").replace("_", " ").title()
         try:
             conn.execute(
-                "INSERT INTO workflow_agents (id, name, command, args, system_prompt) VALUES (?, ?, ?, ?, ?)",
-                (args.agent_id, name, args.cmd, args.args, args.system_prompt)
+                "INSERT INTO workflow_agents (id, name, command, args, system_prompt, endpoint_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (args.agent_id, name, cmd_val, args_val, args.system_prompt, endpoint_id)
             )
             conn.commit()
             print(f"Added agent: {args.agent_id} ({name})")
@@ -1578,6 +1593,18 @@ def cmd_agent(args):
             sys.exit(1)
 
     elif args.agent_command == "update":
+        if args.cmd is not None or args.args is not None:
+            print("WARN: --cmd/--args on agent commands are deprecated. "
+                  "Create an endpoint via 'endpoint add' and reference it with "
+                  "--endpoint-id instead. Compat columns will be removed in a "
+                  "future release.", file=sys.stderr)
+        endpoint_id = getattr(args, "endpoint_id", None)
+        if endpoint_id is not None:
+            from endpoints import get_endpoint
+            if get_endpoint(conn, endpoint_id) is None:
+                print(f"endpoint not found: {endpoint_id}", file=sys.stderr)
+                conn.close()
+                sys.exit(2)
         fields = {}
         if args.name is not None:
             fields["name"] = args.name
@@ -1587,9 +1614,11 @@ def cmd_agent(args):
             fields["args"] = args.args
         if args.system_prompt is not None:
             fields["system_prompt"] = args.system_prompt
+        if endpoint_id is not None:
+            fields["endpoint_id"] = endpoint_id
 
         if not fields:
-            print("Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt.", file=sys.stderr)
+            print("Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt, --endpoint-id.", file=sys.stderr)
             conn.close()
             sys.exit(1)
 
@@ -1637,6 +1666,121 @@ def cmd_agent(args):
         conn.commit()
         proj_names = ", ".join(p["id"] for p in target)
         print(f"Default agent set to '{args.agent_id}' for: {proj_names}")
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: endpoint
+# ---------------------------------------------------------------------------
+
+def cmd_endpoint(args):
+    """Manage runtime endpoints."""
+    conn = get_db()
+    init_db(conn)
+
+    if args.endpoint_command == "list":
+        from endpoints import list_endpoints
+        eps = list_endpoints(conn)
+        if not eps:
+            print("No endpoints defined.")
+        else:
+            if getattr(args, "format", "table") == "json":
+                from dataclasses import asdict
+                print(json.dumps([asdict(e) for e in eps], indent=2, default=str))
+            else:
+                print(f"{'ID':<25} {'TYPE':<10} {'CMD':<15} {'SYS'}")
+                print("-" * 60)
+                for e in eps:
+                    print(f"{e.id:<25} {e.endpoint_type:<10} "
+                          f"{(e.command or ''):<15} {e.system}")
+
+    elif args.endpoint_command == "add":
+        if args.type != "cli":
+            print(
+                f"endpoint add: --type {args.type} requires API endpoint "
+                f"execution support (not in phase 1). Create via the HTTP API "
+                f"instead.",
+                file=sys.stderr,
+            )
+            conn.close()
+            sys.exit(2)
+        from endpoints import Endpoint, create_endpoint, EndpointMisconfigured
+        try:
+            parsed_args = json.loads(args.args) if args.args else []
+        except json.JSONDecodeError as e:
+            print(f"--args is not valid JSON: {e}", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        ep = Endpoint(
+            id=args.id,
+            name=args.name or args.id,
+            endpoint_type="cli",
+            command=args.cmd,
+            args=parsed_args,
+            timeout_s=args.timeout_s,
+        )
+        try:
+            created = create_endpoint(conn, ep)
+        except EndpointMisconfigured as e:
+            print(f"endpoint add: {e}", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        print(f"created endpoint {created.id}")
+
+    elif args.endpoint_command == "update":
+        from endpoints import update_endpoint, EndpointMisconfigured
+        fields = {}
+        if args.name is not None:
+            fields["name"] = args.name
+        if args.cmd is not None:
+            fields["command"] = args.cmd
+        if args.args is not None:
+            try:
+                fields["args"] = json.loads(args.args)
+            except json.JSONDecodeError as e:
+                print(f"--args invalid JSON: {e}", file=sys.stderr)
+                conn.close()
+                sys.exit(2)
+        if args.timeout_s is not None:
+            fields["timeout_s"] = args.timeout_s
+        if not fields:
+            print("Nothing to update. Provide at least one of --name, --cmd, --args, --timeout-s.", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        try:
+            updated = update_endpoint(conn, args.id, **fields)
+        except KeyError:
+            print(f"endpoint not found: {args.id}", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        except PermissionError:
+            print(
+                f"endpoint {args.id} is a system row — edit "
+                f"src/workflows_seed.py and restart",
+                file=sys.stderr,
+            )
+            conn.close()
+            sys.exit(2)
+        except EndpointMisconfigured as e:
+            print(f"endpoint update: {e}", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        print(f"updated endpoint {updated.id}")
+
+    elif args.endpoint_command == "remove":
+        from endpoints import delete_endpoint
+        try:
+            n = delete_endpoint(conn, args.id)
+        except KeyError:
+            print(f"endpoint not found: {args.id}", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        except PermissionError:
+            print(f"endpoint {args.id} is a system row — cannot remove", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
+        print(f"removed endpoint {args.id} (unlinked {n} agents)")
 
     conn.close()
 
@@ -1936,16 +2080,20 @@ def main():
     p_agent_add = agent_sub.add_parser("add", help="Add a workflow agent")
     p_agent_add.add_argument("agent_id", help="Agent ID")
     p_agent_add.add_argument("--name", help="Display name (default: derived from ID)")
-    p_agent_add.add_argument("--cmd", default="claude", help="Command to run (default: claude)")
-    p_agent_add.add_argument("--args", default="[]", help="JSON array of command args")
+    p_agent_add.add_argument("--cmd", default=None, help="Command to run (deprecated; use --endpoint-id)")
+    p_agent_add.add_argument("--args", default=None, help="JSON array of command args (deprecated; use --endpoint-id)")
     p_agent_add.add_argument("--system-prompt", default="", help="System prompt for the agent")
+    p_agent_add.add_argument("--endpoint-id", default=None, dest="endpoint_id",
+                             help="ID of an endpoint this agent should use")
 
     p_agent_upd = agent_sub.add_parser("update", help="Update a workflow agent")
     p_agent_upd.add_argument("agent_id", help="Agent ID")
     p_agent_upd.add_argument("--name", help="New display name")
-    p_agent_upd.add_argument("--cmd", help="New command")
-    p_agent_upd.add_argument("--args", help="New JSON array of command args")
+    p_agent_upd.add_argument("--cmd", help="New command (deprecated; use --endpoint-id)")
+    p_agent_upd.add_argument("--args", help="New JSON array of command args (deprecated; use --endpoint-id)")
     p_agent_upd.add_argument("--system-prompt", help="New system prompt")
+    p_agent_upd.add_argument("--endpoint-id", default=None, dest="endpoint_id",
+                             help="ID of an endpoint this agent should use")
 
     p_agent_rm = agent_sub.add_parser("remove", help="Remove a workflow agent")
     p_agent_rm.add_argument("agent_id", help="Agent ID to remove")
@@ -1953,6 +2101,31 @@ def main():
     p_agent_setdef = agent_sub.add_parser("set-default", help="Set the project default agent (stored in settings as agent.default)")
     p_agent_setdef.add_argument("agent_id", help="Agent ID to set as default")
     p_agent_setdef.add_argument("--project", help="Project ID (default: auto-detect or all)")
+
+    # endpoint
+    p_ep = sub.add_parser("endpoint", help="Manage runtime endpoints")
+    ep_sub = p_ep.add_subparsers(dest="endpoint_command", required=True)
+
+    ep_list = ep_sub.add_parser("list", help="List all endpoints")
+    ep_list.add_argument("--format", choices=["table", "json"], default="table")
+
+    ep_add = ep_sub.add_parser("add", help="Add an endpoint")
+    ep_add.add_argument("id", help="Endpoint ID")
+    ep_add.add_argument("--type", default="cli", help="Endpoint type (phase 1: cli only)")
+    ep_add.add_argument("--name", default=None, help="Display name (default: same as ID)")
+    ep_add.add_argument("--cmd", required=True, help="Command to run")
+    ep_add.add_argument("--args", default="[]", help="JSON array of command args")
+    ep_add.add_argument("--timeout-s", type=int, default=120, dest="timeout_s", help="Timeout in seconds (default: 120)")
+
+    ep_upd = ep_sub.add_parser("update", help="Update an endpoint")
+    ep_upd.add_argument("id", help="Endpoint ID")
+    ep_upd.add_argument("--name", default=None, help="New display name")
+    ep_upd.add_argument("--cmd", default=None, help="New command")
+    ep_upd.add_argument("--args", default=None, help="New JSON array of command args")
+    ep_upd.add_argument("--timeout-s", type=int, default=None, dest="timeout_s", help="New timeout in seconds")
+
+    ep_rm = ep_sub.add_parser("remove", help="Remove an endpoint")
+    ep_rm.add_argument("id", help="Endpoint ID to remove")
 
     # workflow
     p_wf = sub.add_parser("workflow", help="Manage workflow definitions")
@@ -2016,6 +2189,7 @@ def main():
         "unregister": cmd_unregister,
         "criteria": cmd_criteria,
         "agent": cmd_agent,
+        "endpoint": cmd_endpoint,
         "workflow": cmd_workflow,
         "branches": cmd_branches,
     }

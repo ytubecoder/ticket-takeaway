@@ -57,6 +57,8 @@ def install_system_files():
     copy_file(REPO_DIR / "src" / "db.py", INSTALL_DIR / "db.py", "Database")
     copy_file(REPO_DIR / "src" / "conditions.py", INSTALL_DIR / "conditions.py", "Conditions")
     copy_file(REPO_DIR / "src" / "workflows_seed.py", INSTALL_DIR / "workflows_seed.py", "Workflows seeder")
+    copy_file(REPO_DIR / "src" / "kitchen_feed.py", INSTALL_DIR / "kitchen_feed.py", "Kitchen feed (data)")
+    copy_file(REPO_DIR / "src" / "kitchen_view.py", INSTALL_DIR / "kitchen_view.py", "Kitchen view (renderer)")
 
     # PWA static assets (manifest, service worker, icons) — served at root scope.
     copy_tree(REPO_DIR / "src" / "static", INSTALL_DIR / "static", "PWA assets")

@@ -218,3 +218,45 @@ def _substitute(template: list[str], prompt: str,
             new = new.replace("{session_id}", session_id)
         out.append(new)
     return out
+
+
+def extract_session_id(
+    endpoint: Endpoint, stdout: str, stderr: str, started_before: float
+) -> Optional[str]:
+    """Mine a session id from a completed invocation's output.
+
+    Returns None if endpoint doesn't advertise session support, regex
+    doesn't match, and no fallback dir finds a fresh file.
+
+    See spec section 'endpoints.extract_session_id contract' for details.
+    """
+    caps = endpoint.capabilities or {}
+    if not caps.get("sessions"):
+        return None
+    cfg = endpoint.session_config or {}
+
+    # 1. Try regex against combined stdout + stderr
+    regex = cfg.get("session_id_regex")
+    if regex:
+        combined = f"{stdout}\n{stderr}"
+        m = re.search(regex, combined)
+        if m and m.groups():
+            return m.group(1)
+
+    # 2. Fallback: newest file in session_id_fallback_dir created
+    #    after started_before
+    fallback_dir = cfg.get("session_id_fallback_dir")
+    if fallback_dir:
+        try:
+            d = Path(fallback_dir).expanduser()
+            if d.is_dir():
+                fresh = [
+                    p for p in d.iterdir()
+                    if p.stat().st_mtime > started_before
+                ]
+                if fresh:
+                    newest = max(fresh, key=lambda p: p.stat().st_mtime)
+                    return newest.stem
+        except OSError as e:
+            log.warning("session_id_fallback_dir %s: %s", fallback_dir, e)
+    return None

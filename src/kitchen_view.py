@@ -65,7 +65,10 @@ def _card_html(item: dict) -> str:
     """Render a single ticket card as an <a>."""
     ticket_id = item.get("ticket_id", "")
     project_id = item.get("project_id", "")
-    href = f"/{project_id}/?ticket={ticket_id}"
+    # The kanban listens for a #ticket/{id} hash and auto-opens that detail
+    # overlay on load (src/generate.py::_parseTicketHash). Using a query
+    # string instead would land on the kanban with the overlay closed.
+    href = f"/{project_id}/#ticket/{ticket_id}"
     bucket = item.get("bucket", "")
     time_bucket = item.get("time_bucket", "")
     is_unread = bool(item.get("is_unread"))
@@ -128,28 +131,36 @@ def _state_chip_row_html(totals: dict, active_state: str) -> str:
     return "".join(out)
 
 
-def _project_chip_row_html(projects: list, totals: dict, active_project: str) -> str:
-    """Project chip row, including the All chip."""
-    all_count = int(totals.get("all", 0))
-    all_active = "active" if active_project == "all" else ""
-    out = [
-        f'<button class="att-chip {all_active}" type="button" data-project="all">'
-        f'<span class="att-chip-label">All</span>'
-        f'<span class="att-chip-count">{all_count}</span>'
-        f'</button>'
-    ]
+def _project_checkboxes_html(projects: list, totals: dict) -> str:
+    """Project filter as a checkbox list inside the overflow panel.
+
+    All projects checked by default — user unchecks to hide. We keep the
+    "All / None" toggle button for quick mass-toggling.
+    """
+    rows = []
     for p in projects:
         pid = p.get("id", "")
         name = p.get("name", pid)
         count = int((p.get("counts") or {}).get("all", 0))
-        active = "active" if active_project == pid else ""
-        out.append(
-            f'<button class="att-chip {active}" type="button" data-project="{_a(pid)}">'
-            f'<span class="att-chip-label">{_t(name)}</span>'
-            f'<span class="att-chip-count">{count}</span>'
-            f'</button>'
+        rows.append(
+            f'<label class="att-proj-row" data-project="{_a(pid)}">'
+            f'  <input type="checkbox" class="att-proj-check"'
+            f'         data-project="{_a(pid)}" checked>'
+            f'  <span class="att-proj-name">{_t(name)}</span>'
+            f'  <span class="att-proj-count">{count}</span>'
+            f'</label>'
         )
-    return "".join(out)
+    if not rows:
+        rows.append('<div class="att-proj-empty">No projects registered.</div>')
+    return (
+        '<div class="att-proj-section">'
+        '  <div class="att-proj-header">'
+        '    <span class="att-proj-heading">Projects</span>'
+        '    <button class="att-proj-toggle" type="button" data-action="all">All</button>'
+        '  </div>'
+        f'  <div class="att-proj-list">{"".join(rows)}</div>'
+        '</div>'
+    )
 
 
 def _bucket_section_html(time_key: str, label: str, items: list, hidden: bool) -> str:
@@ -340,6 +351,51 @@ body {
 .att-pause-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
 .att-pause-btn:disabled { opacity: 0.55; cursor: progress; }
 
+/* Project filter — multi-select checkbox list inside the overflow panel */
+.att-proj-section {
+  margin-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+.att-proj-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 2px 8px 2px;
+}
+.att-proj-heading {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-tertiary); font-weight: 600;
+}
+.att-proj-toggle {
+  background: transparent; border: 1px solid var(--border-default);
+  color: var(--text-secondary); border-radius: 6px; padding: 3px 10px;
+  font-size: 11px; cursor: pointer; font-weight: 600;
+}
+.att-proj-toggle:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.att-proj-list { display: flex; flex-direction: column; gap: 2px; }
+.att-proj-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 6px; border-radius: 6px; cursor: pointer;
+  font-size: 14px; color: var(--text-primary);
+  user-select: none;
+}
+.att-proj-row:hover { background: var(--bg-hover); }
+.att-proj-check { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.att-proj-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-proj-count {
+  font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;
+  background: var(--bg-card); padding: 1px 8px; border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+}
+.att-proj-empty { font-size: 12px; color: var(--text-tertiary); padding: 6px; }
+
+/* Overflow button gets a subtle accent dot when a project filter is active */
+.att-overflow-btn-filtered { position: relative; }
+.att-overflow-btn-filtered::after {
+  content: ""; position: absolute; top: 6px; right: 6px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+}
+
 /* Chip rows */
 .att-chip-row {
   display: flex;
@@ -350,7 +406,7 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 .att-chip-row::-webkit-scrollbar { display: none; }
-.att-chip-row-projects { padding-top: 14px; }
+.att-chip-row-states { padding-top: 14px; }
 .att-chip-row-states { padding-bottom: 14px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 8px; }
 
 .att-chip {
@@ -569,8 +625,10 @@ body {
 _JS = r"""
 (function(){
   var STATE_PAUSED = window.__ATT_PAUSED__;
-  var ACTIVE_PROJECT = window.__ATT_DEFAULT_PROJECT__;
-  var ACTIVE_STATE   = window.__ATT_DEFAULT_STATE__;
+  // Project filter is now a multi-select Set of project IDs (those that are
+  // CHECKED, i.e. visible). Lives under the overflow menu's Projects section.
+  var ACTIVE_PROJECTS = null;  // null means "all" (no project filter applied)
+  var ACTIVE_STATE    = window.__ATT_DEFAULT_STATE__;
   var POLL_MS = 5000;
 
   var menuOpen = false;
@@ -590,9 +648,10 @@ _JS = r"""
   function applyFilters(){
     var cards = $$('.att-card');
     var visibleByBucket = {today:0, yesterday:0, this_week:0, older:0};
+    var projFilter = ACTIVE_PROJECTS;  // null = no project filter
     cards.forEach(function(card){
-      var matchProj = (ACTIVE_PROJECT === 'all') ||
-                      (card.getAttribute('data-project') === ACTIVE_PROJECT);
+      var matchProj = (projFilter === null) ||
+                      projFilter[card.getAttribute('data-project')] === true;
       var matchState = (ACTIVE_STATE === 'all') ||
                        (card.getAttribute('data-bucket') === ACTIVE_STATE);
       var show = matchProj && matchState;
@@ -613,15 +672,45 @@ _JS = r"""
     if (empty) empty.classList.toggle('att-hidden', totalVisible > 0);
   }
 
+  // Walks the project checkboxes and rebuilds ACTIVE_PROJECTS. Returns null
+  // (= all) when every box is checked, so filtering can short-circuit.
+  function rebuildProjectFilter(){
+    var boxes = $$('.att-proj-check');
+    if (!boxes.length) { ACTIVE_PROJECTS = null; return; }
+    var allChecked = true;
+    var picked = {};
+    boxes.forEach(function(b){
+      if (b.checked) picked[b.getAttribute('data-project')] = true;
+      else allChecked = false;
+    });
+    ACTIVE_PROJECTS = allChecked ? null : picked;
+    // Reflect the filter state on the overflow button so the user can tell
+    // they have a filter applied without opening the menu.
+    var ofb = $('.att-overflow-btn');
+    if (ofb) ofb.classList.toggle('att-overflow-btn-filtered', !allChecked);
+  }
+
   // ---- filter chip wiring ----------------------------------------------
   function wireChips(){
-    $$('.att-chip-row-projects .att-chip').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        ACTIVE_PROJECT = btn.getAttribute('data-project');
-        setChipsActive('.att-chip-row-projects', 'data-project', ACTIVE_PROJECT);
+    $$('.att-proj-check').forEach(function(box){
+      box.addEventListener('change', function(){
+        rebuildProjectFilter();
         applyFilters();
       });
     });
+    var allBtn = $('.att-proj-toggle');
+    if (allBtn) {
+      allBtn.addEventListener('click', function(e){
+        e.stopPropagation();
+        var boxes = $$('.att-proj-check');
+        var anyUnchecked = boxes.some(function(b){ return !b.checked; });
+        // If at least one is unchecked → check all. Else → uncheck all.
+        var nextState = anyUnchecked;
+        boxes.forEach(function(b){ b.checked = nextState; });
+        rebuildProjectFilter();
+        applyFilters();
+      });
+    }
     $$('.att-chip-row-states .att-chip').forEach(function(btn){
       btn.addEventListener('click', function(){
         ACTIVE_STATE = btn.getAttribute('data-state');
@@ -725,7 +814,7 @@ _JS = r"""
   }
   function renderCard(it){
     var href = '/' + encodeURIComponent(it.project_id || '') +
-               '/?ticket=' + encodeURIComponent(it.ticket_id || '');
+               '/#ticket/' + encodeURIComponent(it.ticket_id || '');
     var unread = it.is_unread
       ? '<span class="att-unread-dot" aria-label="Unread"></span>' : '';
     var bucket = it.bucket || '';
@@ -758,10 +847,13 @@ _JS = r"""
           setChipCount('.att-chip-row-states', 'data-state', k, totals[k] || 0);
         });
         var projects = state.projects || [];
-        setChipCount('.att-chip-row-projects', 'data-project', 'all', totals.all || 0);
+        // Refresh the per-project counts inside the overflow menu's checkbox list.
         projects.forEach(function(p){
+          var row = $('.att-proj-row[data-project="' + (p.id || '').replace(/"/g, '\\"') + '"]');
+          if (!row) return;
           var c = (p.counts || {}).all || 0;
-          setChipCount('.att-chip-row-projects', 'data-project', p.id, c);
+          var cnt = row.querySelector('.att-proj-count');
+          if (cnt) cnt.textContent = c;
         });
         // Paused state
         var wasPaused = STATE_PAUSED;
@@ -793,12 +885,17 @@ _JS = r"""
       .catch(function(err){ /* swallow — next poll will try again */ });
   }
 
+  // The /kitchen/demo route renders mockup state; the live /api/kitchen/feed
+  // endpoint would replace it with the empty live DB on the first tick.
+  var IS_DEMO = location.pathname === '/kitchen/demo';
+
   function tick(){
-    if (menuOpen || inFlight) return;
+    if (IS_DEMO || menuOpen || inFlight) return;
     refreshFromServer();
   }
 
   function startPolling(){
+    if (IS_DEMO) return;
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(tick, POLL_MS);
   }
@@ -837,6 +934,8 @@ def render_attention_feed(
     port: int,
     rail_js: str,
     pwa_head_tags: str,
+    rail_css: str = "",
+    rail_html: str = "",
 ) -> str:
     """Return a complete <!DOCTYPE html> ... </html> string for the kitchen
     attention feed.
@@ -849,8 +948,8 @@ def render_attention_feed(
     projects = state.get("projects") or []
     items = state.get("items") or []
 
-    # Defaults for chip selection.
-    default_project = "all"
+    # Default state-chip selection. Project filter is multi-select (checkboxes)
+    # and defaults to all-checked, so there is no "default_project" anymore.
     default_state = "ready_to_delegate" if paused else "all"
 
     # ---- header / overflow -------------------------------------------------
@@ -880,6 +979,7 @@ def render_attention_feed(
         f'  </div>'
         f'  <div class="att-pause-note">{_t(pause_note)}</div>'
         f'  <button class="att-pause-btn" type="button">{_t(pause_btn_label)}</button>'
+        f'  {_project_checkboxes_html(projects, totals)}'
         f'</div>'
     )
 
@@ -895,7 +995,6 @@ def render_attention_feed(
     )
 
     # ---- chip rows ---------------------------------------------------------
-    project_chips = _project_chip_row_html(projects, totals, default_project)
     state_chips = _state_chip_row_html(totals, default_state)
 
     # ---- feed --------------------------------------------------------------
@@ -909,8 +1008,7 @@ def render_attention_feed(
     # For initial paint: a section is hidden when 0 items match the *default*
     # chip selection. We compute that filter here so first paint is correct.
     def _matches_default(it: dict) -> bool:
-        if default_project != "all" and it.get("project_id") != default_project:
-            return False
+        # Project filter starts as all-checked, so it never excludes here.
         if default_state != "all" and it.get("bucket") != default_state:
             return False
         return True
@@ -943,7 +1041,6 @@ def render_attention_feed(
     boot_payload = (
         f'<script>'
         f'window.__ATT_PAUSED__={"true" if paused else "false"};'
-        f'window.__ATT_DEFAULT_PROJECT__={json.dumps(default_project)};'
         f'window.__ATT_DEFAULT_STATE__={json.dumps(default_state)};'
         f'window.__ATT_PORT__={json.dumps(int(port))};'
         f'</script>'
@@ -966,17 +1063,15 @@ def render_attention_feed(
 <title>Kitchen — Ticket Takeaway</title>
 {pwa_head_tags}
 {theme_iife}
-<style>{_CSS}</style>
+<style>{rail_css}
+{_CSS}</style>
 </head>
 <body>
-<div id="navRail"></div>
+{rail_html or '<div id="navRail" class="nav-rail"></div>'}
 <main class="att-main" role="main">
   <div class="att-shell">
     {header_html}
     {overflow_panel}
-    <div class="att-chip-row att-chip-row-projects" role="tablist" aria-label="Projects">
-      {project_chips}
-    </div>
     <div class="att-chip-row att-chip-row-states" role="tablist" aria-label="Run states">
       {state_chips}
     </div>

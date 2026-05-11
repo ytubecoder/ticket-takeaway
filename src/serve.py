@@ -5998,6 +5998,8 @@ def _render_kitchen_view(port: int) -> str:
         conn.close()
     return kitchen_view.render_attention_feed(
         state, port=port,
+        rail_css=gen.build_nav_rail_css(),
+        rail_html=gen.build_nav_rail_html(),
         rail_js=gen.build_nav_rail_js(),
         pwa_head_tags=PWA_HEAD_TAGS,
     )
@@ -8183,6 +8185,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if remainder == "/kitchen/demo":
                 self._send_html(kitchen_view.render_attention_feed(
                     _DEMO_KITCHEN_STATE, port=SERVER_PORT,
+                    rail_css=gen.build_nav_rail_css(),
+                    rail_html=gen.build_nav_rail_html(),
                     rail_js=gen.build_nav_rail_js(),
                     pwa_head_tags=PWA_HEAD_TAGS,
                 ))

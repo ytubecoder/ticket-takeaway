@@ -6085,7 +6085,7 @@ def _aggregate_workflows_state() -> dict:
 
 
 def _render_workflows_view(port: int) -> str:
-    """Render the global Workflows page — two tabs (Workflows | Agents) with inline edit."""
+    """Render the global Workflows page — three tabs (Workflows | Agents | Endpoints) with inline edit."""
     rail_css = gen.build_nav_rail_css()
     rail_html = gen.build_nav_rail_html()
     rail_js = gen.build_nav_rail_js()
@@ -6098,6 +6098,11 @@ def _render_workflows_view(port: int) -> str:
     projects = state["projects"]
     projects_meta_json = json.dumps(projects)
     agents = _list_workflow_agents()
+
+    from endpoints import list_endpoints as _list_endpoints
+    _ep_conn = get_db()
+    endpoints = _list_endpoints(_ep_conn)
+    _ep_conn.close()
 
     def _scope_badge(scope: str, label: str) -> str:
         cls = {"system": "wf-scope-system", "user": "wf-scope-user"}.get(scope, "wf-scope-user")
@@ -6396,6 +6401,69 @@ def _render_workflows_view(port: int) -> str:
             )
         agent_rows_html = "".join(agent_parts)
 
+    # Build the Endpoints tab rows.
+    _ENDPOINT_TYPES = ("cli", "anthropic_api", "openai_api", "gemini_api", "ssh_cli")
+    if not endpoints:
+        endpoint_rows_html = '<div class="wf-empty">No endpoints yet. Click "+ New Endpoint" to create one.</div>'
+    else:
+        ep_parts = []
+        for ep in endpoints:
+            eid = ep.id
+            eid_attr = _safe_attr(eid)
+            ep_is_system = bool(ep.system)
+            ep_ro = " readonly" if ep_is_system else ""
+            ep_sys_note = (
+                '<div class="wf-edit-note">'
+                'System endpoint — body is read-only. The definition lives in '
+                '<code>workflows_seed.py</code>; edit there and restart serve.py.'
+                '</div>'
+                if ep_is_system else ""
+            )
+            ep_del_btn = (
+                '<button class="ep-edit-delete" disabled title="System endpoints can\'t be deleted.">Delete</button>'
+                if ep_is_system
+                else f'<button class="ep-edit-delete" data-id="{eid_attr}">Delete</button>'
+            )
+            type_options = "".join(
+                f'<option value="{t}"{" selected" if t == ep.endpoint_type else ""}>{t}'
+                + (' ⚠ not executable in phase 1' if t != 'cli' else '')
+                + '</option>'
+                for t in _ENDPOINT_TYPES
+            )
+            mode_options = (
+                f'<option value="template"{" selected" if ep.prompt_mode == "template" else ""}>template</option>'
+                f'<option value="stdin"{" selected" if ep.prompt_mode == "stdin" else ""}>stdin (reserved)</option>'
+            )
+            ep_type_class = "ag-type-system" if ep_is_system else "ag-type-custom"
+            ep_type_label = "system" if ep_is_system else "custom"
+            ep_parts.append(
+                f'<div class="ag-row-wrap" data-ep-id="{eid_attr}" data-system="{1 if ep_is_system else 0}" data-testid="ep-row-{eid_attr}">'
+                f'  <div class="ag-row">'
+                f'    <div class="ag-main">'
+                f'      <div class="ag-name">{_html.escape(ep.name)}</div>'
+                f'      <div class="ag-cmd">{_html.escape(ep.endpoint_type)}{(" · " + _html.escape(ep.command)) if ep.command else ""}</div>'
+                f'    </div>'
+                f'    <div class="ag-cell"><span class="ag-type {ep_type_class}">{ep_type_label}</span></div>'
+                f'    <div class="ag-cell"><button class="ep-edit-toggle" data-id="{eid_attr}">Edit</button></div>'
+                f'  </div>'
+                f'  <div class="ep-edit-panel" data-id="{eid_attr}" hidden>'
+                f'    {ep_sys_note}'
+                f'    <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name" value="{_safe_attr(ep.name)}"{ep_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Type</label><select data-field="endpoint_type"{ep_ro}>{type_options}</select></div>'
+                f'    <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="{_safe_attr(ep.command or "")}"{ep_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" value="{_safe_attr(json.dumps(ep.args))}" placeholder="JSON array of strings"{ep_ro}></div>'
+                f'    <div class="wf-edit-row"><label>Prompt mode</label><select data-field="prompt_mode"{ep_ro}>{mode_options}</select></div>'
+                f'    <div class="wf-edit-row"><label>Timeout (s)</label><input type="number" data-field="timeout_s" value="{ep.timeout_s}"{ep_ro}></div>'
+                f'    <div class="wf-edit-actions">'
+                f'      <button class="ag-edit-save ep-edit-save" data-id="{eid_attr}"{" disabled" if ep_is_system else ""}>Save</button>'
+                f'      {ep_del_btn}'
+                f'      <span class="wf-edit-msg"></span>'
+                f'    </div>'
+                f'  </div>'
+                f'</div>'
+            )
+        endpoint_rows_html = "".join(ep_parts)
+
     return f"""<!doctype html>
 <html data-theme="dark">
 <head>
@@ -6479,12 +6547,12 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-match-some {{ background: rgba(34,197,94,0.14); color: #4ade80; border: 1px solid rgba(34,197,94,0.32); }}
 .wf-match-manual {{ background: rgba(168,85,247,0.14); color: #c084fc; border: 1px solid rgba(168,85,247,0.32); }}
 .wf-empty {{ padding: 32px 20px; color: var(--text-tertiary); text-align: center; font-style: italic; font-size: 13px; }}
-.wf-edit-toggle, .ag-edit-toggle {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
-.wf-edit-toggle:hover, .ag-edit-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
-.wf-edit-toggle.active, .ag-edit-toggle.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
-.wf-edit-panel, .ag-edit-panel {{ padding: 14px 18px 16px; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 10px; }}
-.wf-edit-panel[hidden], .ag-edit-panel[hidden] {{ display: none; }}
-[data-theme="light"] .wf-edit-panel, [data-theme="light"] .ag-edit-panel {{ background: rgba(0,0,0,0.02); }}
+.wf-edit-toggle, .ag-edit-toggle, .ep-edit-toggle {{ font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
+.wf-edit-toggle:hover, .ag-edit-toggle:hover, .ep-edit-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
+.wf-edit-toggle.active, .ag-edit-toggle.active, .ep-edit-toggle.active {{ background: var(--accent); border-color: var(--accent); color: white; }}
+.wf-edit-panel, .ag-edit-panel, .ep-edit-panel {{ padding: 14px 18px 16px; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 10px; }}
+.wf-edit-panel[hidden], .ag-edit-panel[hidden], .ep-edit-panel[hidden] {{ display: none; }}
+[data-theme="light"] .wf-edit-panel, [data-theme="light"] .ag-edit-panel, [data-theme="light"] .ep-edit-panel {{ background: rgba(0,0,0,0.02); }}
 .wf-edit-row {{ display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: start; }}
 .wf-edit-row label {{ font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.4px; padding-top: 6px; }}
 .wf-edit-row input[type="text"], .wf-edit-row textarea {{ width: 100%; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 6px; padding: 6px 10px; font-size: 13px; font-family: inherit; }}
@@ -6535,9 +6603,9 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 .wf-edit-actions {{ display: flex; align-items: center; gap: 10px; padding-left: 122px; padding-top: 4px; }}
 .wf-edit-save, .ag-edit-save {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; font-family: inherit; font-weight: 600; }}
 .wf-edit-save:hover, .ag-edit-save:hover {{ filter: brightness(1.1); }}
-.wf-edit-delete, .ag-edit-delete {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid #ef4444; background: transparent; color: #ef4444; cursor: pointer; font-family: inherit; }}
-.wf-edit-delete:hover:not(:disabled), .ag-edit-delete:hover {{ background: rgba(239,68,68,0.1); }}
-.wf-edit-delete:disabled {{ opacity: 0.45; cursor: not-allowed; }}
+.wf-edit-delete, .ag-edit-delete, .ep-edit-delete {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid #ef4444; background: transparent; color: #ef4444; cursor: pointer; font-family: inherit; }}
+.wf-edit-delete:hover:not(:disabled), .ag-edit-delete:hover, .ep-edit-delete:hover:not(:disabled) {{ background: rgba(239,68,68,0.1); }}
+.wf-edit-delete:disabled, .ep-edit-delete:disabled {{ opacity: 0.45; cursor: not-allowed; }}
 .wf-edit-duplicate {{ padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: inherit; }}
 .wf-edit-duplicate:hover {{ border-color: var(--accent); color: var(--accent); }}
 .wf-edit-msg {{ font-size: 11px; color: var(--text-tertiary); }}
@@ -6570,6 +6638,7 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
   <div class="wf-tabs" data-testid="wf-tabs">
     <button class="wf-tab active" data-tab="workflows" data-testid="wf-tab-workflows">Workflows</button>
     <button class="wf-tab" data-tab="agents" data-testid="wf-tab-agents">Agents</button>
+    <button class="wf-tab" data-tab="endpoints" data-testid="wf-tab-endpoints">Endpoints</button>
   </div>
 
   <div class="wf-tab-pane active" data-tab-pane="workflows">
@@ -6601,6 +6670,43 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       </div>
     </div>
     <div class="wf-list" data-testid="ag-list" id="ag-list">{agent_rows_html}</div>
+  </div>
+
+  <div class="wf-tab-pane" data-tab-pane="endpoints">
+    <div class="wf-pane-header">
+      <h2>Model endpoints</h2>
+      <button class="wf-pane-btn" id="ep-new-btn" data-testid="ep-new-btn">+ New Endpoint</button>
+    </div>
+    <div class="ag-new-form" id="ep-new-form" hidden>
+      <div class="wf-edit-panel">
+        <div class="wf-edit-row"><label>ID</label><input type="text" data-field="id" placeholder="lowercase-with-dashes"></div>
+        <div class="wf-edit-row"><label>Name</label><input type="text" data-field="name"></div>
+        <div class="wf-edit-row"><label>Type</label>
+          <select data-field="endpoint_type">
+            <option value="cli" selected>cli</option>
+            <option value="anthropic_api">anthropic_api ⚠ not executable in phase 1</option>
+            <option value="openai_api">openai_api ⚠ not executable in phase 1</option>
+            <option value="gemini_api">gemini_api ⚠ not executable in phase 1</option>
+            <option value="ssh_cli">ssh_cli ⚠ not executable in phase 1</option>
+          </select>
+        </div>
+        <div class="wf-edit-row"><label>Command</label><input type="text" data-field="command" value="claude"></div>
+        <div class="wf-edit-row"><label>Args</label><input type="text" data-field="args" placeholder='JSON array e.g. ["-p"]'></div>
+        <div class="wf-edit-row"><label>Prompt mode</label>
+          <select data-field="prompt_mode">
+            <option value="template" selected>template</option>
+            <option value="stdin">stdin (reserved)</option>
+          </select>
+        </div>
+        <div class="wf-edit-row"><label>Timeout (s)</label><input type="number" data-field="timeout_s" value="120"></div>
+        <div class="wf-edit-actions">
+          <button class="ag-edit-save" id="ep-new-save">Create</button>
+          <button class="wf-edit-delete" id="ep-new-cancel">Cancel</button>
+          <span class="wf-edit-msg" id="ep-new-msg"></span>
+        </div>
+      </div>
+    </div>
+    <div class="wf-list" data-testid="ep-list" id="ep-list">{endpoint_rows_html}</div>
   </div>
 </div>
 <script>
@@ -7426,6 +7532,141 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
           }}
         }})
         .catch(e => setMsg(newMsg, String(e), 'err'));
+    }});
+  }}
+
+  // Endpoint row Edit toggle
+  document.querySelectorAll('.ep-edit-toggle').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.ep-edit-panel[data-id="' + id + '"]');
+      if (!panel) return;
+      var open = !panel.hasAttribute('hidden');
+      if (open) {{
+        panel.setAttribute('hidden', '');
+        btn.classList.remove('active');
+        btn.textContent = 'Edit';
+      }} else {{
+        panel.removeAttribute('hidden');
+        btn.classList.add('active');
+        btn.textContent = 'Close';
+      }}
+    }});
+  }});
+
+  // Endpoint row Save
+  document.querySelectorAll('.ep-edit-save').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      var panel = document.querySelector('.ep-edit-panel[data-id="' + id + '"]');
+      var msg = panel.querySelector('.wf-edit-msg');
+      var argsRaw = panel.querySelector('input[data-field="args"]').value.trim();
+      var argsVal;
+      try {{
+        argsVal = argsRaw ? JSON.parse(argsRaw) : [];
+      }} catch (e) {{
+        argsVal = parseArgs(argsRaw);
+      }}
+      var body = {{
+        name: panel.querySelector('input[data-field="name"]').value,
+        endpoint_type: panel.querySelector('select[data-field="endpoint_type"]').value,
+        command: panel.querySelector('input[data-field="command"]').value,
+        args: argsVal,
+        prompt_mode: panel.querySelector('select[data-field="prompt_mode"]').value,
+        timeout_s: parseInt(panel.querySelector('input[data-field="timeout_s"]').value, 10) || 120
+      }};
+      setMsg(msg, 'Saving…');
+      fetch('/api/endpoints/' + encodeURIComponent(id), {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(body)
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Saved', 'ok');
+            setTimeout(() => location.reload(), 600);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // Endpoint row Delete
+  document.querySelectorAll('.ep-edit-delete').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var id = btn.dataset.id;
+      if (!confirm('Delete endpoint "' + id + '"?')) return;
+      var panel = document.querySelector('.ep-edit-panel[data-id="' + id + '"]');
+      var msg = panel ? panel.querySelector('.wf-edit-msg') : null;
+      setMsg(msg, 'Deleting…');
+      fetch('/api/endpoints/' + encodeURIComponent(id), {{method: 'DELETE'}})
+        .then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(msg, 'Deleted', 'ok');
+            setTimeout(() => location.reload(), 400);
+          }} else {{
+            setMsg(msg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(msg, String(e), 'err'));
+    }});
+  }});
+
+  // New Endpoint form
+  var epNewBtn = document.getElementById('ep-new-btn');
+  var epNewForm = document.getElementById('ep-new-form');
+  var epNewSave = document.getElementById('ep-new-save');
+  var epNewCancel = document.getElementById('ep-new-cancel');
+  var epNewMsg = document.getElementById('ep-new-msg');
+  if (epNewBtn && epNewForm) {{
+    epNewBtn.addEventListener('click', function() {{
+      epNewForm.hidden = !epNewForm.hidden;
+    }});
+  }}
+  if (epNewCancel) {{
+    epNewCancel.addEventListener('click', function() {{
+      epNewForm.hidden = true;
+      setMsg(epNewMsg, '');
+    }});
+  }}
+  if (epNewSave) {{
+    epNewSave.addEventListener('click', function() {{
+      var argsRaw = epNewForm.querySelector('input[data-field="args"]').value.trim();
+      var argsVal;
+      try {{
+        argsVal = argsRaw ? JSON.parse(argsRaw) : [];
+      }} catch (e) {{
+        argsVal = parseArgs(argsRaw);
+      }}
+      var body = {{
+        id: epNewForm.querySelector('input[data-field="id"]').value.trim(),
+        name: epNewForm.querySelector('input[data-field="name"]').value.trim(),
+        endpoint_type: epNewForm.querySelector('select[data-field="endpoint_type"]').value,
+        command: epNewForm.querySelector('input[data-field="command"]').value.trim() || 'claude',
+        args: argsVal,
+        prompt_mode: epNewForm.querySelector('select[data-field="prompt_mode"]').value,
+        timeout_s: parseInt(epNewForm.querySelector('input[data-field="timeout_s"]').value, 10) || 120
+      }};
+      if (!body.id) {{ setMsg(epNewMsg, 'ID is required', 'err'); return; }}
+      if (!body.name) body.name = body.id;
+      setMsg(epNewMsg, 'Creating…');
+      fetch('/api/endpoints', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(body)
+      }}).then(r => r.json().then(d => ({{status: r.status, data: d}})))
+        .then(({{status, data}}) => {{
+          if (status >= 200 && status < 300) {{
+            setMsg(epNewMsg, 'Created', 'ok');
+            setTimeout(() => location.reload(), 500);
+          }} else {{
+            setMsg(epNewMsg, (data && data.error) || 'Failed', 'err');
+          }}
+        }})
+        .catch(e => setMsg(epNewMsg, String(e), 'err'));
     }});
   }}
 }})();

@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from db import get_db, init_db
-from workflows_seed import seed_default_workflows, DEFAULT_WORKFLOWS
+from workflows_seed import seed_default_endpoints, seed_default_workflows, DEFAULT_WORKFLOWS
 
 
 # ---------------------------------------------------------------------------
@@ -253,3 +253,33 @@ class TestSeedDefaultWorkflows:
         ).fetchone()
         assert row is not None
         assert row["name"] == "My workflow"
+
+
+# ---------------------------------------------------------------------------
+# seed_default_endpoints — idempotency
+# ---------------------------------------------------------------------------
+
+class TestSeedDefaultEndpointsIdempotency:
+    def test_seed_default_endpoints_is_idempotent(self, conn):
+        """Re-running seed_default_endpoints on an already-seeded DB
+        must not create duplicate rows or modify existing ones."""
+        # First seed
+        r1 = seed_default_endpoints(conn)
+        count_a = conn.execute(
+            "SELECT COUNT(*) FROM endpoints WHERE system=1"
+        ).fetchone()[0]
+        snapshot_a = conn.execute(
+            "SELECT id, name, command, args, system FROM endpoints ORDER BY id"
+        ).fetchall()
+
+        # Second seed — must be a no-op for every row
+        r2 = seed_default_endpoints(conn)
+        count_b = conn.execute(
+            "SELECT COUNT(*) FROM endpoints WHERE system=1"
+        ).fetchone()[0]
+        snapshot_b = conn.execute(
+            "SELECT id, name, command, args, system FROM endpoints ORDER BY id"
+        ).fetchall()
+
+        assert count_a == count_b, "Re-seeding changed system endpoint count"
+        assert [tuple(r) for r in snapshot_a] == [tuple(r) for r in snapshot_b]

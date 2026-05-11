@@ -157,3 +157,62 @@ def test_build_invocation_stdin_mode_not_implemented():
                   command="claude", args=[], prompt_mode="stdin")
     with pytest.raises(NotImplementedError):
         build_invocation(ep, "x")
+
+
+# === extract_session_id ===
+
+def test_extract_session_id_from_stdout(endpoint_cli_claude):
+    from endpoints import extract_session_id
+    stdout = '{"session_id": "abc-12345-fed", "result": "ok"}'
+    sid = extract_session_id(endpoint_cli_claude, stdout, "", started_before=0)
+    assert sid == "abc-12345-fed"
+
+
+def test_extract_session_id_from_stderr(endpoint_cli_codex):
+    from endpoints import extract_session_id
+    sid = extract_session_id(endpoint_cli_codex, "",
+                             "Session: 019e1234-5678-90ab",
+                             started_before=0)
+    assert sid == "019e1234-5678-90ab"
+
+
+def test_extract_session_id_no_match_no_fallback_returns_none():
+    from endpoints import Endpoint, extract_session_id
+    ep = Endpoint(id="x", name="x", endpoint_type="cli", command="x",
+                  capabilities={"sessions": True},
+                  session_config={"session_id_regex": r"id:(\w+)"})
+    assert extract_session_id(ep, "no id here", "", 0) is None
+
+
+def test_extract_session_id_fallback_dir_picks_newest_file(tmp_path):
+    """If regex misses and a fallback_dir is configured, return the
+    newest filename (stem) created since `started_before`."""
+    import time
+    from endpoints import Endpoint, extract_session_id
+    # Setup: create two files, one old (before started_before) and one new
+    started = time.time()
+    old = tmp_path / "old-session.json"
+    old.write_text("{}")
+    import os
+    old_mtime = started - 10
+    os.utime(old, (old_mtime, old_mtime))
+    time.sleep(0.05)
+    new = tmp_path / "newer-session.json"
+    new.write_text("{}")
+    ep = Endpoint(id="x", name="x", endpoint_type="cli", command="x",
+                  capabilities={"sessions": True},
+                  session_config={
+                      "session_id_regex": r"NEVER_MATCHES",
+                      "session_id_fallback_dir": str(tmp_path),
+                  })
+    sid = extract_session_id(ep, "no match", "", started_before=started)
+    assert sid == "newer-session"
+
+
+def test_extract_session_id_capabilities_false_returns_none():
+    """Documentation: callers should not invoke this for sessions=False
+    endpoints, but if they do, return None safely."""
+    from endpoints import Endpoint, extract_session_id
+    ep = Endpoint(id="x", name="x", endpoint_type="cli", command="x",
+                  capabilities={"sessions": False})
+    assert extract_session_id(ep, "anything", "", 0) is None

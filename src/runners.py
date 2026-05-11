@@ -39,6 +39,7 @@ _log = logging.getLogger(__name__)
 
 # Per-server-boot set to log compat-path warning only once per agent
 _seen_compat_agents: set = set()
+# Best-effort dedup; rare double-log under thread race is acceptable.
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +87,16 @@ def _resolve_argv_for_agent(conn, agent, prompt, session_id=None):
 
     if not endpoint_id:
         command = _agent_field(agent, "command")
+        if not command:
+            _log.error(
+                "runner: agent=%s has no endpoint and no compat command"
+                " — refusing to dispatch",
+                agent_id,
+            )
+            raise EndpointMisconfigured(
+                f"agent {agent_id!r} has no endpoint_id and no compat command"
+                " — refusing to dispatch"
+            )
         args_raw = _agent_field(agent, "args") or "[]"
         args = json.loads(args_raw) if isinstance(args_raw, str) else list(args_raw)
         _log_compat_path_once(agent_id, command, args)

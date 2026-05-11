@@ -104,6 +104,7 @@ from workflows_seed import (
     seed_default_endpoints as _seed_default_endpoints,
 )
 import conditions as _conditions
+# Aliased to avoid shadowing the legacy _extract_session_id until T12 removes it.
 from endpoints import extract_session_id as _endpoints_extract_session_id
 from runners import _resolve_argv_for_agent
 
@@ -2153,6 +2154,8 @@ def _run_workflow_thread(run_id: str, project_id: str, ticket_id: str, workflow:
                     session_ids = {}
             prior_sid = session_ids.get(agent_id)
 
+            # T12: this compat arg-handling block can be removed once all agents
+            # have endpoint_id set (no more NULL-endpoint_id compat path).
             # For compat (no endpoint_id) non-persist agents: inject --no-session-persistence
             # into the agent args so the compat Endpoint picks it up via build_invocation.
             # Real endpoint agents carry this in their endpoint config instead.

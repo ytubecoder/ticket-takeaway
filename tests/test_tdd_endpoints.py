@@ -365,3 +365,23 @@ def test_migration_19_pragma_foreign_keys_still_on(db_pre_migration_19):
     _apply_migration_19(conn)
     fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     assert fk == 1
+
+
+# === _resolve_argv_for_agent guard: NULL endpoint_id AND NULL command ===
+
+def test_resolve_argv_raises_when_no_endpoint_and_no_command(caplog):
+    """A legacy agent with endpoint_id=NULL AND command=NULL must
+    raise EndpointMisconfigured with a clear error message."""
+    from runners import _resolve_argv_for_agent
+    from endpoints import EndpointMisconfigured
+    conn = sqlite3.connect(":memory:")
+    # Build a dict-style "agent" matching what the runtime returns
+    agent = {"id": "agent_broken", "endpoint_id": None,
+             "command": None, "args": "[]"}
+    with pytest.raises(EndpointMisconfigured) as exc:
+        _resolve_argv_for_agent(conn, agent, "test prompt")
+    assert "agent_broken" in str(exc.value)
+    assert "no endpoint" in str(exc.value).lower()
+    # Verify the ERROR log was emitted
+    assert any("agent_broken" in r.message and r.levelname == "ERROR"
+               for r in caplog.records)

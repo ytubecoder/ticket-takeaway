@@ -6382,15 +6382,16 @@ def _render_workflows_view(port: int) -> str:
             for ep in cli_endpoints:
                 sel = " selected" if ep.id == current_ep_id else ""
                 ep_options += f'<option value="{_safe_attr(ep.id)}"{sel}>{_html.escape(ep.name)}</option>'
-            ep_select_disabled = " disabled" if ag_is_system else ""
+            # Endpoint dropdown is always editable — endpoint binding is orthogonal to agent identity.
+            # System agent persona fields (name, system_prompt) stay locked via ag_ro above.
             endpoint_field = (
                 f'<div class="wf-edit-row">'
                 f'  <label>Endpoint</label>'
-                f'  <select data-field="endpoint_id" class="agent-endpoint-select"{ep_select_disabled}>'
+                f'  <select data-field="endpoint_id" class="agent-endpoint-select">'
                 f'    {ep_options}'
                 f'  </select>'
                 f'  <label class="show-all-toggle" style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px;color:var(--text-secondary);cursor:pointer;">'
-                f'    <input type="checkbox" class="show-all-endpoints"{ep_select_disabled}>'
+                f'    <input type="checkbox" class="show-all-endpoints">'
                 f'    Show non-executable types'
                 f'  </label>'
                 f'</div>'
@@ -6417,7 +6418,7 @@ def _render_workflows_view(port: int) -> str:
                 f'    <div class="wf-edit-row"><label>System prompt</label><textarea data-field="system_prompt" rows="4"{ag_ro}>{_html.escape(sys_prompt)}</textarea></div>'
                 f'    {endpoint_field}'
                 f'    <div class="wf-edit-actions">'
-                f'      <button class="ag-edit-save" data-id="{aid_attr}"{" disabled" if ag_is_system else ""}>Save</button>'
+                f'      <button class="ag-edit-save" data-id="{aid_attr}">Save</button>'
                 f'      {ag_del_btn}'
                 f'      <span class="wf-edit-msg"></span>'
                 f'    </div>'
@@ -9255,7 +9256,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except (json.JSONDecodeError, ValueError):
                     self._send_json({"error": "Invalid JSON"}, 400)
                     return
-                # Block edits to system agents — same policy as system workflows.
+                # System agents: allow endpoint_id changes (orthogonal config), block all other fields.
                 with _db_lock:
                     _ag_conn = get_db(); init_db(_ag_conn)
                     _ag_row = _ag_conn.execute(
@@ -9263,8 +9264,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     ).fetchone()
                     _ag_conn.close()
                 if _ag_row and int(_ag_row["system"] or 0) == 1:
-                    self._send_json({"error": "system_agent"}, 403)
-                    return
+                    allowed_fields = {"endpoint_id"}
+                    forbidden = set(body.keys()) - allowed_fields
+                    if forbidden:
+                        self._send_json({"error": "system_agent", "forbidden_fields": sorted(forbidden)}, 403)
+                        return
                 if isinstance(body.get("args"), list):
                     body["args"] = json.dumps(body["args"])
                 updated = _update_workflow_agent(agent_id, body)

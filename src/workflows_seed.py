@@ -850,9 +850,10 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
         if row:
             # Ensure canonical fields stay in sync with the DEFAULT_AGENTS definition.
             if _has_system_col and _has_endpoint_id_col:
+                # endpoint_id deliberately omitted: seed sets it on INSERT, preserves user choice on subsequent re-seeds
                 db.execute(
                     "UPDATE workflow_agents "
-                    "SET name = ?, command = ?, args = ?, persist_session = ?, system = ?, endpoint_id = ? "
+                    "SET name = ?, command = ?, args = ?, persist_session = ?, system = ? "
                     "WHERE id = ?",
                     (
                         agent["name"],
@@ -860,7 +861,6 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
                         agent["args"],
                         agent.get("persist_session", 0),
                         agent.get("system", 0),
-                        agent.get("endpoint_id"),
                         agent["id"],
                     ),
                 )

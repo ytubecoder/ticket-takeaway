@@ -27,7 +27,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-from workflows_seed import DEFAULT_AGENTS, DEFAULT_WORKFLOWS  # noqa: E402
+from workflows_seed import DEFAULT_AGENTS, DEFAULT_ENDPOINTS, DEFAULT_WORKFLOWS  # noqa: E402
 
 
 _DEFAULT_DB = Path.home() / ".claude" / "ticket-takeaway" / "tickets.db"
@@ -124,6 +124,58 @@ def _audit_workflows(conn: sqlite3.Connection) -> int:
     return issues
 
 
+def _audit_endpoints(conn: sqlite3.Connection) -> int:
+    """Return number of issues found (drift + cruft)."""
+    print("\n== Endpoints ==")
+    seed_by_id = {ep.id: ep for ep in DEFAULT_ENDPOINTS}
+    db_rows = {
+        r["id"]: dict(r)
+        for r in conn.execute(
+            "SELECT id, name, command, args, system FROM endpoints"
+        ).fetchall()
+    }
+
+    issues = 0
+    # Seed → DB: every seeded endpoint must exist with matching system flag + command + args
+    for eid, ep in seed_by_id.items():
+        db = db_rows.get(eid)
+        if db is None:
+            print(_drift(f"{eid:40s} in seed, MISSING in DB"))
+            issues += 1
+            continue
+        db_sys = int(db.get("system") or 0)
+        if db_sys != 1:
+            print(_drift(f"{eid:40s} expected system=1, DB.system={db_sys}"))
+            issues += 1
+            continue
+        db_cmd = db.get("command") or ""
+        if db_cmd != (ep.command or ""):
+            print(_drift(
+                f"{eid:40s} command drift (seed={ep.command!r}, db={db_cmd!r})"
+            ))
+            issues += 1
+            continue
+        db_args = json.loads(db.get("args") or "[]")
+        if db_args != ep.args:
+            print(_drift(
+                f"{eid:40s} args drift (seed={ep.args!r}, db={db_args!r})"
+            ))
+            issues += 1
+            continue
+        print(_ok(f"{eid:40s} system={db_sys}"))
+
+    # DB → Seed: every system=1 endpoint row should be in the seed
+    for eid, db in db_rows.items():
+        if eid in seed_by_id:
+            continue
+        if int(db.get("system") or 0) == 1:
+            print(_drift(f"{eid:40s} in DB as system=1, NOT in seed"))
+            issues += 1
+        else:
+            print(_cruft(f"{eid:40s} user endpoint (delete pre-ship if dev cruft)"))
+    return issues
+
+
 def _audit_settings(conn: sqlite3.Connection) -> None:
     print("\n== Settings (informational — not seeded yet) ==")
     rows = list(conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall())
@@ -156,12 +208,13 @@ def main():
     try:
         a = _audit_agents(conn)
         w = _audit_workflows(conn)
+        e = _audit_endpoints(conn)
         _audit_settings(conn)
     finally:
         conn.close()
 
-    total = a + w
-    print(f"\nIssues found: {total} (agents={a}, workflows={w})")
+    total = a + w + e
+    print(f"\nIssues found: {total} (agents={a}, workflows={w}, endpoints={e})")
     sys.exit(0 if total == 0 else 1)
 
 

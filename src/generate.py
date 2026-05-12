@@ -7739,8 +7739,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       body: JSON.stringify({{text: text, press_enter: press_enter}})
     }}).then(function(r) {{
       if (r.ok) {{ form.elements.text.value = ''; }}
-      else {{ r.json().then(function(d) {{ alert('send failed: ' + (d.error || r.status)); }}); }}
-    }});
+      else {{ r.json().then(function(d) {{ showAppToast('send failed: ' + (d.error || r.status), 'error'); }}); }}
+    }}).catch(function() {{ showAppToast('send-keys: network error', 'error'); }});
   }}
 
   function unlinkPane(pane, ticketId) {{

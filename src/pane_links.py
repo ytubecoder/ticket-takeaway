@@ -161,3 +161,61 @@ def classify_attention(
             return ATTENTION_IDLE
 
     return ATTENTION_NONE
+
+
+# ---------------------------------------------------------------------------
+# Capture helpers
+# ---------------------------------------------------------------------------
+
+def trim_tail(text: str) -> str:
+    """Bound tail text to PANE_TAIL_MAX_LINES and PANE_TAIL_MAX_BYTES.
+
+    Keeps the LAST lines (the relevant tail), not the first.
+    """
+    if not text:
+        return text
+    lines = text.splitlines()
+    if len(lines) > PANE_TAIL_MAX_LINES:
+        lines = lines[-PANE_TAIL_MAX_LINES:]
+    out = "\n".join(lines)
+    if len(out.encode("utf-8", errors="replace")) > PANE_TAIL_MAX_BYTES:
+        # Drop oldest lines until we fit
+        while len(out.encode("utf-8", errors="replace")) > PANE_TAIL_MAX_BYTES and len(lines) > 1:
+            lines = lines[1:]
+            out = "\n".join(lines)
+    return out
+
+
+def update_pane_capture(
+    conn: sqlite3.Connection,
+    pane_address: str,
+    tail_text: str,
+    attention_state: str,
+) -> None:
+    """Write a fresh capture; record attention transition timestamp."""
+    now = int(time.time())
+    bounded = trim_tail(tail_text)
+    # Only stamp attention_detected_at when entering a non-none state
+    if attention_state == ATTENTION_NONE:
+        conn.execute(
+            "UPDATE pane_links SET tail_text = ?, attention_state = ?, "
+            "attention_detected_at = NULL, last_captured_at = ?, status = 'active' "
+            "WHERE pane_address = ?",
+            (bounded, attention_state, now, pane_address),
+        )
+    else:
+        conn.execute(
+            "UPDATE pane_links SET tail_text = ?, attention_state = ?, "
+            "attention_detected_at = COALESCE(attention_detected_at, ?), "
+            "last_captured_at = ?, status = 'active' "
+            "WHERE pane_address = ?",
+            (bounded, attention_state, now, now, pane_address),
+        )
+
+
+def mark_pane_stale(conn: sqlite3.Connection, pane_address: str) -> None:
+    """Flip status to 'stale' (capture failed / pane gone)."""
+    conn.execute(
+        "UPDATE pane_links SET status = 'stale' WHERE pane_address = ?",
+        (pane_address,),
+    )

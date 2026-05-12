@@ -103,3 +103,44 @@ def test_list_pane_links_for_ticket(conn):
     assert len(rows) == 2
     addrs = sorted(r["pane_address"] for r in rows)
     assert addrs == ["%23", "%24"]
+
+
+def test_update_pane_capture_stores_tail_and_classifies(conn):
+    pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
+    conn.commit()
+    pane_links.update_pane_capture(
+        conn, "%23", tail_text="hello\nworld", attention_state="none"
+    )
+    conn.commit()
+    row = pane_links.get_ticket_for_pane(conn, "%23")
+    assert row["tail_text"] == "hello\nworld"
+    assert row["attention_state"] == "none"
+    assert row["last_captured_at"] is not None
+
+
+def test_update_pane_capture_records_attention_time_on_alert(conn):
+    pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
+    conn.commit()
+    pane_links.update_pane_capture(
+        conn, "%23", tail_text="Error: bad", attention_state="exception"
+    )
+    conn.commit()
+    row = pane_links.get_ticket_for_pane(conn, "%23")
+    assert row["attention_state"] == "exception"
+    assert row["attention_detected_at"] is not None
+
+
+def test_mark_pane_stale(conn):
+    pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
+    conn.commit()
+    pane_links.mark_pane_stale(conn, "%23")
+    conn.commit()
+    row = pane_links.get_ticket_for_pane(conn, "%23")
+    assert row["status"] == "stale"
+
+
+def test_trim_tail_bounds():
+    long = "\n".join(f"line {i}" for i in range(500))
+    out = pane_links.trim_tail(long)
+    # Should be bounded to PANE_TAIL_MAX_LINES
+    assert len(out.splitlines()) <= 200

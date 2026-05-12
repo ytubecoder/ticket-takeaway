@@ -11580,6 +11580,64 @@ def _start_external_edit_watcher(interval: float = 5.0):
 
 
 # ---------------------------------------------------------------------------
+# Pane capture worker — polls active local panes every 2s
+# ---------------------------------------------------------------------------
+
+def _start_pane_capture_worker():
+    """Daemon thread: every 2s, capture each active local pane and update.
+
+    Local-only: only panes whose host matches socket.gethostname() are captured.
+    Capture failure → mark stale. Tail is ANSI-stripped and bounded.
+    """
+    import socket as _sock
+    import subprocess as _sub
+    import time as _t
+    import pane_links as _pl
+    from constants import PANE_CAPTURE_INTERVAL_S
+
+    local = _sock.gethostname()
+
+    def _poll():
+        while True:
+            try:
+                _t.sleep(PANE_CAPTURE_INTERVAL_S)
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    try:
+                        rows = _pl.list_pane_links_for_host(conn, local)
+                        for r in rows:
+                            addr = r["pane_address"]
+                            prev_tail = r["tail_text"] or ""
+                            prev_time = r["last_captured_at"] or 0
+                            try:
+                                res = _sub.run(
+                                    ["tmux", "capture-pane", "-p", "-S", "-200", "-t", addr],
+                                    capture_output=True, text=True, timeout=3,
+                                )
+                                if res.returncode != 0:
+                                    _pl.mark_pane_stale(conn, addr)
+                                    conn.commit()
+                                    continue
+                                tail = _pl.strip_ansi(res.stdout)
+                                state = _pl.classify_attention(
+                                    tail, prev_tail=prev_tail, prev_time=prev_time,
+                                )
+                                _pl.update_pane_capture(conn, addr, tail, state)
+                                conn.commit()
+                            except (_sub.TimeoutExpired, FileNotFoundError, OSError):
+                                _pl.mark_pane_stale(conn, addr)
+                                conn.commit()
+                    finally:
+                        conn.close()
+            except Exception as _exc:
+                print(f"[pane-capture] error: {_exc}", flush=True)
+
+    t = threading.Thread(target=_poll, daemon=True, name="pane-capture")
+    t.start()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -11638,6 +11696,7 @@ def main():
     # Start background threads
     _start_external_edit_watcher()
     _start_feedbacks_session_watcher()
+    _start_pane_capture_worker()
 
     # Kitchen orchestrator (M3) — polls eligible subjects, dispatches agent runs.
     # Pinned to 5s tick by default; WORKFLOW.toml's automation.* settings are

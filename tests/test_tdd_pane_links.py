@@ -144,3 +144,99 @@ def test_trim_tail_bounds():
     out = pane_links.trim_tail(long)
     # Should be bounded to PANE_TAIL_MAX_LINES
     assert len(out.splitlines()) <= 200
+
+
+# Regression tests for fix #2: last_captured_at must not refresh when tail is unchanged.
+# Without this fix the idle/question classifier sees ~2s elapsed every cycle and never
+# reaches the 30s PANE_IDLE_THRESHOLD_S, so the 'quiet' branch never fires.
+
+def test_last_captured_at_stable_when_tail_unchanged(conn):
+    """Calling update_pane_capture twice with identical tail must not advance last_captured_at."""
+    pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
+    conn.commit()
+
+    tail = "all done\n$ "
+    pane_links.update_pane_capture(conn, "%23", tail_text=tail, attention_state="none")
+    conn.commit()
+    first_ts = conn.execute(
+        "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
+    ).fetchone()["last_captured_at"]
+
+    import time as _time
+    _time.sleep(1)  # ensure wall-clock advances
+
+    pane_links.update_pane_capture(conn, "%23", tail_text=tail, attention_state="none")
+    conn.commit()
+    second_ts = conn.execute(
+        "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
+    ).fetchone()["last_captured_at"]
+
+    assert first_ts == second_ts, (
+        "last_captured_at must not advance when tail is unchanged "
+        f"(first={first_ts}, second={second_ts})"
+    )
+
+
+def test_last_captured_at_advances_when_tail_changes(conn):
+    """Calling update_pane_capture with a different tail MUST advance last_captured_at."""
+    pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
+    conn.commit()
+
+    pane_links.update_pane_capture(conn, "%23", tail_text="step 1\n$ ", attention_state="none")
+    conn.commit()
+    first_ts = conn.execute(
+        "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
+    ).fetchone()["last_captured_at"]
+
+    import time as _time
+    _time.sleep(1)
+
+    pane_links.update_pane_capture(conn, "%23", tail_text="step 2\n$ ", attention_state="none")
+    conn.commit()
+    second_ts = conn.execute(
+        "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
+    ).fetchone()["last_captured_at"]
+
+    assert second_ts > first_ts, (
+        "last_captured_at must advance when tail changes "
+        f"(first={first_ts}, second={second_ts})"
+    )
+
+
+def test_idle_classifier_fires_after_stable_tail(conn):
+    """Simulate the capture loop: write same tail twice, verify classify_attention sees idle."""
+    import time as _time
+    from constants import PANE_IDLE_THRESHOLD_S
+
+    pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
+    conn.commit()
+
+    tail = "all done\n$ "
+
+    # First capture — seeds last_captured_at
+    pane_links.update_pane_capture(conn, "%23", tail_text=tail, attention_state="none")
+    conn.commit()
+
+    # Manually backdate last_captured_at to simulate PANE_IDLE_THRESHOLD_S elapsed
+    stale_ts = int(_time.time()) - PANE_IDLE_THRESHOLD_S - 10
+    conn.execute(
+        "UPDATE pane_links SET last_captured_at = ? WHERE pane_address = '%23'",
+        (stale_ts,),
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT tail_text, last_captured_at FROM pane_links WHERE pane_address = '%23'"
+    ).fetchone()
+
+    # Second capture with same tail — last_captured_at stays at stale_ts
+    pane_links.update_pane_capture(conn, "%23", tail_text=tail, attention_state="none")
+    conn.commit()
+    row2 = conn.execute(
+        "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
+    ).fetchone()
+    assert row2["last_captured_at"] == stale_ts, "last_captured_at should not have advanced"
+
+    # Now the classifier should see the elapsed time and return idle
+    state = pane_links.classify_attention(tail, prev_tail=tail, prev_time=stale_ts)
+    assert state == "idle", f"Expected 'idle', got {state!r}"

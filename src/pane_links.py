@@ -192,16 +192,34 @@ def update_pane_capture(
     tail_text: str,
     attention_state: str,
 ) -> None:
-    """Write a fresh capture; record attention transition timestamp."""
+    """Write a fresh capture; record attention transition timestamp.
+
+    ``last_captured_at`` is only refreshed when *tail_text* actually changes.
+    Keeping it stable when the tail is unchanged lets ``classify_attention``
+    see a growing idle duration and eventually fire the 'idle'/'question'
+    branch — otherwise the classifier sees ~2s elapsed every cycle and the
+    quiet threshold is never crossed.
+    """
     now = int(time.time())
     bounded = trim_tail(tail_text)
+
+    current = conn.execute(
+        "SELECT tail_text, last_captured_at FROM pane_links WHERE pane_address = ?",
+        (pane_address,),
+    ).fetchone()
+    if current is None:
+        return
+
+    tail_changed = current["tail_text"] != bounded
+    captured_at = now if (tail_changed or current["last_captured_at"] is None) else current["last_captured_at"]
+
     # Only stamp attention_detected_at when entering a non-none state
     if attention_state == ATTENTION_NONE:
         conn.execute(
             "UPDATE pane_links SET tail_text = ?, attention_state = ?, "
             "attention_detected_at = NULL, last_captured_at = ?, status = 'active' "
             "WHERE pane_address = ?",
-            (bounded, attention_state, now, pane_address),
+            (bounded, attention_state, captured_at, pane_address),
         )
     else:
         conn.execute(
@@ -209,7 +227,7 @@ def update_pane_capture(
             "attention_detected_at = COALESCE(attention_detected_at, ?), "
             "last_captured_at = ?, status = 'active' "
             "WHERE pane_address = ?",
-            (bounded, attention_state, now, now, pane_address),
+            (bounded, attention_state, now, captured_at, pane_address),
         )
 
 

@@ -7684,22 +7684,36 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       }});
   }}
 
+  function _hesc(s) {{
+    // Full HTML escape: safe for both element content and attribute values.
+    return String(s)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#39;');
+  }}
+
   function paneLinkHTML(p) {{
     var statusDot = p.status === 'active' ? '🟢' : '⚫';
     var att = p.attention_state;
     var attBadge = att === 'question' ? '<span class="att-q">?</span>'
                  : att === 'exception' ? '<span class="att-e">!</span>'
                  : '';
-    var tail = (p.tail_text || '(no capture yet)')
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return '<div class="pane-link" data-pane="' + p.pane_address + '">'
+    // tail_text is used inside <pre> — escape & < > only (no attribute context).
+    var tail = _hesc(p.tail_text || '(no capture yet)');
+    // pane_address and pane_descriptor are interpolated into attribute values
+    // AND into element content — use the full escaper for both.
+    var addr = _hesc(p.pane_address);
+    var desc = _hesc(p.pane_descriptor || p.pane_address);
+    return '<div class="pane-link" data-pane="' + addr + '">'
       + '<div class="pane-link-head">'
-      + '<span class="pane-desc">' + (p.pane_descriptor || p.pane_address) + '</span>'
+      + '<span class="pane-desc">' + desc + '</span>'
       + ' ' + statusDot + ' ' + attBadge
-      + '<button class="unlink-btn" data-pane="' + p.pane_address + '">unlink</button>'
+      + '<button class="unlink-btn" data-pane="' + addr + '">unlink</button>'
       + '</div>'
       + '<pre class="pane-tail">' + tail + '</pre>'
-      + '<form class="send-keys-form" data-pane="' + p.pane_address + '">'
+      + '<form class="send-keys-form" data-pane="' + addr + '">'
       + '<input type="text" name="text" placeholder="type to send to the pane…" autocomplete="off">'
       + '<label><input type="checkbox" name="press_enter" checked> press Enter</label>'
       + '<button type="submit">Send</button>'

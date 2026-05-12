@@ -904,3 +904,30 @@ def init_db(conn: sqlite3.Connection):
             )
         conn.execute("INSERT INTO _migrations (version) VALUES (19)")
         conn.commit()
+
+    # Migration 20: pane_links — bind tmux panes to tickets so TT can show
+    # a live tail of the pane and detect "needs attention" events.  See
+    # docs/superpowers/specs/2026-05-12-pane-link-design.md.
+    if not conn.execute("SELECT 1 FROM _migrations WHERE version = 20").fetchone():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pane_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                pane_address TEXT NOT NULL UNIQUE,
+                host TEXT NOT NULL,
+                pane_descriptor TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                last_captured_at INTEGER,
+                status TEXT NOT NULL DEFAULT 'active',
+                attention_state TEXT NOT NULL DEFAULT 'none',
+                attention_detected_at INTEGER,
+                tail_text TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_links_ticket ON pane_links(project_id, ticket_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_links_host_status ON pane_links(host, status)")
+        conn.execute("INSERT INTO _migrations (version) VALUES (20)")
+        conn.commit()

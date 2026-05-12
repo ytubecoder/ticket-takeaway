@@ -11601,35 +11601,65 @@ def _start_pane_capture_worker():
         while True:
             try:
                 _t.sleep(PANE_CAPTURE_INTERVAL_S)
+
+                # Phase 1: collect link rows under the lock, then release.
+                # Holding the lock across tmux subprocesses (phase 2) would block
+                # API requests for up to 3*N seconds per cycle with N active panes.
                 with _db_lock:
                     conn = get_db()
                     init_db(conn)
                     try:
-                        rows = _pl.list_pane_links_for_host(conn, local)
-                        for r in rows:
-                            addr = r["pane_address"]
-                            prev_tail = r["tail_text"] or ""
-                            prev_time = r["last_captured_at"] or 0
-                            try:
-                                res = _sub.run(
-                                    ["tmux", "capture-pane", "-p", "-S", "-200", "-t", addr],
-                                    capture_output=True, text=True, timeout=3,
-                                )
-                                if res.returncode != 0:
-                                    _pl.mark_pane_stale(conn, addr)
-                                    conn.commit()
-                                    continue
-                                tail = _pl.strip_ansi(res.stdout)
-                                state = _pl.classify_attention(
-                                    tail, prev_tail=prev_tail, prev_time=prev_time,
-                                )
-                                _pl.update_pane_capture(conn, addr, tail, state)
-                                conn.commit()
-                            except (_sub.TimeoutExpired, FileNotFoundError, OSError):
-                                _pl.mark_pane_stale(conn, addr)
-                                conn.commit()
+                        rows = list(_pl.list_pane_links_for_host(conn, local))
+                        # Snapshot fields we need; convert Row → plain dict so we
+                        # can safely use the values after conn is closed.
+                        snapshots = [
+                            {
+                                "pane_address": r["pane_address"],
+                                "prev_tail": r["tail_text"] or "",
+                                "prev_time": r["last_captured_at"] or 0,
+                            }
+                            for r in rows
+                        ]
                     finally:
                         conn.close()
+
+                # Phase 2: run tmux subprocesses WITHOUT the lock.
+                captures = []  # list of (addr, tail_or_None)
+                for snap in snapshots:
+                    addr = snap["pane_address"]
+                    try:
+                        res = _sub.run(
+                            ["tmux", "capture-pane", "-p", "-S", "-200", "-t", addr],
+                            capture_output=True, text=True, timeout=3,
+                        )
+                        if res.returncode != 0:
+                            captures.append((addr, None))
+                        else:
+                            captures.append((addr, _pl.strip_ansi(res.stdout)))
+                    except (_sub.TimeoutExpired, FileNotFoundError, OSError):
+                        captures.append((addr, None))
+
+                # Phase 3: write results under the lock.
+                if captures:
+                    snap_by_addr = {s["pane_address"]: s for s in snapshots}
+                    with _db_lock:
+                        conn = get_db()
+                        init_db(conn)
+                        try:
+                            for addr, tail in captures:
+                                if tail is None:
+                                    _pl.mark_pane_stale(conn, addr)
+                                else:
+                                    snap = snap_by_addr[addr]
+                                    state = _pl.classify_attention(
+                                        tail,
+                                        prev_tail=snap["prev_tail"],
+                                        prev_time=snap["prev_time"],
+                                    )
+                                    _pl.update_pane_capture(conn, addr, tail, state)
+                            conn.commit()
+                        finally:
+                            conn.close()
             except Exception as _exc:
                 print(f"[pane-capture] error: {_exc}", flush=True)
 

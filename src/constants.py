@@ -258,3 +258,21 @@ FEEDBACKS_DEFAULT_PORT = 8080
 FEEDBACKS_REPO_URL = "https://github.com/ytubecoder/feedbacks"
 FEEDBACKS_TRIAGE_TIMEOUT = 90  # seconds
 FEEDBACKS_DETECTION_CACHE_TTL = 30  # seconds
+
+# ---------------------------------------------------------------------------
+# Pane-link attention states (migration 20 / src/pane_links.py)
+# ---------------------------------------------------------------------------
+
+ATTENTION_NONE = "none"
+ATTENTION_QUESTION = "question"
+ATTENTION_EXCEPTION = "exception"
+ATTENTION_IDLE = "idle"
+ATTENTION_STATES = (ATTENTION_NONE, ATTENTION_QUESTION, ATTENTION_EXCEPTION, ATTENTION_IDLE)
+
+# Pane link tail limits
+PANE_TAIL_MAX_LINES = 200
+PANE_TAIL_MAX_BYTES = 8 * 1024
+PANE_CAPTURE_INTERVAL_S = 2.0
+PANE_IDLE_THRESHOLD_S = 30.0
+PANE_SEND_KEYS_MAX_BYTES = 4 * 1024
+PANE_SEND_KEYS_RATE_PER_S = 10

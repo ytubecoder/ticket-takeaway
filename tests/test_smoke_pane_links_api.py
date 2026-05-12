@@ -24,7 +24,8 @@ def cleanup_test_panes(dashboard_server):
     test_addresses = [
         "%test1", "%test2", "%test3",
         "%sktest", "%sktest2",
-        "%25test",  # URL-encoded form of %test — created by the double-unquote regression test
+        "%25test",  # URL-encoded form of %test — guard against old double-unquote leftover
+        "%23",      # created by the double-unquote regression test
     ]
     for addr in test_addresses:
         try:

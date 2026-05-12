@@ -173,10 +173,6 @@ def _set_run_status(
     conn.execute(f"UPDATE runs SET {', '.join(fields)} WHERE id = ?", args)
 
 
-def _heartbeat(conn: sqlite3.Connection, run_id: int) -> None:
-    conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ?", (utcnow_iso(), run_id))
-
-
 # ---------------------------------------------------------------------------
 # Interactive-marker helpers
 # ---------------------------------------------------------------------------

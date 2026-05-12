@@ -469,8 +469,7 @@ DEFAULT_WORKFLOWS: list[dict] = [
         "name": "Parent auto-promote",
         "description": (
             "When all children of a parent ticket reach terminal status "
-            "(done / for-review / bug-fixed), promote the parent to For Review. "
-            "Replaces the legacy hardcoded _maybe_promote_parent hook."
+            "(done / for-review / bug-fixed), promote the parent to For Review."
         ),
         "system": 1,
         "enabled": 1,  # Preserves today's behaviour

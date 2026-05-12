@@ -2665,6 +2665,24 @@ a {{ color: var(--accent); text-decoration: none; }}
 .detail-section:hover .section-assess-btn, .section-assess-btn:focus {{ opacity: 1; }}
 .section-assess-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
 .section-assess-btn.loading {{ opacity: 1; color: var(--accent); pointer-events: none; }}
+/* Pane links */
+.td-pane-links pre.pane-tail {{ font-family: var(--font-mono); font-size: 0.85em; background: rgba(0,0,0,0.25); padding: 0.5em; border-radius: 4px; max-height: 12em; overflow-y: auto; white-space: pre-wrap; margin: 0.3em 0; }}
+.td-pane-links .pane-link {{ margin: 0.75em 0; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 10px; }}
+.td-pane-links .pane-link-head {{ display: flex; gap: 0.5em; align-items: center; font-size: 0.9em; margin-bottom: 4px; }}
+.td-pane-links .pane-desc {{ font-family: var(--font-mono); font-size: 0.85em; color: var(--text-secondary); flex: 1; }}
+.td-pane-links .unlink-btn {{ background: none; border: 1px solid var(--border-subtle); border-radius: 4px; font-size: 11px; padding: 1px 6px; cursor: pointer; color: var(--text-tertiary); }}
+.td-pane-links .unlink-btn:hover {{ color: #ef4444; border-color: #ef4444; }}
+.td-pane-links .send-keys-form {{ display: flex; gap: 0.4em; margin-top: 0.4em; align-items: center; }}
+.td-pane-links .send-keys-form input[type=text] {{ flex: 1; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--text-primary); font-family: var(--font-mono); }}
+.td-pane-links .send-keys-form label {{ font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }}
+.td-pane-links .send-keys-form button[type=submit] {{ background: var(--accent); color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }}
+.td-pane-links .att-q {{ color: #fc6; font-weight: bold; }}
+.td-pane-links .att-e {{ color: #f99; font-weight: bold; }}
+.pane-links-empty {{ font-size: 12px; color: var(--text-tertiary); }}
+.card-attn {{ display:inline-block; font-weight:bold; font-size:0.85em; padding:0 0.3em; border-radius:3px; animation: tt-pulse 1.5s infinite; }}
+.card-attn-q {{ color: #fc6; background: rgba(255,200,100,0.12); }}
+.card-attn-e {{ color: #f99; background: rgba(255,150,150,0.12); }}
+@keyframes tt-pulse {{ 0%,100% {{ opacity:1 }} 50% {{ opacity:0.4 }} }}
 /* Editors */
 .detail-editor {{ width: 100%; min-height: 80px; background: var(--bg-card); color: var(--text-primary); border: 1px solid transparent; border-radius: 6px; padding: 10px 12px; font-family: var(--font-mono); font-size: 13px; resize: vertical; line-height: 1.5; box-sizing: border-box; transition: border-color 0.15s; }}
 .detail-editor:hover {{ border-color: var(--border-default); }}
@@ -5465,6 +5483,17 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         <div id="workflow-runs-list" class="workflow-runs-list"></div>
       </div>
 
+      <!-- Pane links — live tail + send box. Hidden by default; populated by JS. -->
+      <div class="detail-section td-pane-links" id="section-pane-links" style="display:none">
+        <div class="detail-section-header">
+          <h3>Linked panes</h3>
+        </div>
+        <div class="pane-links-list"></div>
+        <div class="pane-links-empty subtle" style="display:none">
+          No linked panes. Run <code>tt link &lt;ticket-id&gt;</code> in a tmux pane on the server host.
+        </div>
+      </div>
+
       <!-- Kitchen activity history (M1b) — newest first; collapsed by default -->
       <div class="detail-section" id="section-history">
         <div class="detail-section-header">
@@ -7583,6 +7612,10 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       // Preload history so cascade events (system actor) auto-expand on open.
       // The renderer keeps the section collapsed when no system events are present.
       loadHistory(tid);
+      // Load pane links and start polling
+      refreshPaneLinks(tid);
+      if (_paneLinksInterval) clearInterval(_paneLinksInterval);
+      _paneLinksInterval = setInterval(function() {{ refreshPaneLinks(currentTicketId); }}, 3000);
     }});
   }}
 
@@ -7590,6 +7623,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     closeStatusDropdown();
     _stopRunsPolling();
     _stopAmbientPolling();
+    if (_paneLinksInterval) {{ clearInterval(_paneLinksInterval); _paneLinksInterval = null; }}
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
     currentTicketId = null; currentData = null;
@@ -7599,6 +7633,88 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       history.pushState({{ gate: false }}, '', window.location.pathname + window.location.search);
     }}
   }}
+
+  // ── Pane links: live tail + send box ────────────────────────────────────
+  var _paneLinksInterval = null;
+
+  function refreshPaneLinks(ticketId) {{
+    if (!ticketId) return;
+    fetch(EDIT_API + '/tickets/' + ticketId + '/pane-links')
+      .then(function(r) {{ return r.ok ? r.json() : null; }})
+      .catch(function() {{ return null; }})
+      .then(function(data) {{
+        if (!data) return;
+        var links = data.pane_links || data || [];
+        var section = overlay.querySelector('#section-pane-links');
+        if (!section) return;
+        var list = section.querySelector('.pane-links-list');
+        var empty = section.querySelector('.pane-links-empty');
+        section.style.display = 'block';
+        if (!links.length) {{
+          list.innerHTML = '';
+          empty.style.display = 'block';
+          return;
+        }}
+        empty.style.display = 'none';
+        list.innerHTML = links.map(function(p) {{ return paneLinkHTML(p); }}).join('');
+        list.querySelectorAll('form.send-keys-form').forEach(function(f) {{
+          f.addEventListener('submit', sendKeys);
+        }});
+        list.querySelectorAll('button.unlink-btn').forEach(function(b) {{
+          b.addEventListener('click', function() {{ unlinkPane(b.dataset.pane, ticketId); }});
+        }});
+        var alerted = links.find(function(p) {{ return p.attention_state === 'question' || p.attention_state === 'exception'; }});
+        if (alerted) {{
+          document.title = '● ' + ticketId + ' needs input — Ticket Takeaway';
+        }}
+      }});
+  }}
+
+  function paneLinkHTML(p) {{
+    var statusDot = p.status === 'active' ? '🟢' : '⚫';
+    var att = p.attention_state;
+    var attBadge = att === 'question' ? '<span class="att-q">?</span>'
+                 : att === 'exception' ? '<span class="att-e">!</span>'
+                 : '';
+    var tail = (p.tail_text || '(no capture yet)')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return '<div class="pane-link" data-pane="' + p.pane_address + '">'
+      + '<div class="pane-link-head">'
+      + '<span class="pane-desc">' + (p.pane_descriptor || p.pane_address) + '</span>'
+      + ' ' + statusDot + ' ' + attBadge
+      + '<button class="unlink-btn" data-pane="' + p.pane_address + '">unlink</button>'
+      + '</div>'
+      + '<pre class="pane-tail">' + tail + '</pre>'
+      + '<form class="send-keys-form" data-pane="' + p.pane_address + '">'
+      + '<input type="text" name="text" placeholder="type to send to the pane…" autocomplete="off">'
+      + '<label><input type="checkbox" name="press_enter" checked> press Enter</label>'
+      + '<button type="submit">Send</button>'
+      + '</form>'
+      + '</div>';
+  }}
+
+  function sendKeys(ev) {{
+    ev.preventDefault();
+    var form = ev.target;
+    var pane = form.dataset.pane;
+    var text = form.elements.text.value;
+    var press_enter = form.elements.press_enter.checked;
+    if (!text) return;
+    fetch(EDIT_API + '/pane-links/' + encodeURIComponent(pane) + '/send-keys', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{text: text, press_enter: press_enter}})
+    }}).then(function(r) {{
+      if (r.ok) {{ form.elements.text.value = ''; }}
+      else {{ r.json().then(function(d) {{ alert('send failed: ' + (d.error || r.status)); }}); }}
+    }});
+  }}
+
+  function unlinkPane(pane, ticketId) {{
+    fetch(EDIT_API + '/pane-links/' + encodeURIComponent(pane), {{method: 'DELETE'}})
+      .then(function() {{ refreshPaneLinks(ticketId); }});
+  }}
+  // ── End pane links ───────────────────────────────────────────────────────
 
   overlay.querySelector('.detail-backdrop').addEventListener('click', closeOverlay);
   overlay.querySelector('.detail-close').addEventListener('click', closeOverlay);

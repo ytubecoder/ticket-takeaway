@@ -11157,6 +11157,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not pane_addr or not host:
                 self._send_json({"error": "pane_address and host required"}, 400)
                 return
+            if not re.match(r"^%[0-9]+$", pane_addr):
+                self._send_json(
+                    {"error": "pane_address must match ^%[0-9]+$ (real tmux pane IDs only)"},
+                    400,
+                )
+                return
             import pane_links as _pl
             with _db_lock:
                 conn = get_db()

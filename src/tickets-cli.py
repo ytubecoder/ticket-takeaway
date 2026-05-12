@@ -1806,9 +1806,13 @@ def cmd_branches(args):
 
 def _require_tmux_pane():
     """Return $TMUX_PANE or exit with a clear error."""
+    import re as _re
     pane = os.environ.get("TMUX_PANE")
     if not pane:
         print("error: $TMUX_PANE is unset — run this inside tmux", file=sys.stderr)
+        sys.exit(1)
+    if not _re.match(r"^%[0-9]+$", pane):
+        print(f"error: $TMUX_PANE has unexpected format {pane!r} (expected ^%[0-9]+$)", file=sys.stderr)
         sys.exit(1)
     return pane
 

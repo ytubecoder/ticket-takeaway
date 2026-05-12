@@ -1016,11 +1016,9 @@ def _after_status_change(
     """Run post-status-change side effects.
 
     Phase A migration (tidy-newt): the parent-promote rule was migrated to a
-    system workflow ("Parent auto-promote", workflows_seed.py). The legacy
-    _maybe_promote_parent() helper is kept defined for safety but no longer
-    invoked from this hook — the dispatcher's next tick picks up parents whose
-    children all reached terminal status and applies the move via the workflow
-    engine.
+    system workflow ("Parent auto-promote", workflows_seed.py) — the
+    dispatcher's next tick picks up parents whose children all reached
+    terminal status and applies the move via the workflow engine.
     """
     return  # noqa: F811 — explicit: no synchronous side effects
 
@@ -1367,72 +1365,8 @@ def scan_prs(
     return {"updated": updated}
 
 
-# TODO: remove once parent-promote system workflow is verified in production.
-# Phase A migration (tidy-newt) replaced this with the "Parent auto-promote"
-# system workflow in workflows_seed.py — the dispatcher fires it on each tick
-# against parents whose children all reached terminal status. Kept defined for
-# safety in case the workflow engine needs to be temporarily disabled.
-def _maybe_promote_parent(
-    conn: sqlite3.Connection,
-    project_id: str,
-    ticket_id: str,
-) -> None:
-    """DEPRECATED — see Phase A migration note above. No longer called.
-
-    If this ticket has a parent, check whether all siblings are done/review-ready.
-
-    When every child of a parent ticket has status in
-    {'for-review', 'bug-fixed', 'done'}, the parent is auto-promoted
-    to the For Review section (keeping its current status badge).
-    """
-    parent_row = conn.execute(
-        "SELECT parent FROM tickets WHERE id = ? AND project_id = ?",
-        (ticket_id, project_id),
-    ).fetchone()
-    if not parent_row or not parent_row["parent"]:
-        return
-
-    parent_id = parent_row["parent"]
-
-    # Verify parent exists
-    parent_ticket = conn.execute(
-        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
-        (parent_id, project_id),
-    ).fetchone()
-    if not parent_ticket:
-        return
-
-    # Already in a terminal section — don't demote
-    if parent_ticket["section"] in ("Done", "Won't Do"):
-        return
-
-    # Gather all children of this parent
-    children = conn.execute(
-        "SELECT status FROM tickets WHERE parent = ? AND project_id = ?",
-        (parent_id, project_id),
-    ).fetchall()
-    if not children:
-        return
-
-    done_statuses = {"for-review", "bug-fixed", "done"}
-    if all(c["status"] in done_statuses for c in children):
-        old_parent_section = parent_ticket["section"]
-        if old_parent_section == "For Review":
-            return  # idempotent — already promoted
-        sort_order = _next_sort_order(conn, project_id, "For Review")
-        conn.execute(
-            "UPDATE tickets SET section = 'For Review', sort_order = ?, updated_at = ? "
-            "WHERE id = ? AND project_id = ?",
-            (sort_order, datetime.now().isoformat(), parent_id, project_id),
-        )
-        # Internal-side-effect rule (§9): system-actor event for the cascaded promotion.
-        emit_event(conn, project_id, "ticket", parent_id, "section_change",
-                   {"before": old_parent_section, "after": "For Review"},
-                   ActorContext.system())
-
-
 # ---------------------------------------------------------------------------
-# Lane B helpers — activity feed, children rollup, children prompt tokens.
+# Lane B helpers — activity feed and children rollup.
 # These are pure DB reads; no mutations, no commits.
 # ---------------------------------------------------------------------------
 
@@ -1585,56 +1519,3 @@ def get_children_summary(
     }
 
 
-def render_children_tokens(
-    conn: sqlite3.Connection,
-    project_id: str,
-    parent_id: str,
-    template: str,
-) -> str:
-    """Expand {{children.summary}} and {{children.criteria}} in a prompt template.
-
-    This is a post-processing step used on top of the runners.py ticket-field
-    substitution.  It is called server-side (e.g. from the "ask AI" button in
-    the full-page ticket view) and also available for future runner integration.
-
-    {{children.summary}}  — plain-text block describing each child's section/status.
-    {{children.criteria}} — concatenated acceptance criteria from all children,
-                            each item prefixed with the child ID.
-    """
-    if "{{children." not in template:
-        return template
-
-    children = conn.execute(
-        "SELECT id, title, section, status FROM tickets "
-        "WHERE parent = ? AND project_id = ? AND archived = 0 ORDER BY sort_order ASC",
-        (parent_id, project_id),
-    ).fetchall()
-
-    # Build summary block.
-    if children:
-        summary_lines = []
-        for c in children:
-            summary_lines.append(
-                f"- {c['id']}: {c['title']} [{c['section']} / {c['status']}]"
-            )
-        summary_text = "\n".join(summary_lines)
-    else:
-        summary_text = "(no children)"
-
-    # Build criteria block.
-    crit_lines = []
-    for c in children:
-        crit_rows = conn.execute(
-            "SELECT text, checked FROM acceptance_criteria "
-            "WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
-            (c["id"], project_id),
-        ).fetchall()
-        for cr in crit_rows:
-            marker = "[x]" if cr["checked"] else "[ ]"
-            crit_lines.append(f"{c['id']}: {marker} {cr['text']}")
-    criteria_text = "\n".join(crit_lines) if crit_lines else "(none)"
-
-    result = template
-    result = result.replace("{{children.summary}}", summary_text)
-    result = result.replace("{{children.criteria}}", criteria_text)
-    return result

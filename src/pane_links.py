@@ -97,3 +97,67 @@ def list_pane_links_for_host(
         "SELECT * FROM pane_links WHERE host = ? AND status = 'active'",
         (host,),
     ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Attention classifier
+# ---------------------------------------------------------------------------
+
+# Heuristic patterns. Order matters: exception > question > idle > none.
+
+_EXCEPTION_PATTERNS = (
+    re.compile(r"^Traceback \(most recent call", re.MULTILINE),
+    re.compile(r"^[A-Za-z_]*Error: ", re.MULTILINE),
+    re.compile(r"^Exception: ", re.MULTILINE),
+    re.compile(r"^panic: ", re.MULTILINE),
+    re.compile(r"failed with status \d", re.MULTILINE),
+)
+
+_QUESTION_TRAILING = re.compile(r"\?\s*$")
+_QUESTION_PROMPTS = re.compile(
+    r"\((y/n|Y/n|y/N)\)\s*$|"
+    r"Please specify|Which option|"
+    r"^\s*>\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+_SHELL_PROMPT_TAIL = re.compile(r"(?:^|\n)[^\n]*[\$%>#]\s*$")
+
+
+def classify_attention(
+    tail: str, prev_tail: str, prev_time: int
+) -> str:
+    """Return one of ATTENTION_* constants for *tail*.
+
+    *prev_tail* and *prev_time* describe the previous capture: if the tail
+    is unchanged and time has elapsed past PANE_IDLE_THRESHOLD_S, we treat
+    the pane as quiet — needed to disambiguate "model just asked a question
+    and is waiting" from "model is mid-stream and a `?` is in passing".
+    """
+    if not tail:
+        return ATTENTION_NONE
+
+    # Look at last 30 non-empty lines
+    last_window = "\n".join(tail.strip().splitlines()[-30:])
+
+    # Exception always wins
+    for pat in _EXCEPTION_PATTERNS:
+        if pat.search(last_window):
+            return ATTENTION_EXCEPTION
+
+    quiet = (
+        tail == prev_tail
+        and (int(time.time()) - prev_time) >= PANE_IDLE_THRESHOLD_S
+    )
+
+    # Question only when pane has settled
+    if quiet:
+        last_line = next(
+            (ln for ln in reversed(tail.splitlines()) if ln.strip()), ""
+        )
+        if _QUESTION_TRAILING.search(last_line) or _QUESTION_PROMPTS.search(last_window):
+            return ATTENTION_QUESTION
+        if _SHELL_PROMPT_TAIL.search(tail):
+            return ATTENTION_IDLE
+
+    return ATTENTION_NONE

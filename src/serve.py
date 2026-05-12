@@ -8021,6 +8021,11 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+# Module-level state — shared across all handlers in this process.
+# Tracks send-keys timestamps per pane for the per-pane rate limiter.
+_PANE_SEND_RATE: dict[str, list[float]] = {}
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     """Handle dashboard HTTP requests."""
 
@@ -8067,6 +8072,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return {}
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8"))
+
+    def _check_send_keys_rate(self, pane_addr: str) -> bool:
+        """Token-bucket rate limiter for send-keys: max PANE_SEND_KEYS_RATE_PER_S per pane per second."""
+        from constants import PANE_SEND_KEYS_RATE_PER_S
+        import time as _t
+        now = _t.time()
+        bucket = _PANE_SEND_RATE.setdefault(pane_addr, [])
+        # Drop timestamps older than 1 second
+        bucket[:] = [t for t in bucket if now - t < 1.0]
+        if len(bucket) >= PANE_SEND_KEYS_RATE_PER_S:
+            return False
+        bucket.append(now)
+        return True
 
     # ── PWA static assets ───────────────────────────────────────────
     # SW scope must be the site root for it to intercept project-scoped
@@ -8967,6 +8985,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"screens": cached})
             else:
                 self._send_json({"screens": [], "hint": "No scan yet. POST /api/screens/scan to discover pages."})
+            return
+
+        # Pane links: GET /<pid>/api/tickets/<tid>/pane-links
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/pane-links$", remainder)
+        if m:
+            tid = m.group(1)
+            import pane_links as _pl
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                rows = _pl.list_pane_links_for_ticket(conn, proj["id"], tid)
+                result = [dict(r) for r in rows]
+                conn.close()
+            self._send_json({"pane_links": result})
             return
 
         self._send_json({"error": "Not found"}, 404)
@@ -11110,6 +11142,90 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(updated or {"ok": True, "run_id": run_id})
             return
 
+        # Pane link: POST /<pid>/api/tickets/<tid>/pane-links
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/pane-links$", remainder)
+        if m:
+            tid = m.group(1)
+            try:
+                payload = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            pane_addr = payload.get("pane_address", "").strip()
+            host = payload.get("host", "").strip()
+            desc = payload.get("pane_descriptor", "").strip()
+            if not pane_addr or not host:
+                self._send_json({"error": "pane_address and host required"}, 400)
+                return
+            import pane_links as _pl
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                if not conn.execute(
+                    "SELECT 1 FROM tickets WHERE id = ? AND project_id = ?",
+                    (tid, proj["id"]),
+                ).fetchone():
+                    conn.close()
+                    self._send_json({"error": "ticket not found"}, 404)
+                    return
+                from actions import emit_event as _emit, ActorContext as _AC
+                row_id = _pl.link_pane(conn, tid, proj["id"], pane_addr, host, desc)
+                _emit(conn, proj["id"], "ticket", tid, "pane_linked",
+                      {"pane_address": pane_addr, "host": host, "pane_descriptor": desc},
+                      _AC.human())
+                conn.commit()
+                conn.close()
+            self._send_json({"id": row_id, "pane_address": pane_addr}, 201)
+            return
+
+        # POST /<pid>/api/pane-links/<addr>/send-keys
+        m = re.match(r"^/api/pane-links/(.+)/send-keys$", remainder)
+        if m:
+            from constants import PANE_SEND_KEYS_MAX_BYTES
+            pane_addr = unquote(m.group(1))
+            try:
+                payload = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            text = payload.get("text", "")
+            press_enter = bool(payload.get("press_enter", True))
+            if "\x00" in text:
+                self._send_json({"error": "null bytes not allowed"}, 400)
+                return
+            if len(text.encode("utf-8")) > PANE_SEND_KEYS_MAX_BYTES:
+                self._send_json({"error": "text exceeds 4KB"}, 413)
+                return
+            import socket as _sock
+            import pane_links as _pl
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                row = _pl.get_ticket_for_pane(conn, pane_addr)
+                conn.close()
+            if not row:
+                self._send_json({"error": "no link for pane"}, 404)
+                return
+            local = _sock.gethostname()
+            if row["host"] != local:
+                self._send_json({"error": f"pane on host {row['host']!r}, server is {local!r}; cross-host send not supported in v1"}, 409)
+                return
+            if not self._check_send_keys_rate(pane_addr):
+                self._send_json({"error": "rate limit (10/s)"}, 429)
+                return
+            import subprocess as _sub
+            args_ = ["tmux", "send-keys", "-t", pane_addr, "-l", text]
+            try:
+                _sub.run(args_, check=True, timeout=2)
+                if press_enter:
+                    _sub.run(["tmux", "send-keys", "-t", pane_addr, "Enter"],
+                             check=True, timeout=2)
+            except _sub.CalledProcessError as e:
+                self._send_json({"error": f"tmux send-keys failed: {e}"}, 502)
+                return
+            self._send_json({"sent": True})
+            return
+
         self._send_json({"error": "Not found"}, 404)
 
     def do_DELETE(self):
@@ -11268,6 +11384,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "deleted": attachment_id})
             else:
                 self._send_json({"error": "Attachment not found"}, 404)
+            return
+
+        # Delete pane link: DELETE /<pid>/api/pane-links/<addr>
+        m = re.match(r"^/api/pane-links/(.+)$", remainder)
+        if m:
+            pane_addr = unquote(m.group(1))
+            import pane_links as _pl
+            with _db_lock:
+                conn = get_db()
+                init_db(conn)
+                row = _pl.get_ticket_for_pane(conn, pane_addr)
+                if not row:
+                    conn.close()
+                    self._send_json({"error": "no link for pane"}, 404)
+                    return
+                from actions import emit_event as _emit, ActorContext as _AC
+                _pl.unlink_pane(conn, pane_addr)
+                _emit(conn, row["project_id"], "ticket", row["ticket_id"], "pane_unlinked",
+                      {"pane_address": pane_addr}, _AC.human())
+                conn.commit()
+                conn.close()
+            self._send_json({"deleted": pane_addr})
             return
 
         # Delete ticket

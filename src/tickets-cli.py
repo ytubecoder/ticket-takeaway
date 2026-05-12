@@ -1858,7 +1858,7 @@ def cmd_link(args):
     pane_links.link_pane(conn, args.ticket_id, project_id, pane, host, desc)
     emit_event(conn, project_id, "ticket", args.ticket_id, "pane_linked",
                {"pane_address": pane, "host": host, "pane_descriptor": desc},
-               ActorContext("user", None))
+               ActorContext.human())
     conn.commit()
     conn.close()
     print(f"linked tmux pane {desc or pane} to ticket {args.ticket_id}")
@@ -1911,7 +1911,7 @@ def cmd_unlink(args):
         return
     pane_links.unlink_pane(conn, pane)
     emit_event(conn, row["project_id"], "ticket", row["ticket_id"], "pane_unlinked",
-               {"pane_address": pane}, ActorContext("user", None))
+               {"pane_address": pane}, ActorContext.human())
     conn.commit()
     conn.close()
     print(f"unlinked pane {pane} from ticket {row['ticket_id']}")

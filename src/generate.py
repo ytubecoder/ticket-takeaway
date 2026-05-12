@@ -785,6 +785,7 @@ class Ticket:
     tags: list = field(default_factory=list)
     branches: list = field(default_factory=list)  # list of dicts: name, pr_number, pr_status, ahead, behind
     is_container: bool = False
+    pane_attention: str = "none"   # "none" | "question" | "exception" (from pane_links)
 
     @property
     def slug(self) -> str:
@@ -1105,6 +1106,19 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             branches=branches,
             is_container=is_container,
         ))
+
+    # Enrich tickets with pane-link attention state (migration 20)
+    try:
+        pane_rows = conn.execute(
+            "SELECT ticket_id, attention_state FROM pane_links "
+            "WHERE project_id = ? AND attention_state IN ('question', 'exception')",
+            (project_id,),
+        ).fetchall()
+        attention_by_ticket = {r["ticket_id"]: r["attention_state"] for r in pane_rows}
+        for t in tickets:
+            t.pane_attention = attention_by_ticket.get(t.id, "none")
+    except Exception:
+        pass  # pane_links table absent on older DBs
 
     conn.close()
     return tickets
@@ -12195,6 +12209,16 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     pr_attr = f' data-pr-status="{escape(pr_state)}"' if pr_state else ""
 
     container_attr = ' data-is-container="true"' if is_container else ""
+
+    # Pane attention badge
+    pane_attn = getattr(t, 'pane_attention', 'none')
+    if pane_attn == 'question':
+        attn_html = '<span class="card-attn card-attn-q" title="pane needs input">?</span>'
+    elif pane_attn == 'exception':
+        attn_html = '<span class="card-attn card-attn-e" title="pane has an exception">!</span>'
+    else:
+        attn_html = ""
+
     return (
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
@@ -12214,6 +12238,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'{branches_html}'
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
+        f'{attn_html}'
         f'{kb_html}'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
         f'<button class="card-run-now-btn" data-testid="card-run-now-{id_esc}" data-ticket-id="{id_esc}" title="Run now" aria-label="Run now for {id_esc}">{_svg_icon("play", 12)}</button>'

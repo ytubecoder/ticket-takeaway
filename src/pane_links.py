@@ -31,3 +31,69 @@ def strip_ansi(text: str) -> str:
     if not text:
         return text
     return _ANSI_RE.sub("", text)
+
+
+def link_pane(
+    conn: sqlite3.Connection,
+    ticket_id: str,
+    project_id: str,
+    pane_address: str,
+    host: str,
+    pane_descriptor: str,
+) -> int:
+    """Create or replace a pane→ticket link. Returns row id.
+
+    Caller commits and emits activity event in the same transaction.
+    """
+    now = int(time.time())
+    conn.execute(
+        "DELETE FROM pane_links WHERE pane_address = ?", (pane_address,)
+    )
+    cur = conn.execute(
+        """
+        INSERT INTO pane_links
+            (ticket_id, project_id, pane_address, host, pane_descriptor,
+             created_at, status, attention_state)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', 'none')
+        """,
+        (ticket_id, project_id, pane_address, host, pane_descriptor, now),
+    )
+    return cur.lastrowid
+
+
+def unlink_pane(conn: sqlite3.Connection, pane_address: str) -> int:
+    """Remove the pane→ticket link. Returns row count deleted."""
+    cur = conn.execute(
+        "DELETE FROM pane_links WHERE pane_address = ?", (pane_address,)
+    )
+    return cur.rowcount
+
+
+def get_ticket_for_pane(
+    conn: sqlite3.Connection, pane_address: str
+) -> Optional[sqlite3.Row]:
+    """Return the pane_links row for *pane_address*, or None."""
+    return conn.execute(
+        "SELECT * FROM pane_links WHERE pane_address = ?", (pane_address,)
+    ).fetchone()
+
+
+def list_pane_links_for_ticket(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str
+) -> list[sqlite3.Row]:
+    """Return all pane_links rows for the given ticket."""
+    return conn.execute(
+        "SELECT * FROM pane_links WHERE project_id = ? AND ticket_id = ? "
+        "ORDER BY created_at ASC",
+        (project_id, ticket_id),
+    ).fetchall()
+
+
+def list_pane_links_for_host(
+    conn: sqlite3.Connection, host: str
+) -> list[sqlite3.Row]:
+    """Return active pane_links rows where host matches (for the capture worker)."""
+    return conn.execute(
+        "SELECT * FROM pane_links WHERE host = ? AND status = 'active'",
+        (host,),
+    ).fetchall()

@@ -1,5 +1,32 @@
 # Session Log
 
+## 2026-05-12 — PWA shell + /kitchen attention-feed redesign
+
+### Summary
+- Shipped PWA installability for the dashboard: `manifest.webmanifest`, `sw.js`, and brand-color icons (180/192/512 PNG + SVG) served at site root. SW is network-first for navigations, never touches `/api/*`. New shared `PWA_HEAD_TAGS` constant in `serve.py` is injected into every top-level page renderer (kanban, projects picker, kitchen, workflows, journeys, ticket detail). A `@media (max-width: 760px)` block in the kanban CSS stacks columns vertically with 36-44px tap targets and a `100dvh` fullscreen detail overlay with safe-area insets.
+- Auto-collapse the nav rail on phone widths after the user taps any rail item — was leaving the expanded rail overlaid on top of the destination page. JS sets `localStorage['tt-rail-expanded']='0'` plus removes the body class before the anchor navigates, so the next page paints with the rail collapsed.
+- Redesigned `/kitchen` as a single-column "attention feed" (replacing the bucket-stacked orchestrator view). New `src/kitchen_feed.py` (data layer) returns a frozen payload — paused flag, totals, projects, flat items list — with time buckets keyed on `tickets.updated_at` and an unread heuristic (24h + actionable status). New `src/kitchen_view.py` (renderer) builds the HTML. `_render_kitchen_view()` in `serve.py` shrinks to a thin wrapper. New `GET /api/kitchen/feed` for 5s client polling. `/kitchen/demo` renders the same view against a baked-in stub state for visual review; cards there are click-inert with an explanatory banner since the IDs don't exist in the live DB.
+- Iterated the card design five passes: original colorful tile + glyph → ticket IDs + section badges + per-bucket glyphs → user feedback "too colorful, too many pictorials" → simplified to thin left-border for bucket + ticket ID + neutral section badge + plain "Running" / "Needs me" / etc. text inline; chip color tinting reverted; Live/Paused indicator surfaced as a header pill (always visible, was previously buried under the "⋯" menu).
+- Project filter relocated from a chip row above the feed into a checkbox list under the "⋯" overflow menu (multi-select, all-checked default, "All / None" toggle). Overflow icon gets a small accent dot when any project is unchecked so the filter state is visible without opening the menu.
+- Memories updated: `feedback_branch_per_feature.md` extended with the merge-defaults pairing + the 2026-05-11 pile-on incident; new `feedback_check_tip_before_admin_merge.md` codifies fetch-and-verify before any admin-merge.
+
+### Lessons Learned
+- **Accepted (architecture):** Splitting the new Kitchen view into `kitchen_feed.py` (pure data) + `kitchen_view.py` (pure renderer) let two parallel agents work without file conflicts. The frozen payload schema between them — `paused`, `totals`, `projects[]`, `items[]` with `bucket`, `time_bucket`, `is_unread`, `section` — became the integration contract. `_render_kitchen_view` in `serve.py` collapsed to 20 lines (was ~575). Same shape should work for any other multi-piece UI: define the payload first, write data + view in parallel, integrate.
+- **Accepted (UX):** Bucket-tinted thin left border is the right amount of color cue. The user explicitly rejected the bigger tile + glyph pictorials; left-border keeps the run-state legible without dominating the card.
+- **Accepted (UX):** Surfacing system Live/Paused in the header as a clickable pill — rather than hiding it under the `⋯` overflow — was an explicit user ask and clearly correct. State that drives behavior should never need a click to reveal.
+- **Accepted (process):** Running serve.py from this Mac with `HTTPServer.__init__` monkey-patched to bind `0.0.0.0` instead of `127.0.0.1` lets the user hit `http://llm.rhino-balance.ts.net:8799/kitchen/demo` from any tailnet-connected device for live preview. Faster than the pull-on-WSL-then-restart loop. Pairs with the existing macOS `getfqdn` workaround.
+- **Rejected (UX):** Per-state chip color tinting + per-section pill color tinting + bucket glyphs all at once. The user called it out as too colorful; reverting to one color cue per concept (left border for bucket, neutral text for bucket label, neutral pill for section) felt much cleaner.
+- **Rejected (UX):** Card href using `?ticket={id}` — the kanban only listens for `#ticket/{id}` hashes (`generate.py::_parseTicketHash`), so the query form just opened the kanban without the detail overlay. Always use the hash form when deep-linking to a ticket from outside the kanban.
+- **Gotcha:** A new page renderer that omits `gen.build_nav_rail_css()` produces a left rail whose menu items render as unstyled inline anchors. The rail JS injects the items into `#navRail`, but without the CSS they look broken. Caller must pass rail_css + rail_html + rail_js into any composing function. Codified in CLAUDE.md.
+- **Gotcha:** Polling on `/kitchen/demo` replaces the demo stub items with the empty live feed after the first 5s tick. Fix: JS checks `location.pathname === '/kitchen/demo'` and skips polling. The demo route is intentionally not backed by a corresponding stub-aware `/api/kitchen/feed` because that would complicate the contract.
+- **Gotcha (recovered):** PR #10 was admin-merged at commit `20f91ef` while I was still pushing `19a35da` to `feat/pwa-mobile`. GitHub auto-deleted the source branch on merge, orphaning my last commit. Recovered via `git cherry-pick 19a35da` onto main. Lesson is the new check-tip memory.
+
+### Decisions
+- **`/kitchen` is the new home of cross-project triage.** The orchestrator controls (pause/resume) move to a header pill + overflow panel inside the new view. The bucket-stacked legacy view is gone. The same URL, replaced content.
+- **One responsive layout** for /kitchen, not a mobile fork. `@media (max-width: 760px)` only widens cards and centers the column on desktop; mobile-first design works at every width.
+- **Demo cards are inert.** The `/kitchen/demo` route renders the full populated state but clicks preventDefault + show a banner explaining the cards are mockup. Avoids ghost-ticket detail overlays when the demo IDs don't exist in the live DB.
+- **PWA start_url stays `/` (redirects to /projects)** for now — not auto-routing to /kitchen on PWA-standalone launch. Deferred until the user lives with the feed long enough to decide.
+
 ## 2026-05-11 — Activity tab redesign + ticket origin provenance + Add-Project modal
 
 ### Summary

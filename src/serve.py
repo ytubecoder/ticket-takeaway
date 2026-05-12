@@ -11182,7 +11182,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/pane-links/(.+)/send-keys$", remainder)
         if m:
             from constants import PANE_SEND_KEYS_MAX_BYTES
-            pane_addr = unquote(m.group(1))
+            pane_addr = m.group(1)  # path already decoded at do_POST entry
             try:
                 payload = self._read_body()
             except (json.JSONDecodeError, ValueError):
@@ -11389,7 +11389,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Delete pane link: DELETE /<pid>/api/pane-links/<addr>
         m = re.match(r"^/api/pane-links/(.+)$", remainder)
         if m:
-            pane_addr = unquote(m.group(1))
+            pane_addr = m.group(1)  # path already decoded at do_DELETE entry
             import pane_links as _pl
             with _db_lock:
                 conn = get_db()

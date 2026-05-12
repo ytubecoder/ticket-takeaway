@@ -1,5 +1,35 @@
 # Session Log
 
+## 2026-05-12 — Model endpoint abstraction (PR #11)
+
+### Summary
+- Shipped the agent/endpoint split: `workflow_agents` now carries a persona + `endpoint_id`; new `endpoints` table (migration #20) owns runtime config (command + args + capabilities + session-resume template). Many agents can share one endpoint. Phase 1 executes `cli` type only (covers claude/codex/hermes); schema reserves slots for `anthropic_api` / `openai_api` / `gemini_api` / `ssh_cli` which raise `UnsupportedEndpointType` at dispatch.
+- Built via subagent-driven-development: 26 tasks across 10 phases, each with a fresh implementer + spec-compliance reviewer + code-quality reviewer. Spec went through 2 rounds of independent Codex review (20 findings folded in) before any code was written. Final cumulative review: APPROVED for merge.
+- Hit a migration-number collision at merge time. The plan claimed #19; `feat/pwa-mobile` had already merged its own #19 (ticket_created backfill). Renamed mine to #20 across db.py, two test files, the spec, the plan, and CLAUDE.md. Memory saved: always `git fetch origin main` and check live `_migrations` numbers before assigning one.
+- Post-implementation UX gap caught during pre-merge dev-server smoke: the agent UI still showed the legacy Command + Args input rows alongside the new Endpoint dropdown, which read as "both are source of truth." Dropped the legacy inputs from the agent UI rendering (kept the DB columns for compat fallback). Fix: `06134b8`.
+- Second UX gap: the endpoint dropdown was `disabled` on system agent rows, blocking the most common runtime customisation. Unlocked the endpoint dropdown specifically (persona stays locked) + taught the seed's `ON CONFLICT DO UPDATE` clause to omit `endpoint_id` (preserves user choice across re-seeds) + extended the PUT route to accept `endpoint_id` changes on system rows with 403 on other fields. Fix: `8394a18`.
+- I-42 follow-up filed: "Rethink system-row lock: lock on workflow usage, not seed provenance." User pointed out the current "system=1 means uneditable" model conflates provenance with usage; a cleaner model would lock only when a row is referenced by a live workflow. Spec-level rethink owed for a future PR.
+- Stale `server_runs_on_wsl.md` memory caught and removed (the server runs on this Mac via Tailscale Serve, not WSL — old memory was wrong by ~25 days). Two new memories saved: `feedback_migration_number_collision.md` and `feedback_keep_dev_server_current.md` (latter went through 3 iterations on user feedback: scope expanded from "after merge" → "after push" → "after any change to dev code, no judgement call").
+
+### Lessons Learned
+- **Accepted (architecture):** Agent = persona, Endpoint = runtime is the right split. The Codex review surfaced "OpenRouter is one endpoint per model, not one endpoint with a model selector" — adopted that and it falls out naturally from the dataclass shape. Endpoint binding is configuration; persona is identity; they should not be conflated on the same row.
+- **Accepted:** Template-with-`{prompt}`-placeholder for CLI args was strictly better than the alternative `prompt_mode` enum (positional/flag/stdin). One field handles all three day-1 CLIs (claude with flags-after-prompt, codex positional, hermes subcommand+flag) and the codex-resume case where the resume_args replace the entire arg array.
+- **Accepted (process):** Subagent-driven-development with the two-stage review (spec compliance then code quality) caught real issues at every layer. Code reviewer caught a HIGH-severity NULL-command crash in T11's compat path that the implementer missed. Spec reviewer caught several minor issues across multiple tasks. Worth the per-task overhead.
+- **Accepted (process):** Codex's 2-round spec review surfaced 20 findings, including 4 critical (migration grouping key, FK pragma prereq, transactionality, canonical-id duplication). Folding them in before writing any code prevented all 4 from landing as bugs.
+- **Rejected:** Plan's "WSL deploy" step (T26). The stale `server_runs_on_wsl.md` memory drove this; reality is the server runs on this Mac. Collapsed T26 to a post-merge restart note.
+- **Gotcha (caught pre-merge):** Migration numbers aren't reserved by spec — they're claimed by whichever PR merges first. Always fetch origin/main and check the live `_migrations` table before writing migration code. Memory saved.
+- **Gotcha (recovered):** PR merge blocked by branch protection (requires review on this repo); used `gh pr merge --admin --merge --delete-branch` per the established `feedback_pr_merge_defaults.md` pattern. The gh-local-checkout step failed harmlessly (main was checked out elsewhere); GitHub-side merge succeeded.
+- **Gotcha (recovered):** serve.py hardcodes `127.0.0.1` binding at `:11846`. To run a dev server reachable over the LAN/tailnet I sed-patched to `0.0.0.0`, ran, then reverted (worktree only). Worth lifting into a `--bind` flag in a follow-up rather than continuing to sed-patch.
+- **Gotcha (process):** "Major code change" was the wrong trigger for the restart-dev-server rule. User corrected three times: any code change, no judgement call. The "is it major" framing invites convincing oneself it's minor and skipping; just always restart. Memory now reflects this.
+- **Gotcha (caught by user, not me):** I conflated "deploy" with "manual file-copy step" in the plan and PR description ("deploy to WSL"). Reality: merging to main IS the deploy; the local serve.py picks up changes after a restart. Stale WSL memory drove the wrong framing.
+
+### Decisions
+- **Migration #20 is the source of truth for the new schema.** Plan/spec docs were retro-updated; future references should cite #20, not the originally-planned #19.
+- **Endpoint binding is editable on system agents.** Persona (name + system_prompt) stays locked because the seed re-upserts it; the endpoint dropdown is unlocked because the seed no longer touches `endpoint_id` after first creation. PUT `/api/workflow/agents/{id}` accepts `endpoint_id` changes on system rows but returns 403 for any other field change.
+- **Compat fallback semantics are narrow.** `workflow_agents.command` and `.args` are read by the runner ONLY when `endpoint_id IS NULL`. A non-NULL `endpoint_id` pointing at a missing endpoint, or any non-cli endpoint, is a hard error — no silent fallback.
+- **Hermes ships as a seeded endpoint, not a default agent.** Users opt in by editing an existing agent or creating a new one.
+- **Dev-server-current rule is unconditional.** After any code change, restart serve.py if the change touches anything in the running module's import graph. Don't judge "is this major" — just always do it.
+
 ## 2026-05-11 — Activity tab redesign + ticket origin provenance + Add-Project modal
 
 ### Summary

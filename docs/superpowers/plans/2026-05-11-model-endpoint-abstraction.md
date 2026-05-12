@@ -1,5 +1,7 @@
 # Model Endpoint Abstraction Implementation Plan
 
+**Status:** shipped 2026-05-12, prod-live (merge commit `70aee2b`, PR #11). See § Shipped (as built) at the bottom for deltas.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Split `workflow_agents` into Agent (persona + system_prompt) + Endpoint (runtime: command/args/capabilities) layers, ship CLI endpoint execution covering claude/codex/hermes, leave the schema seam for API/SSH endpoint types.
@@ -2837,3 +2839,30 @@ These are explicitly NOT in this plan. Do not implement.
 - Secret storage UI (today: `api_key_env` references env var by name)
 - Adding a Hermes agent (persona) to default workflows — product decision
 - Dropping `workflow_agents.command`/`args` columns — one release later, after confirming no compat-path warnings
+
+---
+
+## Shipped (as built) — 2026-05-12
+
+Merged via PR #11 (merge commit `70aee2b`). Status: prod-live on main.
+
+**Migration range owned by this feature:** #20 only.
+
+(Plan was written assuming migration #19. Main's `feat/pwa-mobile` branch landed first with its own #19 — ticket_created backfill — so this work was renumbered to #20 during merge conflict resolution. Lesson captured in `~/.claude/projects/-Users-llm-projects-ticket-takeaway/memory/feedback_migration_number_collision.md`.)
+
+**Deltas vs plan:**
+
+- **T20 over-built.** The plan said "add Endpoint dropdown on agent rows" but didn't say "and remove the legacy Command + Args input rows." The implementer left both in place. Caught pre-merge — fixed in commit `06134b8` (drop legacy fields from agent UI) + JS update.
+- **T11 NULL-command guard.** Code review caught a HIGH-severity gap in the compat path: a synthetic Endpoint built for an agent with `endpoint_id IS NULL` AND `command IS NULL` would crash subprocess with `TypeError: expected str, got NoneType`. Fixed in `40be277` with an explicit `EndpointMisconfigured` raise and a regression test.
+- **System-agent endpoint editability** added late (post-T20) in response to user feedback: the dropdown was disabled on system rows, blocking the most common runtime customisation case. Resolution: UI unlocks the endpoint dropdown specifically (persona stays locked), seed's UPDATE clause drops `endpoint_id` (preserves user choice across re-seeds), PUT `/api/workflow/agents/{id}` allows `endpoint_id` changes on system rows with 403 on other fields. Commit `8394a18`.
+- **WSL deploy phase removed.** Plan included a "deploy to WSL" step (T26) based on a stale memory. Reality: production runs on this Mac via Tailscale Serve at `tt.rhino-balance.ts.net`; merging to main + restarting the local serve.py wrapper is the whole deploy. T26 collapsed to a "post-merge restart" note.
+- **macOS dev server bind hack.** Pre-merge dev-server smoke required temporarily patching `serve.py:11846`'s hardcoded `127.0.0.1` binding to `0.0.0.0` so the server was reachable over the LAN/tailnet. Used a sed-patch-then-revert pattern (worktree only, never on main). Worth lifting into `serve.py` itself as a `--bind` flag in a future cleanup.
+
+**Test surface:** 27 TDD endpoints + 10 smoke endpoints + 7 compat checkpoint + 161 in updated fixture suites = 205 total. All green pre- and post-merge.
+
+**Follow-up ticket:** I-42 "Rethink system-row lock: lock on workflow usage, not seed provenance" — the targeted fix for system-agent endpoint editing exposes the deeper design issue that locking should track usage, not seed origin. Spec-level rethink owed.
+
+**Deferred from this branch:**
+- API endpoint execution (Anthropic / OpenAI-compatible / Gemini) — schema reserves slots, runner raises `UnsupportedEndpointType` at invocation
+- SSH-tunnelled CLI execution — same
+- Compat column drop (`workflow_agents.command` / `args`) — one release after confirming zero compat-path warnings in production logs

@@ -281,6 +281,9 @@ Priority: medium | Status: proposed
 ### B-60: Sample ticket from journey tour
 Priority: medium | Status: proposed
 
+### B-68: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
 ## Ideas
 
 ### I-04: Persist filter and search state in localStorage
@@ -351,6 +354,10 @@ test pet
 - [ ] markdown-criteria-test 1775120298
 - [ ] integration-test criterion 1775127571
 - [ ] markdown-criteria-test 1775127571
+
+### I-42: Rethink system-row lock: lock on workflow usage, not seed provenance
+Priority: medium | Status: proposed
+After the endpoint abstraction (PR #11), system agents got a partial unlock — the endpoint dropdown is editable but persona fields stay locked. The current 'system=1 means uneditable' model is provenance-based (the row came from workflows_seed.py) but should be usage-based (the row is referenced by a live workflow). User raised this during the model-endpoints PR review. Concretely: - A persona's name + system_prompt should be editable UNLESS some live workflow step uses that agent - The 'system' flag becomes informational (this row's defaults come from a seed file), not enforcement - Same model could apply to workflows (a workflow is locked if it's currently scheduled/active) - This unifies workflow + agent locking under one rule: lock on use, not on origin The seed re-upsert problem is real but solvable separately: teach seed_default_* to only INSERT (no UPDATE clause) for user-modified fields. Migration #20 already did this for endpoint_id specifically — same pattern generalised. Touches: workflows_seed.py (seed semantics), serve.py (PUT 403 logic on system rows), compare_seed_to_db.py (drift detection becomes informational not enforcement), CLAUDE.md docs. Context: ~/projects/ticket-takeaway PR #11 merge commit 70aee2b, follow-up branch from main.
 
 ## Bugs
 

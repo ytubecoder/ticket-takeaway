@@ -7599,6 +7599,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     hideGateBanner();
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    _overlayOriginalTitle = document.title;  // save before any pane-link alert can overwrite it
     // Resolve section — could be a flag letter or old tab name
     var scrollFlag = null;
     if (section) {{
@@ -7638,6 +7639,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     _stopRunsPolling();
     _stopAmbientPolling();
     if (_paneLinksInterval) {{ clearInterval(_paneLinksInterval); _paneLinksInterval = null; }}
+    if (_overlayOriginalTitle !== null) {{ document.title = _overlayOriginalTitle; _overlayOriginalTitle = null; }}
     overlay.classList.add('hidden');
     document.body.style.overflow = '';
     currentTicketId = null; currentData = null;
@@ -7650,6 +7652,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
   // ── Pane links: live tail + send box ────────────────────────────────────
   var _paneLinksInterval = null;
+  var _overlayOriginalTitle = null;  // saved at open; restored on close or when attention clears
 
   function refreshPaneLinks(ticketId) {{
     if (!ticketId) return;
@@ -7680,6 +7683,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         var alerted = links.find(function(p) {{ return p.attention_state === 'question' || p.attention_state === 'exception'; }});
         if (alerted) {{
           document.title = '● ' + ticketId + ' needs input — Ticket Takeaway';
+        }} else if (_overlayOriginalTitle !== null) {{
+          document.title = _overlayOriginalTitle;  // attention cleared — restore original title
         }}
       }});
   }}

@@ -11223,6 +11223,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except _sub.CalledProcessError as e:
                 self._send_json({"error": f"tmux send-keys failed: {e}"}, 502)
                 return
+            # Audit event — text is intentionally omitted (may contain secrets)
+            from actions import emit_event as _emit, ActorContext as _AC
+            with _db_lock:
+                _aconn = get_db()
+                init_db(_aconn)
+                try:
+                    _emit(
+                        _aconn, row["project_id"], "ticket", row["ticket_id"],
+                        "pane_send_keys",
+                        {"pane_address": pane_addr, "text_bytes": len(text.encode("utf-8")),
+                         "press_enter": press_enter},
+                        _AC.human(),
+                    )
+                    _aconn.commit()
+                finally:
+                    _aconn.close()
             self._send_json({"sent": True})
             return
 

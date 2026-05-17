@@ -1519,3 +1519,107 @@ def get_children_summary(
     }
 
 
+# --- Bookmarks + Recents --------------------------------------------------
+#
+# Per-project, per-ticket UI state. Not event-emitting — these are personal
+# navigation aids, not ticket state changes.
+
+RECENTS_CAP = 20
+
+
+def toggle_bookmark(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> bool:
+    """Toggle bookmark for a ticket. Returns the new bookmark state (True=bookmarked)."""
+    ticket = _find_ticket(conn, project_id, ticket_id)
+    tid = ticket["id"]
+    row = conn.execute(
+        "SELECT 1 FROM ticket_bookmarks WHERE project_id = ? AND ticket_id = ?",
+        (project_id, tid),
+    ).fetchone()
+    if row:
+        conn.execute(
+            "DELETE FROM ticket_bookmarks WHERE project_id = ? AND ticket_id = ?",
+            (project_id, tid),
+        )
+        conn.commit()
+        return False
+    conn.execute(
+        "INSERT INTO ticket_bookmarks (project_id, ticket_id, created_at) VALUES (?, ?, ?)",
+        (project_id, tid, utcnow_iso()),
+    )
+    conn.commit()
+    return True
+
+
+def list_bookmarks(conn: sqlite3.Connection, project_id: str) -> list[dict]:
+    """List bookmarked tickets for a project. Filters out tickets that no longer exist."""
+    rows = conn.execute(
+        """
+        SELECT t.id AS id, t.title AS title, t.section AS section,
+               t.status AS status, b.created_at AS created_at
+        FROM ticket_bookmarks b
+        INNER JOIN tickets t
+          ON t.project_id = b.project_id AND t.id = b.ticket_id
+        WHERE b.project_id = ?
+        ORDER BY b.created_at DESC
+        """,
+        (project_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def is_bookmarked(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM ticket_bookmarks WHERE project_id = ? AND ticket_id = ?",
+        (project_id, ticket_id),
+    ).fetchone()
+    return bool(row)
+
+
+def touch_recent(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> None:
+    """Record that the user opened this ticket. Trims oldest beyond RECENTS_CAP."""
+    ticket = _find_ticket(conn, project_id, ticket_id)
+    tid = ticket["id"]
+    now = utcnow_iso()
+    conn.execute(
+        """
+        INSERT INTO ticket_recents (project_id, ticket_id, last_seen_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(project_id, ticket_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+        """,
+        (project_id, tid, now),
+    )
+    # Trim oldest rows beyond the cap. Cheap because of idx_ticket_recents_project.
+    conn.execute(
+        """
+        DELETE FROM ticket_recents
+        WHERE project_id = ?
+          AND ticket_id NOT IN (
+              SELECT ticket_id FROM ticket_recents
+              WHERE project_id = ?
+              ORDER BY last_seen_at DESC
+              LIMIT ?
+          )
+        """,
+        (project_id, project_id, RECENTS_CAP),
+    )
+    conn.commit()
+
+
+def list_recents(conn: sqlite3.Connection, project_id: str, limit: int = RECENTS_CAP) -> list[dict]:
+    """List recently-opened tickets, newest first. Filters out tickets that no longer exist."""
+    rows = conn.execute(
+        """
+        SELECT t.id AS id, t.title AS title, t.section AS section,
+               t.status AS status, r.last_seen_at AS last_seen_at
+        FROM ticket_recents r
+        INNER JOIN tickets t
+          ON t.project_id = r.project_id AND t.id = r.ticket_id
+        WHERE r.project_id = ?
+        ORDER BY r.last_seen_at DESC
+        LIMIT ?
+        """,
+        (project_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+

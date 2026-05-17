@@ -65,6 +65,9 @@ SVG_ICONS = {
     "kanban": '<path d="M6 5v11"/><path d="M12 5v6"/><path d="M18 5v14"/><rect x="3" y="3" width="18" height="18" rx="2"/>',
     "panel-left": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
     "grid": '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+    "star": '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+    "clock": '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    "chevron-right": '<polyline points="9 18 15 12 9 6"/>',
 }
 
 
@@ -174,6 +177,90 @@ body:not(.rail-expanded) .rail-switcher { display: none; }
 .rail-switcher-footer { color: var(--text-secondary); font-size: 12px; }
 /* Hide the legacy on-kanban project switcher; the rail owns it now. */
 .proj-switcher { display: none !important; }
+
+/* Collapsible rail sections (Bookmarks, Recents). Accordion: header is
+   always visible; clicking it toggles the list of items beneath. */
+.nav-rail-section { display: flex; flex-direction: column; padding: 0 6px; }
+.nav-rail-section-header {
+  display: flex; align-items: center; gap: 12px;
+  height: 28px; padding: 0 10px; margin-top: 4px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-secondary); font: inherit; text-align: left; width: 100%;
+  border-radius: 6px; position: relative;
+}
+.nav-rail-section-header:hover { color: var(--text-primary); background: var(--bg-hover); }
+.nav-rail-section-header svg.section-icon { flex-shrink: 0; width: 14px; height: 14px; opacity: 0.85; }
+.nav-rail-section-header svg.section-chev {
+  flex-shrink: 0; width: 10px; height: 10px; margin-left: auto;
+  transition: transform 0.15s ease; opacity: 0.6;
+}
+.nav-rail-section[data-expanded="true"] .nav-rail-section-header svg.section-chev {
+  transform: rotate(90deg);
+}
+.nav-rail-section-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
+  opacity: 0; transition: opacity 0.12s; pointer-events: none; white-space: nowrap;
+}
+body.rail-expanded .nav-rail-section-label { opacity: 1; pointer-events: auto; }
+.nav-rail-section-line {
+  /* When the rail is collapsed (icon-only) and the section is closed, the
+     header reads as a horizontal accent below the icon — matches the user's
+     "title + horizontal line" affordance. */
+  display: none;
+}
+body:not(.rail-expanded) .nav-rail-section .nav-rail-section-line {
+  display: block; height: 1px; background: var(--border-subtle);
+  margin: 2px 14px 0;
+}
+body:not(.rail-expanded) .nav-rail-section[data-expanded="true"] .nav-rail-section-line { opacity: 0.4; }
+.nav-rail-section-content {
+  display: none; flex-direction: column; gap: 1px; padding: 2px 0 4px;
+}
+.nav-rail-section[data-expanded="true"] .nav-rail-section-content { display: flex; }
+.nav-rail-bookmark-item {
+  display: flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 10px 0 14px; border-radius: 6px;
+  color: var(--text-primary); text-decoration: none; cursor: pointer;
+  background: none; border: none; font: inherit; text-align: left; width: 100%;
+  white-space: nowrap; overflow: hidden;
+}
+.nav-rail-bookmark-item:hover { background: var(--bg-hover); }
+.nav-rail-bookmark-item.is-closed { color: var(--text-secondary); opacity: 0.75; }
+.nav-rail-bookmark-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  flex-shrink: 0; min-width: 38px;
+}
+.nav-rail-bookmark-title {
+  flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+  opacity: 0; transition: opacity 0.12s; pointer-events: none;
+}
+body.rail-expanded .nav-rail-bookmark-title { opacity: 1; }
+.nav-rail-section-empty {
+  padding: 4px 16px 6px; font-size: 11px; color: var(--text-secondary);
+  font-style: italic; opacity: 0; transition: opacity 0.12s;
+}
+body.rail-expanded .nav-rail-section-empty { opacity: 1; }
+body:not(.rail-expanded) .nav-rail-section-empty { display: none; }
+
+/* Star toggle button on kanban cards + overlay header. */
+.star-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 1px 3px; flex-shrink: 0;
+  background: none; border: none; border-radius: 4px; cursor: pointer;
+  color: var(--text-tertiary); opacity: 0.5;
+  transition: color 0.12s, opacity 0.12s, transform 0.08s;
+  font: inherit; line-height: 1;
+}
+.star-toggle:hover { color: var(--accent); opacity: 1; background: var(--bg-hover); }
+.star-toggle:active { transform: scale(0.92); }
+.star-toggle svg { width: 12px; height: 12px; }
+.star-toggle.is-on { color: #f5b800; opacity: 1; }
+.star-toggle.is-on svg { fill: currentColor; stroke: currentColor; }
+.star-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
+/* Larger variants for the overlay header + full ticket page header. */
+.star-toggle.detail-star svg, .star-toggle.tp-star svg { width: 14px; height: 14px; }
+.star-toggle.detail-star, .star-toggle.tp-star { padding: 2px 4px; }
 """
 
 
@@ -199,6 +286,9 @@ def build_nav_rail_js() -> str:
         "settings": SVG_ICONS["settings"],
         "panel-left": SVG_ICONS["panel-left"],
         "grid": SVG_ICONS["grid"],
+        "star": SVG_ICONS["star"],
+        "clock": SVG_ICONS["clock"],
+        "chevron-right": SVG_ICONS["chevron-right"],
     }
     icons_pairs = ",".join(f'"{k}":{json.dumps(v)}' for k, v in icons_js.items())
     return """
@@ -292,6 +382,40 @@ def build_nav_rail_js() -> str:
       + svg(icon, 16) + '<span class="nav-rail-label">'+label+'</span></a>';
   }
 
+  // Section expand-state in localStorage. Default: bookmarks open, recents closed.
+  var SECTION_KEYS = { bookmarks: 'tt-rail-section-bookmarks', recents: 'tt-rail-section-recents' };
+  function sectionExpanded(key, dflt){
+    try {
+      var v = localStorage.getItem(SECTION_KEYS[key]);
+      if (v === '0') return false;
+      if (v === '1') return true;
+    } catch(e){}
+    return !!dflt;
+  }
+
+  function buildSection(key, icon, label){
+    var expanded = sectionExpanded(key, key === 'bookmarks');
+    return ''
+      + '<div class="nav-rail-section" data-section="'+key+'" data-expanded="'+(expanded?'true':'false')+'">'
+      +   '<button class="nav-rail-section-header" type="button" '
+      +     'data-section-toggle="'+key+'" data-testid="rail-section-'+key+'-toggle" '
+      +     'aria-expanded="'+(expanded?'true':'false')+'" '
+      +     'title="'+label+'">'
+      +     '<svg class="section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" '
+      +       'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      +       (ICONS[icon] || '') + '</svg>'
+      +     '<span class="nav-rail-section-label">'+label+'</span>'
+      +     '<svg class="section-chev" viewBox="0 0 24 24" fill="none" '
+      +       'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      +       (ICONS['chevron-right'] || '') + '</svg>'
+      +   '</button>'
+      +   '<div class="nav-rail-section-line" aria-hidden="true"></div>'
+      +   '<div class="nav-rail-section-content" data-section-content="'+key+'">'
+      +     '<div class="nav-rail-section-empty">Loading…</div>'
+      +   '</div>'
+      + '</div>';
+  }
+
   function buildRail(){
     var pid = currentPid() || fallbackPid();
     var prefix = pid ? '/'+pid : '';
@@ -301,6 +425,11 @@ def build_nav_rail_js() -> str:
     // Workflows is a global cross-project surface — same URL regardless of project.
     var workflowsHref = '/workflows';
     var settingsHref  = prefix ? prefix+'/kanban?settings=1' : '/projects';
+
+    // Bookmarks/Recents only make sense inside a project context. On
+    // cross-project surfaces (Kitchen, Projects picker) we still render the
+    // headers so the rail layout stays stable; they show an empty hint.
+    var hasProject = !!pid;
 
     return ''
       + '<div class="nav-rail-top">'
@@ -317,11 +446,158 @@ def build_nav_rail_js() -> str:
       +   buildItem('workflows', workflowsHref,'ladle',    'Workflows')
       +   buildItem('kitchen',  '/kitchen',    'flame',    'Kitchen')
       +   buildItem('projects', '/projects',   'grid',     'Projects')
+      + '</div>'
+      + (hasProject ? (
+          '<div class="nav-rail-divider"></div>'
+          + buildSection('bookmarks', 'star',  'Bookmarks')
+          + buildSection('recents',   'clock', 'Recents')
+        ) : '')
+      + '<div class="nav-rail-spacer"></div>'
+      + '<div class="nav-rail-items">'
       +   buildItem('settings',  settingsHref, 'settings', 'Settings',  'railSettingsBtn')
       + '</div>'
-      + '<div class="nav-rail-spacer"></div>'
       + '<div class="nav-rail-footer"></div>';
   }
+
+  function renderSectionList(key, items){
+    var root = document.querySelector('[data-section-content="'+key+'"]');
+    if (!root) return;
+    if (!items || items.length === 0) {
+      var hint = key === 'bookmarks'
+        ? 'Star a ticket to bookmark it.'
+        : 'Recently opened tickets appear here.';
+      root.innerHTML = '<div class="nav-rail-section-empty">' + hint + '</div>';
+      return;
+    }
+    var pid = currentPid() || fallbackPid();
+    var html = items.map(function(it){
+      var closed = (it.section === 'Done' || it.section === 'Wontdo') ? ' is-closed' : '';
+      var safeId = escHtml(it.id);
+      var safeTitle = escHtml(it.title || '');
+      return '<a class="nav-rail-bookmark-item'+closed+'" '
+        + 'href="/'+encodeURIComponent(pid)+'/kanban?ticket='+encodeURIComponent(it.id)+'" '
+        + 'data-rail-ticket="'+safeId+'" '
+        + 'title="'+safeId+' — '+safeTitle+'">'
+        + '<span class="nav-rail-bookmark-id">'+safeId+'</span>'
+        + '<span class="nav-rail-bookmark-title">'+safeTitle+'</span>'
+        + '</a>';
+    }).join('');
+    root.innerHTML = html;
+  }
+
+  function loadSection(key){
+    var pid = currentPid() || fallbackPid();
+    if (!pid) return;
+    var path = key === 'bookmarks' ? '/bookmarks' : '/recents';
+    fetch('/' + encodeURIComponent(pid) + '/api' + path)
+      .then(function(r){ return r.ok ? r.json() : Promise.reject(new Error('http '+r.status)); })
+      .then(function(data){
+        var items = (key === 'bookmarks' ? data.bookmarks : data.recents) || [];
+        renderSectionList(key, items);
+      })
+      .catch(function(){
+        renderSectionList(key, []);
+      });
+  }
+
+  function loadAllSections(){
+    if (!document.querySelector('[data-section-content="bookmarks"]')) return;
+    loadSection('bookmarks');
+    loadSection('recents');
+  }
+
+  // Public refresh hooks — called after star toggle or overlay open.
+  window.refreshNavSection = function(key){ loadSection(key); };
+  window.refreshNavSections = loadAllSections;
+
+  // ── Bookmark state hydration + toggle handler ─────────────────────
+  // Star buttons are rendered unfilled. After page load (and after any
+  // toggle) we fetch the current bookmark set and mark matching buttons.
+
+  var _bookmarkedSet = null;
+
+  function applyBookmarkClasses(){
+    if (!_bookmarkedSet) return;
+    document.querySelectorAll('[data-bookmark-toggle][data-ticket-id]').forEach(function(btn){
+      var tid = btn.getAttribute('data-ticket-id');
+      var on = _bookmarkedSet[tid] === true;
+      btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    // The overlay star has no data-ticket-id at render time — it gets one
+    // when openOverlay() runs. Handle it explicitly if present.
+    var detailStar = document.getElementById('detail-star-btn');
+    if (detailStar) {
+      var dtid = detailStar.getAttribute('data-ticket-id');
+      var on = dtid && _bookmarkedSet[dtid] === true;
+      detailStar.classList.toggle('is-on', !!on);
+      detailStar.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+  }
+
+  function hydrateBookmarks(){
+    var pid = currentPid() || fallbackPid();
+    if (!pid) return;
+    fetch('/' + encodeURIComponent(pid) + '/api/bookmarks')
+      .then(function(r){ return r.ok ? r.json() : Promise.reject(); })
+      .then(function(data){
+        _bookmarkedSet = {};
+        (data.bookmarks || []).forEach(function(b){ _bookmarkedSet[b.id] = true; });
+        applyBookmarkClasses();
+      })
+      .catch(function(){ /* leave stars unfilled */ });
+  }
+  window.refreshBookmarkState = hydrateBookmarks;
+  window.applyBookmarkClasses = applyBookmarkClasses;
+  window.setBookmarkedLocal = function(ticketId, on){
+    if (!_bookmarkedSet) _bookmarkedSet = {};
+    if (on) _bookmarkedSet[ticketId] = true;
+    else delete _bookmarkedSet[ticketId];
+    applyBookmarkClasses();
+  };
+
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest('[data-bookmark-toggle]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var tid = btn.getAttribute('data-ticket-id');
+    if (!tid) return;
+    var pid = currentPid() || fallbackPid();
+    if (!pid) return;
+    var wasOn = btn.classList.contains('is-on');
+    var nowOn = !wasOn;
+    // Optimistic UI
+    window.setBookmarkedLocal(tid, nowOn);
+    fetch('/' + encodeURIComponent(pid) + '/api/bookmarks/' + encodeURIComponent(tid),
+          {method: 'POST'})
+      .then(function(r){ return r.ok ? r.json() : Promise.reject(new Error('http '+r.status)); })
+      .then(function(data){
+        // Reconcile with server truth in case of race
+        window.setBookmarkedLocal(tid, !!data.bookmarked);
+        loadSection('bookmarks');
+      })
+      .catch(function(){
+        // Roll back optimistic state on failure
+        window.setBookmarkedLocal(tid, wasOn);
+      });
+  });
+
+  // Touch recents whenever the detail overlay or full-page ticket view
+  // opens. We expose a public function the openers can call; we also
+  // listen for a custom event to keep this layer decoupled.
+  window.touchRecent = function(ticketId){
+    if (!ticketId) return;
+    var pid = currentPid() || fallbackPid();
+    if (!pid) return;
+    fetch('/' + encodeURIComponent(pid) + '/api/recents/' + encodeURIComponent(ticketId),
+          {method: 'POST'})
+      .then(function(r){ if (r.ok) loadSection('recents'); })
+      .catch(function(){});
+  };
+  document.addEventListener('tt:ticket-opened', function(e){
+    if (e && e.detail && e.detail.ticketId) window.touchRecent(e.detail.ticketId);
+  });
 
   function escHtml(s){
     return String(s).replace(/[&<>"']/g, function(c){
@@ -380,6 +656,14 @@ def build_nav_rail_js() -> str:
     var root = document.getElementById('navRail');
     if (!root) return;
     root.innerHTML = buildRail();
+    // Populate sections if their content is currently visible (expanded).
+    document.querySelectorAll('.nav-rail-section[data-expanded="true"]').forEach(function(sec){
+      var key = sec.getAttribute('data-section');
+      if (key) loadSection(key);
+    });
+    // Hydrate star buttons regardless of expand state, so cards and the
+    // overlay header show correct fill on first render.
+    hydrateBookmarks();
   }
 
   function applyCollapse(){
@@ -432,6 +716,21 @@ def build_nav_rail_js() -> str:
     if (st && document.getElementById('settingsToggleBtn')) {
       e.preventDefault();
       document.getElementById('settingsToggleBtn').click();
+      return;
+    }
+    // Accordion section toggle (Bookmarks / Recents).
+    var secToggle = e.target.closest('[data-section-toggle]');
+    if (secToggle) {
+      e.preventDefault();
+      var key = secToggle.getAttribute('data-section-toggle');
+      var section = secToggle.closest('.nav-rail-section');
+      if (!section) return;
+      var nowOpen = section.getAttribute('data-expanded') !== 'true';
+      section.setAttribute('data-expanded', nowOpen ? 'true' : 'false');
+      secToggle.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
+      try { localStorage.setItem(SECTION_KEYS[key], nowOpen ? '1' : '0'); } catch(_){}
+      // If opening on a cross-project page (no pid), there's nothing to load.
+      if (nowOpen) loadSection(key);
       return;
     }
   });
@@ -5292,6 +5591,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   <div class="detail-panel">
     <div class="detail-header">
       <span class="detail-id"></span>
+      <button type="button" class="star-toggle detail-star" id="detail-star-btn" data-bookmark-toggle data-testid="detail-star" title="Bookmark" aria-label="Bookmark" aria-pressed="false">{_svg_icon("star", 14)}</button>
       <span class="detail-title" contenteditable="false" title="Click to rename" data-testid="detail-title"></span>
       <span class="detail-path"></span>
       <div class="detail-dctrs-strip">
@@ -7556,6 +7856,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     hideGateBanner();
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    // Bookmarks/Recents (I-43): bind overlay star and record this visit.
+    var _ds = document.getElementById('detail-star-btn');
+    if (_ds) _ds.setAttribute('data-ticket-id', tid);
+    if (window.applyBookmarkClasses) window.applyBookmarkClasses();
+    document.dispatchEvent(new CustomEvent('tt:ticket-opened', {{detail: {{ticketId: tid}}}}));
     // Resolve section — could be a flag letter or old tab name
     var scrollFlag = null;
     if (section) {{
@@ -12099,6 +12404,7 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
         f'{kb_html}'
+        f'<button type="button" class="star-toggle card-star" data-bookmark-toggle data-ticket-id="{id_esc}" data-testid="card-star-{id_esc}" title="Bookmark" aria-label="Bookmark {id_esc}" aria-pressed="false">{_svg_icon("star", 12)}</button>'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
         f'<button class="card-run-now-btn" data-testid="card-run-now-{id_esc}" data-ticket-id="{id_esc}" title="Run now" aria-label="Run now for {id_esc}">{_svg_icon("play", 12)}</button>'
         f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open full ticket page" aria-label="Open {id_esc}" data-open-full-page="true">{_svg_icon("arrow-up-right", 14)}</button></div>\n'

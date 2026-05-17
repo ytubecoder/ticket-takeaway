@@ -41,10 +41,6 @@ Priority: medium | Status: in-progress
 ### B-48: Streaming Test Ticket
 Priority: medium | Status: in-progress
 
-### B-69: Bookmarks/recents UX fixes (toggle, exclude, inline)
-Priority: medium | Status: in-progress
-Tags: navigation, ux
-
 ## For Review
 
 ### B-07: Expand-to-Edit: Full Form Editing for All Fields
@@ -197,6 +193,10 @@ Add Bookmarks and Recents collapsible sections to the left nav rail. Users can s
 - [ ] Settings moved to bottom of rail (below spacer)
 - [ ] Clicking a bookmarked/recent entry opens the ticket overlay over the current view
 - [ ] Bookmarks survive ticket lifecycle moves (including Done/Wontdo) but are filtered from the list if the ticket is deleted
+
+### B-69: Bookmarks/recents UX fixes (toggle, exclude, inline)
+Priority: medium | Status: for-review
+Tags: navigation, ux
 
 ## Backlog
 

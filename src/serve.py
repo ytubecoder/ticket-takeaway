@@ -2,7 +2,7 @@
 """Ticket Takeaway Dashboard Server — serves the dashboard with editing API.
 
 Usage:
-    python3 serve.py [--port PORT] [--project ID]
+    python3 serve.py [--port PORT] [--project ID] [--bind HOST]
 
 Starts an HTTP server at http://localhost:PORT (default 8787) that:
   - GET /              → serves the generated HTML dashboard
@@ -12093,6 +12093,7 @@ def main():
     global _LEGACY_PROJECT_ID, SERVER_PORT
 
     args = sys.argv[1:]
+    bind_host = "127.0.0.1"
     if "--port" in args:
         idx = args.index("--port")
         if idx + 1 < len(args):
@@ -12101,6 +12102,10 @@ def main():
         idx = args.index("--project")
         if idx + 1 < len(args):
             _LEGACY_PROJECT_ID = args[idx + 1]
+    if "--bind" in args:
+        idx = args.index("--bind")
+        if idx + 1 < len(args):
+            bind_host = args[idx + 1]
 
     # Populate registry cache
     _refresh_projects_cache()
@@ -12165,8 +12170,10 @@ def main():
     # artifacts live → summarised → pruned per docs/KITCHEN.md §13.
     _kitchen_evidence.start_rotation_daemon(get_db, live_days=30, summarised_days=60)
 
-    server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), DashboardHandler)
+    server = ThreadingHTTPServer((bind_host, SERVER_PORT), DashboardHandler)
     url = f"http://localhost:{SERVER_PORT}"
+    if bind_host not in ("127.0.0.1", "localhost"):
+        print(f"Binding to {bind_host}:{SERVER_PORT} (reachable on non-loopback interfaces).")
     print(f"Dashboard server: {url}")
     print("Press Ctrl+C to stop.\n")
 

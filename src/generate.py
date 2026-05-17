@@ -228,14 +228,23 @@ body:not(.rail-expanded) .nav-rail-section[data-expanded="true"] .nav-rail-secti
 }
 .nav-rail-section[data-expanded="true"] .nav-rail-section-content { display: flex; }
 .nav-rail-bookmark-item {
-  display: flex; align-items: center; gap: 8px;
-  height: 28px; padding: 0 10px 0 14px; border-radius: 6px;
+  display: flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 4px 0 10px; border-radius: 6px;
   color: var(--text-primary); text-decoration: none; cursor: pointer;
   background: none; border: none; font: inherit; text-align: left; width: 100%;
   white-space: nowrap; overflow: hidden;
 }
 .nav-rail-bookmark-item:hover { background: var(--bg-hover); }
 .nav-rail-bookmark-item.is-closed { color: var(--text-secondary); opacity: 0.75; }
+.nav-rail-bookmark-item .star-toggle.row-star {
+  margin-left: auto; padding: 2px 4px; opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+/* Filled stars (bookmarks list) are always visible. Outline stars
+   (recents list) appear on row hover so the section stays calm. */
+.nav-rail-bookmark-item .star-toggle.row-star.is-on { opacity: 1; }
+.nav-rail-bookmark-item:hover .star-toggle.row-star { opacity: 1; }
+.nav-rail-bookmark-item .star-toggle.row-star:focus-visible { opacity: 1; }
 .nav-rail-bookmark-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; font-weight: 600; color: var(--accent);
@@ -268,9 +277,18 @@ body:not(.rail-expanded) .nav-rail-section-empty { display: none; }
 .star-toggle.is-on { color: #f5b800; opacity: 1; }
 .star-toggle.is-on svg { fill: currentColor; stroke: currentColor; }
 .star-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
-/* Larger variants for the overlay header + full ticket page header. */
-.star-toggle.detail-star svg, .star-toggle.tp-star svg { width: 14px; height: 14px; }
-.star-toggle.detail-star, .star-toggle.tp-star { padding: 2px 4px; }
+/* Larger, always-visible variants for the overlay header + full ticket
+   page header — these are the primary bookmark surfaces and need to be
+   discoverable, not hover-only. */
+.star-toggle.detail-star svg, .star-toggle.tp-star svg { width: 16px; height: 16px; }
+.star-toggle.detail-star, .star-toggle.tp-star {
+  padding: 4px; opacity: 0.85; color: var(--text-secondary);
+}
+.star-toggle.detail-star:hover, .star-toggle.tp-star:hover { color: var(--accent); opacity: 1; }
+.star-toggle.detail-star.is-on, .star-toggle.tp-star.is-on { color: #f5b800; opacity: 1; }
+/* Card stars stay subtle until hovered so the kanban doesn't get noisy. */
+.card:hover .star-toggle.card-star { opacity: 0.8; }
+.star-toggle.card-star.is-on { opacity: 1; }
 """
 
 
@@ -404,7 +422,9 @@ def build_nav_rail_js() -> str:
   }
 
   function buildSection(key, icon, label){
-    var expanded = sectionExpanded(key, key === 'bookmarks');
+    // Both sections default to expanded so users see what's there on first
+    // open. They can collapse and the choice is remembered per-section.
+    var expanded = sectionExpanded(key, true);
     return ''
       + '<div class="nav-rail-section" data-section="'+key+'" data-expanded="'+(expanded?'true':'false')+'">'
       +   '<button class="nav-rail-section-header" type="button" '
@@ -480,16 +500,32 @@ def build_nav_rail_js() -> str:
       return;
     }
     var pid = currentPid() || fallbackPid();
+    var isBookmarkSection = key === 'bookmarks';
+    var starInner = ICONS['star'] || '';
     var html = items.map(function(it){
       var closed = (it.section === 'Done' || it.section === 'Wontdo') ? ' is-closed' : '';
       var safeId = escHtml(it.id);
       var safeTitle = escHtml(it.title || '');
+      // Filled star for bookmark rows (click = unbookmark), outline star
+      // for recents rows (click = bookmark, which auto-moves it out of
+      // recents). Both go through the same toggle handler.
+      var starClass = 'star-toggle row-star' + (isBookmarkSection ? ' is-on' : '');
+      var pressed = isBookmarkSection ? 'true' : 'false';
+      var label = isBookmarkSection ? ('Unbookmark ' + safeId) : ('Bookmark ' + safeId);
+      var starHtml = '<button type="button" class="'+starClass+'" '
+        + 'data-bookmark-toggle data-ticket-id="'+safeId+'" '
+        + 'aria-pressed="'+pressed+'" aria-label="'+label+'" title="'+label+'">'
+        + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" '
+        +   'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        +   starInner + '</svg>'
+        + '</button>';
       return '<a class="nav-rail-bookmark-item'+closed+'" '
         + 'href="/'+encodeURIComponent(pid)+'/kanban?ticket='+encodeURIComponent(it.id)+'" '
         + 'data-rail-ticket="'+safeId+'" '
         + 'title="'+safeId+' — '+safeTitle+'">'
         + '<span class="nav-rail-bookmark-id">'+safeId+'</span>'
         + '<span class="nav-rail-bookmark-title">'+safeTitle+'</span>'
+        + starHtml
         + '</a>';
     }).join('');
     root.innerHTML = html;
@@ -566,11 +602,16 @@ def build_nav_rail_js() -> str:
     applyBookmarkClasses();
   };
 
-  document.addEventListener('click', function(e){
+  // Star click handler runs in CAPTURE phase so it wins against the
+  // bubble-phase card click handler that would otherwise expand the card
+  // and stop propagation. We also stop the event from continuing so the
+  // surrounding link/card doesn't trigger.
+  function handleStarClick(e){
     var btn = e.target.closest('[data-bookmark-toggle]');
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
     var tid = btn.getAttribute('data-ticket-id');
     if (!tid) return;
     var pid = currentPid() || fallbackPid();
@@ -585,13 +626,18 @@ def build_nav_rail_js() -> str:
       .then(function(data){
         // Reconcile with server truth in case of race
         window.setBookmarkedLocal(tid, !!data.bookmarked);
+        // Both sections may change: bookmarks gains/loses an entry, and
+        // recents loses (on bookmark) or gains (on unbookmark — the server
+        // touches the recent row in the same transaction).
         loadSection('bookmarks');
+        loadSection('recents');
       })
       .catch(function(){
         // Roll back optimistic state on failure
         window.setBookmarkedLocal(tid, wasOn);
       });
-  });
+  }
+  document.addEventListener('click', handleStarClick, true);
 
   // Touch recents whenever the detail overlay or full-page ticket view
   // opens. We expose a public function the openers can call; we also

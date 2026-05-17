@@ -1945,6 +1945,151 @@ def cmd_branches(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: pane-link (link / current / unlink / panes)
+# ---------------------------------------------------------------------------
+
+def _require_tmux_pane():
+    """Return $TMUX_PANE or exit with a clear error."""
+    import re as _re
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        print("error: $TMUX_PANE is unset — run this inside tmux", file=sys.stderr)
+        sys.exit(1)
+    if not _re.match(r"^%[0-9]+$", pane):
+        print(f"error: $TMUX_PANE has unexpected format {pane!r} (expected ^%[0-9]+$)", file=sys.stderr)
+        sys.exit(1)
+    return pane
+
+
+def _tmux_pane_descriptor(pane_address):
+    """Resolve %23 → 'session:window.pane' via tmux. Returns '' on failure."""
+    import subprocess as _sub
+    try:
+        out = _sub.run(
+            ["tmux", "display-message", "-p", "-t", pane_address,
+             "#{session_name}:#{window_index}.#{pane_index}"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def cmd_link(args):
+    """Link this tmux pane to a ticket."""
+    import socket
+    import pane_links
+    pane = _require_tmux_pane()
+    host = socket.gethostname()
+    desc = _tmux_pane_descriptor(pane)
+    # Resolve project
+    if args.project:
+        projects = load_registry()
+        proj = find_project(projects, args.project)
+        project_id = proj["id"]
+    else:
+        projects = load_registry()
+        matched = resolve_project_id(projects)
+        if len(matched) != 1:
+            print("error: cannot auto-detect project; pass --project", file=sys.stderr)
+            sys.exit(1)
+        project_id = matched[0]["id"]
+    conn = get_db()
+    init_db(conn)
+    if not conn.execute(
+        "SELECT 1 FROM tickets WHERE id = ? AND project_id = ?",
+        (args.ticket_id, project_id),
+    ).fetchone():
+        print(f"error: ticket {args.ticket_id} not found in project {project_id}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    pane_links.link_pane(conn, args.ticket_id, project_id, pane, host, desc)
+    emit_event(conn, project_id, "ticket", args.ticket_id, "pane_linked",
+               {"pane_address": pane, "host": host, "pane_descriptor": desc},
+               ActorContext.human())
+    conn.commit()
+    conn.close()
+    print(f"linked tmux pane {desc or pane} to ticket {args.ticket_id}")
+
+
+def cmd_current(args):
+    """Print the bound ticket for this tmux pane."""
+    import pane_links
+    pane = _require_tmux_pane()
+    conn = get_db()
+    init_db(conn)
+    row = pane_links.get_ticket_for_pane(conn, pane)
+    if not row:
+        print(f"no ticket linked to pane {pane}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    t = conn.execute(
+        "SELECT id, title, section, status, parent, description "
+        "FROM tickets WHERE id = ? AND project_id = ?",
+        (row["ticket_id"], row["project_id"]),
+    ).fetchone()
+    crits = conn.execute(
+        "SELECT text, checked FROM acceptance_criteria "
+        "WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order",
+        (row["ticket_id"], row["project_id"]),
+    ).fetchall()
+    conn.close()
+    print(f"{t['id']}: {t['title']}")
+    print(f"Status: {t['status']}  Section: {t['section']}  Parent: {t['parent'] or '(none)'}")
+    print("---")
+    print("DESCRIPTION")
+    print(t["description"] or "(none)")
+    print("---")
+    print("CRITERIA")
+    for c in crits:
+        check = "x" if c["checked"] else " "
+        print(f"- [{check}] {c['text']}")
+
+
+def cmd_unlink(args):
+    """Remove the pane→ticket link for this tmux pane."""
+    import pane_links
+    pane = _require_tmux_pane()
+    conn = get_db()
+    init_db(conn)
+    row = pane_links.get_ticket_for_pane(conn, pane)
+    if not row:
+        print(f"no link to remove for pane {pane}")
+        conn.close()
+        return
+    pane_links.unlink_pane(conn, pane)
+    emit_event(conn, row["project_id"], "ticket", row["ticket_id"], "pane_unlinked",
+               {"pane_address": pane}, ActorContext.human())
+    conn.commit()
+    conn.close()
+    print(f"unlinked pane {pane} from ticket {row['ticket_id']}")
+
+
+def cmd_panes(args):
+    """List all pane links."""
+    conn = get_db()
+    init_db(conn)
+    if args.project:
+        rows = conn.execute(
+            "SELECT pane_address, ticket_id, project_id, host, pane_descriptor, status, attention_state "
+            "FROM pane_links WHERE project_id = ? ORDER BY created_at DESC",
+            (args.project,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT pane_address, ticket_id, project_id, host, pane_descriptor, status, attention_state "
+            "FROM pane_links ORDER BY created_at DESC"
+        ).fetchall()
+    conn.close()
+    if not rows:
+        print("No pane links.")
+        return
+    for r in rows:
+        print(f"{r['pane_address']:<8} → {r['project_id']}/{r['ticket_id']:<8} "
+              f"[{r['status']}/{r['attention_state']}] {r['host']} {r['pane_descriptor']}")
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -2171,6 +2316,18 @@ def main():
     p_br_scan = br_sub.add_parser("scan", help="Scan remote branches and PRs")
     p_br_scan.add_argument("--no-prs", action="store_true", help="Skip PR enrichment via gh")
 
+    # ---- pane link --------------------------------------------------------
+    p_link = sub.add_parser("link", help="Link this tmux pane to a ticket")
+    p_link.add_argument("ticket_id", help="Ticket ID (e.g. B-12)")
+    p_link.add_argument("--project", default=None, help="Project ID (default: auto-detect)")
+
+    p_current = sub.add_parser("current", help="Print the bound ticket for this tmux pane")
+
+    p_unlink = sub.add_parser("unlink", help="Remove the pane→ticket link for this tmux pane")
+
+    p_panes = sub.add_parser("panes", help="List all pane links (debug)")
+    p_panes.add_argument("--project", default=None)
+
     args = parser.parse_args()
 
     commands = {
@@ -2192,6 +2349,10 @@ def main():
         "endpoint": cmd_endpoint,
         "workflow": cmd_workflow,
         "branches": cmd_branches,
+        "link": cmd_link,
+        "current": cmd_current,
+        "unlink": cmd_unlink,
+        "panes": cmd_panes,
     }
 
     commands[args.command](args)

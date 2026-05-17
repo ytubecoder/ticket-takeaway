@@ -1,0 +1,72 @@
+<h2>The reframe: a shared steering protocol</h2>
+<p class="subtitle">Not "how do bits flow from CLI to TT" &mdash; that's plumbing. The real question is: what primitives let GUI-semi-automation and CLI-direct-steering cooperate around the same work?</p>
+
+<div class="mockup" style="margin-top:1rem">
+  <div class="mockup-header">TWO FIRST-CLASS SURFACES &mdash; same primitives</div>
+  <div class="mockup-body" style="padding:1.25rem">
+
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;align-items:stretch">
+
+      <div class="mockup" style="margin:0">
+        <div class="mockup-header" style="background:rgba(100,200,255,0.15)">GUI &mdash; TT dashboard</div>
+        <div class="mockup-body" style="padding:1rem">
+          <ul style="margin:0;padding-left:1.2rem;line-height:1.6">
+            <li>Semi-automation (workflows, kitchen)</li>
+            <li>Multi-project portfolio view</li>
+            <li>Triage, observe, intervene</li>
+            <li>The rhizome made visible (parent &harr; children)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;gap:0.25rem;font-size:1.5em">
+        <div>&hArr;</div>
+        <div style="font-size:0.6em;opacity:0.7;writing-mode:vertical-rl;transform:rotate(180deg)">bidirectional</div>
+      </div>
+
+      <div class="mockup" style="margin:0">
+        <div class="mockup-header" style="background:rgba(255,180,100,0.15)">CLI/TUI &mdash; your coding session</div>
+        <div class="mockup-body" style="padding:1rem">
+          <ul style="margin:0;padding-left:1.2rem;line-height:1.6">
+            <li>Direct steering, vibe coding</li>
+            <li>Linear, warm, cached context</li>
+            <li>Where ideas surface in flight</li>
+            <li>You + model in a tight loop</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin:1.5rem 0 1rem 0;font-size:1.2em;opacity:0.6">&darr; both speak &darr;</div>
+
+    <div class="mockup" style="margin:0;background:rgba(150,255,150,0.08)">
+      <div class="mockup-header">THE STEERING PROTOCOL</div>
+      <div class="mockup-body" style="padding:1rem;display:grid;grid-template-columns:1fr 1fr;gap:0.75rem 1.5rem">
+        <div><code>propose(items, parent?)</code><br><span style="font-size:0.85em;opacity:0.75">Candidate tickets &mdash; land in a triage tray, not committed yet</span></div>
+        <div><code>fork(fragment, parent)</code><br><span style="font-size:0.85em;opacity:0.75">Spawn an agent on a sub-task with packaged context. Returns child ticket id.</span></div>
+        <div><code>stream(filter?)</code><br><span style="font-size:0.85em;opacity:0.75">Subscribe to live activity &mdash; child output, status changes, completions</span></div>
+        <div><code>reabsorb(child)</code><br><span style="font-size:0.85em;opacity:0.75">Fold result back into parent summary &mdash; new jump-off points appear</span></div>
+        <div><code>jump(ticket, characteristic)</code><br><span style="font-size:0.85em;opacity:0.75">From a feature summary, fork on a specific characteristic. The Surface-A flow.</span></div>
+        <div><code>list, get, link, accept, &hellip;</code><br><span style="font-size:0.85em;opacity:0.75">Everything you can already do in the GUI, callable from anywhere</span></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
+      <div class="mockup" style="margin:0">
+        <div class="mockup-header">CLIENT 1 &mdash; MCP server for the agent</div>
+        <div class="mockup-body" style="padding:1rem">
+          Your Claude/Codex session has these primitives <em>as tools</em>. The model itself can say "I'll fork the W,X,Y,Z items as sub-tickets &mdash; confirm?" and call <code>fork</code> four times. No PTY proxying. No clipboard. The agent is the first-class participant.
+        </div>
+      </div>
+      <div class="mockup" style="margin:0">
+        <div class="mockup-header">CLIENT 2 &mdash; <code>tt</code> CLI for you</div>
+        <div class="mockup-body" style="padding:1rem">
+          <code>tt fork &lt;parent&gt; "fragment"</code>, <code>tt propose &lt; bullets.txt</code>, <code>tt stream</code> in a side tmux pane. You can drop into manual mode whenever your model isn't doing what you want.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:1.5rem">If this lands, the deliverable is: <strong>a small set of protocol primitives + two thin clients (MCP + <code>tt</code> CLI)</strong>, both backed by the existing TT API. The GUI doesn't change much &mdash; it already shows everything that flows through.</p>

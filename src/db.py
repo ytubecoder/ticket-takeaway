@@ -907,6 +907,7 @@ def init_db(conn: sqlite3.Connection):
 
     _apply_migration_20(conn)
     _apply_migration_21(conn)
+    _apply_migration_23(conn)
 
 
 def _apply_migration_20(conn) -> None:
@@ -972,7 +973,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
     """
     import json as _json
     import logging as _logging
-    log = _logging.getLogger("migration20")
+    log = _logging.getLogger("migration20.backfill")
 
     # Import canonical mappings lazily to avoid circular imports
     try:
@@ -1014,7 +1015,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
                 raise ValueError("args is not a list of strings")
         except Exception as e:
             log.warning(
-                f"migration20: agent_id={agent_id} has malformed "
+                f"agent_id={agent_id} has malformed "
                 f"args={args_text!r}, defaulting to [] ({e})"
             )
             raw_args = []
@@ -1101,7 +1102,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
             counters["remapped"] += 1
 
     log.info(
-        f"migration20: created={counters['created']} "
+        f"endpoints backfill: created={counters['created']} "
         f"reused={counters['reused']} "
         f"agents_remapped={counters['remapped']} "
         f"malformed_args_defaulted={counters['malformed_args']} "
@@ -1178,4 +1179,41 @@ def _apply_migration_21(conn) -> None:
     """)
 
     conn.execute("INSERT INTO _migrations (version) VALUES (21)")
+    conn.commit()
+
+
+def _apply_migration_23(conn) -> None:
+    """Migration 23: pane_links — bind tmux panes to tickets so TT can show
+    a live tail of the pane and detect "needs attention" events.  See
+    docs/superpowers/specs/2026-05-12-pane-link-design.md.
+
+    Numbered 23 (not 20/21/22) to avoid collision with main's
+    endpoints=20 and bookmarks=21.  Migration 22 was never used.
+    """
+    if conn.execute(
+        "SELECT 1 FROM _migrations WHERE version = 23"
+    ).fetchone():
+        return
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pane_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            pane_address TEXT NOT NULL UNIQUE,
+            host TEXT NOT NULL,
+            pane_descriptor TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            last_captured_at INTEGER,
+            status TEXT NOT NULL DEFAULT 'active',
+            attention_state TEXT NOT NULL DEFAULT 'none',
+            attention_detected_at INTEGER,
+            tail_text TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_links_ticket ON pane_links(project_id, ticket_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_links_host_status ON pane_links(host, status)")
+    conn.execute("INSERT INTO _migrations (version) VALUES (23)")
     conn.commit()

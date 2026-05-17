@@ -85,6 +85,12 @@ from actions import (
     set_no_test_required as _kitchen_set_ntr,
     # Typed errors (paired with DashboardHandler._send_typed_error below)
     AppError,
+    # Bookmarks + Recents (I-43)
+    toggle_bookmark as _actions_toggle_bookmark,
+    list_bookmarks as _actions_list_bookmarks,
+    is_bookmarked as _actions_is_bookmarked,
+    touch_recent as _actions_touch_recent,
+    list_recents as _actions_list_recents,
 )
 import kitchen as _kitchen
 from workspaces import wipe_for_retry_fresh as _kitchen_wipe_fresh
@@ -5193,6 +5199,7 @@ a:hover {{ text-decoration: underline; }}
 <div class="tp-header">
   <a class="tp-back" href="/{pid}/">← Kanban</a>
   <span class="tp-header-id">{tid}</span>
+  <button type="button" class="star-toggle tp-star" data-bookmark-toggle data-ticket-id="{tid}" data-testid="tp-star" title="Bookmark" aria-label="Bookmark" aria-pressed="false">{gen._svg_icon("star", 14)}</button>
   {container_badge}
   <span class="tp-header-title">{title}</span>
 </div>
@@ -5222,6 +5229,14 @@ var TP_API_BASE = {json.dumps(api_base)};
 var TP_TICKET_ID = {json.dumps(ticket["id"])};
 var TP_PROJECT_ID = {json.dumps(proj["id"])};
 var TP_PORT = {port};
+
+// Bookmarks/Recents (I-43): record this visit. The rail's listener will
+// touch /api/recents and refresh the section. Fired after the DOM is ready
+// so the listener (installed by the rail script) is in place.
+document.addEventListener('DOMContentLoaded', function(){{
+  document.dispatchEvent(new CustomEvent('tt:ticket-opened',
+    {{detail: {{ticketId: TP_TICKET_ID}}}}));
+}});
 
 // ── Relative timestamp ────────────────────────────────────────────
 function relativeTime(iso) {{
@@ -8634,6 +8649,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Ticket not found"}, 404)
             return
 
+        # Bookmarks + Recents (I-43)
+        if remainder == "/api/bookmarks":
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                items = _actions_list_bookmarks(conn, proj["id"])
+                conn.close()
+            self._send_json({"bookmarks": items})
+            return
+
+        if remainder == "/api/recents":
+            with _db_lock:
+                conn = get_db(); init_db(conn)
+                items = _actions_list_recents(conn, proj["id"])
+                conn.close()
+            self._send_json({"recents": items})
+            return
+
         # All tags in this project (with counts)
         if remainder == "/api/tags":
             project_id = proj["id"]
@@ -10516,6 +10548,40 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t or {"ok": True})
             else:
                 self._send_json({"error": "Invalid flag or ticket"}, 400)
+            return
+
+        # Bookmark toggle (I-43): POST /api/bookmarks/{ticket_id}
+        m = re.match(r"^/api/bookmarks/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                with _db_lock:
+                    conn = get_db(); init_db(conn)
+                    try:
+                        new_state = _actions_toggle_bookmark(conn, proj["id"], ticket_id)
+                    finally:
+                        conn.close()
+            except AppError as e:
+                self._send_json({"error": str(e)}, 404)
+                return
+            self._send_json({"ticket_id": ticket_id, "bookmarked": new_state})
+            return
+
+        # Recents touch (I-43): POST /api/recents/{ticket_id}
+        m = re.match(r"^/api/recents/([A-Za-z0-9_-]+)$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                with _db_lock:
+                    conn = get_db(); init_db(conn)
+                    try:
+                        _actions_touch_recent(conn, proj["id"], ticket_id)
+                    finally:
+                        conn.close()
+            except AppError as e:
+                self._send_json({"error": str(e)}, 404)
+                return
+            self._send_json({"ok": True})
             return
 
         # Accept ticket (move to Done + append to PRODUCT_SPECIFICATION.md)

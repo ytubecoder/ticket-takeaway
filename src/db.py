@@ -906,6 +906,7 @@ def init_db(conn: sqlite3.Connection):
         conn.commit()
 
     _apply_migration_20(conn)
+    _apply_migration_21(conn)
 
 
 def _apply_migration_20(conn) -> None:
@@ -1141,3 +1142,40 @@ def _synth_name(command, eff_argv) -> str:
         if not (a and a.startswith("{") and a.endswith("}"))
     )[:50]
     return f"{command} {summary}".strip()
+
+
+def _apply_migration_21(conn) -> None:
+    """Migration 21: bookmarks + recents per project."""
+    if conn.execute(
+        "SELECT 1 FROM _migrations WHERE version = 21"
+    ).fetchone():
+        return
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ticket_bookmarks (
+            project_id TEXT NOT NULL,
+            ticket_id  TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (project_id, ticket_id)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ticket_bookmarks_project
+        ON ticket_bookmarks (project_id, created_at DESC)
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ticket_recents (
+            project_id   TEXT NOT NULL,
+            ticket_id    TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (project_id, ticket_id)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ticket_recents_project
+        ON ticket_recents (project_id, last_seen_at DESC)
+    """)
+
+    conn.execute("INSERT INTO _migrations (version) VALUES (21)")
+    conn.commit()

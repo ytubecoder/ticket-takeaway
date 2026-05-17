@@ -1406,7 +1406,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             is_container=is_container,
         ))
 
-    # Enrich tickets with pane-link attention state (migration 20)
+    # Enrich tickets with pane-link attention state (migration 23)
     try:
         pane_rows = conn.execute(
             "SELECT ticket_id, attention_state FROM pane_links "

@@ -33,7 +33,7 @@ def migrated_db_with_system_agents(tmp_path):
     conn.row_factory = sqlite3.Row
 
     # Stub migration 20 during init so we can seed legacy rows first
-    with patch.object(ttdb, "_apply_migration_21", lambda c: None,
+    with patch.object(ttdb, "_apply_migration_20", lambda c: None,
                       create=True):
         ttdb.init_db(conn)
 
@@ -55,8 +55,8 @@ def migrated_db_with_system_agents(tmp_path):
     conn.commit()
 
     # Now run migration 20 for real
-    from db import _apply_migration_21
-    _apply_migration_21(conn)
+    from db import _apply_migration_20
+    _apply_migration_20(conn)
     return conn
 
 

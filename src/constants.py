@@ -260,7 +260,7 @@ FEEDBACKS_TRIAGE_TIMEOUT = 90  # seconds
 FEEDBACKS_DETECTION_CACHE_TTL = 30  # seconds
 
 # ---------------------------------------------------------------------------
-# Pane-link attention states (migration 20 / src/pane_links.py)
+# Pane-link attention states (migration 23 / src/pane_links.py)
 # ---------------------------------------------------------------------------
 
 ATTENTION_NONE = "none"

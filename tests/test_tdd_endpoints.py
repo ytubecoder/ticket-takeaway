@@ -233,10 +233,10 @@ def db_pre_migration_20(tmp_path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     # Replay migrations 1..19 by importing init_db and patching out 20.
-    # If _apply_migration_21 doesn't exist yet, the patch is harmless
+    # If _apply_migration_20 doesn't exist yet, the patch is harmless
     # (create=True). After T6/T7 lands, this patch prevents premature
     # migration during fixture setup.
-    with patch.object(ttdb, "_apply_migration_21", lambda c: None,
+    with patch.object(ttdb, "_apply_migration_20", lambda c: None,
                       create=True):
         ttdb.init_db(conn)
     # Insert legacy agent rows
@@ -264,9 +264,9 @@ def db_pre_migration_20(tmp_path):
 def test_migration_20_canonical_id_for_system_claude(db_pre_migration_20):
     """A system agent with command='claude', args=[] should be rewired
     to the canonical 'claude-cli' endpoint, not a synthesised id."""
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     row = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='agent_planner'"
     ).fetchone()
@@ -276,9 +276,9 @@ def test_migration_20_canonical_id_for_system_claude(db_pre_migration_20):
 def test_migration_20_user_agent_does_not_share_system_endpoint(db_pre_migration_20):
     """User agent with same (command, args) as system planner must get
     its own user-owned endpoint — grouping key includes 'system'."""
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     user_eid = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='usr_my_claude'"
     ).fetchone()[0]
@@ -295,9 +295,9 @@ def test_migration_20_user_agent_does_not_share_system_endpoint(db_pre_migration
 
 
 def test_migration_20_unknown_command_creates_synthesised_endpoint(db_pre_migration_20):
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     eid = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='usr_my_thing'"
     ).fetchone()[0]
@@ -311,9 +311,9 @@ def test_migration_20_unknown_command_creates_synthesised_endpoint(db_pre_migrat
 
 
 def test_migration_20_malformed_args_defaults_to_empty(db_pre_migration_20, caplog):
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     # The bad agent should still get an endpoint (default args=[] applied)
     eid = conn.execute(
         "SELECT endpoint_id FROM workflow_agents WHERE id='agent_bad'"
@@ -324,9 +324,9 @@ def test_migration_20_malformed_args_defaults_to_empty(db_pre_migration_20, capl
 
 
 def test_migration_20_every_agent_gets_endpoint_id(db_pre_migration_20):
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     nulls = conn.execute(
         "SELECT COUNT(*) FROM workflow_agents WHERE endpoint_id IS NULL"
     ).fetchone()[0]
@@ -334,12 +334,12 @@ def test_migration_20_every_agent_gets_endpoint_id(db_pre_migration_20):
 
 
 def test_migration_20_idempotent(db_pre_migration_20):
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     snapshot_a = conn.execute("SELECT id, endpoint_id FROM workflow_agents ORDER BY id").fetchall()
     eps_a = conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0]
-    _apply_migration_21(conn)  # rerun
+    _apply_migration_20(conn)  # rerun
     snapshot_b = conn.execute("SELECT id, endpoint_id FROM workflow_agents ORDER BY id").fetchall()
     eps_b = conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0]
     assert snapshot_a == snapshot_b
@@ -349,9 +349,9 @@ def test_migration_20_idempotent(db_pre_migration_20):
 def test_migration_20_compat_columns_preserved(db_pre_migration_20):
     """The compat fallback requires workflow_agents.command/.args remain
     populated after migration."""
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     row = conn.execute(
         "SELECT command, args FROM workflow_agents WHERE id='agent_planner'"
     ).fetchone()
@@ -360,9 +360,9 @@ def test_migration_20_compat_columns_preserved(db_pre_migration_20):
 
 
 def test_migration_20_pragma_foreign_keys_still_on(db_pre_migration_20):
-    from db import _apply_migration_21
+    from db import _apply_migration_20
     conn, _ = db_pre_migration_20
-    _apply_migration_21(conn)
+    _apply_migration_20(conn)
     fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     assert fk == 1
 

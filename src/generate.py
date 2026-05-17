@@ -81,14 +81,24 @@ def _svg_icon(name: str, size: int = 16, cls: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Shared left navigation rail
+# Shared left navigation rail  (SINGLE-INSTANCE COMPONENT)
 # ---------------------------------------------------------------------------
-# Single source of truth for the rail used by the kanban (generate.py) and
-# the fullscreen views (journeys, kitchen) rendered by serve.py. Items:
-#   Kanban / Journeys / Kitchen / Workflows / Settings
-# Workflows + Settings live inside the kanban view (an inline panel + a
-# right-hand drawer respectively); from non-kanban pages we deep-link to
-# /{pid}/?bounce=1 / /{pid}/?settings=1 so the kanban auto-opens them.
+# The rail is the ONE menu component for the whole app. It MUST look and
+# behave identically on every page. There is no per-page variant.
+#
+# Rule: changes to the rail (items, sections, ordering, icons, behaviour,
+# style) belong in `build_nav_rail_css/html/js()` and nowhere else.
+# Every page renderer pulls the same three functions:
+#   - kanban     (generate.py, line ~1740)
+#   - journeys, kitchen, workflows, projects, full-page ticket
+#     (serve.py — search for `gen.build_nav_rail_`)
+# Adding a new view? Inject the same three values into your template.
+# Never hand-roll rail markup in a renderer.
+#
+# Current items: Kanban / Journeys / divider / Workflows / Kitchen /
+# Projects / divider / Bookmarks (section) / Recents (section) / spacer /
+# Settings (bottom). Workflows + Settings deep-link to the kanban
+# (?bounce=1 / ?settings=1) so the inline panel + drawer auto-open.
 
 def build_nav_rail_css() -> str:
     """CSS for the left navigation rail. Inject inside any <style> block."""

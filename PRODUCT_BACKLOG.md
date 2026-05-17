@@ -182,22 +182,6 @@ Five lanes shipped from the Factory.ai missions talk. **A**: migration 17 (ticke
 - [ ] All TDD tests pass (791/1; 1 unrelated pre-existing failure)
 - [ ] Manual flow: orchestrator interview on a fresh Idea (deferred — needs end-user driving)
 
-### I-43: Bookmarks and Recents in the left nav
-Priority: medium | Status: for-review
-Tags: navigation, ux
-Add Bookmarks and Recents collapsible sections to the left nav rail. Users can star tickets to bookmark them; opening any ticket adds it to recents. Per-project, DB-backed. Star toggle visible on kanban cards and in the ticket overlay header. Move Settings to the bottom of the rail.
-- [ ] ticket_bookmarks and ticket_recents tables created via migration 21, per-project keyed
-- [ ] Star icon on kanban card meta row + overlay header; click toggles bookmark state with optimistic UI
-- [ ] Bookmarks + Recents sections render in left rail (Kanban/Journeys/Kitchen/Workflows pages); accordion expand/collapse with localStorage persistence
-- [ ] Opening a ticket overlay touches recents; recents capped at 20 per project (oldest trimmed)
-- [ ] Settings moved to bottom of rail (below spacer)
-- [ ] Clicking a bookmarked/recent entry opens the ticket overlay over the current view
-- [ ] Bookmarks survive ticket lifecycle moves (including Done/Wontdo) but are filtered from the list if the ticket is deleted
-
-### B-69: Bookmarks/recents UX fixes (toggle, exclude, inline)
-Priority: medium | Status: for-review
-Tags: navigation, ux
-
 ## Backlog
 
 ### B-45: Show eligibility reasons in ticket detail overlay when not ready
@@ -608,6 +592,24 @@ Add _assessCache JS object keyed by ticketId+section/cat. Check cache before fet
 ### B-42: Dual-backend scenario runner (Playwright + CDP)
 Priority: medium | Status: done
 Commit: 015ee52
+
+### I-43: Bookmarks and Recents in the left nav
+Priority: medium | Status: done
+Tags: navigation, ux
+Commit: b998a25
+Add Bookmarks and Recents collapsible sections to the left nav rail. Users can star tickets to bookmark them; opening any ticket adds it to recents. Per-project, DB-backed. Star toggle visible on kanban cards and in the ticket overlay header. Move Settings to the bottom of the rail.
+- [ ] ticket_bookmarks and ticket_recents tables created via migration 21, per-project keyed
+- [ ] Star icon on kanban card meta row + overlay header; click toggles bookmark state with optimistic UI
+- [ ] Bookmarks + Recents sections render in left rail (Kanban/Journeys/Kitchen/Workflows pages); accordion expand/collapse with localStorage persistence
+- [ ] Opening a ticket overlay touches recents; recents capped at 20 per project (oldest trimmed)
+- [ ] Settings moved to bottom of rail (below spacer)
+- [ ] Clicking a bookmarked/recent entry opens the ticket overlay over the current view
+- [ ] Bookmarks survive ticket lifecycle moves (including Done/Wontdo) but are filtered from the list if the ticket is deleted
+
+### B-69: Bookmarks/recents UX fixes (toggle, exclude, inline)
+Priority: medium | Status: done
+Tags: navigation, ux
+Commit: b998a25
 
 ## Won't Do
 

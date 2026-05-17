@@ -142,6 +142,17 @@ desc
 Priority: medium | Status: released
 Released: 2026-05-04 | Commit: 7eb9b06
 
+
+### I-43: Bookmarks and Recents in the left nav
+Priority: medium | Status: released
+Released: 2026-05-17 | Commit: b998a25
+Add Bookmarks and Recents collapsible sections to the left nav rail. Users can star tickets to bookmark them; opening any ticket adds it to recents. Per-project, DB-backed. Star toggle visible on kanban cards and in the ticket overlay header. Move Settings to the bottom of the rail.
+
+
+### B-69: Bookmarks/recents UX fixes (toggle, exclude, inline)
+Priority: medium | Status: released
+Released: 2026-05-17 | Commit: b998a25
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

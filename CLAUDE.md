@@ -104,9 +104,12 @@ Business logic in `actions.py`, constants in `constants.py`, DB in `db.py` — a
 
 ```bash
 cp src/{generate,tickets-cli,serve,constants,db,actions,journeys}.py ~/.claude/ticket-takeaway/
+python3 src/generate.py                                # ONLY if you edited generate.py — see below
 pkill -f "ticket-takeaway/serve.py"; sleep 1
 python3 ~/.claude/ticket-takeaway/serve.py &
 ```
+
+**`generate.py` edits also need an HTML regenerate.** The `/kanban` route serves the pre-generated `docs/sdlc-dashboard.html` (not a live re-render). After any edit to `generate.py` — rail JS/CSS, card markup, overlay HTML, etc. — you must also run `python3 src/generate.py` to rewrite the static file. Restarting serve.py alone leaves the kanban serving stale UI even though the API/full-page routes pick up the new code. Caught after editing `build_nav_rail_js` and seeing the kanban keep firing the old handler.
 
 Full deployment map: `INSTALL.md`.
 

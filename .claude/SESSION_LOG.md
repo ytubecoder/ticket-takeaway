@@ -1,5 +1,27 @@
 # Session Log
 
+## 2026-05-17 — Bookmarks + Recents in nav rail (I-43, B-69) + serve --bind flag
+
+### Summary
+- Shipped Bookmarks/Recents as two collapsible sections in the shared left rail. Star toggle on every kanban card, the overlay header, and the full-page ticket header. Per-project, DB-backed (migration 21 — `ticket_bookmarks` + `ticket_recents`). Recents capped at 20 per project; bookmarks survive Done/Wontdo. Settings drops to the rail bottom.
+- Followed up with B-69 (UX fixes for 7 user-reported issues): mutually-exclusive Bookmarks/Recents lists (LEFT JOIN filter), unbookmark touches recents in same transaction, capture-phase star click handler (the card's bubble-phase handler was calling `stopPropagation` and eating the toggle), inline row-star buttons on every section entry, both sections default-expanded, tp-star/detail-star bumped to 16px @ 0.85 opacity so they read as primary affordances.
+- Added `--bind HOST` to serve.py so port 8799 can stay reachable on the LAN after killing the deleted `/tmp/tt_tailnet_preview.py` (it had bound to `*:8799`; my replacement defaulted to 127.0.0.1, breaking `http://llm:8799/`).
+- Three PRs merged to main: #14 (feature), #15 (UX fixes), #16 (bind flag). I-43 + B-69 accepted to Done.
+
+### Lessons Learned
+- **Accepted:** Treat the left nav rail as a single shared component — `build_nav_rail_css/html/js` in generate.py is the SoT and every page renderer pulls those three functions. No per-page variant. Spelled out in a beefed-up docstring above `build_nav_rail_css` and in auto-memory (`feedback_nav_rail_singleton.md`).
+- **Accepted:** Document-level click handlers for in-card buttons MUST register in capture phase (`addEventListener(..., true)`) — the card's own bubble-phase `stopPropagation` will otherwise eat the event. Also use `stopImmediatePropagation` to belt-and-brace against other capture handlers re-firing the card-expand.
+- **Gotcha:** `/kanban` serves `docs/sdlc-dashboard.html`, a pre-generated static file. After ANY `generate.py` edit you must run `python3 src/generate.py` in addition to copying source and restarting serve.py — restart alone keeps the kanban on stale JS. Promoted to CLAUDE.md Deployment section. Memory updated (`feedback_keep_dev_server_current.md`).
+- **Gotcha:** Star button width matters for centroid-based playwright clicks. Sizing my new `.star-toggle` at 24×24 (vs other card buttons at ~18×14) shifted the card layout enough that `card-click-expands` smoke test now clicked through to `card-open-btn` and navigated away. Tightened the card variant to match the existing button padding.
+- **Gotcha:** serve.py default bind is `127.0.0.1`. Long-lived preview scripts (`/tmp/tt_tailnet_preview.py`, since deleted) bound to `*:PORT`. Restarting serve.py on the same port silently breaks any non-loopback URL until you pass `--bind 0.0.0.0`. The default unchanged for the canonical writer; Tailscale Serve still works.
+
+### Decisions
+- Bookmark/Recent storage in SQLite (not localStorage) — follows the user across machines via the canonical writer at port 8788. Personal UI state, not ticket state, so no `emit_event()` and no audit trail.
+- Bookmarks and Recents are mutually exclusive lists. A ticket is in exactly one at any time. Unbookmarking puts it back in Recents (touches the row in the same transaction) rather than vanishing.
+- Both sections default to expanded so the new affordance is discoverable on first paint. User can collapse and choice is per-section in localStorage.
+- Inline row-star renders outline in Recents (click → bookmark) and filled in Bookmarks (click → unbookmark). Same toggle handler; CSS controls visibility (hover-only in Recents, always-on in Bookmarks).
+- Star handler delegated at document in capture phase rather than bound per-button — survives any future card re-renders without rebinding.
+
 ## 2026-05-12 — Model endpoint abstraction (PR #11)
 
 ### Summary

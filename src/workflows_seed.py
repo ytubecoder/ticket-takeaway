@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +27,101 @@ def _ticket_prompt(action: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Endpoint dataclass + seed data
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Endpoint:
+    """Seed-time representation of an endpoints table row.
+
+    Mirrors the SQL columns in migration 19. JSON-shaped fields (args,
+    capabilities, session_config) are held as Python types here and
+    json.dumps()'d at upsert time.
+    """
+    id: str
+    name: str
+    endpoint_type: str = "cli"
+    command: Optional[str] = None
+    args: list = field(default_factory=list)
+    prompt_mode: str = "template"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key_env: Optional[str] = None
+    timeout_s: int = 120
+    capabilities: dict = field(default_factory=dict)
+    session_config: dict = field(default_factory=dict)
+    system: int = 0
+
+
+DEFAULT_ENDPOINTS: list[Endpoint] = [
+    Endpoint(
+        id="claude-cli",
+        name="Claude CLI",
+        endpoint_type="cli",
+        system=1,
+        command="claude",
+        args=["-p", "{prompt}", "--output-format", "json"],
+        prompt_mode="template",
+        capabilities={"sessions": True},
+        session_config={
+            "resume_args": ["-p", "{prompt}", "--output-format", "json",
+                            "--resume", "{session_id}"],
+            "session_id_regex": r'"session_id"\s*:\s*"([0-9a-f-]+)"',
+        },
+    ),
+    Endpoint(
+        id="codex-cli",
+        name="Codex CLI",
+        endpoint_type="cli",
+        system=1,
+        command="codex",
+        args=["{prompt}"],
+        prompt_mode="template",
+        capabilities={"sessions": True},
+        session_config={
+            "resume_args": ["exec", "resume", "{session_id}"],
+            "session_id_regex": r"Session(?:\s+ID)?\s*:\s*([0-9a-f-]+)",
+            "session_id_fallback_dir": "~/.codex/sessions/",
+        },
+    ),
+    Endpoint(
+        id="codex-exec-readonly",
+        name="Codex exec (read-only)",
+        endpoint_type="cli",
+        system=1,
+        command="codex",
+        args=["exec", "-s", "read-only", "{prompt}"],
+        prompt_mode="template",
+        capabilities={"sessions": False},
+    ),
+    Endpoint(
+        id="hermes-cli",
+        name="Hermes CLI",
+        endpoint_type="cli",
+        system=1,
+        command="hermes",
+        args=["chat", "-q", "{prompt}"],
+        prompt_mode="template",
+        capabilities={"sessions": False},
+    ),
+]
+
+# Maps legacy (command, raw_args_tuple) -> canonical endpoint id.
+# Used by migration #19 to pin known system runtimes to seeded ids
+# instead of synthesising duplicate endpoints. raw_args_tuple is the
+# value stored in workflow_agents.args BEFORE _build_agent_cmd's
+# runner-side flag injection.
+KNOWN_CLI_MAPPINGS: dict[tuple, str] = {
+    ("claude", ()): "claude-cli",
+    ("codex", ()): "codex-cli",
+    ("codex", ("exec", "-s", "read-only")): "codex-exec-readonly",
+    ("hermes", ()): "hermes-cli",
+    ("hermes", ("chat",)): "hermes-cli",
+}
+
+
+# ---------------------------------------------------------------------------
 # Default agents (global — no project_id)
 # ---------------------------------------------------------------------------
 
@@ -35,6 +132,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_planner",
         "name": "Planner",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": "",   # /plan-check sets none — templates carry the instructions
@@ -45,6 +143,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_consultant",
         "name": "Consultant",
+        "endpoint_id": "codex-exec-readonly",
         "command": "codex",
         "args": "exec -s read-only",
         "system_prompt": "",
@@ -58,6 +157,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_orchestrator",
         "name": "Orchestrator",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -91,6 +191,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_worker",
         "name": "Worker",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -119,6 +220,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_summarizer",
         "name": "Summarizer",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -145,6 +247,7 @@ DEFAULT_AGENTS: list[dict] = [
     {
         "id": "agent_validator",
         "name": "Validator",
+        "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
         "system_prompt": (
@@ -366,8 +469,7 @@ DEFAULT_WORKFLOWS: list[dict] = [
         "name": "Parent auto-promote",
         "description": (
             "When all children of a parent ticket reach terminal status "
-            "(done / for-review / bug-fixed), promote the parent to For Review. "
-            "Replaces the legacy hardcoded _maybe_promote_parent hook."
+            "(done / for-review / bug-fixed), promote the parent to For Review."
         ),
         "system": 1,
         "enabled": 1,  # Preserves today's behaviour
@@ -612,6 +714,61 @@ DEFAULT_WORKFLOWS: list[dict] = [
 
 
 # ---------------------------------------------------------------------------
+# Seeder — endpoints (global, run once at startup)
+# ---------------------------------------------------------------------------
+
+def seed_default_endpoints(db: sqlite3.Connection) -> dict[str, int]:
+    """Upsert DEFAULT_ENDPOINTS into the endpoints table.
+
+    Returns {"upserted": n, "skipped_collision": m}.
+    System rows always overwrite. If a system=0 row already exists with
+    the same id as a DEFAULT_ENDPOINTS entry, log and skip.
+    """
+    upserted = 0
+    skipped = 0
+    for ep in DEFAULT_ENDPOINTS:
+        existing = db.execute(
+            "SELECT system FROM endpoints WHERE id = ?", (ep.id,)
+        ).fetchone()
+        if existing is not None and existing[0] == 0:
+            print(f"WARN seed: skipping system endpoint {ep.id} — "
+                  f"user row with same id exists, please rename")
+            skipped += 1
+            continue
+        db.execute("""
+            INSERT INTO endpoints (id, name, endpoint_type, provider, model,
+                base_url, api_key_env, command, args, prompt_mode,
+                timeout_s, capabilities, session_config, system)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,
+                endpoint_type=excluded.endpoint_type,
+                provider=excluded.provider,
+                model=excluded.model,
+                base_url=excluded.base_url,
+                api_key_env=excluded.api_key_env,
+                command=excluded.command,
+                args=excluded.args,
+                prompt_mode=excluded.prompt_mode,
+                timeout_s=excluded.timeout_s,
+                capabilities=excluded.capabilities,
+                session_config=excluded.session_config,
+                system=excluded.system
+            WHERE endpoints.system = 1
+        """, (
+            ep.id, ep.name, ep.endpoint_type, ep.provider, ep.model,
+            ep.base_url, ep.api_key_env, ep.command,
+            json.dumps(ep.args), ep.prompt_mode, ep.timeout_s,
+            json.dumps(ep.capabilities), json.dumps(ep.session_config),
+            ep.system,
+        ))
+        upserted += 1
+    db.commit()
+    print(f"INFO seed: endpoints_upserted={upserted} endpoints_skipped_collision={skipped}")
+    return {"upserted": upserted, "skipped_collision": skipped}
+
+
+# ---------------------------------------------------------------------------
 # Seeder — agents (global, run once at startup)
 # ---------------------------------------------------------------------------
 
@@ -676,12 +833,14 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
                 pass  # Malformed steps — leave untouched
 
     # --- insert or sync missing agents ---
-    # Detect whether workflow_agents has the system column (added in migration 17).
+    # Detect whether workflow_agents has the system column (added in migration 17)
+    # and the endpoint_id column (added in migration 19).
     _agent_cols = {
         row["name"]
         for row in db.execute("PRAGMA table_info(workflow_agents)").fetchall()
     }
     _has_system_col = "system" in _agent_cols
+    _has_endpoint_id_col = "endpoint_id" in _agent_cols
 
     for agent in DEFAULT_AGENTS:
         row = db.execute(
@@ -689,7 +848,22 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
         ).fetchone()
         if row:
             # Ensure canonical fields stay in sync with the DEFAULT_AGENTS definition.
-            if _has_system_col:
+            if _has_system_col and _has_endpoint_id_col:
+                # endpoint_id deliberately omitted: seed sets it on INSERT, preserves user choice on subsequent re-seeds
+                db.execute(
+                    "UPDATE workflow_agents "
+                    "SET name = ?, command = ?, args = ?, persist_session = ?, system = ? "
+                    "WHERE id = ?",
+                    (
+                        agent["name"],
+                        agent["command"],
+                        agent["args"],
+                        agent.get("persist_session", 0),
+                        agent.get("system", 0),
+                        agent["id"],
+                    ),
+                )
+            elif _has_system_col:
                 db.execute(
                     "UPDATE workflow_agents "
                     "SET name = ?, command = ?, args = ?, persist_session = ?, system = ? "
@@ -719,7 +893,26 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
             existing += 1
             continue
 
-        if _has_system_col:
+        if _has_system_col and _has_endpoint_id_col:
+            db.execute(
+                """
+                INSERT INTO workflow_agents
+                    (id, name, command, args, system_prompt, persist_session, system, endpoint_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent["id"],
+                    agent["name"],
+                    agent["command"],
+                    agent["args"],
+                    agent.get("system_prompt", ""),
+                    agent.get("persist_session", 0),
+                    agent.get("system", 0),
+                    agent.get("endpoint_id"),
+                    now,
+                ),
+            )
+        elif _has_system_col:
             db.execute(
                 """
                 INSERT INTO workflow_agents

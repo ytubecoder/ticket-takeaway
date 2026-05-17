@@ -40,6 +40,7 @@ from workflows_seed import (
     DEFAULT_AGENTS,
     DEFAULT_WORKFLOWS,
     seed_default_agents,
+    seed_default_endpoints,
     seed_default_workflows,
 )
 
@@ -50,11 +51,16 @@ from workflows_seed import (
 
 @pytest.fixture
 def conn():
-    """In-memory DB with full schema including migration 17."""
+    """In-memory DB with full schema including migration 17.
+
+    Endpoints are pre-seeded so that seed_default_agents can satisfy the
+    FK constraint on workflow_agents.endpoint_id (added in migration 19).
+    """
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys=ON")
     init_db(c)
+    seed_default_endpoints(c)
     return c
 
 
@@ -721,9 +727,18 @@ class TestTagPredicatesViaEvaluateTrigger:
         assert passed is True
 
     def test_sprint_tag_rotation_trigger_fires_on_matching_ticket(self, conn):
-        """Sprint tag rotation's trigger should pass on a ticket with sprint-current."""
+        """Sprint tag rotation's trigger should pass on a ticket with sprint-current
+        and automation_mode='auto' (trigger requires all three: has_tag, automation_mode=auto,
+        no_active_run)."""
         _make_ticket(conn)
         _add_tag(conn, "B-1", "sprint-current")
+        # The trigger includes automation_mode=auto; insert the automation_subjects row.
+        conn.execute(
+            "INSERT INTO automation_subjects (project_id, subject_type, subject_id, automation_mode) "
+            "VALUES (?, 'ticket', 'B-1', 'auto')",
+            (PROJECT_ID,),
+        )
+        conn.commit()
         ctx = _make_ctx(conn)
         wf = next(wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Sprint tag rotation")
         passed, failures = evaluate_trigger(wf["trigger_json"], ctx)

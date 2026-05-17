@@ -131,23 +131,6 @@ def _git_fetch(repo_path: Path, remote: str = "origin", timeout: int = 60) -> tu
         return (False, str(e))
 
 
-def _worktree_exists(repo_path: Path, target_path: Path) -> bool:
-    try:
-        r = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=str(repo_path), capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode != 0:
-            return False
-        target = str(target_path.resolve())
-        for line in r.stdout.splitlines():
-            if line.startswith("worktree ") and line[len("worktree "):].strip() == target:
-                return True
-        return False
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
 def _branch_exists(repo_path: Path, branch: str) -> bool:
     try:
         r = subprocess.run(

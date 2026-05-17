@@ -126,6 +126,25 @@ class TestRecents:
         with pytest.raises(actions.TicketNotFoundError):
             actions.touch_recent(conn, "p1", "NOPE-99")
 
+    def test_bookmarked_ticket_excluded(self, conn):
+        # A bookmarked ticket should never appear in the recents list,
+        # even if it was touched.
+        actions.touch_recent(conn, "p1", "B-01")
+        actions.touch_recent(conn, "p1", "B-02")
+        actions.toggle_bookmark(conn, "p1", "B-01")  # now bookmarked
+        ids = [r["id"] for r in actions.list_recents(conn, "p1")]
+        assert "B-01" not in ids
+        assert "B-02" in ids
+
+    def test_unbookmark_brings_ticket_back_to_recents(self, conn):
+        # Bookmarking removes a ticket from recents view; unbookmarking
+        # must put it back (as a 'just viewed' entry).
+        actions.toggle_bookmark(conn, "p1", "B-01")  # bookmark
+        assert [r["id"] for r in actions.list_recents(conn, "p1")] == []
+        actions.toggle_bookmark(conn, "p1", "B-01")  # unbookmark
+        ids = [r["id"] for r in actions.list_recents(conn, "p1")]
+        assert ids[0] == "B-01"
+
     def test_project_scoped(self, conn):
         conn.execute(
             "INSERT INTO tickets (id, project_id, title, section, status) "

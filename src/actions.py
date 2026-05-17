@@ -1528,7 +1528,12 @@ RECENTS_CAP = 20
 
 
 def toggle_bookmark(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> bool:
-    """Toggle bookmark for a ticket. Returns the new bookmark state (True=bookmarked)."""
+    """Toggle bookmark for a ticket. Returns the new bookmark state (True=bookmarked).
+
+    Removing a bookmark also touches recents — unbookmarking counts as a
+    'just viewed' signal so the ticket re-appears under Recents instead of
+    vanishing entirely from the nav.
+    """
     ticket = _find_ticket(conn, project_id, ticket_id)
     tid = ticket["id"]
     row = conn.execute(
@@ -1540,6 +1545,8 @@ def toggle_bookmark(conn: sqlite3.Connection, project_id: str, ticket_id: str) -
             "DELETE FROM ticket_bookmarks WHERE project_id = ? AND ticket_id = ?",
             (project_id, tid),
         )
+        # Treat unbookmarking as a fresh view so the ticket lands in Recents.
+        _touch_recent_row(conn, project_id, tid)
         conn.commit()
         return False
     conn.execute(
@@ -1548,6 +1555,32 @@ def toggle_bookmark(conn: sqlite3.Connection, project_id: str, ticket_id: str) -
     )
     conn.commit()
     return True
+
+
+def _touch_recent_row(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> None:
+    """Inner upsert + trim — no separate commit, callers commit as part of
+    their own transaction."""
+    conn.execute(
+        """
+        INSERT INTO ticket_recents (project_id, ticket_id, last_seen_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(project_id, ticket_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+        """,
+        (project_id, ticket_id, utcnow_iso()),
+    )
+    conn.execute(
+        """
+        DELETE FROM ticket_recents
+        WHERE project_id = ?
+          AND ticket_id NOT IN (
+              SELECT ticket_id FROM ticket_recents
+              WHERE project_id = ?
+              ORDER BY last_seen_at DESC
+              LIMIT ?
+          )
+        """,
+        (project_id, project_id, RECENTS_CAP),
+    )
 
 
 def list_bookmarks(conn: sqlite3.Connection, project_id: str) -> list[dict]:
@@ -1578,35 +1611,14 @@ def is_bookmarked(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> 
 def touch_recent(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> None:
     """Record that the user opened this ticket. Trims oldest beyond RECENTS_CAP."""
     ticket = _find_ticket(conn, project_id, ticket_id)
-    tid = ticket["id"]
-    now = utcnow_iso()
-    conn.execute(
-        """
-        INSERT INTO ticket_recents (project_id, ticket_id, last_seen_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(project_id, ticket_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
-        """,
-        (project_id, tid, now),
-    )
-    # Trim oldest rows beyond the cap. Cheap because of idx_ticket_recents_project.
-    conn.execute(
-        """
-        DELETE FROM ticket_recents
-        WHERE project_id = ?
-          AND ticket_id NOT IN (
-              SELECT ticket_id FROM ticket_recents
-              WHERE project_id = ?
-              ORDER BY last_seen_at DESC
-              LIMIT ?
-          )
-        """,
-        (project_id, project_id, RECENTS_CAP),
-    )
+    _touch_recent_row(conn, project_id, ticket["id"])
     conn.commit()
 
 
 def list_recents(conn: sqlite3.Connection, project_id: str, limit: int = RECENTS_CAP) -> list[dict]:
-    """List recently-opened tickets, newest first. Filters out tickets that no longer exist."""
+    """List recently-opened tickets, newest first. Excludes tickets that
+    are currently bookmarked — a ticket is in exactly one of Bookmarks or
+    Recents at any time."""
     rows = conn.execute(
         """
         SELECT t.id AS id, t.title AS title, t.section AS section,
@@ -1614,7 +1626,9 @@ def list_recents(conn: sqlite3.Connection, project_id: str, limit: int = RECENTS
         FROM ticket_recents r
         INNER JOIN tickets t
           ON t.project_id = r.project_id AND t.id = r.ticket_id
-        WHERE r.project_id = ?
+        LEFT JOIN ticket_bookmarks b
+          ON b.project_id = r.project_id AND b.ticket_id = r.ticket_id
+        WHERE r.project_id = ? AND b.ticket_id IS NULL
         ORDER BY r.last_seen_at DESC
         LIMIT ?
         """,

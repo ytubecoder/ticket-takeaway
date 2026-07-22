@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -320,21 +321,491 @@ def _journey_compiles_and_validates(conn: sqlite3.Connection, project_id: str, j
         return False
 
 
+# ---------------------------------------------------------------------------
+# Spec lifecycle (OpenSpec) — enforced here, in the shared core
+# ---------------------------------------------------------------------------
+#
+# Both surfaces call into this module: `tickets-cli.py` for the headless agent
+# path and `serve.py` for the dashboard. Putting the gates in a skill's prose or
+# in dashboard JS would let the two diverge, so nothing below is duplicated
+# outward — the skills and the HTTP handlers are thin callers.
+#
+# The lane (see constants.SPEC_LANES) changes how work is *described*. It never
+# changes how work is *closed*: accept_ticket() runs the same verify + obligation
+# + archive sequence in every lane, differing only in where the obligations are
+# read from.
+
+#: Sentinel used in the `spec` readiness flag when a lane-C ticket closes without
+#: a spec delta because nothing observable changed. Must carry a reason.
+NO_CHANGE_SENTINEL = "none"
+
+
+def project_path_for(project_id: str) -> str:
+    """Resolve a project's filesystem path from the registry, or '' if unknown."""
+    try:
+        from db import REGISTRY_PATH
+        registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    for p in registry.get("projects", []):
+        if p.get("id") == project_id:
+            return os.path.expanduser(p.get("path", "") or "")
+    return ""
+
+
+def read_readiness_flag(conn: sqlite3.Connection, project_id: str, ticket_id: str, flag: str) -> str:
+    """Return a readiness flag's content, or '' when unset."""
+    row = conn.execute(
+        "SELECT content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+        (ticket_id, project_id, flag),
+    ).fetchone()
+    return (row["content"] or "") if row else ""
+
+
+def write_readiness_flag(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+    flag: str,
+    content: str,
+    set_by: str = "cli",
+) -> None:
+    """Upsert a readiness flag. Caller commits."""
+    conn.execute(
+        """
+        INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (ticket_id, project_id, flag)
+        DO UPDATE SET content = excluded.content, set_by = excluded.set_by
+        """,
+        (ticket_id, project_id, flag, content, set_by),
+    )
+
+
+@dataclass(frozen=True)
+class SpecLink:
+    """Parsed `spec` readiness flag: which lane, and which OpenSpec change (if any).
+
+    Wire format is one line so it survives the PRODUCT_BACKLOG.md round-trip:
+
+        A:b-44-knowledge-ingestion-pipeline
+        C:none - rename only, no observable behaviour change
+
+    Lane C may name the sentinel instead of a change, but only with a reason:
+    an unexplained "nothing changed" claim is exactly what the gate exists to
+    stop being rubber-stamped.
+    """
+
+    lane: str = ""
+    change: str = ""
+    note: str = ""
+
+    @property
+    def declared(self) -> bool:
+        return bool(self.lane)
+
+    @property
+    def claims_no_change(self) -> bool:
+        return self.change == NO_CHANGE_SENTINEL
+
+    def render(self) -> str:
+        base = f"{self.lane}:{self.change or NO_CHANGE_SENTINEL}"
+        return f"{base} - {self.note}" if self.note else base
+
+
+def parse_spec_link(content: str) -> SpecLink:
+    """Parse the `spec` readiness flag content. Unparseable input yields an empty link."""
+    first = (content or "").strip().splitlines()[0] if (content or "").strip() else ""
+    # Lane letter is case-insensitive: `--lane a` is a normal thing to type.
+    m = re.match(r"^\s*([ABCabc])\s*:\s*([A-Za-z0-9._-]*)\s*(?:[-—]\s*(.*))?$", first)
+    if not m:
+        return SpecLink()
+    return SpecLink(lane=m.group(1).upper(), change=(m.group(2) or "").strip(), note=(m.group(3) or "").strip())
+
+
+def spec_link(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> SpecLink:
+    """The ticket's declared lane + change, from the `spec` readiness flag."""
+    return parse_spec_link(read_readiness_flag(conn, project_id, ticket_id, "spec"))
+
+
+@dataclass(frozen=True)
+class VerifyRecord:
+    """Parsed `verified` readiness flag — real evidence, not a checkbox."""
+
+    command: str = ""
+    exit_code: int = -1
+    commit: str = ""
+    ran_at: str = ""
+    output_tail: str = ""
+
+    @property
+    def passed(self) -> bool:
+        return self.exit_code == 0
+
+    def render(self) -> str:
+        head = f"exit={self.exit_code} commit={self.commit or '-'} at={self.ran_at} cmd={self.command}"
+        if not self.output_tail:
+            return head
+        return head + "\n" + self.output_tail
+
+
+def parse_verify_record(content: str) -> VerifyRecord:
+    """Parse the `verified` readiness flag. Unparseable input yields exit_code -1."""
+    text = (content or "").strip()
+    if not text:
+        return VerifyRecord()
+    lines = text.splitlines()
+    m = re.match(
+        r"^exit=(-?\d+)\s+commit=(\S*)\s+at=(\S*)\s+cmd=(.*)$",
+        lines[0].strip(),
+    )
+    if not m:
+        return VerifyRecord()
+    return VerifyRecord(
+        exit_code=int(m.group(1)),
+        commit="" if m.group(2) in ("", "-") else m.group(2),
+        ran_at=m.group(3),
+        command=m.group(4).strip(),
+        output_tail="\n".join(lines[1:]),
+    )
+
+
+def verify_record(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> VerifyRecord:
+    return parse_verify_record(read_readiness_flag(conn, project_id, ticket_id, "verified"))
+
+
+# --- Verify command resolution --------------------------------------------
+#
+# Declared per project so step 1 of the close is deterministic rather than
+# improvised by whichever agent happens to be running.
+
+VERIFY_TIMEOUT_MS_DEFAULT = 600_000
+
+
+def resolve_verify_command(project_path: str) -> tuple[str, int, str]:
+    """Return (command, timeout_ms, source) for a project's verify step.
+
+    Order: WORKFLOW.toml `[verify]`, then the conventional runners. `source` is
+    'WORKFLOW.toml' when declared, otherwise the heuristic that matched, or ''
+    when nothing was found — in which case the caller must ask once and write the
+    answer into WORKFLOW.toml rather than guessing again next time.
+    """
+    root = Path(project_path)
+    if not project_path or not root.is_dir():
+        return ("", VERIFY_TIMEOUT_MS_DEFAULT, "")
+
+    try:
+        from workflow_config import load_workflow_config
+        cfg = load_workflow_config(root).get("verify") or {}
+        cmd = str(cfg.get("command", "") or "").strip()
+        if cmd:
+            timeout = int(cfg.get("timeout_ms", VERIFY_TIMEOUT_MS_DEFAULT))
+            return (cmd, timeout, "WORKFLOW.toml")
+    except Exception:
+        pass  # a malformed WORKFLOW.toml must not silently disable the fallbacks
+
+    if (root / "tests" / "run-tests.sh").is_file():
+        return ("tests/run-tests.sh", VERIFY_TIMEOUT_MS_DEFAULT, "tests/run-tests.sh")
+
+    pkg = root / "package.json"
+    if pkg.is_file():
+        try:
+            scripts = json.loads(pkg.read_text(encoding="utf-8")).get("scripts") or {}
+        except Exception:
+            scripts = {}
+        if scripts.get("test"):
+            return ("npm test", VERIFY_TIMEOUT_MS_DEFAULT, "package.json test script")
+
+    if (root / "pytest.ini").is_file() or (root / "tests").is_dir() or (root / "pyproject.toml").is_file():
+        return ("python3 -m pytest", VERIFY_TIMEOUT_MS_DEFAULT, "pytest")
+
+    return ("", VERIFY_TIMEOUT_MS_DEFAULT, "")
+
+
+VERIFY_OUTPUT_TAIL_LINES = 20
+
+
+def run_verify(
+    conn: sqlite3.Connection,
+    project_id: str,
+    ticket_id: str,
+    project_path: str,
+    actor: "ActorContext | None" = None,
+) -> VerifyRecord:
+    """Run the project's verify command and record the real result on the ticket.
+
+    Records regardless of outcome — a failing verify is evidence too, and the
+    accept gate reads exit_code rather than the flag's mere presence. Caller
+    commits.
+    """
+    command, timeout_ms, source = resolve_verify_command(project_path)
+    if not command:
+        raise ValueError(
+            f"No verify command for project {project_id!r}. Declare one in "
+            f"{Path(project_path) / 'WORKFLOW.toml'}:\n\n"
+            "    [verify]\n"
+            '    command = "tests/run-tests.sh"\n'
+        )
+
+    started = datetime.now().isoformat(timespec="seconds")
+    try:
+        # stderr is merged into stdout rather than captured separately: the tail
+        # is meant to show how the run actually ended, and concatenating two
+        # separately-buffered streams puts all of stderr last, which routinely
+        # buries the real summary line under warning noise.
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=project_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=max(1, timeout_ms) / 1000.0,
+        )
+        exit_code = proc.returncode
+        combined = proc.stdout or ""
+    except subprocess.TimeoutExpired:
+        exit_code = 124
+        combined = f"verify timed out after {timeout_ms}ms"
+
+    tail_lines = [ln for ln in combined.strip().splitlines() if ln.strip()][-VERIFY_OUTPUT_TAIL_LINES:]
+    # 4-space indent so the tail survives the PRODUCT_BACKLOG.md round-trip as
+    # continuation lines of the `Verified:` entry.
+    tail = "\n".join(f"    {ln}" for ln in tail_lines)
+
+    record = VerifyRecord(
+        command=command,
+        exit_code=exit_code,
+        commit=capture_commit_hash(project_path),
+        ran_at=started,
+        output_tail=tail,
+    )
+    write_readiness_flag(
+        conn, project_id, ticket_id, "verified", record.render(),
+        set_by=f"verify:{source or 'fallback'}",
+    )
+    return record
+
+
+# --- Gate predicates -------------------------------------------------------
+#
+# Each returns (passed, reasons). conditions.py exposes these to the workflow
+# engine; accept_ticket() calls them directly. One implementation, two callers —
+# the engine and the gate can never disagree.
+
+def _spec_linked(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+    """A lane has been declared: an OpenSpec change, or an explicit lane-C choice."""
+    link = spec_link(conn, ticket["project_id"], ticket["id"])
+    if not link.declared:
+        return (False, ["no spec lane declared (run `tickets-cli.py spec <project> <id> --lane A|B|C`)"])
+    if link.lane in ("A", "B") and (not link.change or link.claims_no_change):
+        return (False, [f"lane {link.lane} requires an OpenSpec change name, got {link.change or '(empty)'!r}"])
+    if link.claims_no_change and not link.note:
+        return (False, ["lane C claims no spec delta but records no reason"])
+    if link.change and not link.claims_no_change:
+        return (True, [f"lane {link.lane}, change {link.change}"])
+    return (True, [f"lane {link.lane}, no delta: {link.note}"])
+
+
+def _spec_validates(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+    """`openspec validate <change> --strict` exits 0 for the ticket's change.
+
+    A lane-C ticket that legitimately has no delta passes vacuously — there is
+    nothing to validate — but only because _spec_linked already forced the claim
+    to be explicit and justified.
+    """
+    project_id = ticket["project_id"]
+    link = spec_link(conn, project_id, ticket["id"])
+    if not link.declared:
+        return (False, ["no spec lane declared"])
+    if link.claims_no_change:
+        # Vacuously true — there is no delta to validate. Reported silently
+        # because _spec_linked has already stated the claim and its reason;
+        # saying it twice makes one decision look like two.
+        return (True, [])
+    if not link.change:
+        return (False, [f"lane {link.lane} has no change name"])
+
+    project_path = project_path_for(project_id)
+    if not project_path:
+        return (False, [f"project {project_id!r} has no path in the registry"])
+
+    try:
+        import openspec_adapter as osa
+    except ImportError:
+        return (False, ["openspec_adapter is not installed"])
+
+    if not osa.is_initialised(project_path):
+        return (False, [f"{project_path} has no openspec/ root (run `openspec init --tools claude`)"])
+
+    # Already archived by a previous accept — the delta is canon now, so
+    # re-validating the (moved) change directory would fail spuriously.
+    if not osa.change_exists(project_path, link.change):
+        if osa.archived_change_dirs(project_path, link.change):
+            return (True, [f"change {link.change} is already archived"])
+        return (False, [f"change {link.change} not found under openspec/changes/"])
+
+    ok, reason = osa.check_cli(project_path)
+    if not ok:
+        return (False, [reason])
+
+    res = osa.validate(project_path, link.change, strict=True)
+    if res.ok:
+        return (True, [f"openspec validate {link.change} --strict passed"])
+    errors = osa.validation_errors(res) or [res.message]
+    return (False, [f"openspec validate {link.change} --strict failed"] + errors)
+
+
+def _verify_passed(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+    """A `verified` flag exists, exited 0, and was recorded against current HEAD.
+
+    The commit check is what stops a stale green from being reused: verify output
+    from three commits ago is not evidence about the code being accepted.
+    """
+    project_id = ticket["project_id"]
+    rec = verify_record(conn, project_id, ticket["id"])
+    if not rec.command:
+        return (False, ["no verify run recorded (run `tickets-cli.py verify <project> <id>`)"])
+    if not rec.passed:
+        tail = rec.output_tail.strip().splitlines()
+        detail = tail[-1].strip() if tail else ""
+        return (False, [f"verify `{rec.command}` exited {rec.exit_code}"] + ([detail] if detail else []))
+
+    head = capture_commit_hash(project_path_for(project_id))
+    if head and rec.commit and rec.commit != head:
+        return (False, [
+            f"verify passed at commit {rec.commit} but HEAD is {head} — re-run verify"
+        ])
+    return (True, [f"verify `{rec.command}` passed at commit {rec.commit or 'unknown'}"])
+
+
+# --- The accept gate -------------------------------------------------------
+
+@dataclass(frozen=True)
+class AcceptGate:
+    """Result of evaluating the close conditions for one ticket."""
+
+    passed: bool
+    failures: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+
+    def refusal_message(self, project_id: str, ticket_id: str) -> str:
+        """A specific, actionable refusal — never a bare 'not allowed'."""
+        lines = [f"Cannot accept {ticket_id}: the close gate refused.", ""]
+        lines += [f"  - {f}" for f in self.failures]
+        lines += [
+            "",
+            "Fix the above, or override deliberately and on the record:",
+            f"  tickets-cli.py accept {project_id} {ticket_id} --force \"<reason>\"",
+        ]
+        return "\n".join(lines)
+
+
+def evaluate_accept_gate(conn: sqlite3.Connection, ticket: sqlite3.Row) -> AcceptGate:
+    """Evaluate the uniform close conditions. Same in every lane.
+
+    Step 1 of the close (running verify) is a separate, explicit action — this
+    reads the recorded result rather than running commands as a side effect of
+    an accept.
+    """
+    failures: list[str] = []
+    evidence: list[str] = []
+
+    ok, reasons = _verify_passed(conn, ticket)
+    (evidence if ok else failures).extend(reasons)
+
+    # spec_validates can only restate spec_linked's complaint when no lane is
+    # declared — and it would shell out to `openspec` to do it. Short-circuit so
+    # the refusal reads as one problem rather than two.
+    linked_ok, reasons = _spec_linked(conn, ticket)
+    (evidence if linked_ok else failures).extend(reasons)
+    if linked_ok:
+        ok, reasons = _spec_validates(conn, ticket)
+        (evidence if ok else failures).extend(reasons)
+
+    return AcceptGate(
+        passed=not failures,
+        failures=tuple(dict.fromkeys(failures)),
+        evidence=tuple(dict.fromkeys(evidence)),
+    )
+
+
+def _forced_spec_flag_content(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str, reason: str
+) -> str:
+    """Preserve any declared lane while stamping the override reason onto it."""
+    link = spec_link(conn, project_id, ticket_id)
+    lane = link.lane or "C"
+    change = link.change or NO_CHANGE_SENTINEL
+    return SpecLink(lane=lane, change=change, note=f"accepted with --force: {reason}").render()
+
+
+def _archive_change_for(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str, project_path: str
+) -> str:
+    """Archive the ticket's OpenSpec change, merging its delta into canon.
+
+    Returns a one-line note for PRODUCT_SPECIFICATION.md, or '' when there was
+    nothing to archive. Raises ValueError if the archive is attempted and fails —
+    a half-closed ticket whose spec never reached canon is worse than a refusal.
+    """
+    link = spec_link(conn, project_id, ticket_id)
+    if not link.change or link.claims_no_change:
+        return ""
+
+    try:
+        import openspec_adapter as osa
+    except ImportError:
+        return ""
+
+    if not osa.change_exists(project_path, link.change):
+        archived = osa.archived_change_dirs(project_path, link.change)
+        if archived:
+            return f"Spec: `{link.change}` (already archived)"
+        return ""
+
+    res = osa.archive(project_path, link.change)
+    if not res.ok:
+        raise ValueError(
+            f"Cannot accept {ticket_id}: `openspec archive {link.change}` failed "
+            f"({res.message}). The spec delta must reach openspec/specs/ before "
+            f"the ticket closes."
+        )
+    summary = osa.archive_summary(res)
+    totals = summary.get("totals") or {}
+    counts = ", ".join(
+        f"{n} {k}" for k, n in totals.items() if isinstance(n, int) and n
+    ) or "no requirement changes"
+    return f"Spec: `{link.change}` archived to openspec/specs/ ({counts})"
+
+
 def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
     """Return (covered, reasons). Opt-in predicate for stricter user gates.
 
     Migration 15 collapsed the tests/smoke readiness flags into acceptance
     criteria, so the legacy "tests readiness flag has content" path is gone.
-    Surviving paths:
-      1. A linked journey that compiles + validates.
-      2. Explicit ticket.no_test_required = 1 with a non-empty rationale note.
-    Nothing seeded references this predicate; criteria are the default bar.
+    Paths:
+      1. A passing `verified` flag — a real verify run against current HEAD.
+      2. A linked journey that compiles + validates.
+      3. Explicit ticket.no_test_required = 1 with a non-empty rationale note.
+
+    Path 1 exists because this predicate was a live trap: six projects already
+    carry `tests_covered` in their `Backlog → WIP` triggers, while
+    `journey_tickets` is empty and nothing sets `no_test_required`. Every one of
+    those tickets was unsatisfiable — if the engine were switched on they could
+    never advance. Accepting verify evidence gives the predicate a route that
+    projects actually use.
     """
     reasons: list[str] = []
     project_id = ticket["project_id"]
     ticket_id = ticket["id"]
 
-    # Path 1: any linked journey that compiles + validates.
+    # Path 1: a recorded verify run that passed against the current commit.
+    ok, why = _verify_passed(conn, ticket)
+    if ok:
+        return (True, why)
+
+    # Path 2: any linked journey that compiles + validates.
     journey_rows = conn.execute(
         "SELECT journey_id FROM journey_tickets "
         "WHERE ticket_id = ? AND project_id = ?",
@@ -344,11 +815,13 @@ def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool,
         if _journey_compiles_and_validates(conn, project_id, journey_id):
             return (True, [f"linked journey {journey_id} compiles+validates"])
 
-    # Path 2: explicit no_test_required with non-empty note.
+    # Path 3: explicit no_test_required with non-empty note.
     if ticket["no_test_required"] == 1 and (ticket["no_test_required_note"] or "").strip():
         return (True, ["no_test_required (explicit)"])
 
-    # No path satisfied — explain.
+    # No path satisfied — explain. Verify comes first because it is the route
+    # most tickets should take.
+    reasons.extend(why)
     if journey_rows and not any(
         _journey_compiles_and_validates(conn, project_id, jid) for (jid,) in journey_rows
     ):
@@ -396,6 +869,14 @@ def _ticket_eligibility(conn: sqlite3.Connection, ticket: sqlite3.Row) -> Eligib
 
     if _has_active_run(conn, project_id, "ticket", ticket_id):
         reasons.append("active run already exists")
+
+    # Advisory only, deliberately. The engine is off in this phase, so an
+    # undeclared lane is surfaced as a warning rather than blocking dispatch —
+    # otherwise every pre-existing ticket in every project would go ineligible
+    # the moment this shipped. The binding gate is at accept, not here.
+    spec_ok, spec_reasons = _spec_linked(conn, ticket)
+    if not spec_ok:
+        reasons.append(f"advisory: {spec_reasons[0]}")
 
     eligible = (
         mode == "auto"
@@ -644,8 +1125,28 @@ def accept_ticket(
     project_path: str,
     project_name: str,
     actor: ActorContext = ActorContext.human(),
+    force: str = "",
 ) -> str:
     """Accept a ticket: move to Done with status 'done' and append to PRODUCT_SPECIFICATION.md.
+
+    This is the gate. Before anything is written it requires:
+
+      * `verify_passed`   — a real verify run that exited 0 against current HEAD
+      * `spec_validates`  — `openspec validate <change> --strict` exits 0, or an
+                            explicit-and-justified lane-C claim of no delta
+
+    A failing check raises ValueError; both callers turn that into a non-zero
+    exit / an HTTP error. The checks run identically whether this is reached from
+    `tickets-cli.py accept` or from a dashboard click, because there is exactly
+    one implementation.
+
+    On success the change is archived — merging its delta into
+    `openspec/specs/` — *before* PRODUCT_SPECIFICATION.md is written, so the
+    archive diff lands in the same commit as the accept rather than stranding a
+    second diff that needs its own PR.
+
+    *force* is the escape hatch: a non-empty string skips the gate but records
+    the reason on the ticket and in the audit log. Silent bypass is not offered.
 
     Emits M1a spine events `section_change` and `status_change` as needed.
     Returns the canonical ticket ID.
@@ -654,6 +1155,22 @@ def accept_ticket(
     tid = ticket["id"]
     old_section = ticket["section"]
     old_status = ticket["status"]
+
+    gate = evaluate_accept_gate(conn, ticket)
+    if not gate.passed and not force:
+        raise ValueError(gate.refusal_message(project_id, tid))
+
+    archive_note = ""
+    if force:
+        emit_event(conn, project_id, "ticket", tid, "gate_override",
+                   {"reason": force, "blocked_by": list(gate.failures)}, actor)
+        write_readiness_flag(
+            conn, project_id, tid, "spec",
+            _forced_spec_flag_content(conn, project_id, tid, force),
+            set_by="accept:--force",
+        )
+    else:
+        archive_note = _archive_change_for(conn, project_id, tid, project_path)
 
     commit_hash_val = capture_commit_hash(project_path)
     sort_order = _next_sort_order(conn, project_id, "Done")
@@ -680,6 +1197,15 @@ def accept_ticket(
     entry += f"Priority: {ticket['priority']} | Status: released\n"
     commit_info = f" | Commit: {commit_hash_val}" if commit_hash_val else ""
     entry += f"Released: {today}{commit_info}\n"
+    # Record what the gate actually saw, so the spec says how this was proven
+    # rather than merely that someone pressed accept.
+    rec = verify_record(conn, project_id, tid)
+    if rec.command:
+        entry += f"Verified: `{rec.command}` exit {rec.exit_code}\n"
+    if archive_note:
+        entry += f"{archive_note}\n"
+    if force:
+        entry += f"Gate overridden: {force}\n"
     if ticket["description"]:
         entry += f"{ticket['description']}\n"
 

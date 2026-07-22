@@ -57,6 +57,12 @@ def install_system_files():
     copy_file(REPO_DIR / "src" / "db.py", INSTALL_DIR / "db.py", "Database")
     copy_file(REPO_DIR / "src" / "conditions.py", INSTALL_DIR / "conditions.py", "Conditions")
     copy_file(REPO_DIR / "src" / "workflows_seed.py", INSTALL_DIR / "workflows_seed.py", "Workflows seeder")
+    # Sole OpenSpec shell-out point — the gates in actions.py import it, so the
+    # CLI is broken without it.
+    copy_file(REPO_DIR / "src" / "openspec_adapter.py", INSTALL_DIR / "openspec_adapter.py", "OpenSpec adapter")
+    copy_file(REPO_DIR / "src" / "workflow_config.py", INSTALL_DIR / "workflow_config.py", "Workflow config reader")
+    copy_file(REPO_DIR / "src" / "trigger_describe.py", INSTALL_DIR / "trigger_describe.py", "Trigger describer")
+    copy_file(REPO_DIR / "src" / "runners.py", INSTALL_DIR / "runners.py", "Runners")
     copy_file(REPO_DIR / "src" / "kitchen_feed.py", INSTALL_DIR / "kitchen_feed.py", "Kitchen feed (data)")
     copy_file(REPO_DIR / "src" / "kitchen_view.py", INSTALL_DIR / "kitchen_view.py", "Kitchen view (renderer)")
 

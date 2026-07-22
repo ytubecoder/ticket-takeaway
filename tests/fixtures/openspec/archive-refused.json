@@ -1,0 +1,15 @@
+{
+  "archive": null,
+  "root": {
+    "path": "<PROJECT_ROOT>",
+    "source": "nearest"
+  },
+  "status": [
+    {
+      "severity": "error",
+      "code": "archive_validation_failed",
+      "message": "Validation failed for change 'b-1-sample-capability'.",
+      "fix": "Run openspec validate b-1-sample-capability for details, fix the errors, or rerun with --no-validate."
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "archive": {
+    "change": "b-1-sample-capability",
+    "archivedAs": "2026-07-22-b-1-sample-capability",
+    "path": "<PROJECT_ROOT>/openspec/changes/archive/2026-07-22-b-1-sample-capability",
+    "specsUpdated": true,
+    "totals": {
+      "added": 1,
+      "modified": 0,
+      "removed": 0,
+      "renamed": 0
+    }
+  },
+  "root": {
+    "path": "<PROJECT_ROOT>",
+    "source": "nearest"
+  }
+}

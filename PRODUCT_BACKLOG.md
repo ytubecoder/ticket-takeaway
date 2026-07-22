@@ -364,6 +364,14 @@ After the endpoint abstraction (PR #11), system agents got a partial unlock — 
 ### BUG-01: Sample bug — placeholder for Live tab demo
 Priority: high | Status: bug
 
+### BUG-02: Registry has a duplicate project: reworking-order and reworkingorder both point at ~/projects/reworkingorder
+Priority: medium | Status: bug
+registry.json contains two entries for the same path (~/projects/reworkingorder) under ids 'reworking-order' and 'reworkingorder'. Both carry 9 tickets, so the project's work is double-counted everywhere the registry is aggregated (dashboard totals, kitchen dispatch, seed-to-DB comparison). Found while enrolling loops for the OpenSpec rollout; unrelated to that work. Deciding which id is canonical requires knowing which one the user's markdown and any external links reference, so this is not a safe silent merge.
+- [ ] Establish which of the two ids is canonical (check PRODUCT_BACKLOG.md provenance and any pane/bookmark links)
+- [ ] Migrate tickets, readiness_flags, workflow_projects and automation_subjects rows from the duplicate id to the canonical one
+- [ ] Remove the duplicate entry from registry.json
+- [ ] Registry has no two entries sharing a path
+
 ## Icebox
 
 ## Done

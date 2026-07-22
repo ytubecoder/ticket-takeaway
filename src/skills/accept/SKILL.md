@@ -52,19 +52,52 @@ Wait for user decision. If they don't force-accept, stop.
 
 If `docs/features/{ID}/` exists, run `/sync` to extract learnings before cleanup. This step is **mandatory** — never skip it.
 
-### 5. Verify Acceptance Criteria
+### 5. Verify — Really Run It
 
-- Check unchecked criteria in the ticket
-- Run tests if available (search for test files related to the feature)
-- Report verification status to the user
+Do not search for test files and eyeball them. Run the project's declared verify command and record the real result:
+
+```bash
+CLI=~/.claude/ticket-takeaway/tickets-cli.py
+python3 $CLI verify <project> <ID>
+```
+
+This reads `[verify]` from the project's `WORKFLOW.toml` (falling back to `tests/run-tests.sh`, then a `package.json` test script, then `pytest`), runs it, and records the command, exit code, output tail, and commit sha onto the ticket. **Non-zero exits are recorded too** — a failing verify is evidence, and it is what the gate will refuse on.
+
+If it reports no verify command, ask the user once and write the answer into the project's `WORKFLOW.toml` so the next close is deterministic:
+
+```toml
+[verify]
+command = "tests/run-tests.sh"
+timeout_ms = 600000
+```
+
+Then check each obligation against the diff:
+- **lane A/B** → the requirement scenarios in the spec delta
+- **lane C** → the ticket's acceptance criteria rows
+
+Same rigour, same evidence standard, different source. If observable behaviour changed on a lane-C ticket and no delta exists, write one now, from the diff — `python3 $CLI spec <project> <ID> --lane C` creates the change, then use `openspec instructions specs --change <name>`.
 
 ### 6. Accept the Ticket
 
 ```bash
-python3 ~/.claude/ticket-takeaway/tickets-cli.py accept <project> <ID>
+python3 $CLI accept <project> <ID>
 ```
 
-This moves the ticket to Done, appends to PRODUCT_SPECIFICATION.md, and syncs the markdown.
+**This is a gate, not a formality.** Before anything is written it requires a passing verify run against current HEAD, and a spec delta that passes `openspec validate --strict` (or an explicit, justified lane-C claim that nothing observable changed). On success it archives the change — merging the delta into `openspec/specs/` — *before* writing PRODUCT_SPECIFICATION.md, so the archive diff lands in the same commit as the accept.
+
+Preview what it will decide without changing anything:
+
+```bash
+python3 $CLI gate <project> <ID>
+```
+
+**If it refuses, report the refusal to the user verbatim and stop.** The message names exactly what is missing. Do not work around it by editing flags, hand-archiving, or re-running until it passes. The override exists and is deliberate:
+
+```bash
+python3 $CLI accept <project> <ID> --force "<reason>"
+```
+
+`--force` records the reason on the ticket, in the audit log, and in PRODUCT_SPECIFICATION.md. Only use it when the user explicitly asks for it, and quote the reason they gave.
 
 ### 7. Clean Up
 

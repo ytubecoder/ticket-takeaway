@@ -126,6 +126,39 @@ def _eval_tests_covered(ctx: dict, p: dict) -> tuple[bool, str]:
     return (False, "; ".join(reasons) if reasons else "tests not covered")
 
 
+def _delegate(fn_name: str, ctx: dict, ok_default: str, fail_default: str) -> tuple[bool, str]:
+    """Delegate to an actions.py predicate — IDENTICAL logic, same source of truth.
+
+    The spec-lifecycle predicates below are the same functions accept_ticket()
+    calls. Reimplementing them here is how the engine and the gate would end up
+    disagreeing, so they are not reimplemented.
+    """
+    import actions  # type: ignore[import]
+
+    fn = getattr(actions, fn_name)
+    ticket_row = ctx.get("ticket_row")
+    subject = ticket_row if ticket_row is not None else _DictRow(ctx["ticket"])
+    ok, reasons = fn(ctx["db"], subject)
+    if ok:
+        return (True, reasons[0] if reasons else ok_default)
+    return (False, "; ".join(reasons) if reasons else fail_default)
+
+
+def _eval_spec_linked(ctx: dict, p: dict) -> tuple[bool, str]:
+    """Delegate to actions._spec_linked — a spec lane has been declared."""
+    return _delegate("_spec_linked", ctx, "spec lane declared", "no spec lane declared")
+
+
+def _eval_spec_validates(ctx: dict, p: dict) -> tuple[bool, str]:
+    """Delegate to actions._spec_validates — `openspec validate --strict` exits 0."""
+    return _delegate("_spec_validates", ctx, "spec validates", "spec does not validate")
+
+
+def _eval_verify_passed(ctx: dict, p: dict) -> tuple[bool, str]:
+    """Delegate to actions._verify_passed — verify exited 0 against current HEAD."""
+    return _delegate("_verify_passed", ctx, "verify passed", "verify has not passed")
+
+
 def _eval_tag_includes(ctx: dict, p: dict) -> tuple[bool, str]:
     """Check if the ticket has a specific tag."""
     db: sqlite3.Connection = ctx["db"]
@@ -454,6 +487,25 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
         "label": "Tests are covered",
         "params": [],
         "evaluator": _eval_tests_covered,
+    },
+    # --- Spec lifecycle (OpenSpec) ----------------------------------------
+    # These read the `spec` / `verified` readiness flags and shell out through
+    # openspec_adapter. They are the same predicates actions.accept_ticket()
+    # enforces, exposed here so a user-built workflow can filter on them too.
+    "spec_linked": {
+        "label": "Spec lane is declared",
+        "params": [],
+        "evaluator": _eval_spec_linked,
+    },
+    "spec_validates": {
+        "label": "OpenSpec change validates (--strict)",
+        "params": [],
+        "evaluator": _eval_spec_validates,
+    },
+    "verify_passed": {
+        "label": "Verify command passed at HEAD",
+        "params": [],
+        "evaluator": _eval_verify_passed,
     },
     "no_active_run": {
         "label": "No active run",
@@ -898,6 +950,28 @@ def ui_catalog() -> dict:
                 "hint": "Test-coverage state is intrinsic — produced by the agent's work product.",
             },
             {
+                "key": "spec",
+                "label": "Spec",
+                "filter_ops": [
+                    {"key": "is_linked", "label": "lane is declared",
+                     "predicate_kind": "spec_linked", "value_control": "none"},
+                    {"key": "validates", "label": "validates (openspec --strict)",
+                     "predicate_kind": "spec_validates", "value_control": "none"},
+                ],
+                "action_ops": [],
+                "hint": "Spec state is intrinsic — set by `tickets-cli.py spec` and by OpenSpec itself.",
+            },
+            {
+                "key": "verify",
+                "label": "Verify",
+                "filter_ops": [
+                    {"key": "passed", "label": "passed at HEAD",
+                     "predicate_kind": "verify_passed", "value_control": "none"},
+                ],
+                "action_ops": [],
+                "hint": "Verify state is evidence — recorded by `tickets-cli.py verify`, never asserted by hand.",
+            },
+            {
                 "key": "run",
                 "label": "Run",
                 "filter_ops": [
@@ -991,6 +1065,9 @@ def ui_catalog() -> dict:
             "has_field": "field_present",
             "deps_clear": "dependencies",
             "tests_covered": "tests",
+            "spec_linked": "spec",
+            "spec_validates": "spec",
+            "verify_passed": "verify",
             "no_active_run": "run",
             "parent_done": "parent",
             "parent_section_not_in": "parent",

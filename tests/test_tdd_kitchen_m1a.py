@@ -566,8 +566,11 @@ class TestSpineEventsOnExistingActions:
 
     def test_accept_ticket_emits_section_and_status(self, conn, tmp_path):
         _add_ticket(conn, section="For Review", status="for-review"); conn.commit()
+        # This test is about event emission, not the close gate — bypass it
+        # explicitly. Gate coverage lives in tests/test_tdd_spec_lifecycle.py.
         accept_ticket(conn, "p", "B-1", str(tmp_path), "p",
-                      actor=ActorContext.human("alice"))
+                      actor=ActorContext.human("alice"),
+                      force="test fixture: exercising event emission")
         conn.commit()
         kinds = [r[0] for r in conn.execute(
             "SELECT event_kind FROM activity_events WHERE subject_id='B-1' ORDER BY id"

@@ -122,6 +122,49 @@ def compute_status_on_move(current_status: str, target_section: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Readiness flags — the ONE registry both surfaces (CLI + HTTP) validate against
+# ---------------------------------------------------------------------------
+#
+# `readiness_flags` accepts any flag name at the DB level, so a flag is only
+# usable once it is (a) allowed by both surfaces and (b) round-trips through
+# PRODUCT_BACKLOG.md. The label below is the markdown line prefix used by both
+# the writer and the parser — a flag with no label would be silently dropped on
+# the next regeneration, which is exactly the trap this registry exists to close.
+#
+#   reviewed  — legacy name for the L-pane (Learnings), set at review time
+#   spec      — OpenSpec linkage: "<lane letter>:<change name>", e.g.
+#               "A:b-44-knowledge-ingestion-pipeline"; lane C may carry "C:" alone
+#   verified  — real verify-command evidence: command, exit code, output tail,
+#               and the commit sha the run was made against
+READINESS_FLAG_LABELS: dict[str, str] = {
+    "reviewed": "Reviewed",
+    "spec": "Spec",
+    "verified": "Verified",
+}
+
+VALID_READINESS_FLAGS: set[str] = set(READINESS_FLAG_LABELS)
+
+# Markdown line prefix -> flag name, for the PRODUCT_BACKLOG.md parser.
+READINESS_LABEL_TO_FLAG: dict[str, str] = {
+    f"{label}:": flag for flag, label in READINESS_FLAG_LABELS.items()
+}
+
+# ---------------------------------------------------------------------------
+# Spec lanes (see docs/LIFECYCLE.md) — chosen by intent, not by size
+# ---------------------------------------------------------------------------
+#
+# The lane changes how work is *described* up front. It never changes how work
+# is *closed*: every lane goes through the same verify + obligation + archive
+# gate in actions.accept_ticket().
+SPEC_LANES: dict[str, str] = {
+    "A": "Spec'd — proposal + spec delta + design + tasks, written before work starts",
+    "B": "Interviewed — proposal + spec delta only",
+    "C": "Direct — no up-front artifacts; spec delta written from the diff at close, if behaviour changed",
+}
+
+DEFAULT_SPEC_LANE = "B"
+
+# ---------------------------------------------------------------------------
 # Workflow bounce
 # ---------------------------------------------------------------------------
 
@@ -169,6 +212,7 @@ EVENT_KIND_LABELS: dict[str, str] = {
     "pause_cleared":      "Resumed",
     "handoff_recorded":   "Handoff recorded",
     "ticket_created":     "Ticket created",
+    "gate_override":      "Accept gate overridden",
 }
 
 # ---------------------------------------------------------------------------
@@ -196,6 +240,7 @@ EVENT_KIND_ICONS: dict[str, str] = {
     "pause_cleared":      "play",
     "handoff_recorded":   "file-text",     # TODO: ideal icon would be 'clipboard-check'
     "ticket_created":     "plus",          # TODO: ideal icon would be 'sparkles' or 'file-plus'
+    "gate_override":      "zap",           # TODO: ideal icon would be 'shield-off'
 }
 
 # ---------------------------------------------------------------------------
@@ -225,13 +270,14 @@ EVENT_KIND_GROUPS: dict[str, str] = {
     "workspace_created":  "Workspace",
     "pause_set":          "Pause",
     "pause_cleared":      "Pause",
+    "gate_override":      "Gate",
 }
 
 # Display order for the filter chip row; groups not in this list are appended
 # alphabetically at the end so new event kinds don't disappear silently.
 EVENT_GROUP_ORDER: list[str] = [
     "Created", "Moved", "Status", "Criteria",
-    "Run", "Hook", "Workspace", "Field", "Input", "Pause",
+    "Run", "Hook", "Workspace", "Field", "Input", "Pause", "Gate",
 ]
 
 # Per-group accent colour. Picked from the existing palette so light & dark
@@ -248,6 +294,7 @@ EVENT_GROUP_COLORS: dict[str, str] = {
     "Field":     "#64748b",  # slate-darker — text edits
     "Input":     "#ec4899",  # pink — human-in-the-loop
     "Pause":     "#ef4444",  # red — interruptions
+    "Gate":      "#dc2626",  # deep red — a gate was bypassed on purpose
 }
 
 # ---------------------------------------------------------------------------

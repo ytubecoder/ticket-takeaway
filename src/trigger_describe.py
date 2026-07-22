@@ -80,6 +80,12 @@ def _describe_predicate(p: dict) -> str:
         return "all of its dependencies are done"
     if kind == "tests_covered":
         return "tests are covered"
+    if kind == "spec_linked":
+        return "a spec lane has been declared for it"
+    if kind == "spec_validates":
+        return "its OpenSpec change validates in strict mode"
+    if kind == "verify_passed":
+        return "its verify command passed at the current commit"
     if kind == "no_active_run":
         return "no run is already in flight for it"
     if kind == "tag_includes":
@@ -177,6 +183,9 @@ _PREDICATE_LABELS = {
     "flag_set": "Readiness flag is set",
     "deps_clear": "All dependencies are done",
     "tests_covered": "Tests are covered",
+    "spec_linked": "Spec lane is declared",
+    "spec_validates": "OpenSpec change validates (--strict)",
+    "verify_passed": "Verify command passed at HEAD",
     "no_active_run": "No run already in flight",
     "tag_includes": "Has tag",
     "has_tag": "Has all tags",
@@ -202,7 +211,7 @@ def _predicate_value(p: dict) -> str:
     kind = p.get("kind")
     if kind in ("deps_clear", "tests_covered", "no_active_run", "parent_done",
                 "children_have_open_bugs", "children_no_open_bugs", "has_children",
-                "summary_stale"):
+                "summary_stale", "spec_linked", "spec_validates", "verify_passed"):
         return ""
     if kind == "automation_mode":
         v = p.get("value")

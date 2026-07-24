@@ -235,6 +235,18 @@ Enforced in `actions.accept_ticket()`:
 
 Archiving lands at step 5, *before* the commit, deliberately: archiving after a merge strands a second diff needing its own PR.
 
+### The entry gate — no dispatch without a declared lane
+
+The close gate has an entry-side counterpart: `_ticket_eligibility` and the seeded `Backlog → WIP` trigger both require `spec_linked`, so the Kitchen will not hand a ticket to an implementing agent on free text alone. A justified lane-C declaration satisfies it — the question at entry is "has intent been declared", not "is there a delta". This is safe to enforce against old tickets because eligibility already requires `automation_mode='auto'` (per-ticket opt-in, default manual): declaring a lane is simply part of switching a ticket on. `tests/test_tdd_engine_parity.py` enforces that the two paths agree.
+
+So the automation pipeline is gated at three points:
+
+| Transition | Gate |
+|---|---|
+| Backlog → WIP (dispatch) | `spec_linked` — a lane is declared |
+| WIP → For Review | `commit_hash` present + `verify_passed` |
+| For Review → Done (accept) | `verify_passed` at HEAD + `spec_validates` + archive |
+
 ### Where the rules live
 
 In the **shared core** — `conditions.py` predicates and `actions.py` enforcement — which both surfaces already call. Consequences:

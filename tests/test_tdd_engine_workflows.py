@@ -120,6 +120,19 @@ def _set_tests_flag(db_factory, tid="B-1", project_id="p"):
     return None
 
 
+def _declare_lane(db_factory, tid="B-1", project_id="p"):
+    """Entry gate into automation: eligibility + the Backlog → WIP trigger
+    require a declared spec lane (spec_linked)."""
+    conn = db_factory()
+    conn.execute(
+        "INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by) "
+        "VALUES (?, ?, 'spec', ?, 'test')",
+        (tid, project_id, f"B:{tid.lower()}-test-change"),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _set_flag(db_factory, key: str, value: str):
     conn = db_factory()
     conn.execute(
@@ -232,6 +245,7 @@ class TestDispatchViaWorkflows:
         _add_ticket(db_factory, tid="B-1", section="Backlog", project_id=project_id)
         _set_auto(db_factory, tid="B-1", project_id=project_id)
         _set_tests_flag(db_factory, tid="B-1", project_id=project_id)
+        _declare_lane(db_factory, tid="B-1", project_id=project_id)
         _seed_workflows(db_factory, project_id=project_id)
         _set_flag(db_factory, "kitchen.use_db_workflows", "true")
 
@@ -301,6 +315,7 @@ class TestDispatchViaWorkflows:
         _add_ticket(db_factory, tid="B-1", section="Done", status="done")
         _set_auto(db_factory, tid="B-1")
         _set_tests_flag(db_factory, tid="B-1")
+        _declare_lane(db_factory, tid="B-1")
         _freeze_summary_hash(db_factory, tid="B-1")
         _seed_workflows(db_factory)
         _set_flag(db_factory, "kitchen.use_db_workflows", "true")
@@ -358,6 +373,7 @@ class TestDispatchViaWorkflows:
         _add_ticket(db_factory, tid="B-1", section="Backlog")
         # Don't call _set_auto — stays manual.
         _set_tests_flag(db_factory, tid="B-1")
+        _declare_lane(db_factory, tid="B-1")
         _seed_workflows(db_factory)
         _set_flag(db_factory, "kitchen.use_db_workflows", "true")
 
@@ -390,6 +406,7 @@ class TestLegacyPathWithFlagFalse:
         _add_ticket(db_factory, tid="B-1", section="Backlog")
         _set_auto(db_factory, tid="B-1")
         _set_tests_flag(db_factory, tid="B-1")
+        _declare_lane(db_factory, tid="B-1")
         # flag stays false (default)
         # No workflows seeded — legacy doesn't need them.
 
@@ -418,6 +435,7 @@ class TestLegacyPathWithFlagFalse:
         _add_ticket(db_factory, tid="B-1", section="Backlog")
         _set_auto(db_factory, tid="B-1")
         _set_tests_flag(db_factory, tid="B-1")
+        _declare_lane(db_factory, tid="B-1")
 
         (tmp_path / "p").mkdir(parents=True, exist_ok=True)
         kitchen.set_project_path_resolver(lambda pid: tmp_path / pid)
@@ -478,6 +496,7 @@ class TestTickRouting:
         _add_ticket(db_factory, tid="B-1", section="Backlog")
         _set_auto(db_factory, tid="B-1")
         _set_tests_flag(db_factory, tid="B-1")
+        _declare_lane(db_factory, tid="B-1")
         _seed_workflows(db_factory)
         _set_flag(db_factory, "kitchen.use_db_workflows", "true")
 

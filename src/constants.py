@@ -180,9 +180,9 @@ WORKFLOW_RUN_STATUSES = ("pending", "running", "paused", "completed", "failed", 
 
 GATE_BANNER_BY_SECTION: dict[str, str] = {
     "Ideas":      "Add a description and at least one criterion → auto-moves to Backlog.",
-    "Backlog":    "Resolve dependencies → auto-moves to WIP.",
-    "WIP":        "Land a commit → auto-moves to For Review.",
-    "For Review": "All criteria checked + no open bugs → auto-accepts.",
+    "Backlog":    "Declare a spec lane (tickets-cli spec) + resolve dependencies → eligible for WIP dispatch.",
+    "WIP":        "Land a commit + a passing verify → auto-moves to For Review.",
+    "For Review": "Verify passes at HEAD + spec validates → accept archives the change and closes.",
     "Done":       "Ticket accepted — learnings can be captured in the L flag.",
     "Bugs":       "Link this bug to a parent ticket and mark it fixed.",
     "Icebox":     "Shelved. Move back to Backlog when ready to resume.",

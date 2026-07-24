@@ -430,6 +430,11 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 {"kind": "automation_mode", "value": "auto"},
                 {"kind": "has_field", "field": "description"},
                 {"kind": "criteria_count_gte", "value": 1},
+                # Entry gate into automation: a spec lane must be declared
+                # before an implementing agent is dispatched. Mirrors the
+                # binding spec_linked check in actions._ticket_eligibility —
+                # test_tdd_engine_parity.py enforces that the two agree.
+                {"kind": "spec_linked"},
                 {"kind": "deps_clear"},
                 {"kind": "no_active_run"},
             ]

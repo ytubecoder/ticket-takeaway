@@ -1,5 +1,21 @@
 # Session Log
 
+## 2026-07-25 — Entry gate: spec_linked now binding at Kitchen dispatch
+
+### Summary
+- Per Tom's direction, the spec lane became the *entry* gate into automation, not just advisory: `_ticket_eligibility` and the seeded `Backlog → WIP` trigger both require `spec_linked`, so the Kitchen never dispatches an implementing agent on free text alone. A justified lane-C declaration satisfies it (entry asks "is intent declared", not "is there a delta"). Live DB reseeded; verified against a real Backlog ticket — eligibility now lists the missing lane as a blocker.
+- Gate banners updated (Backlog/WIP/For Review) — the full-page ticket view now describes the real gates.
+- Saved `workflows/enroll-project-openspec.txt` — the 9-step per-project enrollment recipe with footprint verification, distilled from the loops + stuntsclone2 pilots.
+
+### Lessons Learned
+- **Accepted:** Flipping advisory → binding was safe *because* eligibility already requires `automation_mode='auto'` (per-ticket opt-in, default manual). The original advisory caution protected pre-existing tickets; the auto-mode requirement was already doing that job.
+- **Gotcha:** `seed_default_workflows` only refreshes system-workflow bodies at serve.py startup — after editing `workflows_seed.py`, the live DB still had the old trigger until explicitly reseeded. `compare_seed_to_db.py` reported OK for the row anyway (it compares the src seed to itself for body state) — verify the actual `trigger_json` in the DB, not the comparator's OK.
+- **Gotcha:** 13 kitchen-test fixtures built "eligible" tickets without a lane. Fixed with `_declare_lane` helpers per file rather than baking the flag into `_add_ticket`, so tests that intend *ineligible* stay honest. New parity cases: undeclared lane blocks both paths; justified lane-C passes both.
+
+### Decisions
+- The automation pipeline is now gated at three points: Backlog→WIP = `spec_linked`; WIP→Review = commit + `verify_passed`; Review→Done = verify at HEAD + validate + archive. Recorded in LIFECYCLE.md §4c.
+- The engine master switches (`kitchen.use_db_workflows`, `automation_mode`) remain off — unchanged from the adoption plan.
+
 ## 2026-07-23 — OpenSpec adopted as the spec lifecycle; gates enforced in the core
 
 ### Summary

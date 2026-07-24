@@ -1,0 +1,63 @@
+# Enroll a Project in the OpenSpec Lifecycle
+# Project: ticket-takeaway (operates on OTHER projects — pass the target as argument)
+# Frequency: as needed — once per project, per the rollout order in the adoption plan
+# Description: Bring one project under OpenSpec + the Ticket Takeaway close gate, with footprint verification
+
+## Prerequisites
+- `openspec --version` prints exactly 1.6.0 (`@fission-ai/openspec@1.6.0` — NEVER the bare `openspec` npm name, a dead squat)
+- `OPENSPEC_TELEMETRY=0` exported (in ~/.zshrc; the TT adapter also sets it per-call)
+- Target project has no uncommitted mess you'd be unable to distinguish from init fallout — commit or stash first
+- Check for a live parallel session in the target (recent file mtimes, running claude/codex processes). If one exists, use `--tools none` in step 2 and skip nothing else.
+
+## Steps
+
+1. Snapshot the target's state
+   - Run: cd <project> && git status --porcelain | sort > /tmp/enroll-before.txt; md5 -q CLAUDE.md AGENTS.md 2>/dev/null > /tmp/enroll-md5.txt; find .claude -type f | sort > /tmp/enroll-claude.txt
+   - Expected outcome: Baselines recorded (empty files are fine for repos without those paths)
+   - If fails: Not a git repo — record `ls -a` instead, and note there is NO undo; consider `git init` first
+
+2. Initialise OpenSpec
+   - Run: openspec init --tools claude    (or --tools none if a parallel session is live — commands/skills can be added later)
+   - NEVER pass --force (deletes legacy command dirs unprompted). Never accept `openspec config profile`'s auto-apply prompt (runs the squatted bare name via npx).
+   - Expected outcome: Only `openspec/` (+ `.claude/skills/openspec-*`, `.claude/commands/opsx/` with --tools claude) appear vs the step-1 baseline; CLAUDE.md/AGENTS.md md5-identical
+   - If fails: Diff against the baselines, restore anything unexpected from git, stop
+
+3. Fill `openspec/config.yaml` context
+   - Write a `context:` block that POINTS at the project's real docs (CLAUDE.md, frozen contracts, safety notes) rather than copying them; include hard constraints an agent must not violate
+   - Expected outcome: Context block present; under 50KB; no duplicated doc content
+
+4. Register in Ticket Takeaway (skip if already registered)
+   - Run: python3 ~/.claude/ticket-takeaway/tickets-cli.py register --id <id> --name "<Name>" --path <project>
+   - Expected outcome: Entry in registry.json; PRODUCT_BACKLOG.md + PRODUCT_SPECIFICATION.md created
+   - If fails: Check for an id collision or a duplicate path in registry.json (see BUG-02)
+
+5. Declare the verify command
+   - Write `WORKFLOW.toml` at the project root with `[verify] command = "<real test runner>"` and `timeout_ms`
+   - Expected outcome: `python3 $CLI gate <project> <any-ticket>` names the verify command in its refusal, proving resolution works
+   - If fails: `resolve_verify_command` fallbacks are tests/run-tests.sh → package.json test → pytest; if none fit, the command MUST be declared here
+
+6. Backfill the first capability from code
+   - Pick the most load-bearing EXISTING behaviour. `tickets-cli.py spec <project> <id> --lane A` (or `openspec new change <name>` if no ticket yet), then write proposal + delta derived by READING THE CODE — never from docs/. Scope to one capability; split if over ~a page.
+   - Expected outcome: `openspec validate <change> --strict` exits 0
+   - If fails: Fix the delta format (#### for scenarios, not ###) — do not archive with --no-validate
+
+7. Verify the gate bites, headless
+   - Run: python3 $CLI accept <project> <some-unready-ticket>; echo $?
+   - Expected outcome: Specific refusal text, exit 1, ticket untouched, no PRODUCT_SPECIFICATION.md entry
+   - If fails: The gate is broken — stop the rollout and fix ticket-takeaway before enrolling anything else
+
+8. Close the loop once
+   - Run: $CLI verify → $CLI gate → $CLI accept on one real ticket
+   - Expected outcome: Verify records real output; accept archives the change (delta lands in openspec/specs/) and writes PRODUCT_SPECIFICATION.md with the Verified:/Spec: lines
+   - If fails: Read the refusal — it names the missing piece
+
+9. Commit
+   - Stage openspec/, WORKFLOW.toml, PRODUCT_BACKLOG.md, PRODUCT_SPECIFICATION.md (+ .claude/skills/openspec-* if --tools claude)
+   - Expected outcome: One commit; push if the repo has a remote
+   - If fails: If the archived change files are untracked and something deletes them, they are GONE — commit promptly (learned the hard way in loops)
+
+## Verification
+- `openspec list --specs` shows the backfilled capability
+- `git status` vs the step-1 baseline shows only intended additions
+- A deliberately-unready ticket is refused by BOTH `tickets-cli.py accept` (exit 1) and the dashboard accept (HTTP 400, same message)
+- Session log entry written in the target project noting lanes used and any divergences found

@@ -53,6 +53,15 @@ def _add_ticket(conn, tid="B-1", section="Backlog", status="specified",
         )
 
 
+def _declare_lane(conn, tid="B-1", project_id="p"):
+    """Entry gate into automation: eligibility requires a declared spec lane."""
+    conn.execute(
+        "INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by) "
+        "VALUES (?, ?, 'spec', ?, 'test')",
+        (tid, project_id, f"B:{tid.lower()}-test-change"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Migration #6 — schema present, CHECK constraints fire
 # ---------------------------------------------------------------------------
@@ -249,7 +258,7 @@ class TestEligibilityTicket:
         """After migration 15 the seeded gate is criteria-led — automation auto
         plus at least one acceptance criterion is enough. Tests are no longer
         a default gate (users can opt in via tests_covered in their workflows)."""
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn); _declare_lane(conn); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
@@ -259,7 +268,7 @@ class TestEligibilityTicket:
         """no_test_required has no effect on the default gate now (the seeded
         Backlog → WIP trigger no longer evaluates tests_covered) but a ticket
         marked NTR with criteria is still eligible."""
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn); _declare_lane(conn); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         set_no_test_required(conn, "p", "B-1", True, "Pure docs change", ActorContext.human())
         conn.commit()
@@ -332,7 +341,8 @@ class TestEligibilityTicket:
         assert any("B-2" in x for x in r.reasons)
 
     def test_dep_done_clears(self, conn):
-        _add_ticket(conn, tid="B-1"); _add_ticket(conn, tid="B-2", section="Done", status="done"); conn.commit()
+        _add_ticket(conn, tid="B-1"); _declare_lane(conn, tid="B-1")
+        _add_ticket(conn, tid="B-2", section="Done", status="done"); conn.commit()
         conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')"); conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
@@ -376,7 +386,7 @@ class TestEligibilityTicket:
 
     def test_criteria_alone_satisfies_eligibility(self, conn):
         """After migration 15 the seeded gate is criteria-led; no test flag required."""
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn); _declare_lane(conn); conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")

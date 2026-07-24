@@ -95,6 +95,20 @@ def _set_tests_flag(conn, tid="B-1", project_id="p", content="pytest tests/test_
     return None
 
 
+def _declare_lane(conn, tid="B-1", project_id="p", lane="B"):
+    """Declare a spec lane — the entry gate into automation.
+
+    Both _ticket_eligibility and the Backlog → WIP trigger now require
+    spec_linked, so every fixture that intends *eligible* must declare a lane,
+    exactly as a real ticket must before the Kitchen will dispatch it.
+    """
+    from actions import SpecLink, write_readiness_flag
+
+    change = f"{tid.lower()}-title-{tid.lower()}"
+    write_readiness_flag(conn, project_id, tid, "spec",
+                         SpecLink(lane=lane, change=change).render(), set_by="test")
+
+
 def _get_legacy_result(conn, tid="B-1", project_id="p"):
     """Run the legacy _ticket_eligibility against this ticket."""
     ticket = conn.execute(
@@ -139,6 +153,7 @@ class TestParityEligible:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -154,6 +169,7 @@ class TestParityMissingDescription:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -169,6 +185,7 @@ class TestParityZeroCriteria:
         # Intentionally NOT adding criteria.
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -203,6 +220,7 @@ class TestParityNoTestsCovered:
         _add_ticket(conn)
         _add_criteria(conn)
         _set_auto(conn)
+        _declare_lane(conn)
         # Intentionally NOT setting any test coverage.
         conn.commit()
 
@@ -215,6 +233,42 @@ class TestParityNoTestsCovered:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn, content="   ")  # no-op after migration 15
+        _declare_lane(conn)
+        conn.commit()
+
+        legacy, wf_passed, _ = _assert_parity(conn)
+        assert legacy.eligible is True
+        assert wf_passed is True
+
+
+class TestParityNoSpecLane:
+    """No declared spec lane — the entry gate into automation. Both block:
+    the Kitchen must not dispatch an implementing agent on free text alone."""
+
+    def test_undeclared_lane_both_block(self, conn):
+        _add_ticket(conn)
+        _add_criteria(conn)
+        _set_auto(conn)
+        # Intentionally NOT declaring a lane.
+        conn.commit()
+
+        legacy, wf_passed, _ = _assert_parity(conn)
+        assert legacy.eligible is False
+        assert wf_passed is False
+        assert any("spec lane" in r for r in legacy.reasons)
+
+    def test_lane_c_no_change_with_reason_is_enough_to_dispatch(self, conn):
+        """A justified lane-C declaration satisfies the entry gate — the lane
+        question is 'has intent been declared', not 'is there a delta'."""
+        from actions import SpecLink, write_readiness_flag, NO_CHANGE_SENTINEL
+
+        _add_ticket(conn)
+        _add_criteria(conn)
+        _set_auto(conn)
+        write_readiness_flag(
+            conn, "p", "B-1", "spec",
+            SpecLink(lane="C", change=NO_CHANGE_SENTINEL, note="dep bump only").render(),
+            set_by="test")
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -230,6 +284,7 @@ class TestParityActiveRun:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.execute(
             "INSERT INTO runs (project_id, subject_type, subject_id, runner_kind, status, triggered_by) "
             "VALUES ('p', 'ticket', 'B-1', 'agent', 'running', 'human')"
@@ -249,6 +304,7 @@ class TestParityManualMode:
         _add_criteria(conn)
         # mode stays 'manual' (default — no automation_subjects row).
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -265,6 +321,7 @@ class TestParityPausedMode:
         set_automation_mode(conn, "p", "ticket", "B-1", "paused",
                             ActorContext.human(), pause_reason="waiting on design")
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -280,6 +337,7 @@ class TestParityWrongSection:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -291,6 +349,7 @@ class TestParityWrongSection:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -317,6 +376,7 @@ class TestParityDraft:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy = _get_legacy_result(conn)
@@ -330,6 +390,7 @@ class TestParityDraft:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         wf_passed, _ = _get_workflow_result(conn)
@@ -350,6 +411,7 @@ class TestParityArchived:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy = _get_legacy_result(conn)
@@ -363,6 +425,7 @@ class TestParityArchived:
         _add_criteria(conn)
         _set_auto(conn)
         _set_tests_flag(conn)
+        _declare_lane(conn)
         conn.commit()
 
         wf_passed, _ = _get_workflow_result(conn)
@@ -379,6 +442,7 @@ class TestParityDepDone:
         _add_criteria(conn, tid="B-1")
         _set_auto(conn, tid="B-1")
         _set_tests_flag(conn, tid="B-1")
+        _declare_lane(conn, tid="B-1")
         conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')")
         conn.commit()
 
@@ -400,6 +464,7 @@ class TestParityNoTestRequiredBypass:
         _add_ticket(conn, no_test_required=1, no_test_required_note="docs-only change")
         _add_criteria(conn)
         _set_auto(conn)
+        _declare_lane(conn)
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)

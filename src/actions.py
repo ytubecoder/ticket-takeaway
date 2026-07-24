@@ -870,16 +870,21 @@ def _ticket_eligibility(conn: sqlite3.Connection, ticket: sqlite3.Row) -> Eligib
     if _has_active_run(conn, project_id, "ticket", ticket_id):
         reasons.append("active run already exists")
 
-    # Advisory only, deliberately. The engine is off in this phase, so an
-    # undeclared lane is surfaced as a warning rather than blocking dispatch —
-    # otherwise every pre-existing ticket in every project would go ineligible
-    # the moment this shipped. The binding gate is at accept, not here.
+    # Binding: no agent dispatch without a declared spec lane. This is the
+    # entry gate into automation — the Kitchen must not hand a ticket to an
+    # implementing agent on free text alone. Safe to enforce even with old
+    # tickets around, because eligibility already requires automation_mode
+    # 'auto' (per-ticket opt-in, default manual): a ticket only meets this
+    # gate once someone deliberately switches it on, and declaring a lane is
+    # part of switching it on. The exit gate (verify + validate + archive)
+    # stays at accept.
     spec_ok, spec_reasons = _spec_linked(conn, ticket)
     if not spec_ok:
-        reasons.append(f"advisory: {spec_reasons[0]}")
+        reasons.append(spec_reasons[0])
 
     eligible = (
         mode == "auto"
+        and spec_ok
         and ticket["section"] in CANONICAL_SECTIONS_FOR_ELIGIBILITY
         and ticket["draft"] != 1
         and ticket["archived"] != 1

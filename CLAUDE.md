@@ -16,7 +16,10 @@ python3 $CLI add <project> "Title" --section ideas [--tag t1 --priority high]
 python3 $CLI move <project> <ID> wip|review|backlog|ideas|bugs|icebox|done|wontdo
 python3 $CLI update <project> <ID> --status blocked|rework|...
 python3 $CLI update <project> <ID> --add-tag x --remove-tag y --add-criteria "..."
-python3 $CLI accept <project> <ID>        # moves to Done + appends to PRODUCT_SPECIFICATION.md
+python3 $CLI spec <project> <ID> --lane A|B|C   # declare lane + create OpenSpec change
+python3 $CLI verify <project> <ID>              # run WORKFLOW.toml [verify], record real result
+python3 $CLI gate <project> <ID>                # read-only: what accept would decide
+python3 $CLI accept <project> <ID> [--force "reason"]  # GATED: needs verify + spec; archives change, then → Done
 python3 $CLI seed                          # rebuild DB from markdown (recovery)
 python3 $CLI sync                          # regenerate markdown from DB
 
@@ -46,9 +49,10 @@ src/page_scraper.py     screen discovery for journey path builder
 src/kitchen.py          Kitchen orchestrator (poll/claim/dispatch + pause/resume)
 src/workspaces.py       per-subject git worktree manager (Kitchen)
 src/runners.py          Runner ABC + AgentRunner + ScenarioRunner + NoopRunner
-src/workflow_config.py  WORKFLOW.toml + PROMPT.md reader (Kitchen policy)
+src/workflow_config.py  WORKFLOW.toml + PROMPT.md reader (Kitchen policy; also [verify])
 src/evidence.py         Kitchen evidence rotation
 src/trigger_describe.py renders trigger_json / on_success_json to English
+src/openspec_adapter.py SOLE place that shells out to `openspec` (pin + telemetry-off + JSON shapes)
 ```
 
 Source files in `src/` are canonical; runtime copies live in `~/.claude/ticket-takeaway/`. **The deployed copies are what `serve.py` and the CLI actually execute** — see "Deployment gotcha" below.
@@ -61,10 +65,20 @@ Source files in `src/` are canonical; runtime copies live in `~/.claude/ticket-t
 
 ## Ticket Model
 
-- **Section** (where the work is) → kanban column. **Status** (badge) → lifecycle state within a column. **Readiness flags D C S T L** → checkpoints. All three are orthogonal — see `docs/LIFECYCLE.md` §3b for the full model.
+- **Section** (where the work is) → kanban column. **Status** (badge) → lifecycle state within a column. **Readiness flags D C L** (+ `spec` / `verified`, written by the CLI) → checkpoints. All orthogonal — see `docs/LIFECYCLE.md` §3b/§4b for the full model. (Migration 15 collapsed the old T/S flags into acceptance criteria; any "D C S T L" reference elsewhere is stale.)
 - **ID prefixes:** `B-` backlog, `R-` released, `I-` idea, `W-` won't do, `Z-` icebox, `BUG-` bug.
 - **Ticket format in PRODUCT_BACKLOG.md** and full field definitions: `docs/LIFECYCLE.md` §2.
 - **Parent/child:** bug sub-tickets with `Parent: {ID}` are never standalone — rendered nested. If all child bugs are `for-review`/`bug-fixed`/`done`, parent auto-promotes to For Review (now a system workflow, see Workflow Bounce).
+
+## Spec Lifecycle (OpenSpec) — the accept gate
+
+Work is described through OpenSpec change proposals and closed through one uniform gate. **Full model: `docs/LIFECYCLE.md` §4c.** What a cold-start agent must not get wrong:
+
+- **The gate lives in `actions.accept_ticket()`, not in a skill or the UI.** Both surfaces (CLI + `serve.py`) call it, so headless and dashboard accepts are bound identically. Never restate gate rules in `SKILL.md` prose or dashboard JS — that is how the two paths silently diverge.
+- **Close = verify (real command, real exit code, recorded) → obligations → `validate --strict` → `archive` → write spec.** Identical in all three lanes (A spec'd / B interviewed / C direct); the lane only changes where obligations are read from. `--force "reason"` is the sole bypass and records the reason everywhere.
+- **All `openspec` shell-outs go through `src/openspec_adapter.py`.** Pinned to `@fission-ai/openspec@1.6.0` — **not** the bare `openspec` npm name (dead 2019 squat, no `bin`) — with `OPENSPEC_TELEMETRY=0`. Captured fixtures in `tests/fixtures/openspec/` guard the JSON parsing; regenerate them (see LIFECYCLE.md §4c) after any deliberate version bump.
+- **Adding a readiness flag is a 3-place change, not one.** The DB accepts any name, so the real gates are: `constants.READINESS_FLAG_LABELS` (both surfaces validate against it), and it supplies the `PRODUCT_BACKLOG.md` line prefix for both the writer and the parser. A flag missing from that registry is written to the DB and then silently dropped on the next regeneration.
+- **Per-project verify command:** `WORKFLOW.toml` `[verify] command`. Fallbacks: `tests/run-tests.sh` → `package.json` test → `pytest` → ask once and write it in.
 
 ## Workflow Bounce (I-19) — quick map
 
@@ -131,9 +145,13 @@ Full deployment map: `INSTALL.md`.
 
 - **Inline `onclick="..."` inside JS string literals must use HTML entities for nested quotes.** Pattern that broke twice in `serve.py`'s activity-tab JS: a JS source line like `runLink = ' <a onclick="setItem(\'foo\',\'bar\')">...</a>';` renders to `... onclick="setItem('foo','bar')" ...` because Python's triple-quoted f-string converts `\'` to `'`. JS then sees the inner `'foo'` as the closer and fails with `Unexpected identifier`, killing the *entire* `<script>` block. Use `&apos;` for inner single quotes and `&quot;` for inner double quotes — the browser HTML-decodes them inside the attribute at parse time. Don't rely on backslash escapes inside Python triple-quoted f-strings that emit JS string literals.
 
+- **`run_verify` must merge stderr into stdout, not capture them separately.** The `verified` flag records the tail of a verify run to show *how it ended*. Capturing stdout and stderr into two buffers and concatenating puts all of stderr last, which routinely buries the real `passed: N, failed: 0` summary under trailing `ResourceWarning` noise. Use `stderr=subprocess.STDOUT`.
+
+- **Port 8787 is not always free.** On llm-node it's owned by `growth-console` (maguyva-marketing), not TT. When starting `serve.py` for a one-off (e.g. verifying a gate through the HTTP path), pass `--port 8790` and check `lsof -nP -iTCP:<port> -sTCP:LISTEN` first. The canonical production writer is still port 8788 (see the DB-writer gotcha).
+
 ## Further reading
 
-- `docs/LIFECYCLE.md` — ticket format, field definitions, sections, statuses, readiness flags
+- `docs/LIFECYCLE.md` — ticket format, field definitions, sections, statuses, readiness flags; **§4c = the OpenSpec spec lifecycle + accept gate**
 - `docs/KITCHEN.md` — Kitchen orchestrator spec (architecture, eligibility, runners, closed loop)
 - `docs/ARCHITECTURE.md` — high-level system overview (note: predates SQLite migration; markdown-as-DB framing is stale)
 - `docs/REVIEW_PROCESS.md` — `/review` skill workflow

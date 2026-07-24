@@ -1,5 +1,28 @@
 # Session Log
 
+## 2026-07-23 — OpenSpec adopted as the spec lifecycle; gates enforced in the core
+
+### Summary
+- Built the spec lifecycle from the plan in `docs/` (feat/openspec-lifecycle-gates, pushed, PR not yet opened). New `src/openspec_adapter.py` is the sole `openspec` shell-out (pins `@fission-ai/openspec@1.6.0`, `OPENSPEC_TELEMETRY=0`, fixtures in `tests/fixtures/openspec/`). `actions.accept_ticket()` is now a gate: verify → obligations → `validate --strict` → `archive` → write spec, identical in all three lanes, with a `--force` escape that records the reason. New CLI subcommands `spec` / `verify` / `gate`; new `conditions.py` predicates `spec_linked` / `spec_validates` / `verify_passed` delegate to the same actions.py functions the gate uses. Skills `/spec` and `/accept` became thin callers. `docs/LIFECYCLE.md` §4b/§4c rewritten.
+- Repaired `tests_covered`: it sat in six projects' `Backlog → WIP` triggers while `journey_tickets` is empty and nothing sets `no_test_required`, so those tickets were unsatisfiable. It now accepts verify evidence.
+- Piloted end-to-end in `loops` (enrolled, both lanes closed through one gate; its own SESSION_LOG has the detail) and in `stuntsclone2` (OpenSpec `--tools none`, one backfill change staged-not-archived; that repo has a live parallel session, so footprint was kept to `openspec/` only).
+- Filed the registry-duplicate bug (`reworking-order` + `reworkingorder` → same path) as `ticket-takeaway/BUG-02`, not fixed (choosing the canonical id needs provenance knowledge).
+
+### Lessons Learned
+- **Accepted:** Put the rule in `actions.accept_ticket()`, not in the two callers. Verified the gate can't be bypassed by calling `accept` directly (no skill, no GUI) *and* through the `serve.py` HTTP endpoint — both refuse identically, neither half-closes the ticket. That equivalence is the whole argument for enforcing in the core.
+- **Accepted:** Capture real OpenSpec JSON as committed fixtures and unit-test the adapter's parsers against them. The package ships ~2 releases/month and self-reports inconsistent key casing; the fixtures make a shape change fail loudly instead of a gate silently passing everything.
+- **Rejected:** The plan's "extend the `{"reviewed"}` allowlist — one line at `tickets-cli.py:1204`" was wrong. It was a **4-place** change: `serve.py` had its own duplicate allowlist, and the markdown writer's label map + the parser are two more gates. A flag missing from the label map is written to the DB and then silently dropped on the next regeneration. Collapsed all of it onto one registry in `constants.py`.
+- **Rejected:** The plan's "append `Spec: openspec/changes/<name>` to the description" would have collided with the new `Spec:` readiness-flag label — the parser would eat it out of the description. Dropped; the flag content already carries the change name.
+- **Gotcha:** `run_verify` first captured stdout/stderr separately and concatenated them, which put all of stderr last and buried the real `passed: N` summary under `ResourceWarning` noise. Fixed with `stderr=subprocess.STDOUT`. [Promoted to CLAUDE.md]
+- **Gotcha:** The reversibility test (`rm -rf openspec …`) is destructive to *untracked* files — it deleted the archived change and canonical spec, which aren't tracked until committed. Do it on a copy or commit first.
+- **Gotcha:** Editing a ticket's criteria/description via a stale reference re-imported from markdown and briefly clobbered `BUG-01`; restored from the pre-session DB backup. Snapshot `tickets.db` before bulk ticket surgery.
+
+### Decisions
+- **Engine stays off.** `_ticket_eligibility` surfaces `spec_linked` as advisory only, so shipping this does not make every pre-existing ticket ineligible. The binding gate is at accept, not at dispatch.
+- **Lane is chosen by intent, not size** (A spec'd / B interviewed / C direct), and it changes only how work is *described*. The close is identical in every lane — lane C reads obligations from acceptance criteria instead of a spec delta, and must *justify* a no-delta claim rather than assert one.
+- **Archive before the accept commit** (step 5, not after) so the spec-merge diff joins the accept rather than stranding a second PR.
+- Deferred: dashboard artifact strip, launch/resume buttons, `kitchen.use_db_workflows`, any `automation_mode` change, and a TT MCP server — all inherit the gates for free once the core enforces them. Per-change token cost was **not** measured (both pilots ran inside this build session); still owed a dedicated per-lane session.
+
 ## 2026-05-19 — Pane Link v1 shipped: tmux pane ↔ ticket binding with live tail + attention events (PR #13)
 
 ### Summary

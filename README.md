@@ -83,12 +83,12 @@ Full deployment map: [`INSTALL.md`](INSTALL.md)
 | Step | What happens | Gate |
 |------|-------------|------|
 | **1. Idea** | Add a ticket to `## Ideas`. Needs only an ID and title. | — |
-| **2. Spec** | Run `/spec` — writes description + acceptance criteria. Moves to Backlog. | Description + at least one `- [ ]` criterion |
+| **2. Spec** | Run `/spec` — picks a spec lane (A/B/C), creates the OpenSpec change, writes description + acceptance criteria. Moves to Backlog. | Description + at least one `- [ ]` criterion + a declared lane |
 | **3. Ready** | Dependencies met, criteria are actionable. Status → `ready`. | Nothing blocking the start of work |
 | **4. Build** | Double-click the card, paste into Claude Code. Ticket moves to `## WIP`. | Ticket is `ready` |
 | **5. Complete** | All criteria addressed. Ticket moves to `## For Review`. | Implementation covers every criterion |
 | **6. Review** | Run `/review` — walks through criteria, creates bug sub-tickets if needed. | All criteria verified |
-| **7. Accept** | `/accept` moves ticket to `PRODUCT_SPECIFICATION.md`. | Review passed |
+| **7. Accept** | `/accept` runs the verify command, validates + archives the OpenSpec change, then moves the ticket to `PRODUCT_SPECIFICATION.md`. | **Gate:** verify passes + spec validates (or a justified lane-C no-delta) |
 
 **Stage change** = `tickets-cli.py move <project> <id> <section>`. **State change** = `tickets-cli.py update <project> <id> --status <status>`. Or just edit the markdown — the CLI absorbs direct edits.
 
@@ -120,7 +120,7 @@ Generates and opens the kanban board. The dashboard supports light, dark, and sy
 
 ### `/spec` — Ideas to Backlog
 
-Run `/spec` to walk through all ideas, or `/spec {ID}` for a specific one. The skill reads unvetted tickets, helps you write a description and acceptance criteria, sets priority, and moves the ticket to Backlog with status `specified`.
+Run `/spec` to walk through all ideas, or `/spec {ID}` for a specific one. The skill reads unvetted tickets, picks a **spec lane** (A spec'd / B interviewed / C direct — chosen by intent, defaulting to B), creates the ticket's [OpenSpec](https://openspec.dev) change, helps you write a description and acceptance criteria, sets priority, and moves the ticket to Backlog with status `specified`. Full model: `docs/LIFECYCLE.md` §4c.
 
 ### `/review` — For Review to Done
 
@@ -128,7 +128,7 @@ Run `/review` to walk through completed work. The skill batches related tickets,
 
 ### `/accept` — Close a ticket
 
-Moves a reviewed ticket to `PRODUCT_SPECIFICATION.md`, summarizes development notes, and cleans up working files.
+Runs the project's declared verify command (`WORKFLOW.toml` `[verify]`), records the real result, then closes through a gate: verify must pass at HEAD and the OpenSpec change must validate `--strict` (or be a justified lane-C no-delta). On success it archives the change — merging its delta into `openspec/specs/` — moves the ticket to `PRODUCT_SPECIFICATION.md`, and cleans up working files. `--force "reason"` bypasses the gate on the record. Same gate whether run from the skill, the CLI, or the dashboard.
 
 ### AI Readiness Assessment
 

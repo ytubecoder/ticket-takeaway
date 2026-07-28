@@ -1,0 +1,7 @@
+[verify]
+# TDD suite only: pure logic, importable without a server, no side effects.
+# Do NOT widen this to bare pytest — the smoke/e2e suites' dashboard_server
+# fixture writes to the real tickets.db and the streaming smokes can spawn
+# real billed agent sessions. Run those deliberately, never as a gate.
+command = "python3 -m pytest tests/test_tdd_*.py -q"
+timeout_ms = 180000

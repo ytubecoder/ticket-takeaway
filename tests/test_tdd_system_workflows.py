@@ -92,7 +92,7 @@ class TestSystemWorkflowSeeds:
 
 
 # ---------------------------------------------------------------------------
-# Trigger evaluation against parent — system workflow doesn't need auto mode
+# Trigger evaluation against parent — master switch: needs automation_mode=auto
 # ---------------------------------------------------------------------------
 
 
@@ -107,6 +107,11 @@ class TestParentPromoteTriggerEvaluation:
         _add_ticket(conn, "B-1", section="WIP", status="in-progress")
         _add_ticket(conn, "BUG-1", section="Bugs", status="bug-fixed", parent="B-1")
         _add_ticket(conn, "BUG-2", section="Bugs", status="done", parent="B-1")
+        conn.execute(
+            "INSERT INTO automation_subjects (project_id, subject_type, subject_id, automation_mode) "
+            "VALUES (?, 'ticket', 'B-1', 'auto')",
+            (PROJECT_ID,),
+        )
         conn.commit()
 
         # Look up the seeded workflow's trigger.
@@ -172,6 +177,11 @@ class TestParentPromoteTriggerEvaluation:
 class TestAutoAcceptTriggerEvaluation:
     def test_passes_in_review_done_no_open_bugs(self, conn):
         _add_ticket(conn, "B-1", section="For Review", status="done")
+        conn.execute(
+            "INSERT INTO automation_subjects (project_id, subject_type, subject_id, automation_mode) "
+            "VALUES (?, 'ticket', 'B-1', 'auto')",
+            (PROJECT_ID,),
+        )
         conn.commit()
 
         row = conn.execute(

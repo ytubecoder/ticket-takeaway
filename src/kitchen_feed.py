@@ -145,9 +145,7 @@ def _is_unread(
         return False
     if bucket in ("needs_me", "failed", "paused_ticket"):
         return True
-    if status in ("proposed", "blocked"):
-        return True
-    return False
+    return status in ("proposed", "blocked")
 
 
 def build_attention_feed(

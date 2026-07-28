@@ -266,9 +266,6 @@ def main():
         print(f"DB B not found: {pb}", file=sys.stderr)
         sys.exit(2)
 
-    a_name = pa.parent.name or pa.name
-    b_name = pb.parent.name or pb.name
-
     conn_a = _open_ro(pa)
     conn_b = _open_ro(pb)
     try:

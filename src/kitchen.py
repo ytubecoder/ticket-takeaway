@@ -617,7 +617,7 @@ def _dispatch_via_workflows(
                             else trigger_raw
                         )
                         ctx = build_subject_context(conn, project_id, ticket_id)
-                        passed, reasons = evaluate_trigger(trigger, ctx)
+                        passed, _reasons = evaluate_trigger(trigger, ctx)
                     except Exception:
                         logger.exception(
                             "workflow trigger evaluation failed for workflow %r ticket %r",

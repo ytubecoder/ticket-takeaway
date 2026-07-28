@@ -94,7 +94,7 @@ def test_post_move_ticket(dashboard_server):
     original = api_get(dashboard_server, f"/api/tickets/{tid}")
     original_section = original.get("section", "Backlog")
 
-    status_code, data = api_post(
+    status_code, _data = api_post(
         dashboard_server, f"/api/tickets/{tid}/move", {"section": "WIP"}
     )
     assert status_code == 200
@@ -112,7 +112,7 @@ def test_post_toggle_readiness_flag(dashboard_server):
     (migration 15); 'reviewed' is the surviving flag-style readiness slot.
     """
     tid = _get_first_ticket_id(dashboard_server)
-    status_code, data = api_post(
+    status_code, _data = api_post(
         dashboard_server, f"/api/tickets/{tid}/readiness/reviewed", {}
     )
     assert status_code == 200
@@ -132,7 +132,7 @@ def test_put_update_ticket(dashboard_server):
     original = api_get(dashboard_server, f"/api/tickets/{tid}")
     original_desc = original.get("description", "")
 
-    status_code, data = api_put(
+    status_code, _data = api_put(
         dashboard_server,
         f"/api/tickets/{tid}",
         {"description": "smoke test description"},
@@ -146,7 +146,7 @@ def test_put_update_ticket(dashboard_server):
 def test_put_readiness_content(dashboard_server):
     """PUT /api/tickets/{id}/readiness/reviewed returns 200."""
     tid = _get_first_ticket_id(dashboard_server)
-    status_code, data = api_put(
+    status_code, _data = api_put(
         dashboard_server,
         f"/api/tickets/{tid}/readiness/reviewed",
         {"content": "smoke test"},
@@ -171,7 +171,7 @@ def test_delete_ticket(dashboard_server):
     )
     tid = created["id"]
 
-    status_code, data = api_delete(dashboard_server, f"/api/tickets/{tid}")
+    status_code, _data = api_delete(dashboard_server, f"/api/tickets/{tid}")
     assert status_code == 200
 
 

@@ -42,7 +42,7 @@ def test_search_input_filters_cards(page_no_js_errors):
     search = page.query_selector("#searchInput")
     assert search is not None, "#searchInput not found"
 
-    total_before = len(page.query_selector_all(".card[data-item-id]"))
+    len(page.query_selector_all(".card[data-item-id]"))
     search.fill("zzz-nonexistent-zzz")
     page.wait_for_timeout(300)
     # Either some cards are hidden or count changed (filtering happened)

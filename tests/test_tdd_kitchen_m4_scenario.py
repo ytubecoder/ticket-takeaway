@@ -497,7 +497,7 @@ class TestScenarioRunnerLifecycle:
         assert "step" in (row["summary"] or "")
 
     def test_successful_run_emits_workspace_created_and_run_succeeded(self):
-        run_id, outcome = self._execute_with_patches(_passed_result())
+        run_id, _outcome = self._execute_with_patches(_passed_result())
         ws_events = _events(self.env, run_id=run_id, kind="workspace_created")
         succ_events = _events(self.env, run_id=run_id, kind="run_succeeded")
         assert len(ws_events) == 1
@@ -505,7 +505,7 @@ class TestScenarioRunnerLifecycle:
         assert succ_events[0]["actor_type"] == "agent"
 
     def test_successful_run_emits_run_succeeded_with_duration(self):
-        run_id, outcome = self._execute_with_patches(_passed_result())
+        run_id, _outcome = self._execute_with_patches(_passed_result())
         rows = _events(self.env, run_id=run_id, kind="run_succeeded")
         payload = json.loads(rows[0]["payload_json"])
         assert "duration_ms" in payload
@@ -527,7 +527,7 @@ class TestScenarioRunnerLifecycle:
             target={"testid": "btn"},
             error_message="element not visible",
         )
-        run_id, outcome = self._execute_with_patches(result)
+        run_id, _outcome = self._execute_with_patches(result)
         row = _run_row(self.env, run_id)
         meta = json.loads(row["metadata_json"] or "{}")
         assert "gap_report" in meta
@@ -537,7 +537,7 @@ class TestScenarioRunnerLifecycle:
 
     def test_failed_run_emits_run_failed_event(self):
         result = _failed_result(action="open", error_message="404")
-        run_id, outcome = self._execute_with_patches(result)
+        run_id, _outcome = self._execute_with_patches(result)
         rows = _events(self.env, run_id=run_id, kind="run_failed")
         assert len(rows) == 1
         payload = json.loads(rows[0]["payload_json"])
@@ -565,7 +565,7 @@ class TestScenarioRunnerLifecycle:
     def test_cancel_emits_run_cancelled_with_agent_actor(self):
         ev = threading.Event()
         ev.set()
-        run_id, outcome = self._execute_with_patches(_passed_result(), cancel_event=ev)
+        run_id, _outcome = self._execute_with_patches(_passed_result(), cancel_event=ev)
         rows = _events(self.env, run_id=run_id, kind="run_cancelled")
         assert rows[0]["actor_type"] == "agent"
         assert rows[0]["actor_id"] == str(run_id)
@@ -576,7 +576,7 @@ class TestScenarioRunnerLifecycle:
             target={"testid": "panel"},
             error_message="Timeout 10000ms exceeded",
         )
-        run_id, outcome = self._execute_with_patches(result)
+        run_id, _outcome = self._execute_with_patches(result)
         row = _run_row(self.env, run_id)
         meta = json.loads(row["metadata_json"])
         assert meta["gap_report"]["gap_kind"] == "missing_selector"
@@ -585,20 +585,20 @@ class TestScenarioRunnerLifecycle:
         result = _failed_result(
             action="open", target=None, error_message="404 Not Found"
         )
-        run_id, outcome = self._execute_with_patches(result)
+        run_id, _outcome = self._execute_with_patches(result)
         row = _run_row(self.env, run_id)
         meta = json.loads(row["metadata_json"])
         assert meta["gap_report"]["gap_kind"] == "missing_screen"
 
     def test_successful_run_has_no_gap_report(self):
         """Successful runs should NOT have a gap_report in metadata_json."""
-        run_id, outcome = self._execute_with_patches(_passed_result())
+        run_id, _outcome = self._execute_with_patches(_passed_result())
         row = _run_row(self.env, run_id)
         meta = json.loads(row["metadata_json"] or "{}")
         assert "gap_report" not in meta
 
     def test_workspace_created_event_has_path(self):
-        run_id, outcome = self._execute_with_patches(_passed_result())
+        run_id, _outcome = self._execute_with_patches(_passed_result())
         rows = _events(self.env, run_id=run_id, kind="workspace_created")
         payload = json.loads(rows[0]["payload_json"])
         assert "path" in payload

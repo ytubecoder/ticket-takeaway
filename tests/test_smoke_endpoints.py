@@ -181,7 +181,7 @@ def test_put_system_endpoint_returns_403(api_url):
 
 
 def test_delete_system_endpoint_returns_403(api_url):
-    status, body = _delete(f"{api_url}/claude-cli")
+    status, _body = _delete(f"{api_url}/claude-cli")
     assert status == 403
 
 

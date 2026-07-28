@@ -175,7 +175,6 @@ def scan_code_todos(project_path: str) -> list[DiscoveredItem]:
     items = []
     root = Path(project_path)
     todo_re = re.compile(r"(?:TODO|FIXME|HACK)\s*[:—\-]\s*(.+)", re.IGNORECASE)
-    comment_prefix_re = re.compile(r"^[\s#/\*;-]*")
 
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune excluded directories in-place
@@ -331,7 +330,7 @@ def discover(
     """Run scanners and return combined results."""
     to_run = {k: v for k, v in SCANNERS.items() if sources is None or k in sources}
     results = []
-    for name, scanner in to_run.items():
+    for scanner in to_run.values():
         try:
             results.extend(scanner(project_path))
         except Exception:

@@ -233,7 +233,7 @@ def _eval_lacks_readiness_flag(ctx: dict, p: dict) -> tuple[bool, str]:
     Inverse of flag_set — used to target tickets missing a particular flag.
     """
     # Delegate to _eval_flag_set and invert.
-    passed, reason = _eval_flag_set(ctx, p)
+    passed, _reason = _eval_flag_set(ctx, p)
     if passed:
         flag = p.get("flag", "")
         return (False, f"readiness flag {flag!r} is already set")

@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
+from typing import ClassVar
 from urllib.parse import parse_qs, unquote, urlparse
 
 # ---------------------------------------------------------------------------
@@ -2084,9 +2085,9 @@ def _inspect_workflows_for_ticket(project_id: str, ticket_id: str) -> dict:
         init_db(conn)
         try:
             ctx = _conditions.build_subject_context(conn, project_id, ticket_id)
-        except ValueError as exc:
+        except ValueError:
             conn.close()
-            raise exc
+            raise
 
         # Build a compact summary from the assembled context for the response
         ticket = ctx["ticket"]
@@ -2490,7 +2491,6 @@ def _run_workflow_thread(
             return
 
         conversation = []
-        total_steps = len(steps)
 
         for step_idx, step in enumerate(steps):
             # Check for cancellation
@@ -5094,10 +5094,7 @@ def _render_ticket_tab_overview(ticket: dict, proj: dict, port: int) -> str:
     pid = _safe_attr(proj["id"])
     api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
     tid = _h.escape(ticket["id"])
-    title = _h.escape(ticket["title"] or "")
     section = ticket.get("section", "Ideas")
-    status = _h.escape(ticket.get("status", ""))
-    priority = _h.escape(ticket.get("priority", "medium"))
     description = _h.escape(ticket.get("description", "") or "")
     parent = _h.escape(ticket.get("parent", "") or "")
     gate_banner = _h.escape(GATE_BANNER_BY_SECTION.get(section, ""))
@@ -5189,10 +5186,6 @@ def _render_ticket_tab_overview(ticket: dict, proj: dict, port: int) -> str:
     {child_cards_html or "<span class='tp-empty'>No children yet.</span>"}
   </div>
 </div>"""
-
-    container_badge = (
-        '<span class="tp-container-badge">Container</span>' if is_container else ""
-    )
 
     return f'''
 <div class="tp-gate-banner">{gate_banner}</div>
@@ -5476,7 +5469,6 @@ def _render_ticket_page(
         return None
 
     pid = _safe_attr(proj["id"])
-    name = _safe_attr(proj.get("name", proj["id"]))
     api_base = f"/{pid}/api"  # origin-relative — works through Tailscale Serve, port-forwards, etc.
     tid = _h.escape(ticket["id"])
     title = _h.escape(ticket["title"] or "")
@@ -5547,9 +5539,6 @@ def _render_ticket_page(
     event_icons_js = json.dumps(EVENT_KIND_ICONS)
     event_groups_js = json.dumps(EVENT_KIND_GROUPS)
     event_group_colors_js = json.dumps(EVENT_GROUP_COLORS)
-    event_summary_map_js = json.dumps(
-        {k: v.__doc__ or k for k, v in _EVENT_KIND_SUMMARY_MAP.items()}
-    )
 
     return f'''<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -6716,8 +6705,6 @@ def _render_workflows_view(port: int) -> str:
     from trigger_describe import (
         describe_on_success,
         describe_trigger,
-        effect_rows,
-        predicate_rows,
     )
 
     def _build_row_html(wf: dict) -> str:
@@ -6751,53 +6738,6 @@ def _render_workflows_view(port: int) -> str:
             # the logic. Make that explicit so the panel doesn't look empty.
             steps_summary = '<li class="wf-edit-empty">Pure rule — no agent step. Logic lives entirely in Trigger and Effects below.</li>'
 
-        # Trigger conditions — list each predicate as a read-only row so users
-        # can see WHY this workflow fires even when it has no agent step.
-        trig_rows = predicate_rows(wf.get("trigger_json"))
-        if trig_rows:
-            trig_items = "".join(
-                f'<li class="wf-cond-item{" wf-cond-neg" if neg else ""}">'
-                f'<span class="wf-cond-label">{_html.escape(label)}</span>'
-                + (
-                    f'<span class="wf-cond-value">{_html.escape(value)}</span>'
-                    if value
-                    else ""
-                )
-                + "</li>"
-                for label, value, neg in trig_rows
-            )
-            trigger_block = (
-                '<div class="wf-edit-row"><label>Trigger</label>'
-                f'<ul class="wf-cond-list">{trig_items}</ul></div>'
-            )
-        else:
-            trigger_block = (
-                '<div class="wf-edit-row"><label>Trigger</label>'
-                '<div class="wf-cond-empty">Manual run only — does not auto-fire. '
-                "Run from the ticket detail panel or Run button on the kanban card.</div></div>"
-            )
-
-        # Effects on success — list each on_success entry.
-        eff_rows = effect_rows(wf.get("on_success_json"))
-        if eff_rows:
-            eff_items = "".join(
-                f'<li class="wf-cond-item">'
-                f'<span class="wf-cond-label">{_html.escape(label)}</span>'
-                + (
-                    f'<span class="wf-cond-value">{_html.escape(value)}</span>'
-                    if value
-                    else ""
-                )
-                + "</li>"
-                for label, value in eff_rows
-            )
-            effect_block = (
-                '<div class="wf-edit-row"><label>Effects</label>'
-                f'<ul class="wf-cond-list">{eff_items}</ul></div>'
-            )
-        else:
-            effect_block = ""
-
         sys_note = (
             '<div class="wf-edit-note">'
             "System workflow — body is read-only. You can toggle Enabled "
@@ -6817,7 +6757,7 @@ def _render_workflows_view(port: int) -> str:
             if is_system
             else ""
         )
-        advanced_link = (
+        (
             ""
             if is_system
             else (
@@ -6933,18 +6873,18 @@ def _render_workflows_view(port: int) -> str:
             aid = a["id"]
             aid_attr = _safe_attr(aid)
             aname = a.get("name") or aid
-            cmd = a.get("command") or ""
+            a.get("command") or ""
             args_raw = a.get("args") or "[]"
             try:
                 args_parsed = (
                     json.loads(args_raw) if isinstance(args_raw, str) else args_raw
                 )
                 if isinstance(args_parsed, list):
-                    args_display = ", ".join(str(x) for x in args_parsed)
+                    ", ".join(str(x) for x in args_parsed)
                 else:
-                    args_display = str(args_raw)
+                    str(args_raw)
             except (json.JSONDecodeError, TypeError):
-                args_display = str(args_raw)
+                str(args_raw)
             sys_prompt = a.get("system_prompt") or ""
             ag_is_system = bool(a.get("system"))
             ag_ro = " readonly" if ag_is_system else ""
@@ -8349,7 +8289,7 @@ def _render_project_picker(port: int) -> str:
 
     cards_html = ""
     gear_icon = gen._svg_icon("settings", 14)
-    chevron_icon = gen._svg_icon("panel-left", 12)  # repurposed as fold indicator
+    gen._svg_icon("panel-left", 12)  # repurposed as fold indicator
     for proj in projects:
         pid = proj["id"]
         pid_attr = _safe_attr(pid)
@@ -9021,7 +8961,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     # SW scope must be the site root for it to intercept project-scoped
     # navigations, so manifest/sw/icons all live above the routing layer.
     _STATIC_DIR = Path(__file__).parent / "static"
-    _STATIC_ROUTES = {
+    _STATIC_ROUTES: ClassVar[dict[str, tuple[str, str]]] = {
         "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
         "/sw.js": ("sw.js", "application/javascript"),
         "/icon.svg": ("icon.svg", "image/svg+xml"),
@@ -13068,7 +13008,6 @@ def _start_feedbacks_session_watcher(interval: float = 3.0):
     import time
 
     def _poll():
-        global _session_watcher_known
         # Initial snapshot: populate known sessions so we don't import old ones
         _seed_known_sessions()
 

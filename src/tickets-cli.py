@@ -80,7 +80,9 @@ def find_project(projects: list[dict], project_id: str) -> dict:
     sys.exit(1)
 
 
-def resolve_project_id(projects: list[dict], project_id: str = None) -> list[dict]:
+def resolve_project_id(
+    projects: list[dict], project_id: str | None = None
+) -> list[dict]:
     """Resolve to a list of projects — specific one or all if auto-detect fails."""
     if project_id:
         return [find_project(projects, project_id)]
@@ -1173,14 +1175,14 @@ def cmd_add(args):
     init_db(conn)
     ingest_markdown(conn, proj)
 
-    add_kwargs = dict(
-        section=section,
-        priority=args.priority or "medium",
-        description=args.description or "",
-        parent=args.parent,
-        draft=args.draft,
-        tags=args.tag,
-    )
+    add_kwargs = {
+        "section": section,
+        "priority": args.priority or "medium",
+        "description": args.description or "",
+        "parent": args.parent,
+        "draft": args.draft,
+        "tags": args.tag,
+    }
     if args.container:
         add_kwargs["is_container"] = 1
 
@@ -2900,13 +2902,9 @@ def main():
         "--project", default=None, help="Project ID (default: auto-detect)"
     )
 
-    p_current = sub.add_parser(
-        "current", help="Print the bound ticket for this tmux pane"
-    )
+    sub.add_parser("current", help="Print the bound ticket for this tmux pane")
 
-    p_unlink = sub.add_parser(
-        "unlink", help="Remove the pane→ticket link for this tmux pane"
-    )
+    sub.add_parser("unlink", help="Remove the pane→ticket link for this tmux pane")
 
     p_panes = sub.add_parser("panes", help="List all pane links (debug)")
     p_panes.add_argument("--project", default=None)

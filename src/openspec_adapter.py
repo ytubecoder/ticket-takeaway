@@ -270,8 +270,10 @@ def check_cli(project_path: str | Path = ".") -> tuple[bool, str]:
     if found != REQUIRED_VERSION:
         return (
             False,
-            f"openspec {found} installed, gates require {REQUIRED_VERSION} "
-            f"(npm install -g {NPM_PACKAGE}@{REQUIRED_VERSION})",
+            (
+                f"openspec {found} installed, gates require {REQUIRED_VERSION} "
+                f"(npm install -g {NPM_PACKAGE}@{REQUIRED_VERSION})"
+            ),
         )
     return (True, f"openspec {found}")
 

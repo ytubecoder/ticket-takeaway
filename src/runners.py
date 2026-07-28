@@ -506,7 +506,6 @@ class AgentRunner(Runner):
             )
 
         # Determine whether this agent has persist_session enabled (for resume support).
-        agent_persist_session = bool(agent_cfg.get("persist_session", 0))
 
         # Build stdin: prior conversation (for resume) + current prompt.
         stdin_text = self._build_stdin(run_id, prompt, conn_factory)
@@ -1744,19 +1743,21 @@ def classify_scenario_failure(result, manifest: dict) -> dict:
         return _build("external_dependency")
 
     # Rule 5: wait_for / click / fill etc. with a selector target → missing_selector
-    if failed_step_action in (
-        "wait_for",
-        "click",
-        "fill",
-        "select",
-        "press",
-        "double_click",
-        "dblclick",
+    if (
+        failed_step_action
+        in (
+            "wait_for",
+            "click",
+            "fill",
+            "select",
+            "press",
+            "double_click",
+            "dblclick",
+        )
+        and failed_step_target
+        and _SELECTOR_TARGET_KEYS & set(failed_step_target.keys())
     ):
-        if failed_step_target and _SELECTOR_TARGET_KEYS & set(
-            failed_step_target.keys()
-        ):
-            return _build("missing_selector")
+        return _build("missing_selector")
 
     # Rule 4: assert_visible → missing_feature
     if failed_step_action == "assert_visible":

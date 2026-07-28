@@ -143,7 +143,7 @@ def test_add_project_with_existing_backlog(dashboard_server, temp_project_dir):
 
 def test_add_project_browser_flow(dashboard_server, browser, temp_project_dir):
     """Full browser flow: click Add, browse, select, submit, verify dashboard loads."""
-    project_path, dir_name = temp_project_dir
+    _project_path, dir_name = temp_project_dir
     root = _root_url(dashboard_server)
 
     # Verify browse API works first

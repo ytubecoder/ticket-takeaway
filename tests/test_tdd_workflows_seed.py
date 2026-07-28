@@ -278,7 +278,7 @@ class TestSeedDefaultEndpointsIdempotency:
         """Re-running seed_default_endpoints on an already-seeded DB
         must not create duplicate rows or modify existing ones."""
         # First seed
-        r1 = seed_default_endpoints(conn)
+        seed_default_endpoints(conn)
         count_a = conn.execute(
             "SELECT COUNT(*) FROM endpoints WHERE system=1"
         ).fetchone()[0]
@@ -287,7 +287,7 @@ class TestSeedDefaultEndpointsIdempotency:
         ).fetchall()
 
         # Second seed — must be a no-op for every row
-        r2 = seed_default_endpoints(conn)
+        seed_default_endpoints(conn)
         count_b = conn.execute(
             "SELECT COUNT(*) FROM endpoints WHERE system=1"
         ).fetchone()[0]

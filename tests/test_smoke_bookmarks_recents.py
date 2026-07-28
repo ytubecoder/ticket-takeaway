@@ -70,7 +70,7 @@ def test_touch_recent_adds_to_list(dashboard_server):
 
 
 def test_unknown_ticket_returns_404(dashboard_server):
-    status, body = api_post(dashboard_server, "/api/bookmarks/NOPE-9999", {})
+    status, _body = api_post(dashboard_server, "/api/bookmarks/NOPE-9999", {})
     assert status == 404
-    status, body = api_post(dashboard_server, "/api/recents/NOPE-9999", {})
+    status, _body = api_post(dashboard_server, "/api/recents/NOPE-9999", {})
     assert status == 404

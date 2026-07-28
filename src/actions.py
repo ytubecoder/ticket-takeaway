@@ -1935,11 +1935,7 @@ def _match_branch_to_ticket(branch_name: str, ticket_ids: list[str]) -> str | No
         tid_lower = tid.lower()
         for cand in lower_name_candidates:
             # Must start with ticket ID followed by end-of-string, dash, or slash
-            if (
-                cand == tid_lower
-                or cand.startswith(tid_lower + "-")
-                or cand.startswith(tid_lower + "/")
-            ):
+            if cand == tid_lower or cand.startswith((tid_lower + "-", tid_lower + "/")):
                 return tid
     return None
 

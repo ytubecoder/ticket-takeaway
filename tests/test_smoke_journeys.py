@@ -176,7 +176,7 @@ class TestStepCreate:
 
     def test_add_step_invalid_action(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Invalid Step"})
-        status, data = api_post(
+        status, _data = api_post(
             dashboard_server,
             f"/api/journeys/{j['id']}/steps",
             {
@@ -312,7 +312,7 @@ class TestTicketLinking:
         import time
 
         ts = int(time.time())
-        status, data = api_post(
+        _status, data = api_post(
             dashboard_server,
             "/api/tickets",
             {

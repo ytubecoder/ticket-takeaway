@@ -291,7 +291,7 @@ class TestDispatchViaWorkflows:
 
         time.sleep(0.2)
 
-        runs = _get_queued_runs(db_factory)
+        _get_queued_runs(db_factory)
         # Run may already be succeeded (stub transitions immediately); check all.
         conn = db_factory()
         all_runs = conn.execute(

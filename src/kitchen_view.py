@@ -134,10 +134,12 @@ def _state_chip_row_html(totals: dict, active_state: str) -> str:
     all_count = int(totals.get("all", 0))
     all_active = "active" if active_state == "all" else ""
     out = [
-        f'<button class="att-chip {all_active}" type="button" data-state="all">'
-        f'<span class="att-chip-label">All</span>'
-        f'<span class="att-chip-count">{all_count}</span>'
-        f"</button>"
+        (
+            f'<button class="att-chip {all_active}" type="button" data-state="all">'
+            f'<span class="att-chip-label">All</span>'
+            f'<span class="att-chip-count">{all_count}</span>'
+            f"</button>"
+        )
     ]
     for key, label in _STATE_CHIPS:
         count = int(totals.get(key, 0))
@@ -1161,9 +1163,7 @@ def render_attention_feed(
     # chip selection. We compute that filter here so first paint is correct.
     def _matches_default(it: dict) -> bool:
         # Project filter starts as all-checked, so it never excludes here.
-        if default_state != "all" and it.get("bucket") != default_state:
-            return False
-        return True
+        return not (default_state != "all" and it.get("bucket") != default_state)
 
     sections_html_parts: list[str] = []
     total_visible_default = 0

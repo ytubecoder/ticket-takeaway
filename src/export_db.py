@@ -160,7 +160,6 @@ def export_db(
     att_by = _bucket_by_ticket(attachments)
 
     # ---- tickets ----
-    ticket_cols = [r[1] for r in conn.execute("PRAGMA table_info(tickets)").fetchall()]
     tw = "WHERE project_id = ?" if project_filter else ""
     ticket_rows = _rows(
         conn, f"SELECT * FROM tickets {tw} ORDER BY project_id, id", params

@@ -134,13 +134,12 @@ def _validate_step(step: Any, index: int, actors: set[str], filepath: str) -> No
         )
 
     # --- fill requires value ---
-    if action == "fill":
-        if "value" not in step:
-            raise ScenarioValidationError(
-                filepath,
-                _field("value"),
-                "steps with action 'fill' must include a 'value' field",
-            )
+    if action == "fill" and "value" not in step:
+        raise ScenarioValidationError(
+            filepath,
+            _field("value"),
+            "steps with action 'fill' must include a 'value' field",
+        )
 
     # --- target shape (optional but validated when present) ---
     if "target" in step:

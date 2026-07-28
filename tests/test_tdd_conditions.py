@@ -667,7 +667,7 @@ class TestEvaluateTrigger:
     def test_empty_dict_passes(self, conn):
         _make_ticket(conn)
         ctx = _make_ctx(conn)
-        ok, failures = evaluate_trigger({}, ctx)
+        ok, _failures = evaluate_trigger({}, ctx)
         assert ok
 
     def test_all_of_all_pass(self, conn):

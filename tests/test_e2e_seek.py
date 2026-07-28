@@ -20,7 +20,7 @@ def test_seek_api_returns_results(dashboard_server):
 
 def test_seek_api_idempotent(dashboard_server):
     """Running seek twice creates 0 new tickets on second run."""
-    status1, data1 = api_post(dashboard_server, "/api/seek", {})
+    status1, _data1 = api_post(dashboard_server, "/api/seek", {})
     assert status1 == 200
     status2, data2 = api_post(dashboard_server, "/api/seek", {})
     assert status2 == 200

@@ -60,7 +60,7 @@ def test_resolve_project_global_routes_not_captured():
     with _PROJECTS_CACHE_LOCK:
         _PROJECTS_CACHE.clear()
         _PROJECTS_CACHE["api"] = {"id": "api", "name": "bad", "path": "/tmp"}
-    proj, remainder = _resolve_project_from_path("/api/projects")
+    proj, _remainder = _resolve_project_from_path("/api/projects")
     assert proj is None  # global routes take precedence
 
 

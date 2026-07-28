@@ -514,7 +514,6 @@ def _build_move_candidates(
     prerequisites = _detect_prerequisites(request.goal, ctx)
 
     # Determine from/to sections from goal text
-    goal_lower = request.goal.lower()
     from_section = "Backlog"
     to_section = "WIP"
 
@@ -573,8 +572,10 @@ def _build_move_candidates(
             prerequisites=(
                 prerequisites
                 + [
-                    "Direct section-move UI (drag) is not yet automatable via testids. "
-                    "Consider adding a 'move to section' button with a testid for full automation."
+                    (
+                        "Direct section-move UI (drag) is not yet automatable via testids. "
+                        "Consider adding a 'move to section' button with a testid for full automation."
+                    )
                 ]
             ),
             confidence="medium",
@@ -594,7 +595,7 @@ def _build_review_candidates(
         if len(actors) >= 2
         else {"agent": {"label": "Agent"}, "reviewer": {"label": "Reviewer"}}
     )
-    agent = list(actors_dict.keys())[0]
+    agent = next(iter(actors_dict.keys()))
     reviewer = list(actors_dict.keys())[-1]
     ticket_title = "Feature ready for review"
     prerequisites = _detect_prerequisites(request.goal, ctx)
@@ -655,7 +656,7 @@ def _build_lifecycle_candidates(
             "reviewer": {"label": "Reviewer"},
         }
     )
-    scheduler = list(actors_dict.keys())[0]
+    scheduler = next(iter(actors_dict.keys()))
     agent = list(actors_dict.keys())[1] if len(actors_dict) > 1 else scheduler
     reviewer = list(actors_dict.keys())[2] if len(actors_dict) > 2 else agent
     ticket_title = "Lifecycle test ticket"

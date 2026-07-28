@@ -245,7 +245,7 @@ class TestTicketPatchIsContainer:
 
     def test_patch_is_container_false_accepts(self, dashboard_server):
         url = f"{self._base}/api/tickets/{self._tid}"
-        status, body = _patch_json(url, {"is_container": 0})
+        status, _body = _patch_json(url, {"is_container": 0})
         if status in (404, 405):
             pytest.skip(
                 "PATCH is_container field not yet accepted — Lane B pending. "
@@ -335,10 +335,9 @@ class TestTicketActivityEndpoint:
             req = urllib.request.Request(url)
             resp = urllib.request.urlopen(req, timeout=3)
             status = resp.status
-            body = json.loads(resp.read())
+            json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             status = exc.code
-            body = {}
         if status == 404:
             pytest.skip(
                 "GET /api/tickets/{id}/activity not yet implemented — Lane B pending."

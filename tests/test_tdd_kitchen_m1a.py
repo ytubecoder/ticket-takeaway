@@ -226,7 +226,7 @@ class TestUtcNowIso:
         s = utcnow_iso()
         # Must be ISO-8601 with timezone (either +00:00 or Z) so reads are unambiguous.
         assert "T" in s
-        assert s.endswith("+00:00") or s.endswith("Z")
+        assert s.endswith(("+00:00", "Z"))
 
 
 class TestEmitEvent:

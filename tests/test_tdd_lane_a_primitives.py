@@ -334,7 +334,7 @@ class TestHasTagPredicate:
         _add_tag(conn, "B-1", "bar")
         ctx = _make_ctx(conn)
         cond = {"kind": "has_tag", "value": ["foo", "bar"]}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_has_tag_returns_false_when_ticket_missing_one_tag(self, conn):
@@ -350,14 +350,14 @@ class TestHasTagPredicate:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         cond = {"kind": "has_tag", "value": []}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_has_tag_false_when_ticket_has_no_tags_at_all(self, conn):
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         cond = {"kind": "has_tag", "value": ["required-tag"]}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is False
 
     def test_has_tag_single_string_value_coerced_to_list(self, conn):
@@ -379,7 +379,7 @@ class TestLacksTagPredicate:
         _add_tag(conn, "B-1", "other-tag")
         ctx = _make_ctx(conn)
         cond = {"kind": "lacks_tag", "value": ["excluded"]}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_lacks_tag_false_when_ticket_has_a_listed_tag(self, conn):
@@ -427,7 +427,7 @@ class TestLacksReadinessFlagPredicate:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         cond = {"kind": "lacks_readiness_flag", "flag": "L"}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_lacks_readiness_flag_false_when_flag_set_with_content(self, conn):
@@ -436,7 +436,7 @@ class TestLacksReadinessFlagPredicate:
         _add_readiness_flag(conn, "B-1", "reviewed", content="Learnings captured here.")
         ctx = _make_ctx(conn)
         cond = {"kind": "lacks_readiness_flag", "flag": "L"}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is False
 
     def test_lacks_readiness_flag_true_when_flag_row_has_empty_content(self, conn):
@@ -742,7 +742,7 @@ class TestTagPredicatesViaEvaluateTrigger:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         trigger = {"all_of": [{"kind": "lacks_tag", "value": ["sprint-prev"]}]}
-        passed, failures = evaluate_trigger(trigger, ctx)
+        passed, _failures = evaluate_trigger(trigger, ctx)
         assert passed is True
 
     def test_sprint_tag_rotation_trigger_fires_on_matching_ticket(self, conn):
@@ -760,12 +760,12 @@ class TestTagPredicatesViaEvaluateTrigger:
         conn.commit()
         ctx = _make_ctx(conn)
         wf = next(wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Sprint tag rotation")
-        passed, failures = evaluate_trigger(wf["trigger_json"], ctx)
+        passed, _failures = evaluate_trigger(wf["trigger_json"], ctx)
         assert passed is True
 
     def test_sprint_tag_rotation_trigger_blocks_when_tag_absent(self, conn):
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         wf = next(wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Sprint tag rotation")
-        passed, failures = evaluate_trigger(wf["trigger_json"], ctx)
+        passed, _failures = evaluate_trigger(wf["trigger_json"], ctx)
         assert passed is False

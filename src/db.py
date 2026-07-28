@@ -18,7 +18,7 @@ REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 # ---------------------------------------------------------------------------
 
 
-def get_db(db_path: str = None) -> sqlite3.Connection:
+def get_db(db_path: str | None = None) -> sqlite3.Connection:
     """Open (or create) the SQLite database with WAL mode and FK support."""
     path = db_path or str(DB_PATH)
     conn = sqlite3.connect(path)

@@ -136,7 +136,9 @@ def install_system_files():
 
 
 def register_project(
-    project_id: str = None, project_name: str = None, project_path: str = None
+    project_id: str | None = None,
+    project_name: str | None = None,
+    project_path: str | None = None,
 ):
     """Register the current (or specified) project in the registry."""
     if project_path is None:
@@ -184,7 +186,7 @@ def register_project(
     print(f"Registered: {project_id} ({project_name}) -> {project_path}")
 
 
-def seed_project(project_id: str = None):
+def seed_project(project_id: str | None = None):
     """Seed the DB from existing PRODUCT_BACKLOG.md."""
     cli = str(INSTALL_DIR / "tickets-cli.py")
     cmd = [sys.executable, cli, "seed"]

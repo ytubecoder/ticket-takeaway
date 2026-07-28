@@ -57,7 +57,7 @@ def test_seed_project_with_valid_backlog(temp_project):
 
 def test_seed_project_no_backlog(temp_project):
     """seed_project returns 0 when no PRODUCT_BACKLOG.md exists."""
-    project, conn, tmp_path = temp_project
+    project, conn, _tmp_path = temp_project
     count = seed_project(conn, project)
     assert count == 0
 

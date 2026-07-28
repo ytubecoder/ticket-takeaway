@@ -242,7 +242,7 @@ def test_idle_classifier_fires_after_stable_tail(conn):
     )
     conn.commit()
 
-    row = conn.execute(
+    conn.execute(
         "SELECT tail_text, last_captured_at FROM pane_links WHERE pane_address = '%23'"
     ).fetchone()
 

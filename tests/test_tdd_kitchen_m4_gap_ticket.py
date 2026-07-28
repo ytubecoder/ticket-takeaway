@@ -79,7 +79,6 @@ def _file_gap_ticket(serve, project_id, run_id):
     The endpoint logic is server-bound; we exercise the same DB ops in-process
     by importing the closed-over names directly.
     """
-    proj = {"id": project_id, "name": "P", "path": "/tmp/x"}
     # The handler reads the run, builds the title/description, calls
     # _actions_add_ticket + INSERTs criterion + links the journey + emits an event.
     # We reuse the same actions APIs to mirror the handler.

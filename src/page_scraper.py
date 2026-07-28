@@ -174,9 +174,7 @@ def infer_is_navigation(tag: str, href: str, text: str, testid: str) -> bool:
 
     # Links with real hrefs (not hash or javascript:)
     if tag.lower() == "a" and href:
-        if href.startswith("#") or href.startswith("javascript:"):
-            return False
-        return True
+        return not (href.startswith(("#", "javascript:")))
 
     return False
 
@@ -199,13 +197,12 @@ _INTERACTIVE_SELECTOR = (
     "[role='button'], [onclick], [data-testid]"
 )
 
-_EXTRACT_JS = (
-    """
-() => {
-    const sel = `%s`;
+_EXTRACT_JS = f"""
+() => {{
+    const sel = `{_INTERACTIVE_SELECTOR}`;
     const els = document.querySelectorAll(sel);
     const results = [];
-    for (const el of els) {
+    for (const el of els) {{
         // Skip hidden elements
         const style = window.getComputedStyle(el);
         if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
@@ -226,20 +223,18 @@ _EXTRACT_JS = (
         let css = tag;
         if (el.id) css = tag + '#' + el.id;
         else if (testid) css = tag + '[data-testid="' + testid + '"]';
-        else if (el.className && typeof el.className === 'string') {
+        else if (el.className && typeof el.className === 'string') {{
             const cls = el.className.trim().split(/\\s+/).slice(0, 2).join('.');
             if (cls) css = tag + '.' + cls;
-        }
+        }}
 
-        results.push({
+        results.push({{
             tag, testid, text, role, inputType, href, placeholder, title, ariaLabel, css
-        });
-    }
+        }});
+    }}
     return results;
-}
+}}
 """
-    % _INTERACTIVE_SELECTOR
-)
 
 
 async def scrape_page(page, url: str) -> PageScan:

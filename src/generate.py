@@ -1200,7 +1200,7 @@ class Project:
 # ---------------------------------------------------------------------------
 
 
-def run_cmd(cmd: str, cwd: str = None, default: str = "") -> str:
+def run_cmd(cmd: str, cwd: str | None = None, default: str = "") -> str:
     """Run a shell command and return stdout, or default on failure."""
     try:
         result = subprocess.run(
@@ -1555,11 +1555,9 @@ def parse_spec_for_done(filepath: str) -> list[Ticket]:
 
         # Skip metadata/release lines, capture description as summary
         if current_ticket and line_stripped:
-            if line_stripped.startswith("Priority:") or line_stripped.startswith(
-                "Released:"
-            ):
+            if line_stripped.startswith(("Priority:", "Released:")):
                 continue
-            if line_stripped.startswith("#") or line_stripped.startswith("---"):
+            if line_stripped.startswith(("#", "---")):
                 continue
             if current_ticket.summary:
                 current_ticket.summary += " " + line_stripped
@@ -1741,7 +1739,7 @@ def generate_html(project: Project) -> str:
             child_tickets.setdefault(t.parent, []).append(t)
 
     # Auto-promote parents to For Review when all child tickets are resolved
-    promoted_ids = auto_promote_parents(by_section, child_tickets)
+    auto_promote_parents(by_section, child_tickets)
     parented_ids = {t.id for t in all_tickets if t.parent}
 
     # Reorder sections: place children directly after their parent
@@ -1774,21 +1772,6 @@ def generate_html(project: Project) -> str:
     all_visible = [
         t for sec in by_section.values() for t in sec if t.id not in parented_ids
     ]
-    count_status_proposed = sum(
-        1 for t in all_visible if t.status.replace(" ", "-").lower() == "proposed"
-    )
-    count_status_inprogress = sum(
-        1 for t in all_visible if t.status.replace(" ", "-").lower() == "in-progress"
-    )
-    count_status_forreview = sum(
-        1 for t in all_visible if t.status.replace(" ", "-").lower() == "for-review"
-    )
-    count_type_bug = sum(
-        1
-        for t in all_visible
-        if t.section == "Bugs"
-        or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed")
-    )
 
     # Rationalised automation filter counts.
     # 'Auto' counts only mode == 'auto' by default; 'paused' is opt-in via the
@@ -1822,13 +1805,6 @@ def generate_html(project: Project) -> str:
             if s in states:
                 return s
         return ""
-
-    count_has_branch = sum(1 for t in all_visible if getattr(t, "branches", []))
-    count_pr_open = sum(
-        1 for t in all_visible if _ticket_pr_state(t) in ("open", "draft")
-    )
-    count_pr_merged = sum(1 for t in all_visible if _ticket_pr_state(t) == "merged")
-    count_no_branch = sum(1 for t in all_visible if not getattr(t, "branches", []))
 
     # Collect all unique tags with counts (for filter bar)
     tag_counts: dict[str, int] = {}
@@ -12455,8 +12431,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 def _render_cards(
     tickets: list[Ticket],
     slug: str,
-    child_tickets: dict[str, list] = None,
-    dep_state: dict = None,
+    child_tickets: dict[str, list] | None = None,
+    dep_state: dict | None = None,
 ) -> str:
     """Render full-size kanban cards."""
     if child_tickets is None:
@@ -12466,14 +12442,10 @@ def _render_cards(
     card_class = CARD_CLASS_BY_SLUG.get(slug, "")
     lines = []
     for t in tickets:
-        title_esc = escape(t.title)
         id_esc = escape(t.id)
-        desc_esc = escape(t.description) if t.description else ""
-        status_class = t.status.replace(" ", "-").lower()
 
         # Blocked-by-deps class
-        dep_info = dep_state.get(t.id, {})
-        blocked_class = " blocked" if dep_info.get("blocking_deps") else ""
+        dep_state.get(t.id, {})
 
         # Skip children here — they'll be rendered in the child-group after their parent
         if t.parent:
@@ -12796,8 +12768,8 @@ def _render_action_buttons(slug: str, ticket_id: str) -> str:
 def _render_list_rows(
     tickets: list[Ticket],
     slug: str,
-    child_tickets: dict[str, list] = None,
-    dep_state: dict = None,
+    child_tickets: dict[str, list] | None = None,
+    dep_state: dict | None = None,
 ) -> str:
     """Render compact list rows for bottom sections (bugs, done, icebox, won't do)."""
     if child_tickets is None:

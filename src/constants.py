@@ -21,7 +21,16 @@ REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 # Section slugs (CLI / HTML aliases)
 # ---------------------------------------------------------------------------
 
-SECTION_ORDER = ["WIP", "For Review", "Backlog", "Ideas", "Bugs", "Icebox", "Done", "Won't Do"]
+SECTION_ORDER = [
+    "WIP",
+    "For Review",
+    "Backlog",
+    "Ideas",
+    "Bugs",
+    "Icebox",
+    "Done",
+    "Won't Do",
+]
 
 SECTION_SLUGS = {
     "Ideas": "ideas",
@@ -84,30 +93,38 @@ CARD_CLASS_BY_SLUG = {
 # ---------------------------------------------------------------------------
 
 STATUSES = [
-    "proposed", "specified", "ready",       # pre-work
-    "in-progress", "blocked", "rework",     # active work
-    "for-review",                           # review
-    "done", "released",                     # complete
-    "bug", "bug-fixed",                     # bugs
-    "icebox", "wontdo",                     # terminal/parked
+    "proposed",
+    "specified",
+    "ready",  # pre-work
+    "in-progress",
+    "blocked",
+    "rework",  # active work
+    "for-review",  # review
+    "done",
+    "released",  # complete
+    "bug",
+    "bug-fixed",  # bugs
+    "icebox",
+    "wontdo",  # terminal/parked
 ]
 
 # Which statuses are valid in which sections
 VALID_STATUSES_BY_SECTION = {
-    "Ideas":      {"proposed"},
-    "Backlog":    {"proposed", "specified", "ready"},
-    "WIP":        {"in-progress", "blocked", "rework"},
+    "Ideas": {"proposed"},
+    "Backlog": {"proposed", "specified", "ready"},
+    "WIP": {"in-progress", "blocked", "rework"},
     "For Review": {"for-review", "rework", "done", "blocked"},
-    "Done":       {"done", "released"},
-    "Won't Do":   {"wontdo"},
-    "Icebox":     {"icebox"},
-    "Bugs":       {"bug", "bug-fixed"},
+    "Done": {"done", "released"},
+    "Won't Do": {"wontdo"},
+    "Icebox": {"icebox"},
+    "Bugs": {"bug", "bug-fixed"},
 }
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def compute_status_on_move(current_status: str, target_section: str) -> str:
     """Determine status after a section move.
@@ -168,9 +185,16 @@ DEFAULT_SPEC_LANE = "B"
 # Workflow bounce
 # ---------------------------------------------------------------------------
 
-WORKFLOW_AGENT_TIMEOUT = 120   # seconds per agent CLI call
+WORKFLOW_AGENT_TIMEOUT = 120  # seconds per agent CLI call
 WORKFLOW_POLL_INTERVAL = 2000  # ms, frontend polling interval
-WORKFLOW_RUN_STATUSES = ("pending", "running", "paused", "completed", "failed", "cancelled")
+WORKFLOW_RUN_STATUSES = (
+    "pending",
+    "running",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+)
 
 # ---------------------------------------------------------------------------
 # Gate banners — one-line guidance per section shown above criteria panel.
@@ -179,14 +203,14 @@ WORKFLOW_RUN_STATUSES = ("pending", "running", "paused", "completed", "failed", 
 # ---------------------------------------------------------------------------
 
 GATE_BANNER_BY_SECTION: dict[str, str] = {
-    "Ideas":      "Add a description and at least one criterion → auto-moves to Backlog.",
-    "Backlog":    "Declare a spec lane (tickets-cli spec) + resolve dependencies → eligible for WIP dispatch.",
-    "WIP":        "Land a commit + a passing verify → auto-moves to For Review.",
+    "Ideas": "Add a description and at least one criterion → auto-moves to Backlog.",
+    "Backlog": "Declare a spec lane (tickets-cli spec) + resolve dependencies → eligible for WIP dispatch.",
+    "WIP": "Land a commit + a passing verify → auto-moves to For Review.",
     "For Review": "Verify passes at HEAD + spec validates → accept archives the change and closes.",
-    "Done":       "Ticket accepted — learnings can be captured in the L flag.",
-    "Bugs":       "Link this bug to a parent ticket and mark it fixed.",
-    "Icebox":     "Shelved. Move back to Backlog when ready to resume.",
-    "Won't Do":   "Closed as won't do. Re-open by moving back to Backlog.",
+    "Done": "Ticket accepted — learnings can be captured in the L flag.",
+    "Bugs": "Link this bug to a parent ticket and mark it fixed.",
+    "Icebox": "Shelved. Move back to Backlog when ready to resume.",
+    "Won't Do": "Closed as won't do. Re-open by moving back to Backlog.",
 }
 
 # ---------------------------------------------------------------------------
@@ -195,24 +219,24 @@ GATE_BANNER_BY_SECTION: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 EVENT_KIND_LABELS: dict[str, str] = {
-    "run_started":        "Run started",
-    "run_succeeded":      "Run succeeded",
-    "run_failed":         "Run failed",
-    "run_cancelled":      "Run cancelled",
-    "section_change":     "Moved",
-    "status_change":      "Status changed",
-    "criteria_check":     "Criterion checked",
-    "criteria_added":     "Criterion added",
-    "hook_started":       "Hook started",
-    "hook_succeeded":     "Hook succeeded",
-    "hook_failed":        "Hook failed",
-    "workspace_created":  "Workspace created",
-    "agent_output":       "Agent output",
-    "pause_set":          "Paused",
-    "pause_cleared":      "Resumed",
-    "handoff_recorded":   "Handoff recorded",
-    "ticket_created":     "Ticket created",
-    "gate_override":      "Accept gate overridden",
+    "run_started": "Run started",
+    "run_succeeded": "Run succeeded",
+    "run_failed": "Run failed",
+    "run_cancelled": "Run cancelled",
+    "section_change": "Moved",
+    "status_change": "Status changed",
+    "criteria_check": "Criterion checked",
+    "criteria_added": "Criterion added",
+    "hook_started": "Hook started",
+    "hook_succeeded": "Hook succeeded",
+    "hook_failed": "Hook failed",
+    "workspace_created": "Workspace created",
+    "agent_output": "Agent output",
+    "pause_set": "Paused",
+    "pause_cleared": "Resumed",
+    "handoff_recorded": "Handoff recorded",
+    "ticket_created": "Ticket created",
+    "gate_override": "Accept gate overridden",
 }
 
 # ---------------------------------------------------------------------------
@@ -223,24 +247,24 @@ EVENT_KIND_LABELS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 EVENT_KIND_ICONS: dict[str, str] = {
-    "run_started":        "play",
-    "run_succeeded":      "check",         # green check on success
-    "run_failed":         "x",             # X on failure
-    "run_cancelled":      "square",        # stop square
-    "section_change":     "arrow-right",
-    "status_change":      "zap",           # TODO: ideal icon would be 'badge' or 'dot'
-    "criteria_check":     "check-square",
-    "criteria_added":     "plus",
-    "hook_started":       "zap",           # TODO: ideal icon would be 'hook' or 'bolt'
-    "hook_succeeded":     "check",
-    "hook_failed":        "x",
-    "workspace_created":  "grid",          # TODO: ideal icon would be 'folder-plus'
-    "agent_output":       "file-text",
-    "pause_set":          "square",        # stop/pause shape
-    "pause_cleared":      "play",
-    "handoff_recorded":   "file-text",     # TODO: ideal icon would be 'clipboard-check'
-    "ticket_created":     "plus",          # TODO: ideal icon would be 'sparkles' or 'file-plus'
-    "gate_override":      "zap",           # TODO: ideal icon would be 'shield-off'
+    "run_started": "play",
+    "run_succeeded": "check",  # green check on success
+    "run_failed": "x",  # X on failure
+    "run_cancelled": "square",  # stop square
+    "section_change": "arrow-right",
+    "status_change": "zap",  # TODO: ideal icon would be 'badge' or 'dot'
+    "criteria_check": "check-square",
+    "criteria_added": "plus",
+    "hook_started": "zap",  # TODO: ideal icon would be 'hook' or 'bolt'
+    "hook_succeeded": "check",
+    "hook_failed": "x",
+    "workspace_created": "grid",  # TODO: ideal icon would be 'folder-plus'
+    "agent_output": "file-text",
+    "pause_set": "square",  # stop/pause shape
+    "pause_cleared": "play",
+    "handoff_recorded": "file-text",  # TODO: ideal icon would be 'clipboard-check'
+    "ticket_created": "plus",  # TODO: ideal icon would be 'sparkles' or 'file-plus'
+    "gate_override": "zap",  # TODO: ideal icon would be 'shield-off'
 }
 
 # ---------------------------------------------------------------------------
@@ -251,50 +275,59 @@ EVENT_KIND_ICONS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 EVENT_KIND_GROUPS: dict[str, str] = {
-    "ticket_created":     "Created",
-    "section_change":     "Moved",
-    "status_change":      "Status",
-    "criteria_check":     "Criteria",
-    "criteria_added":     "Criteria",
-    "field_changed":      "Field",
-    "input_provided":     "Input",
-    "run_started":        "Run",
-    "run_succeeded":      "Run",
-    "run_failed":         "Run",
-    "run_cancelled":      "Run",
-    "agent_output":       "Run",
-    "handoff_recorded":   "Run",
-    "hook_started":       "Hook",
-    "hook_succeeded":     "Hook",
-    "hook_failed":        "Hook",
-    "workspace_created":  "Workspace",
-    "pause_set":          "Pause",
-    "pause_cleared":      "Pause",
-    "gate_override":      "Gate",
+    "ticket_created": "Created",
+    "section_change": "Moved",
+    "status_change": "Status",
+    "criteria_check": "Criteria",
+    "criteria_added": "Criteria",
+    "field_changed": "Field",
+    "input_provided": "Input",
+    "run_started": "Run",
+    "run_succeeded": "Run",
+    "run_failed": "Run",
+    "run_cancelled": "Run",
+    "agent_output": "Run",
+    "handoff_recorded": "Run",
+    "hook_started": "Hook",
+    "hook_succeeded": "Hook",
+    "hook_failed": "Hook",
+    "workspace_created": "Workspace",
+    "pause_set": "Pause",
+    "pause_cleared": "Pause",
+    "gate_override": "Gate",
 }
 
 # Display order for the filter chip row; groups not in this list are appended
 # alphabetically at the end so new event kinds don't disappear silently.
 EVENT_GROUP_ORDER: list[str] = [
-    "Created", "Moved", "Status", "Criteria",
-    "Run", "Hook", "Workspace", "Field", "Input", "Pause", "Gate",
+    "Created",
+    "Moved",
+    "Status",
+    "Criteria",
+    "Run",
+    "Hook",
+    "Workspace",
+    "Field",
+    "Input",
+    "Pause",
+    "Gate",
 ]
 
 # Per-group accent colour. Picked from the existing palette so light & dark
 # themes inherit contrast from CSS variables; values here are direct hex
 # fallbacks for the badge background-tint.
 EVENT_GROUP_COLORS: dict[str, str] = {
-    "Created":   "#22c55e",  # green — birth events
-    "Moved":     "#3b82f6",  # blue — section transitions
-    "Status":    "#a855f7",  # purple — state transitions
-    "Criteria":  "#14b8a6",  # teal — acceptance work
-    "Run":       "#f59e0b",  # amber — agent activity
-    "Hook":      "#f97316",  # orange — automation hooks
+    "Created": "#22c55e",  # green — birth events
+    "Moved": "#3b82f6",  # blue — section transitions
+    "Status": "#a855f7",  # purple — state transitions
+    "Criteria": "#14b8a6",  # teal — acceptance work
+    "Run": "#f59e0b",  # amber — agent activity
+    "Hook": "#f97316",  # orange — automation hooks
     "Workspace": "#94a3b8",  # slate — infra
-    "Field":     "#64748b",  # slate-darker — text edits
-    "Input":     "#ec4899",  # pink — human-in-the-loop
-    "Pause":     "#ef4444",  # red — interruptions
-    "Gate":      "#dc2626",  # deep red — a gate was bypassed on purpose
+    "Field": "#64748b",  # slate-darker — text edits
+    "Input": "#ec4899",  # pink — human-in-the-loop
+    "Pause": "#ef4444",  # red — interruptions
+    "Gate": "#dc2626",  # deep red — a gate was bypassed on purpose
 }
 
 # ---------------------------------------------------------------------------
@@ -314,7 +347,12 @@ ATTENTION_NONE = "none"
 ATTENTION_QUESTION = "question"
 ATTENTION_EXCEPTION = "exception"
 ATTENTION_IDLE = "idle"
-ATTENTION_STATES = (ATTENTION_NONE, ATTENTION_QUESTION, ATTENTION_EXCEPTION, ATTENTION_IDLE)
+ATTENTION_STATES = (
+    ATTENTION_NONE,
+    ATTENTION_QUESTION,
+    ATTENTION_EXCEPTION,
+    ATTENTION_IDLE,
+)
 
 # Pane link tail limits
 PANE_TAIL_MAX_LINES = 200

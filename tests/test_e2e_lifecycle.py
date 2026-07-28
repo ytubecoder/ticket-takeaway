@@ -9,7 +9,6 @@ All operations go through the live HTTP API (no mocks).
 import time
 
 import pytest
-
 from conftest import api_delete, api_get, api_post
 
 
@@ -64,9 +63,7 @@ def test_full_ticket_lifecycle(dashboard_server, lifecycle_ticket):
     assert ticket["status"] == "for-review"
 
     # 5. Accept → Done
-    status_code, _ = api_post(
-        dashboard_server, f"/api/tickets/{tid}/accept", {}
-    )
+    status_code, _ = api_post(dashboard_server, f"/api/tickets/{tid}/accept", {})
     assert status_code == 200
     ticket = api_get(dashboard_server, f"/api/tickets/{tid}")
     assert ticket["section"] == "Done"

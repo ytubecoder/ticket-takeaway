@@ -5,18 +5,16 @@ Pure logic. No server, no Playwright. See docs/KITCHEN.md.
 """
 
 import json
+import os
 import sqlite3
 import sys
-import os
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import get_db, init_db
 from actions import (
     ActorContext,
-    EligibilityResult,
     accept_ticket,
     eligibility,
     emit_event,
@@ -26,6 +24,7 @@ from actions import (
     update_ticket,
     utcnow_iso,
 )
+from db import init_db
 
 
 @pytest.fixture
@@ -38,9 +37,15 @@ def conn():
     return c
 
 
-def _add_ticket(conn, tid="B-1", section="Backlog", status="specified",
-                description="A real description.", with_criteria=True,
-                project_id="p"):
+def _add_ticket(
+    conn,
+    tid="B-1",
+    section="Backlog",
+    status="specified",
+    description="A real description.",
+    with_criteria=True,
+    project_id="p",
+):
     conn.execute(
         "INSERT INTO tickets (id, project_id, title, section, status, description) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -66,11 +71,15 @@ def _declare_lane(conn, tid="B-1", project_id="p"):
 # Migration #6 — schema present, CHECK constraints fire
 # ---------------------------------------------------------------------------
 
+
 class TestMigration:
     def test_new_tables_exist(self, conn):
-        names = {r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()}
+        names = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
         assert {"automation_subjects", "runs", "activity_events"} <= names
 
     def test_no_test_required_columns_added(self, conn):
@@ -79,9 +88,12 @@ class TestMigration:
         assert "no_test_required_note" in cols
 
     def test_partial_unique_index_present(self, conn):
-        idx = {r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        ).fetchall()}
+        idx = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
         assert "one_active_run_per_subject" in idx
 
     def test_check_rejects_bad_automation_mode(self, conn):
@@ -140,6 +152,7 @@ class TestMigration:
 # Partial unique index — one active run per subject
 # ---------------------------------------------------------------------------
 
+
 class TestActiveRunUniqueness:
     def _new_active_run(self, conn, status="queued", subject_id="B-1"):
         conn.execute(
@@ -158,7 +171,9 @@ class TestActiveRunUniqueness:
         self._new_active_run(conn, "preparing")
         conn.execute("UPDATE runs SET status = 'succeeded' WHERE subject_id = 'B-1'")
         self._new_active_run(conn, "queued")  # must not raise
-        rows = conn.execute("SELECT status FROM runs WHERE subject_id = 'B-1' ORDER BY id").fetchall()
+        rows = conn.execute(
+            "SELECT status FROM runs WHERE subject_id = 'B-1' ORDER BY id"
+        ).fetchall()
         assert [r[0] for r in rows] == ["succeeded", "queued"]
 
     def test_needs_input_blocks_new_active(self, conn):
@@ -169,12 +184,15 @@ class TestActiveRunUniqueness:
 
     def test_different_subjects_unaffected(self, conn):
         self._new_active_run(conn, "running", subject_id="B-1")
-        self._new_active_run(conn, "running", subject_id="B-2")  # different subject — fine
+        self._new_active_run(
+            conn, "running", subject_id="B-2"
+        )  # different subject — fine
 
 
 # ---------------------------------------------------------------------------
 # ActorContext + utcnow_iso + emit_event
 # ---------------------------------------------------------------------------
+
 
 class TestActorContext:
     def test_human_factory(self):
@@ -208,13 +226,20 @@ class TestUtcNowIso:
         s = utcnow_iso()
         # Must be ISO-8601 with timezone (either +00:00 or Z) so reads are unambiguous.
         assert "T" in s
-        assert s.endswith("+00:00") or s.endswith("Z")
+        assert s.endswith(("+00:00", "Z"))
 
 
 class TestEmitEvent:
     def test_writes_one_row(self, conn):
-        emit_event(conn, "p", "ticket", "B-1", "mode_changed",
-                   {"before": "manual", "after": "auto"}, ActorContext.human("alice"))
+        emit_event(
+            conn,
+            "p",
+            "ticket",
+            "B-1",
+            "mode_changed",
+            {"before": "manual", "after": "auto"},
+            ActorContext.human("alice"),
+        )
         conn.commit()
         row = conn.execute(
             "SELECT actor_type, actor_id, event_kind, payload_json FROM activity_events"
@@ -228,17 +253,33 @@ class TestEmitEvent:
         # If we don't commit, the audit row must NOT be visible after rollback.
         # This proves emit_event participates in the caller's transaction
         # rather than opening one of its own.
-        emit_event(conn, "p", "ticket", "B-1", "mode_changed",
-                   {"before": "manual", "after": "auto"}, ActorContext.human())
+        emit_event(
+            conn,
+            "p",
+            "ticket",
+            "B-1",
+            "mode_changed",
+            {"before": "manual", "after": "auto"},
+            ActorContext.human(),
+        )
         conn.rollback()
         n = conn.execute("SELECT COUNT(*) FROM activity_events").fetchone()[0]
         assert n == 0
 
     def test_system_actor_id_null(self, conn):
-        emit_event(conn, "p", "ticket", "B-1", "section_change",
-                   {"before": "WIP", "after": "For Review"}, ActorContext.system())
+        emit_event(
+            conn,
+            "p",
+            "ticket",
+            "B-1",
+            "section_change",
+            {"before": "WIP", "after": "For Review"},
+            ActorContext.system(),
+        )
         conn.commit()
-        row = conn.execute("SELECT actor_type, actor_id FROM activity_events").fetchone()
+        row = conn.execute(
+            "SELECT actor_type, actor_id FROM activity_events"
+        ).fetchone()
         assert row["actor_type"] == "system"
         assert row["actor_id"] is None
 
@@ -247,9 +288,11 @@ class TestEmitEvent:
 # Eligibility — each gate
 # ---------------------------------------------------------------------------
 
+
 class TestEligibilityTicket:
     def test_default_mode_blocks(self, conn):
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
         assert not r.eligible
         assert any("automation_mode" in x for x in r.reasons)
@@ -258,7 +301,9 @@ class TestEligibilityTicket:
         """After migration 15 the seeded gate is criteria-led — automation auto
         plus at least one acceptance criterion is enough. Tests are no longer
         a default gate (users can opt in via tests_covered in their workflows)."""
-        _add_ticket(conn); _declare_lane(conn); conn.commit()
+        _add_ticket(conn)
+        _declare_lane(conn)
+        conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
@@ -268,24 +313,38 @@ class TestEligibilityTicket:
         """no_test_required has no effect on the default gate now (the seeded
         Backlog → WIP trigger no longer evaluates tests_covered) but a ticket
         marked NTR with criteria is still eligible."""
-        _add_ticket(conn); _declare_lane(conn); conn.commit()
+        _add_ticket(conn)
+        _declare_lane(conn)
+        conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
-        set_no_test_required(conn, "p", "B-1", True, "Pure docs change", ActorContext.human())
+        set_no_test_required(
+            conn, "p", "B-1", True, "Pure docs change", ActorContext.human()
+        )
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
         assert r.eligible, r.reasons
 
     def test_paused_blocks(self, conn):
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
-        set_automation_mode(conn, "p", "ticket", "B-1", "paused", ActorContext.human(), pause_reason="waiting")
+        set_automation_mode(
+            conn,
+            "p",
+            "ticket",
+            "B-1",
+            "paused",
+            ActorContext.human(),
+            pause_reason="waiting",
+        )
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
         assert not r.eligible
 
     def test_section_outside_active_range_blocks(self, conn):
         # Ticket in Ideas can't be eligible no matter what.
-        _add_ticket(conn, section="Ideas", status="proposed"); conn.commit()
+        _add_ticket(conn, section="Ideas", status="proposed")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -294,8 +353,10 @@ class TestEligibilityTicket:
         assert any("Ideas" in x or "Backlog/WIP/For Review" in x for x in r.reasons)
 
     def test_draft_blocks(self, conn):
-        _add_ticket(conn); conn.commit()
-        conn.execute("UPDATE tickets SET draft = 1 WHERE id = 'B-1'"); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
+        conn.execute("UPDATE tickets SET draft = 1 WHERE id = 'B-1'")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -304,8 +365,10 @@ class TestEligibilityTicket:
         assert any("draft" in x for x in r.reasons)
 
     def test_archived_blocks(self, conn):
-        _add_ticket(conn); conn.commit()
-        conn.execute("UPDATE tickets SET archived = 1 WHERE id = 'B-1'"); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
+        conn.execute("UPDATE tickets SET archived = 1 WHERE id = 'B-1'")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -313,7 +376,8 @@ class TestEligibilityTicket:
         assert not r.eligible
 
     def test_no_description_blocks(self, conn):
-        _add_ticket(conn, description=""); conn.commit()
+        _add_ticket(conn, description="")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -322,7 +386,8 @@ class TestEligibilityTicket:
         assert any("description" in x for x in r.reasons)
 
     def test_no_criteria_blocks(self, conn):
-        _add_ticket(conn, with_criteria=False); conn.commit()
+        _add_ticket(conn, with_criteria=False)
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -331,8 +396,11 @@ class TestEligibilityTicket:
         assert any("criteria" in x for x in r.reasons)
 
     def test_unmet_dependency_blocks(self, conn):
-        _add_ticket(conn, tid="B-1"); _add_ticket(conn, tid="B-2", section="WIP", status="in-progress"); conn.commit()
-        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')"); conn.commit()
+        _add_ticket(conn, tid="B-1")
+        _add_ticket(conn, tid="B-2", section="WIP", status="in-progress")
+        conn.commit()
+        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -341,9 +409,12 @@ class TestEligibilityTicket:
         assert any("B-2" in x for x in r.reasons)
 
     def test_dep_done_clears(self, conn):
-        _add_ticket(conn, tid="B-1"); _declare_lane(conn, tid="B-1")
-        _add_ticket(conn, tid="B-2", section="Done", status="done"); conn.commit()
-        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')"); conn.commit()
+        _add_ticket(conn, tid="B-1")
+        _declare_lane(conn, tid="B-1")
+        _add_ticket(conn, tid="B-2", section="Done", status="done")
+        conn.commit()
+        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -352,8 +423,11 @@ class TestEligibilityTicket:
 
     def test_wontdo_dep_does_not_clear(self, conn):
         # Per docs/KITCHEN.md §7: wontdo does NOT clear deps; must be removed explicitly.
-        _add_ticket(conn, tid="B-1"); _add_ticket(conn, tid="B-2", section="Won't Do", status="wontdo"); conn.commit()
-        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')"); conn.commit()
+        _add_ticket(conn, tid="B-1")
+        _add_ticket(conn, tid="B-2", section="Won't Do", status="wontdo")
+        conn.commit()
+        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -361,9 +435,12 @@ class TestEligibilityTicket:
         assert not r.eligible
 
     def test_archived_dep_blocks(self, conn):
-        _add_ticket(conn, tid="B-1"); _add_ticket(conn, tid="B-2", section="Done", status="done"); conn.commit()
+        _add_ticket(conn, tid="B-1")
+        _add_ticket(conn, tid="B-2", section="Done", status="done")
+        conn.commit()
         conn.execute("UPDATE tickets SET archived = 1 WHERE id = 'B-2'")
-        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')"); conn.commit()
+        conn.execute("INSERT INTO depends VALUES ('B-1', 'p', 'B-2')")
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
@@ -372,7 +449,8 @@ class TestEligibilityTicket:
         assert any("archived" in x for x in r.reasons)
 
     def test_active_run_blocks(self, conn):
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
         set_no_test_required(conn, "p", "B-1", True, "x", ActorContext.human())
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.execute(
@@ -386,7 +464,9 @@ class TestEligibilityTicket:
 
     def test_criteria_alone_satisfies_eligibility(self, conn):
         """After migration 15 the seeded gate is criteria-led; no test flag required."""
-        _add_ticket(conn); _declare_lane(conn); conn.commit()
+        _add_ticket(conn)
+        _declare_lane(conn)
+        conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
@@ -394,7 +474,8 @@ class TestEligibilityTicket:
 
     def test_no_criteria_blocks_eligibility(self, conn):
         """Tickets with no acceptance criteria are not eligible."""
-        _add_ticket(conn, with_criteria=False); conn.commit()
+        _add_ticket(conn, with_criteria=False)
+        conn.commit()
         set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
         r = eligibility(conn, "p", "ticket", "B-1")
@@ -417,16 +498,21 @@ class TestEligibilityUnknown:
 # Mode actions
 # ---------------------------------------------------------------------------
 
+
 class TestSetAutomationMode:
     def test_lazy_creates_subject_row(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human("alice"))
+        set_automation_mode(
+            conn, "p", "ticket", "B-1", "auto", ActorContext.human("alice")
+        )
         conn.commit()
         row = conn.execute("SELECT automation_mode FROM automation_subjects").fetchone()
         assert row["automation_mode"] == "auto"
 
     def test_invalid_mode_rejected(self, conn):
         with pytest.raises(ValueError):
-            set_automation_mode(conn, "p", "ticket", "B-1", "bogus", ActorContext.human())
+            set_automation_mode(
+                conn, "p", "ticket", "B-1", "bogus", ActorContext.human()
+            )
 
     def test_paused_without_reason_accepted(self, conn):
         # Pause is optional — pause_reason can be omitted entirely.
@@ -440,26 +526,44 @@ class TestSetAutomationMode:
 
     def test_paused_with_whitespace_only_reason_normalised_to_null(self, conn):
         # Whitespace-only reason is treated as no reason.
-        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
-                            ActorContext.human(), pause_reason="   ")
+        set_automation_mode(
+            conn,
+            "p",
+            "ticket",
+            "B-1",
+            "paused",
+            ActorContext.human(),
+            pause_reason="   ",
+        )
         conn.commit()
-        row = conn.execute(
-            "SELECT pause_reason FROM automation_subjects"
-        ).fetchone()
+        row = conn.execute("SELECT pause_reason FROM automation_subjects").fetchone()
         assert row["pause_reason"] is None
 
     def test_first_set_to_auto_emits_mode_changed(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
-        e = conn.execute("SELECT event_kind, payload_json FROM activity_events").fetchone()
+        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
+        conn.commit()
+        e = conn.execute(
+            "SELECT event_kind, payload_json FROM activity_events"
+        ).fetchone()
         assert e["event_kind"] == "mode_changed"
         assert json.loads(e["payload_json"]) == {"before": "manual", "after": "auto"}
 
     def test_setting_paused_emits_pause_set(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
-        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
-                            ActorContext.human(), pause_reason="waiting on Stripe")
+        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
         conn.commit()
-        e = conn.execute("SELECT event_kind, payload_json FROM activity_events ORDER BY id DESC").fetchone()
+        set_automation_mode(
+            conn,
+            "p",
+            "ticket",
+            "B-1",
+            "paused",
+            ActorContext.human(),
+            pause_reason="waiting on Stripe",
+        )
+        conn.commit()
+        e = conn.execute(
+            "SELECT event_kind, payload_json FROM activity_events ORDER BY id DESC"
+        ).fetchone()
         assert e["event_kind"] == "pause_set"
         payload = json.loads(e["payload_json"])
         assert payload["reason"] == "waiting on Stripe"
@@ -467,10 +571,15 @@ class TestSetAutomationMode:
         assert payload["after"] == "paused"
 
     def test_clearing_paused_emits_pause_cleared(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
-                            ActorContext.human(), pause_reason="x"); conn.commit()
-        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
-        e = conn.execute("SELECT event_kind, payload_json FROM activity_events ORDER BY id DESC").fetchone()
+        set_automation_mode(
+            conn, "p", "ticket", "B-1", "paused", ActorContext.human(), pause_reason="x"
+        )
+        conn.commit()
+        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
+        conn.commit()
+        e = conn.execute(
+            "SELECT event_kind, payload_json FROM activity_events ORDER BY id DESC"
+        ).fetchone()
         assert e["event_kind"] == "pause_cleared"
         payload = json.loads(e["payload_json"])
         assert payload["before"] == "paused"
@@ -478,16 +587,21 @@ class TestSetAutomationMode:
         assert payload["prior_reason"] == "x"
 
     def test_no_op_emits_nothing(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
+        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
+        conn.commit()
         n_before = conn.execute("SELECT COUNT(*) FROM activity_events").fetchone()[0]
-        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
+        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
+        conn.commit()
         n_after = conn.execute("SELECT COUNT(*) FROM activity_events").fetchone()[0]
         assert n_before == n_after
 
     def test_clearing_pause_clears_reason_field(self, conn):
-        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
-                            ActorContext.human(), pause_reason="x"); conn.commit()
-        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human()); conn.commit()
+        set_automation_mode(
+            conn, "p", "ticket", "B-1", "paused", ActorContext.human(), pause_reason="x"
+        )
+        conn.commit()
+        set_automation_mode(conn, "p", "ticket", "B-1", "auto", ActorContext.human())
+        conn.commit()
         row = conn.execute(
             "SELECT automation_mode, pause_reason FROM automation_subjects"
         ).fetchone()
@@ -497,19 +611,24 @@ class TestSetAutomationMode:
 
 class TestSetNoTestRequired:
     def test_enabled_requires_note(self, conn):
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
         with pytest.raises(ValueError):
             set_no_test_required(conn, "p", "B-1", True, "", ActorContext.human())
 
     def test_enabled_whitespace_note_rejected(self, conn):
-        _add_ticket(conn); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
         with pytest.raises(ValueError):
             set_no_test_required(conn, "p", "B-1", True, "   ", ActorContext.human())
 
     def test_disabled_clears_note(self, conn):
-        _add_ticket(conn); conn.commit()
-        set_no_test_required(conn, "p", "B-1", True, "rationale", ActorContext.human()); conn.commit()
-        set_no_test_required(conn, "p", "B-1", False, "ignored", ActorContext.human()); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
+        set_no_test_required(conn, "p", "B-1", True, "rationale", ActorContext.human())
+        conn.commit()
+        set_no_test_required(conn, "p", "B-1", False, "ignored", ActorContext.human())
+        conn.commit()
         row = conn.execute(
             "SELECT no_test_required, no_test_required_note FROM tickets WHERE id='B-1'"
         ).fetchone()
@@ -521,41 +640,58 @@ class TestSetNoTestRequired:
 # Spine event emission on existing mutations
 # ---------------------------------------------------------------------------
 
+
 class TestSpineEventsOnExistingActions:
     def test_move_ticket_emits_section_and_status(self, conn):
-        _add_ticket(conn, section="Backlog", status="specified"); conn.commit()
-        move_ticket(conn, "p", "B-1", "WIP", actor=ActorContext.human("alice")); conn.commit()
-        kinds = [r[0] for r in conn.execute(
-            "SELECT event_kind FROM activity_events ORDER BY id"
-        ).fetchall()]
+        _add_ticket(conn, section="Backlog", status="specified")
+        conn.commit()
+        move_ticket(conn, "p", "B-1", "WIP", actor=ActorContext.human("alice"))
+        conn.commit()
+        kinds = [
+            r[0]
+            for r in conn.execute(
+                "SELECT event_kind FROM activity_events ORDER BY id"
+            ).fetchall()
+        ]
         assert "section_change" in kinds
         assert "status_change" in kinds
 
     def test_move_to_same_section_emits_nothing(self, conn):
-        _add_ticket(conn, section="WIP", status="in-progress"); conn.commit()
-        move_ticket(conn, "p", "B-1", "WIP", actor=ActorContext.human()); conn.commit()
+        _add_ticket(conn, section="WIP", status="in-progress")
+        conn.commit()
+        move_ticket(conn, "p", "B-1", "WIP", actor=ActorContext.human())
+        conn.commit()
         n = conn.execute("SELECT COUNT(*) FROM activity_events").fetchone()[0]
         assert n == 0
 
     def test_update_status_emits_status_change(self, conn):
-        _add_ticket(conn, section="WIP", status="in-progress"); conn.commit()
-        update_ticket(conn, "p", "B-1", status="blocked", actor=ActorContext.human("alice"))
+        _add_ticket(conn, section="WIP", status="in-progress")
+        conn.commit()
+        update_ticket(
+            conn, "p", "B-1", status="blocked", actor=ActorContext.human("alice")
+        )
         conn.commit()
         e = conn.execute(
             "SELECT event_kind, payload_json FROM activity_events ORDER BY id DESC"
         ).fetchone()
         assert e["event_kind"] == "status_change"
-        assert json.loads(e["payload_json"]) == {"before": "in-progress", "after": "blocked"}
+        assert json.loads(e["payload_json"]) == {
+            "before": "in-progress",
+            "after": "blocked",
+        }
 
     def test_update_title_does_not_emit_in_m1a(self, conn):
         # Title edits land in M1b's field_changed vocabulary, not M1a.
-        _add_ticket(conn); conn.commit()
-        update_ticket(conn, "p", "B-1", title="New title", actor=ActorContext.human()); conn.commit()
+        _add_ticket(conn)
+        conn.commit()
+        update_ticket(conn, "p", "B-1", title="New title", actor=ActorContext.human())
+        conn.commit()
         n = conn.execute("SELECT COUNT(*) FROM activity_events").fetchone()[0]
         assert n == 0
 
     def test_check_criteria_emits_criteria_check(self, conn):
-        _add_ticket(conn, with_criteria=True); conn.commit()
+        _add_ticket(conn, with_criteria=True)
+        conn.commit()
         update_ticket(conn, "p", "B-1", check_criteria=1, actor=ActorContext.human())
         conn.commit()
         e = conn.execute(
@@ -567,24 +703,36 @@ class TestSpineEventsOnExistingActions:
         assert payload["after"] is True
 
     def test_check_already_checked_emits_nothing(self, conn):
-        _add_ticket(conn, with_criteria=True); conn.commit()
-        conn.execute("UPDATE acceptance_criteria SET checked = 1"); conn.commit()
+        _add_ticket(conn, with_criteria=True)
+        conn.commit()
+        conn.execute("UPDATE acceptance_criteria SET checked = 1")
+        conn.commit()
         update_ticket(conn, "p", "B-1", check_criteria=1, actor=ActorContext.human())
         conn.commit()
         n = conn.execute("SELECT COUNT(*) FROM activity_events").fetchone()[0]
         assert n == 0
 
     def test_accept_ticket_emits_section_and_status(self, conn, tmp_path):
-        _add_ticket(conn, section="For Review", status="for-review"); conn.commit()
+        _add_ticket(conn, section="For Review", status="for-review")
+        conn.commit()
         # This test is about event emission, not the close gate — bypass it
         # explicitly. Gate coverage lives in tests/test_tdd_spec_lifecycle.py.
-        accept_ticket(conn, "p", "B-1", str(tmp_path), "p",
-                      actor=ActorContext.human("alice"),
-                      force="test fixture: exercising event emission")
+        accept_ticket(
+            conn,
+            "p",
+            "B-1",
+            str(tmp_path),
+            "p",
+            actor=ActorContext.human("alice"),
+            force="test fixture: exercising event emission",
+        )
         conn.commit()
-        kinds = [r[0] for r in conn.execute(
-            "SELECT event_kind FROM activity_events WHERE subject_id='B-1' ORDER BY id"
-        ).fetchall()]
+        kinds = [
+            r[0]
+            for r in conn.execute(
+                "SELECT event_kind FROM activity_events WHERE subject_id='B-1' ORDER BY id"
+            ).fetchall()
+        ]
         assert "section_change" in kinds
         assert "status_change" in kinds
 
@@ -592,6 +740,7 @@ class TestSpineEventsOnExistingActions:
 # ---------------------------------------------------------------------------
 # Internal-side-effect rule (§9): cascaded mutations emit too, with system actor.
 # ---------------------------------------------------------------------------
+
 
 class TestInternalSideEffects:
     def test_parent_auto_promote_no_longer_synchronous(self, conn):
@@ -615,17 +764,20 @@ class TestInternalSideEffects:
         )
         conn.commit()
 
-        update_ticket(conn, "p", "BUG-1", status="bug-fixed", actor=ActorContext.human())
+        update_ticket(
+            conn, "p", "BUG-1", status="bug-fixed", actor=ActorContext.human()
+        )
         conn.commit()
-        update_ticket(conn, "p", "BUG-2", status="bug-fixed", actor=ActorContext.human())
+        update_ticket(
+            conn, "p", "BUG-2", status="bug-fixed", actor=ActorContext.human()
+        )
         conn.commit()
 
         # Parent must still be in WIP (no synchronous cascade).
-        parent = conn.execute(
-            "SELECT section FROM tickets WHERE id = 'B-1'"
-        ).fetchone()
-        assert parent["section"] == "WIP", \
+        parent = conn.execute("SELECT section FROM tickets WHERE id = 'B-1'").fetchone()
+        assert parent["section"] == "WIP", (
             "parent should NOT be promoted by update_ticket — workflow handles it"
+        )
 
         # No system section_change event should have fired for the parent.
         rows = conn.execute(
@@ -646,22 +798,26 @@ class TestInternalSideEffects:
 # Module skeletons importable
 # ---------------------------------------------------------------------------
 
+
 class TestModuleSkeletons:
     def test_kitchen_lifecycle(self):
         import kitchen
+
         kitchen.start(get_db=lambda: None, settings={"kitchen_poll_seconds": 0.05})
         kitchen.stop()
         # Idempotent stop
         kitchen.stop()
 
     def test_workspaces_path_deterministic(self):
-        from workspaces import workspace_path_for, _sanitize_key
+        from workspaces import _sanitize_key, workspace_path_for
+
         p = workspace_path_for("proj", "ticket", "B-42")
         assert "proj" in str(p) and "ticket" in str(p) and "B-42" in str(p)
         assert _sanitize_key("a/b*c") == "a_b_c"
 
     def test_runner_abc(self):
         from runners import Runner
+
         # Can't instantiate the ABC
         with pytest.raises(TypeError):
             Runner()  # type: ignore[abstract]

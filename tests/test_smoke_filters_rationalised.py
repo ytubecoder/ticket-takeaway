@@ -18,10 +18,7 @@ Covers:
 12. Auto chip includes held-mode tickets (JS dataset check).
 """
 
-import json
-
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -42,7 +39,13 @@ def _filter_chip(page, data_filter: str):
 def test_canonical_chips_present(live_page):
     """Auto / Ready / Running / Needs Attention / For Review (auto) chips exist."""
     p = live_page
-    for label_filt in ["auto", "ready", "running", "needs-attention", "for-review-auto"]:
+    for label_filt in [
+        "auto",
+        "ready",
+        "running",
+        "needs-attention",
+        "for-review-auto",
+    ]:
         btn = _filter_chip(p, label_filt)
         assert btn is not None, f"Expected chip data-filter='{label_filt}' — not found"
 
@@ -93,19 +96,27 @@ def test_needs_attention_chevron_opens_popover(live_page):
     assert popover is not None, "#needsAttentionPopover not found"
 
     # Popover should be hidden initially
-    initial_display = p.evaluate("document.getElementById('needsAttentionPopover').style.display")
-    assert initial_display in ("none", ""), f"Expected popover hidden, got display='{initial_display}'"
+    initial_display = p.evaluate(
+        "document.getElementById('needsAttentionPopover').style.display"
+    )
+    assert initial_display in ("none", ""), (
+        f"Expected popover hidden, got display='{initial_display}'"
+    )
 
     chevron.click()
     p.wait_for_timeout(150)
 
     # Popover should now be visible
-    display_after = p.evaluate("document.getElementById('needsAttentionPopover').style.display")
+    display_after = p.evaluate(
+        "document.getElementById('needsAttentionPopover').style.display"
+    )
     assert display_after != "none", "Popover did not open after chevron click"
 
     # Four checkboxes with data-na-sub attributes
     checkboxes = p.query_selector_all("[data-na-sub]")
-    assert len(checkboxes) == 4, f"Expected 4 sub-toggle checkboxes, got {len(checkboxes)}"
+    assert len(checkboxes) == 4, (
+        f"Expected 4 sub-toggle checkboxes, got {len(checkboxes)}"
+    )
 
     sub_values = {chk.get_attribute("data-na-sub") for chk in checkboxes}
     expected = {"needs_input", "failed", "stalled", "cancelled"}
@@ -128,14 +139,18 @@ def test_needs_attention_popover_dismisses_on_outside_click(live_page):
     p.wait_for_timeout(150)
 
     # Verify open
-    display_after = p.evaluate("document.getElementById('needsAttentionPopover').style.display")
+    display_after = p.evaluate(
+        "document.getElementById('needsAttentionPopover').style.display"
+    )
     assert display_after != "none", "Popover did not open"
 
     # Click outside (on the page body, far from chips)
     p.click("body", position={"x": 10, "y": 10})
     p.wait_for_timeout(150)
 
-    display_dismissed = p.evaluate("document.getElementById('needsAttentionPopover').style.display")
+    display_dismissed = p.evaluate(
+        "document.getElementById('needsAttentionPopover').style.display"
+    )
     assert display_dismissed == "none", "Popover did not dismiss on outside click"
 
 
@@ -239,7 +254,9 @@ def test_needs_attention_subtoggle_excludes_failed(live_page):
     p.wait_for_timeout(100)
     p.click("body", position={"x": 10, "y": 10})
     p.wait_for_timeout(100)
-    p.evaluate("document.querySelector('.filter-btn[data-filter=\"needs-attention\"]').click()")
+    p.evaluate(
+        "document.querySelector('.filter-btn[data-filter=\"needs-attention\"]').click()"
+    )
     p.wait_for_timeout(150)
 
 
@@ -294,20 +311,23 @@ def test_needs_attention_chip_toggles_active(live_page):
         pytest.skip("Needs Attention chip not found")
 
     # Should not be active initially
-    assert not chip.evaluate("el => el.classList.contains('active')"), \
+    assert not chip.evaluate("el => el.classList.contains('active')"), (
         "Chip should not be active before first click"
+    )
 
     chip.click()
     p.wait_for_timeout(150)
 
-    assert chip.evaluate("el => el.classList.contains('active')"), \
+    assert chip.evaluate("el => el.classList.contains('active')"), (
         "Chip should be active after click"
+    )
 
     # Toggle off
     chip.click()
     p.wait_for_timeout(150)
-    assert not chip.evaluate("el => el.classList.contains('active')"), \
+    assert not chip.evaluate("el => el.classList.contains('active')"), (
         "Chip should be inactive after second click"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +393,9 @@ def test_auto_chip_includes_paused_when_subtoggle_on(live_page):
             return (mode === 'auto' || (include && mode === 'paused'));
         })()
     """)
-    assert matches is True, "Auto predicate should match mode='paused' when sub-toggle is on"
+    assert matches is True, (
+        "Auto predicate should match mode='paused' when sub-toggle is on"
+    )
 
     # Reset
     btn.click()

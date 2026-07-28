@@ -7,15 +7,15 @@ capability advertisement.
 Phase 1: only endpoint_type='cli' executes. Other types validate and
 persist but raise UnsupportedEndpointType at invocation time.
 """
+
 from __future__ import annotations
+
 import json
 import logging
 import re
 import sqlite3
-import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -36,18 +36,18 @@ class Endpoint:
     id: str
     name: str
     endpoint_type: str = "cli"
-    command: Optional[str] = None
+    command: str | None = None
     args: list = field(default_factory=list)
     prompt_mode: str = "template"
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    base_url: Optional[str] = None
-    api_key_env: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    api_key_env: str | None = None
     timeout_s: int = 120
     capabilities: dict = field(default_factory=dict)
     session_config: dict = field(default_factory=dict)
     system: int = 0
-    created_at: Optional[str] = None
+    created_at: str | None = None
 
 
 def from_row(row: sqlite3.Row) -> Endpoint:
@@ -67,7 +67,7 @@ def list_endpoints(conn) -> list[Endpoint]:
     return [from_row(r) for r in rows]
 
 
-def get_endpoint(conn, endpoint_id: str) -> Optional[Endpoint]:
+def get_endpoint(conn, endpoint_id: str) -> Endpoint | None:
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT * FROM endpoints WHERE id = ?", (endpoint_id,)
@@ -77,19 +77,31 @@ def get_endpoint(conn, endpoint_id: str) -> Optional[Endpoint]:
 
 def create_endpoint(conn, ep: Endpoint) -> Endpoint:
     _validate_for_persist(ep)
-    conn.execute("""
+    conn.execute(
+        """
         INSERT INTO endpoints
           (id, name, endpoint_type, provider, model, base_url, api_key_env,
            command, args, prompt_mode, timeout_s, capabilities,
            session_config, system)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        ep.id, ep.name, ep.endpoint_type, ep.provider, ep.model,
-        ep.base_url, ep.api_key_env, ep.command,
-        json.dumps(ep.args), ep.prompt_mode, ep.timeout_s,
-        json.dumps(ep.capabilities), json.dumps(ep.session_config),
-        ep.system,
-    ))
+    """,
+        (
+            ep.id,
+            ep.name,
+            ep.endpoint_type,
+            ep.provider,
+            ep.model,
+            ep.base_url,
+            ep.api_key_env,
+            ep.command,
+            json.dumps(ep.args),
+            ep.prompt_mode,
+            ep.timeout_s,
+            json.dumps(ep.capabilities),
+            json.dumps(ep.session_config),
+            ep.system,
+        ),
+    )
     conn.commit()
     return get_endpoint(conn, ep.id)
 
@@ -111,8 +123,7 @@ def update_endpoint(conn, endpoint_id: str, **fields) -> Endpoint:
         sets.append(f"{k} = ?")
         vals.append(v)
     vals.append(endpoint_id)
-    conn.execute(
-        f"UPDATE endpoints SET {', '.join(sets)} WHERE id = ?", vals)
+    conn.execute(f"UPDATE endpoints SET {', '.join(sets)} WHERE id = ?", vals)
     conn.commit()
     return get_endpoint(conn, endpoint_id)
 
@@ -127,8 +138,7 @@ def delete_endpoint(conn, endpoint_id: str) -> int:
     if existing.system == 1:
         raise PermissionError("system_endpoint")
     affected = conn.execute(
-        "SELECT COUNT(*) FROM workflow_agents WHERE endpoint_id = ?",
-        (endpoint_id,)
+        "SELECT COUNT(*) FROM workflow_agents WHERE endpoint_id = ?", (endpoint_id,)
     ).fetchone()[0]
     conn.execute("DELETE FROM endpoints WHERE id = ?", (endpoint_id,))
     conn.commit()
@@ -138,32 +148,38 @@ def delete_endpoint(conn, endpoint_id: str) -> int:
 def _validate_for_persist(ep: Endpoint) -> None:
     if not re.match(r"^[a-zA-Z0-9_-]+$", ep.id or ""):
         raise EndpointMisconfigured(
-            f"endpoint id must match [a-zA-Z0-9_-]+, got {ep.id!r}")
+            f"endpoint id must match [a-zA-Z0-9_-]+, got {ep.id!r}"
+        )
     if ep.endpoint_type not in VALID_TYPES:
         raise EndpointMisconfigured(
-            f"endpoint_type must be in {VALID_TYPES}, got {ep.endpoint_type!r}")
+            f"endpoint_type must be in {VALID_TYPES}, got {ep.endpoint_type!r}"
+        )
     if ep.prompt_mode not in VALID_PROMPT_MODES:
         raise EndpointMisconfigured(
-            f"prompt_mode must be in {VALID_PROMPT_MODES}, got {ep.prompt_mode!r}")
+            f"prompt_mode must be in {VALID_PROMPT_MODES}, got {ep.prompt_mode!r}"
+        )
     if ep.endpoint_type == "cli" and not ep.command:
         raise EndpointMisconfigured("cli endpoints require 'command'")
     if ep.endpoint_type.endswith("_api"):
         if not ep.provider:
             raise EndpointMisconfigured(
-                f"{ep.endpoint_type} endpoints require 'provider'")
+                f"{ep.endpoint_type} endpoints require 'provider'"
+            )
         if not ep.api_key_env:
             raise EndpointMisconfigured(
-                f"{ep.endpoint_type} endpoints require 'api_key_env'")
+                f"{ep.endpoint_type} endpoints require 'api_key_env'"
+            )
     if not isinstance(ep.args, list):
         raise EndpointMisconfigured("args must be a list")
     for i, a in enumerate(ep.args):
         if not isinstance(a, str):
             raise EndpointMisconfigured(
-                f"args[{i}] must be a string, got {type(a).__name__}")
+                f"args[{i}] must be a string, got {type(a).__name__}"
+            )
 
 
 def build_invocation(
-    endpoint: Endpoint, prompt: str, *, session_id: Optional[str] = None
+    endpoint: Endpoint, prompt: str, *, session_id: str | None = None
 ) -> list[str]:
     """Build the argv for executing `prompt` against `endpoint`.
 
@@ -176,9 +192,7 @@ def build_invocation(
             f"API endpoint execution is not implemented (phase 1 = CLI only)"
         )
     if endpoint.prompt_mode == "stdin":
-        raise NotImplementedError(
-            "prompt_mode='stdin' is reserved for a future phase"
-        )
+        raise NotImplementedError("prompt_mode='stdin' is reserved for a future phase")
     if not isinstance(endpoint.args, list):
         raise EndpointMisconfigured(
             f"endpoint {endpoint.id!r} args must be a list, got "
@@ -194,12 +208,12 @@ def build_invocation(
     if session_id is not None:
         resume_template = (endpoint.session_config or {}).get("resume_args")
         if resume_template:
-            substituted = _substitute(
-                resume_template, prompt, session_id=session_id)
+            substituted = _substitute(resume_template, prompt, session_id=session_id)
             return [endpoint.command] + substituted
         log.warning(
             "endpoint=%s advertises sessions but has no resume_args "
-            "template — session resume skipped", endpoint.id,
+            "template — session resume skipped",
+            endpoint.id,
         )
 
     # Normal path
@@ -209,8 +223,9 @@ def build_invocation(
     return [endpoint.command] + substituted
 
 
-def _substitute(template: list[str], prompt: str,
-                *, session_id: Optional[str] = None) -> list[str]:
+def _substitute(
+    template: list[str], prompt: str, *, session_id: str | None = None
+) -> list[str]:
     out = []
     for tok in template:
         new = tok.replace("{prompt}", prompt)
@@ -222,7 +237,7 @@ def _substitute(template: list[str], prompt: str,
 
 def extract_session_id(
     endpoint: Endpoint, stdout: str, stderr: str, started_before: float
-) -> Optional[str]:
+) -> str | None:
     """Mine a session id from a completed invocation's output.
 
     Returns None if endpoint doesn't advertise session support, regex
@@ -250,10 +265,7 @@ def extract_session_id(
         try:
             d = Path(fallback_dir).expanduser()
             if d.is_dir():
-                fresh = [
-                    p for p in d.iterdir()
-                    if p.stat().st_mtime > started_before
-                ]
+                fresh = [p for p in d.iterdir() if p.stat().st_mtime > started_before]
                 if fresh:
                     newest = max(fresh, key=lambda p: p.stat().st_mtime)
                     return newest.stem

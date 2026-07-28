@@ -14,17 +14,16 @@ Requires: running serve.py (`dashboard_server` fixture from conftest.py).
 from __future__ import annotations
 
 import json
-import urllib.request
 import urllib.error
-import sqlite3
+import urllib.request
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helper: probe whether an endpoint exists at all.
 # Returns the HTTP status code or None if connection refused / 404.
 # ---------------------------------------------------------------------------
+
 
 def _probe_endpoint(url: str, method: str = "GET") -> int | None:
     """Return the HTTP status code for a request to url, or None on network error."""
@@ -82,6 +81,7 @@ def _patch_json(url: str, payload: dict) -> tuple[int, dict]:
 # Helper: get or create a test ticket id from the running server.
 # ---------------------------------------------------------------------------
 
+
 def _get_any_ticket_id(base_url: str) -> str | None:
     """Return the id of the first ticket visible via the API, or None."""
     try:
@@ -114,6 +114,7 @@ def _create_test_ticket(base_url: str) -> str | None:
 #
 # TODO (Lane B): Remove the skip probe block when this endpoint is implemented.
 #
+
 
 class TestRunsRespondEndpoint:
     """Tests for POST /api/runs/{id}/respond.
@@ -171,7 +172,10 @@ class TestRunsRespondEndpoint:
         url = f"{dashboard_server}/api/runs/0/respond"
         status, body = _post_json(
             url,
-            {"kind": "propose", "accepted": {"description": "New desc", "criteria": []}},
+            {
+                "kind": "propose",
+                "accepted": {"description": "New desc", "criteria": []},
+            },
         )
         assert status != 422, (
             f"Server rejected propose payload shape — expected 400/404, got 422: {body}"
@@ -195,6 +199,7 @@ class TestRunsRespondEndpoint:
 # the PATCH handler.
 #
 
+
 class TestTicketPatchIsContainer:
     """Tests for PATCH /api/tickets/{id} accepting is_container."""
 
@@ -202,7 +207,9 @@ class TestTicketPatchIsContainer:
     def _setup(self, dashboard_server):
         self._base = dashboard_server
         # Get or create a ticket to operate on.
-        self._tid = _get_any_ticket_id(dashboard_server) or _create_test_ticket(dashboard_server)
+        self._tid = _get_any_ticket_id(dashboard_server) or _create_test_ticket(
+            dashboard_server
+        )
         if not self._tid:
             pytest.skip("Could not obtain a test ticket from the running server.")
 
@@ -238,7 +245,7 @@ class TestTicketPatchIsContainer:
 
     def test_patch_is_container_false_accepts(self, dashboard_server):
         url = f"{self._base}/api/tickets/{self._tid}"
-        status, body = _patch_json(url, {"is_container": 0})
+        status, _body = _patch_json(url, {"is_container": 0})
         if status in (404, 405):
             pytest.skip(
                 "PATCH is_container field not yet accepted — Lane B pending. "
@@ -255,13 +262,16 @@ class TestTicketPatchIsContainer:
 # TODO (Lane B): Remove the skip probe block when activity endpoint is implemented.
 #
 
+
 class TestTicketActivityEndpoint:
     """Tests for GET /api/tickets/{id}/activity."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, dashboard_server):
         self._base = dashboard_server
-        self._tid = _get_any_ticket_id(dashboard_server) or _create_test_ticket(dashboard_server)
+        self._tid = _get_any_ticket_id(dashboard_server) or _create_test_ticket(
+            dashboard_server
+        )
         if not self._tid:
             pytest.skip("Could not obtain a test ticket from the running server.")
 
@@ -289,7 +299,9 @@ class TestTicketActivityEndpoint:
                 "GET /api/tickets/{id}/activity returned 404 — Lane B needs to add "
                 "this endpoint. Remove skip once wired."
             )
-        assert status == 200, f"Expected 200 from activity endpoint, got {status}: {body}"
+        assert status == 200, (
+            f"Expected 200 from activity endpoint, got {status}: {body}"
+        )
 
     def test_activity_response_has_events_list(self, dashboard_server):
         """Response must contain an 'events' key with a list value."""
@@ -301,13 +313,17 @@ class TestTicketActivityEndpoint:
             )
         events = body.get("events")
         assert events is not None, f"Response missing 'events' key: {body}"
-        assert isinstance(events, list), f"Expected 'events' to be a list, got {type(events)}"
+        assert isinstance(events, list), (
+            f"Expected 'events' to be a list, got {type(events)}"
+        )
 
     def test_activity_response_has_total_key(self, dashboard_server):
         """Response must include a 'total' count key."""
         status, body = self._get_activity()
         if status == 404:
-            pytest.skip("GET /api/tickets/{id}/activity not yet implemented — Lane B pending.")
+            pytest.skip(
+                "GET /api/tickets/{id}/activity not yet implemented — Lane B pending."
+            )
         assert "total" in body or "count" in body, (
             f"Expected 'total' or 'count' key in activity response: {body}"
         )
@@ -319,10 +335,9 @@ class TestTicketActivityEndpoint:
             req = urllib.request.Request(url)
             resp = urllib.request.urlopen(req, timeout=3)
             status = resp.status
-            body = json.loads(resp.read())
+            json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             status = exc.code
-            body = {}
         if status == 404:
             pytest.skip(
                 "GET /api/tickets/{id}/activity not yet implemented — Lane B pending."
@@ -350,6 +365,4 @@ class TestTicketActivityEndpoint:
         good_status, _ = self._get_activity()
         if good_status == 404:
             pytest.skip("Activity endpoint not yet implemented — Lane B pending.")
-        assert status == 404, (
-            f"Expected 404 for nonexistent ticket, got {status}"
-        )
+        assert status == 404, f"Expected 404 for nonexistent ticket, got {status}"

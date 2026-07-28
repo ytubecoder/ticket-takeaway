@@ -19,9 +19,7 @@ import time
 from pathlib import Path
 
 import pytest
-
 from conftest import api_delete, api_get, api_post
-
 
 _LIVE_DB_PATH = Path.home() / ".claude" / "ticket-takeaway" / "tickets.db"
 
@@ -67,7 +65,9 @@ def test_activity_endpoint_returns_wrapped_events(dashboard_server, fresh_ideas_
     assert "next_before" in data
 
 
-def test_respond_endpoint_validates_needs_input_state(dashboard_server, fresh_ideas_ticket):
+def test_respond_endpoint_validates_needs_input_state(
+    dashboard_server, fresh_ideas_ticket
+):
     """Lane B: POST /api/runs/{id}/respond rejects runs that aren't in needs_input.
 
     We inject a stub run directly into the live DB at status='succeeded' and
@@ -94,8 +94,17 @@ def test_respond_endpoint_validates_needs_input_state(dashboard_server, fresh_id
                (project_id, subject_type, subject_id, runner_kind, status,
                 triggered_by, attempt, claim_owner, metadata_json)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (project_id, "ticket", tid, "agent", "succeeded",
-             "human", 1, "test-owner", "{}"),
+            (
+                project_id,
+                "ticket",
+                tid,
+                "agent",
+                "succeeded",
+                "human",
+                1,
+                "test-owner",
+                "{}",
+            ),
         )
         run_id = cur.lastrowid
         con.commit()
@@ -159,16 +168,20 @@ def test_respond_endpoint_validates_needs_input_state(dashboard_server, fresh_id
             con.close()
 
 
-@pytest.mark.skip(reason=(
-    "Requires real agent subprocess or substantial mocking. "
-    "The other tests in this file cover the surface; this is the full chat -> "
-    "propose -> commit -> Backlog flow which needs a live `claude` CLI."
-))
+@pytest.mark.skip(
+    reason=(
+        "Requires real agent subprocess or substantial mocking. "
+        "The other tests in this file cover the surface; this is the full chat -> "
+        "propose -> commit -> Backlog flow which needs a live `claude` CLI."
+    )
+)
 def test_full_chat_to_propose_to_commit_flow(page, dashboard_server):
     raise NotImplementedError
 
 
-@pytest.mark.skip(reason="Requires real agent subprocess. See comment on previous test.")
+@pytest.mark.skip(
+    reason="Requires real agent subprocess. See comment on previous test."
+)
 def test_runs_tab_shows_chat_transcript(page, dashboard_server):
     raise NotImplementedError
 

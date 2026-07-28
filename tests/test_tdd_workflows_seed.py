@@ -6,21 +6,25 @@ Pure logic, no server, no Playwright.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
-import os
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import get_db, init_db
-from workflows_seed import seed_default_endpoints, seed_default_workflows, DEFAULT_WORKFLOWS
-
+from db import init_db
+from workflows_seed import (
+    DEFAULT_WORKFLOWS,
+    seed_default_endpoints,
+    seed_default_workflows,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def conn():
@@ -38,6 +42,7 @@ PROJECT_ID = "test-project"
 # ---------------------------------------------------------------------------
 # Migration 9 — new columns exist
 # ---------------------------------------------------------------------------
+
 
 class TestMigration9:
     def test_workflows_has_system_column(self, conn):
@@ -64,6 +69,7 @@ class TestMigration9:
 # ---------------------------------------------------------------------------
 # DEFAULT_WORKFLOWS manifest
 # ---------------------------------------------------------------------------
+
 
 class TestDefaultWorkflowsManifest:
     def test_exactly_ten_workflows(self):
@@ -102,7 +108,9 @@ class TestDefaultWorkflowsManifest:
 
     def test_auto_accept_is_disabled(self):
         """Auto-accept must be disabled by default (memory: never auto-accept)."""
-        wf = next(w for w in DEFAULT_WORKFLOWS if w["name"] == "Auto-accept reviewed tickets")
+        wf = next(
+            w for w in DEFAULT_WORKFLOWS if w["name"] == "Auto-accept reviewed tickets"
+        )
         assert wf["enabled"] == 0
 
     def test_parent_promote_has_zero_steps(self):
@@ -110,7 +118,9 @@ class TestDefaultWorkflowsManifest:
         assert wf["steps"] == []
 
     def test_auto_accept_has_zero_steps(self):
-        wf = next(w for w in DEFAULT_WORKFLOWS if w["name"] == "Auto-accept reviewed tickets")
+        wf = next(
+            w for w in DEFAULT_WORKFLOWS if w["name"] == "Auto-accept reviewed tickets"
+        )
         assert wf["steps"] == []
 
     def test_trigger_json_round_trips(self):
@@ -128,12 +138,15 @@ class TestDefaultWorkflowsManifest:
         workflows (system mutation rules) are exempt."""
         for wf in DEFAULT_WORKFLOWS:
             for step in wf["steps"]:
-                assert "prompt_template" in step, f"{wf['name']!r} step missing prompt_template"
+                assert "prompt_template" in step, (
+                    f"{wf['name']!r} step missing prompt_template"
+                )
 
 
 # ---------------------------------------------------------------------------
 # seed_default_workflows
 # ---------------------------------------------------------------------------
+
 
 class TestSeedDefaultWorkflows:
     def test_links_ten_system_workflows_on_first_run(self, conn):
@@ -259,12 +272,13 @@ class TestSeedDefaultWorkflows:
 # seed_default_endpoints — idempotency
 # ---------------------------------------------------------------------------
 
+
 class TestSeedDefaultEndpointsIdempotency:
     def test_seed_default_endpoints_is_idempotent(self, conn):
         """Re-running seed_default_endpoints on an already-seeded DB
         must not create duplicate rows or modify existing ones."""
         # First seed
-        r1 = seed_default_endpoints(conn)
+        seed_default_endpoints(conn)
         count_a = conn.execute(
             "SELECT COUNT(*) FROM endpoints WHERE system=1"
         ).fetchone()[0]
@@ -273,7 +287,7 @@ class TestSeedDefaultEndpointsIdempotency:
         ).fetchall()
 
         # Second seed — must be a no-op for every row
-        r2 = seed_default_endpoints(conn)
+        seed_default_endpoints(conn)
         count_b = conn.execute(
             "SELECT COUNT(*) FROM endpoints WHERE system=1"
         ).fetchone()[0]

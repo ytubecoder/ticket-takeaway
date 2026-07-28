@@ -43,7 +43,6 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
 # ---- Comparable tables ----
 #   key_cols: tuple — composite key uniquely identifying a row
 #   compare_cols: tuple — columns whose values must match for "same content"
@@ -51,9 +50,17 @@ _TABLES = {
     "tickets": {
         "key_cols": ("project_id", "id"),
         "compare_cols": (
-            "title", "priority", "status", "section", "description",
-            "parent", "draft", "is_container", "summary_oneliner",
-            "release_tag", "commit_hash",
+            "title",
+            "priority",
+            "status",
+            "section",
+            "description",
+            "parent",
+            "draft",
+            "is_container",
+            "summary_oneliner",
+            "release_tag",
+            "commit_hash",
         ),
     },
     "acceptance_criteria": {
@@ -70,14 +77,27 @@ _TABLES = {
     },
     "workflow_agents": {
         "key_cols": ("id",),
-        "compare_cols": ("name", "command", "args", "system_prompt",
-                          "persist_session", "system"),
+        "compare_cols": (
+            "name",
+            "command",
+            "args",
+            "system_prompt",
+            "persist_session",
+            "system",
+        ),
     },
     "workflows": {
         "key_cols": ("id",),
-        "compare_cols": ("name", "description", "steps", "system",
-                          "enabled", "trigger_json", "on_success_json",
-                          "subject_type"),
+        "compare_cols": (
+            "name",
+            "description",
+            "steps",
+            "system",
+            "enabled",
+            "trigger_json",
+            "on_success_json",
+            "subject_type",
+        ),
     },
     "automation_subjects": {
         "key_cols": ("project_id", "subject_type", "subject_id"),
@@ -113,13 +133,19 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _filter_existing_cols(conn: sqlite3.Connection, table: str, cols: tuple[str, ...]) -> tuple[str, ...]:
+def _filter_existing_cols(
+    conn: sqlite3.Connection, table: str, cols: tuple[str, ...]
+) -> tuple[str, ...]:
     """Drop columns that don't exist on this side (handles schema drift)."""
     return tuple(c for c in cols if _col_exists(conn, table, c))
 
 
-def _load_rows(conn: sqlite3.Connection, table: str, key_cols: tuple[str, ...],
-                compare_cols: tuple[str, ...]) -> dict[tuple, dict]:
+def _load_rows(
+    conn: sqlite3.Connection,
+    table: str,
+    key_cols: tuple[str, ...],
+    compare_cols: tuple[str, ...],
+) -> dict[tuple, dict]:
     """Load all rows from a table, keyed by composite key. Returns {} if missing."""
     if not _table_exists(conn, table):
         return {}
@@ -136,8 +162,9 @@ def _load_rows(conn: sqlite3.Connection, table: str, key_cols: tuple[str, ...],
     return out
 
 
-def _diff_table(conn_a: sqlite3.Connection, conn_b: sqlite3.Connection,
-                table: str, spec: dict) -> dict:
+def _diff_table(
+    conn_a: sqlite3.Connection, conn_b: sqlite3.Connection, table: str, spec: dict
+) -> dict:
     """Return {only_in_a, only_in_b, changed} for one table."""
     a = _load_rows(conn_a, table, spec["key_cols"], spec["compare_cols"])
     b = _load_rows(conn_b, table, spec["key_cols"], spec["compare_cols"])
@@ -159,18 +186,26 @@ def _diff_table(conn_a: sqlite3.Connection, conn_b: sqlite3.Connection,
     }
 
 
-def _count_only(conn_a: sqlite3.Connection, conn_b: sqlite3.Connection,
-                table: str) -> dict:
+def _count_only(
+    conn_a: sqlite3.Connection, conn_b: sqlite3.Connection, table: str
+) -> dict:
     """For append-only tables, just report counts."""
-    ca = conn_a.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] \
-        if _table_exists(conn_a, table) else 0
-    cb = conn_b.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] \
-        if _table_exists(conn_b, table) else 0
+    ca = (
+        conn_a.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if _table_exists(conn_a, table)
+        else 0
+    )
+    cb = (
+        conn_b.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if _table_exists(conn_b, table)
+        else 0
+    )
     return {"table": table, "count_a": ca, "count_b": cb, "delta": cb - ca}
 
 
-def _print_text(diffs: list[dict], counts: list[dict],
-                a_name: str, b_name: str) -> None:
+def _print_text(
+    diffs: list[dict], counts: list[dict], a_name: str, b_name: str
+) -> None:
     total_changes = 0
     for d in diffs:
         a_only = len(d["only_in_a"])
@@ -180,8 +215,10 @@ def _print_text(diffs: list[dict], counts: list[dict],
             print(f"  OK    {d['table']:25s} ({d['total_a']} rows, identical)")
             continue
         total_changes += a_only + b_only + chg
-        print(f"  DIFF  {d['table']:25s} A={d['total_a']} B={d['total_b']}  "
-              f"only_in_A={a_only} only_in_B={b_only} changed={chg}")
+        print(
+            f"  DIFF  {d['table']:25s} A={d['total_a']} B={d['total_b']}  "
+            f"only_in_A={a_only} only_in_B={b_only} changed={chg}"
+        )
         for key in d["only_in_a"][:5]:
             print(f"          - only in {a_name}: {key}")
         if a_only > 5:
@@ -194,7 +231,9 @@ def _print_text(diffs: list[dict], counts: list[dict],
             print(f"          ~ changed: {key}")
             for col in sorted(set(va) | set(vb)):
                 if va.get(col) != vb.get(col):
-                    print(f"              {col}: {a_name}={va.get(col)!r}  {b_name}={vb.get(col)!r}")
+                    print(
+                        f"              {col}: {a_name}={va.get(col)!r}  {b_name}={vb.get(col)!r}"
+                    )
         if chg > 5:
             print(f"          ... + {chg - 5} more changed")
     print()
@@ -214,18 +253,18 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("db_a", help="Path to first tickets.db (e.g. WSL)")
     p.add_argument("db_b", help="Path to second tickets.db (e.g. llm-node)")
-    p.add_argument("--json", action="store_true",
-                    help="Emit JSON instead of human-readable text")
+    p.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of human-readable text"
+    )
     args = p.parse_args()
 
     pa, pb = Path(args.db_a), Path(args.db_b)
     if not pa.exists():
-        print(f"DB A not found: {pa}", file=sys.stderr); sys.exit(2)
+        print(f"DB A not found: {pa}", file=sys.stderr)
+        sys.exit(2)
     if not pb.exists():
-        print(f"DB B not found: {pb}", file=sys.stderr); sys.exit(2)
-
-    a_name = pa.parent.name or pa.name
-    b_name = pb.parent.name or pb.name
+        print(f"DB B not found: {pb}", file=sys.stderr)
+        sys.exit(2)
 
     conn_a = _open_ro(pa)
     conn_b = _open_ro(pb)
@@ -233,7 +272,8 @@ def main():
         diffs = [_diff_table(conn_a, conn_b, t, spec) for t, spec in _TABLES.items()]
         counts = [_count_only(conn_a, conn_b, t) for t in _COUNT_ONLY]
     finally:
-        conn_a.close(); conn_b.close()
+        conn_a.close()
+        conn_b.close()
 
     if args.json:
         # Make tuples JSON-friendly
@@ -241,11 +281,14 @@ def main():
             d = {**d}
             d["only_in_a"] = [list(k) for k in d["only_in_a"]]
             d["only_in_b"] = [list(k) for k in d["only_in_b"]]
-            d["changed"] = [{"key": list(k), "a": va, "b": vb}
-                            for k, va, vb in d["changed"]]
+            d["changed"] = [
+                {"key": list(k), "a": va, "b": vb} for k, va, vb in d["changed"]
+            ]
             return d
+
         out = {
-            "db_a": str(pa), "db_b": str(pb),
+            "db_a": str(pa),
+            "db_b": str(pb),
             "tables": [_serialise(d) for d in diffs],
             "append_only": counts,
         }

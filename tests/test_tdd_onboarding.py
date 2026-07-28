@@ -2,12 +2,11 @@
 
 import os
 import sqlite3
-import tempfile
 
 import pytest
 from conftest import cli_mod
-from db import get_db, init_db
 
+from db import init_db
 
 seed_project = cli_mod.seed_project
 scaffold_project = cli_mod.scaffold_project
@@ -50,13 +49,15 @@ def test_seed_project_with_valid_backlog(temp_project):
     )
     count = seed_project(conn, project)
     assert count == 2
-    rows = conn.execute("SELECT id FROM tickets WHERE project_id = ?", ("test-proj",)).fetchall()
+    rows = conn.execute(
+        "SELECT id FROM tickets WHERE project_id = ?", ("test-proj",)
+    ).fetchall()
     assert len(rows) == 2
 
 
 def test_seed_project_no_backlog(temp_project):
     """seed_project returns 0 when no PRODUCT_BACKLOG.md exists."""
-    project, conn, tmp_path = temp_project
+    project, conn, _tmp_path = temp_project
     count = seed_project(conn, project)
     assert count == 0
 
@@ -79,7 +80,9 @@ def test_seed_project_is_idempotent(temp_project):
     )
     seed_project(conn, project)
     seed_project(conn, project)
-    rows = conn.execute("SELECT id FROM tickets WHERE project_id = ?", ("test-proj",)).fetchall()
+    rows = conn.execute(
+        "SELECT id FROM tickets WHERE project_id = ?", ("test-proj",)
+    ).fetchall()
     assert len(rows) == 1
 
 
@@ -130,12 +133,13 @@ def test_scaffold_does_not_overwrite_existing(temp_project):
 
 # Import serve module's function
 import importlib.util
+
 _serve_path = os.path.join(os.path.dirname(__file__), "..", "src", "serve.py")
 _serve_spec = importlib.util.spec_from_file_location("serve", _serve_path)
 # We can't easily import serve.py (it has side effects), so test the data structure directly
 # Instead, test the constant and logic inline
 
-from serve import _get_managed_files, _MANAGED_FILES
+from serve import _MANAGED_FILES, _get_managed_files
 
 
 def test_managed_files_constant_has_entries():

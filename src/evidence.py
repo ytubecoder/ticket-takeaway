@@ -16,15 +16,13 @@ itself is pure-DB-and-filesystem and safe to call from anywhere.
 from __future__ import annotations
 
 import gzip
-import json
 import logging
 import shutil
 import sqlite3
 import threading
-import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Optional
 
 from constants import DASHBOARD_DIR
 
@@ -41,11 +39,12 @@ TRANSCRIPT_CANDIDATES = ("transcript.txt", "agent.log", "stdout.log")
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def rotate_evidence(
     get_db: Callable[[], sqlite3.Connection],
     live_days: int = 30,
     summarised_days: int = 60,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> dict:
     """Sweep all runs and age their on-disk evidence.
 
@@ -110,6 +109,7 @@ def rotate_evidence(
 # Summarise step — write summary.md + gzip large text artifacts.
 # ---------------------------------------------------------------------------
 
+
 def _summarise(evidence_dir: Path, run_row: dict) -> None:
     """Reduce a live evidence dir to its summarised form.
 
@@ -144,7 +144,10 @@ def _summarise(evidence_dir: Path, run_row: dict) -> None:
             continue
         if child.suffix.lower() in (".txt", ".log") and child.stat().st_size > 1024:
             try:
-                with open(child, "rb") as src, gzip.open(str(child) + ".gz", "wb") as dst:
+                with (
+                    open(child, "rb") as src,
+                    gzip.open(str(child) + ".gz", "wb") as dst,
+                ):
                     shutil.copyfileobj(src, dst)
                 child.unlink()
             except OSError:
@@ -153,7 +156,9 @@ def _summarise(evidence_dir: Path, run_row: dict) -> None:
     # 3. index.txt
     try:
         names = sorted(p.name for p in evidence_dir.iterdir() if p.name != "index.txt")
-        (evidence_dir / "index.txt").write_text("\n".join(names) + "\n", encoding="utf-8")
+        (evidence_dir / "index.txt").write_text(
+            "\n".join(names) + "\n", encoding="utf-8"
+        )
     except OSError:
         pass
 
@@ -192,6 +197,7 @@ def _build_summary_markdown(run_row: dict) -> str:
 # Prune step — keep only summary.md.
 # ---------------------------------------------------------------------------
 
+
 def _prune(evidence_dir: Path) -> None:
     """Drop everything in evidence_dir except summary.md."""
     if not evidence_dir.exists():
@@ -212,17 +218,21 @@ def _prune(evidence_dir: Path) -> None:
 # DB helpers
 # ---------------------------------------------------------------------------
 
-def _set_evidence_status(get_db: Callable[[], sqlite3.Connection],
-                         run_id: int, status: str) -> None:
+
+def _set_evidence_status(
+    get_db: Callable[[], sqlite3.Connection], run_id: int, status: str
+) -> None:
     conn = get_db()
     try:
-        conn.execute("UPDATE runs SET evidence_status = ? WHERE id = ?", (status, run_id))
+        conn.execute(
+            "UPDATE runs SET evidence_status = ? WHERE id = ?", (status, run_id)
+        )
         conn.commit()
     finally:
         conn.close()
 
 
-def _parse_iso(s: str) -> Optional[datetime]:
+def _parse_iso(s: str) -> datetime | None:
     if not s:
         return None
     try:
@@ -239,8 +249,8 @@ def _parse_iso(s: str) -> Optional[datetime]:
 # ---------------------------------------------------------------------------
 
 _started = False
-_stop_event: Optional[threading.Event] = None
-_thread: Optional[threading.Thread] = None
+_stop_event: threading.Event | None = None
+_thread: threading.Thread | None = None
 DEFAULT_INTERVAL_S = 24 * 3600  # daily
 
 
@@ -260,18 +270,24 @@ def start_rotation_daemon(
         # First tick after a small delay so startup isn't blocked by IO.
         if not _stop_event.wait(timeout=30):
             try:
-                rotate_evidence(get_db, live_days=live_days, summarised_days=summarised_days)
+                rotate_evidence(
+                    get_db, live_days=live_days, summarised_days=summarised_days
+                )
             except Exception:
                 logger.exception("evidence rotation tick failed")
         while not _stop_event.is_set():
             if _stop_event.wait(timeout=interval_s):
                 return
             try:
-                rotate_evidence(get_db, live_days=live_days, summarised_days=summarised_days)
+                rotate_evidence(
+                    get_db, live_days=live_days, summarised_days=summarised_days
+                )
             except Exception:
                 logger.exception("evidence rotation tick failed")
 
-    _thread = threading.Thread(target=_loop, name="kitchen-evidence-rotation", daemon=True)
+    _thread = threading.Thread(
+        target=_loop, name="kitchen-evidence-rotation", daemon=True
+    )
     _thread.start()
     _started = True
 

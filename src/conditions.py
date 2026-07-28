@@ -21,7 +21,6 @@ import json
 import sqlite3
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Priority ordering (low → high)
 # ---------------------------------------------------------------------------
@@ -40,6 +39,7 @@ def _priority_rank(p: str) -> int:
 # Dict-compatible Row wrapper (lets us pass plain dicts where sqlite3.Row needed)
 # ---------------------------------------------------------------------------
 
+
 class _DictRow:
     """Minimal wrapper around a dict that supports item access like sqlite3.Row."""
 
@@ -56,6 +56,7 @@ class _DictRow:
 # ---------------------------------------------------------------------------
 # Evaluator implementations
 # ---------------------------------------------------------------------------
+
 
 def _eval_automation_mode(ctx: dict, p: dict) -> tuple[bool, str]:
     """Check automation_mode from automation_subject row (or 'manual' if absent)."""
@@ -126,7 +127,9 @@ def _eval_tests_covered(ctx: dict, p: dict) -> tuple[bool, str]:
     return (False, "; ".join(reasons) if reasons else "tests not covered")
 
 
-def _delegate(fn_name: str, ctx: dict, ok_default: str, fail_default: str) -> tuple[bool, str]:
+def _delegate(
+    fn_name: str, ctx: dict, ok_default: str, fail_default: str
+) -> tuple[bool, str]:
     """Delegate to an actions.py predicate — IDENTICAL logic, same source of truth.
 
     The spec-lifecycle predicates below are the same functions accept_ticket()
@@ -230,7 +233,7 @@ def _eval_lacks_readiness_flag(ctx: dict, p: dict) -> tuple[bool, str]:
     Inverse of flag_set — used to target tickets missing a particular flag.
     """
     # Delegate to _eval_flag_set and invert.
-    passed, reason = _eval_flag_set(ctx, p)
+    passed, _reason = _eval_flag_set(ctx, p)
     if passed:
         flag = p.get("flag", "")
         return (False, f"readiness flag {flag!r} is already set")
@@ -305,7 +308,10 @@ def _eval_children_all_status_in(ctx: dict, p: dict) -> tuple[bool, str]:
     bad = [c["status"] for c in children if c["status"] not in wanted_set]
     if not bad:
         return (True, f"all {len(children)} children in {sorted(wanted_set)}")
-    return (False, f"{len(bad)} child(ren) not in {sorted(wanted_set)} (e.g. {bad[0]!r})")
+    return (
+        False,
+        f"{len(bad)} child(ren) not in {sorted(wanted_set)} (e.g. {bad[0]!r})",
+    )
 
 
 def _eval_children_any_status_in(ctx: dict, p: dict) -> tuple[bool, str]:
@@ -324,7 +330,10 @@ def _eval_children_any_status_in(ctx: dict, p: dict) -> tuple[bool, str]:
         return (False, "no children")
     matching = [c["status"] for c in children if c["status"] in wanted_set]
     if matching:
-        return (True, f"{len(matching)} of {len(children)} child(ren) in {sorted(wanted_set)}")
+        return (
+            True,
+            f"{len(matching)} of {len(children)} child(ren) in {sorted(wanted_set)}",
+        )
     return (False, f"no child status in {sorted(wanted_set)}")
 
 
@@ -380,8 +389,14 @@ def _eval_parent_section_not_in(ctx: dict, p: dict) -> tuple[bool, str]:
     if not row:
         return (True, f"parent {parent_id!r} not found (vacuously true)")
     if row["section"] in sections_set:
-        return (False, f"parent {parent_id!r} section is {row['section']!r}, in excluded set")
-    return (True, f"parent {parent_id!r} section is {row['section']!r}, not in {sorted(sections_set)}")
+        return (
+            False,
+            f"parent {parent_id!r} section is {row['section']!r}, in excluded set",
+        )
+    return (
+        True,
+        f"parent {parent_id!r} section is {row['section']!r}, not in {sorted(sections_set)}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +413,16 @@ def _eval_parent_section_not_in(ctx: dict, p: dict) -> tuple[bool, str]:
 # Evaluator returns (passed, reason_string).  reason_string explains why the
 # condition passed or failed (used for diagnostics / UI tooltips).
 
-_SECTION_OPTIONS = ["Ideas", "Backlog", "WIP", "For Review", "Done", "Bugs", "Icebox", "Won't Do"]
+_SECTION_OPTIONS = [
+    "Ideas",
+    "Backlog",
+    "WIP",
+    "For Review",
+    "Done",
+    "Bugs",
+    "Icebox",
+    "Won't Do",
+]
 _AUTOMATION_MODE_OPTIONS = ["manual", "auto", "paused"]
 
 # Imported lazily inside the dict so test runs that don't have constants on path
@@ -407,17 +431,28 @@ try:
     from constants import STATUSES as _STATUS_OPTIONS  # type: ignore
 except Exception:  # pragma: no cover
     _STATUS_OPTIONS = [
-        "proposed", "specified", "ready",
-        "in-progress", "blocked", "rework",
-        "for-review", "done", "released",
-        "bug", "bug-fixed", "icebox", "wontdo",
+        "proposed",
+        "specified",
+        "ready",
+        "in-progress",
+        "blocked",
+        "rework",
+        "for-review",
+        "done",
+        "released",
+        "bug",
+        "bug-fixed",
+        "icebox",
+        "wontdo",
     ]
 
 
 CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     "section_equals": {
         "label": "Section is",
-        "params": [{"name": "value", "type": "section_select", "options": _SECTION_OPTIONS}],
+        "params": [
+            {"name": "value", "type": "section_select", "options": _SECTION_OPTIONS}
+        ],
         "evaluator": lambda ctx, p: (
             ctx["ticket"]["section"] == p["value"],
             f"section is {ctx['ticket']['section']!r}, need {p['value']!r}",
@@ -425,7 +460,13 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "section_in": {
         "label": "Section is one of",
-        "params": [{"name": "values", "type": "section_multi_select", "options": _SECTION_OPTIONS}],
+        "params": [
+            {
+                "name": "values",
+                "type": "section_multi_select",
+                "options": _SECTION_OPTIONS,
+            }
+        ],
         "evaluator": lambda ctx, p: (
             ctx["ticket"]["section"] in p.get("values", []),
             f"section is {ctx['ticket']['section']!r}, need one of {p.get('values', [])}",
@@ -433,7 +474,9 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "status_equals": {
         "label": "Status is",
-        "params": [{"name": "value", "type": "status_select", "options": _STATUS_OPTIONS}],
+        "params": [
+            {"name": "value", "type": "status_select", "options": _STATUS_OPTIONS}
+        ],
         "evaluator": lambda ctx, p: (
             ctx["ticket"]["status"] == p["value"],
             f"status is {ctx['ticket']['status']!r}, need {p['value']!r}",
@@ -441,7 +484,13 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "automation_mode": {
         "label": "Automation mode is",
-        "params": [{"name": "value", "type": "automation_mode_select", "options": _AUTOMATION_MODE_OPTIONS}],
+        "params": [
+            {
+                "name": "value",
+                "type": "automation_mode_select",
+                "options": _AUTOMATION_MODE_OPTIONS,
+            }
+        ],
         "evaluator": _eval_automation_mode,
     },
     "has_field": {
@@ -582,12 +631,16 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "children_all_status_in": {
         "label": "All children status in",
-        "params": [{"name": "value", "type": "status_multi_select", "options": _STATUS_OPTIONS}],
+        "params": [
+            {"name": "value", "type": "status_multi_select", "options": _STATUS_OPTIONS}
+        ],
         "evaluator": _eval_children_all_status_in,
     },
     "children_any_status_in": {
         "label": "Any child status in",
-        "params": [{"name": "value", "type": "status_multi_select", "options": _STATUS_OPTIONS}],
+        "params": [
+            {"name": "value", "type": "status_multi_select", "options": _STATUS_OPTIONS}
+        ],
         "evaluator": _eval_children_any_status_in,
     },
     "has_children": {
@@ -597,7 +650,13 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
     },
     "parent_section_not_in": {
         "label": "Parent section is not one of",
-        "params": [{"name": "value", "type": "section_multi_select", "options": _SECTION_OPTIONS}],
+        "params": [
+            {
+                "name": "value",
+                "type": "section_multi_select",
+                "options": _SECTION_OPTIONS,
+            }
+        ],
         "evaluator": _eval_parent_section_not_in,
     },
     "summary_stale": {
@@ -611,6 +670,7 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 # Trigger evaluation
 # ---------------------------------------------------------------------------
+
 
 def evaluate_condition(cond: dict, ctx: dict) -> tuple[bool, str]:
     """Evaluate a single condition dict against ctx.
@@ -633,7 +693,7 @@ def evaluate_condition(cond: dict, ctx: dict) -> tuple[bool, str]:
 
 
 def evaluate_trigger(
-    trigger_json: "dict | str | None",
+    trigger_json: dict | str | None,
     ctx: dict,
 ) -> tuple[bool, list[str]]:
     """Evaluate a workflow's trigger expression against ctx.
@@ -695,6 +755,7 @@ def evaluate_trigger(
 # ---------------------------------------------------------------------------
 # SubjectContext builder
 # ---------------------------------------------------------------------------
+
 
 def build_subject_context(
     db: sqlite3.Connection,
@@ -805,105 +866,177 @@ def ui_catalog() -> dict:
                 "key": "section",
                 "label": "Section",
                 "filter_ops": [
-                    {"key": "is", "label": "is", "predicate_kind": "section_equals",
-                     "value_control": "section_select"},
-                    {"key": "is_one_of", "label": "is one of", "predicate_kind": "section_in",
-                     "value_control": "section_multi_select"},
+                    {
+                        "key": "is",
+                        "label": "is",
+                        "predicate_kind": "section_equals",
+                        "value_control": "section_select",
+                    },
+                    {
+                        "key": "is_one_of",
+                        "label": "is one of",
+                        "predicate_kind": "section_in",
+                        "value_control": "section_multi_select",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "set", "label": "change to", "on_success_key": "move_section",
-                     "value_control": "section_select"},
-                    {"key": "accept", "label": "accept (move to Done + write spec)",
-                     "on_success_key": "accept_ticket", "value_control": "none"},
+                    {
+                        "key": "set",
+                        "label": "change to",
+                        "on_success_key": "move_section",
+                        "value_control": "section_select",
+                    },
+                    {
+                        "key": "accept",
+                        "label": "accept (move to Done + write spec)",
+                        "on_success_key": "accept_ticket",
+                        "value_control": "none",
+                    },
                 ],
             },
             {
                 "key": "status",
                 "label": "Status",
                 "filter_ops": [
-                    {"key": "is", "label": "is", "predicate_kind": "status_equals",
-                     "value_control": "status_select"},
+                    {
+                        "key": "is",
+                        "label": "is",
+                        "predicate_kind": "status_equals",
+                        "value_control": "status_select",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "set", "label": "change to", "on_success_key": "set_status",
-                     "value_control": "status_select"},
+                    {
+                        "key": "set",
+                        "label": "change to",
+                        "on_success_key": "set_status",
+                        "value_control": "status_select",
+                    },
                 ],
             },
             {
                 "key": "automation_mode",
                 "label": "Automation",
                 "filter_ops": [
-                    {"key": "is", "label": "is", "predicate_kind": "automation_mode",
-                     "value_control": "automation_mode_select"},
+                    {
+                        "key": "is",
+                        "label": "is",
+                        "predicate_kind": "automation_mode",
+                        "value_control": "automation_mode_select",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "set", "label": "change to", "on_success_key": "set_automation_mode",
-                     "value_control": "automation_mode_select"},
+                    {
+                        "key": "set",
+                        "label": "change to",
+                        "on_success_key": "set_automation_mode",
+                        "value_control": "automation_mode_select",
+                    },
                 ],
             },
             {
                 "key": "priority",
                 "label": "Priority",
                 "filter_ops": [
-                    {"key": "at_least", "label": "is at least",
-                     "predicate_kind": "priority_at_least",
-                     "value_control": "priority_select"},
+                    {
+                        "key": "at_least",
+                        "label": "is at least",
+                        "predicate_kind": "priority_at_least",
+                        "value_control": "priority_select",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "set", "label": "change to", "on_success_key": "set_priority",
-                     "value_control": "priority_select"},
+                    {
+                        "key": "set",
+                        "label": "change to",
+                        "on_success_key": "set_priority",
+                        "value_control": "priority_select",
+                    },
                 ],
             },
             {
                 "key": "tags",
                 "label": "Tags",
                 "filter_ops": [
-                    {"key": "include_all_of", "label": "include all of",
-                     "predicate_kind": "has_tag",
-                     "value_control": "tag_multi_input"},
-                    {"key": "include_none_of", "label": "include none of",
-                     "predicate_kind": "lacks_tag",
-                     "value_control": "tag_multi_input"},
+                    {
+                        "key": "include_all_of",
+                        "label": "include all of",
+                        "predicate_kind": "has_tag",
+                        "value_control": "tag_multi_input",
+                    },
+                    {
+                        "key": "include_none_of",
+                        "label": "include none of",
+                        "predicate_kind": "lacks_tag",
+                        "value_control": "tag_multi_input",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "add", "label": "add", "on_success_key": "add_tags",
-                     "value_control": "tag_multi_input"},
-                    {"key": "remove", "label": "remove", "on_success_key": "remove_tags",
-                     "value_control": "tag_multi_input"},
+                    {
+                        "key": "add",
+                        "label": "add",
+                        "on_success_key": "add_tags",
+                        "value_control": "tag_multi_input",
+                    },
+                    {
+                        "key": "remove",
+                        "label": "remove",
+                        "on_success_key": "remove_tags",
+                        "value_control": "tag_multi_input",
+                    },
                 ],
             },
             {
                 "key": "readiness_flag",
                 "label": "Readiness flag",
                 "filter_ops": [
-                    {"key": "is_set", "label": "is set", "predicate_kind": "flag_set",
-                     "value_control": "flag_select"},
-                    {"key": "is_not_set", "label": "is NOT set",
-                     "predicate_kind": "lacks_readiness_flag",
-                     "value_control": "flag_select"},
+                    {
+                        "key": "is_set",
+                        "label": "is set",
+                        "predicate_kind": "flag_set",
+                        "value_control": "flag_select",
+                    },
+                    {
+                        "key": "is_not_set",
+                        "label": "is NOT set",
+                        "predicate_kind": "lacks_readiness_flag",
+                        "value_control": "flag_select",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "set_from_stdout", "label": "set from agent stdout",
-                     "on_success_key": "set_readiness_content",
-                     "value_control": "flag_select",
-                     "extra": {"from": "stdout"}},
-                    {"key": "clear", "label": "clear",
-                     "on_success_key": "clear_readiness_flag",
-                     "value_control": "flag_select"},
+                    {
+                        "key": "set_from_stdout",
+                        "label": "set from agent stdout",
+                        "on_success_key": "set_readiness_content",
+                        "value_control": "flag_select",
+                        "extra": {"from": "stdout"},
+                    },
+                    {
+                        "key": "clear",
+                        "label": "clear",
+                        "on_success_key": "clear_readiness_flag",
+                        "value_control": "flag_select",
+                    },
                 ],
             },
             {
                 "key": "is_container",
                 "label": "Container",
                 "filter_ops": [
-                    {"key": "is", "label": "is",
-                     "predicate_kind": "is_container",  # Not yet wired in CONDITION_CATALOG
-                     "value_control": "bool_select"},
+                    {
+                        "key": "is",
+                        "label": "is",
+                        "predicate_kind": "is_container",  # Not yet wired in CONDITION_CATALOG
+                        "value_control": "bool_select",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "set", "label": "change to",
-                     "on_success_key": "set_is_container",
-                     "value_control": "bool_select"},
+                    {
+                        "key": "set",
+                        "label": "change to",
+                        "on_success_key": "set_is_container",
+                        "value_control": "bool_select",
+                    },
                 ],
                 "hint": "Filter side requires the is_container predicate (not yet shipped); action side works today.",
             },
@@ -911,9 +1044,12 @@ def ui_catalog() -> dict:
                 "key": "criteria_count",
                 "label": "Acceptance criteria count",
                 "filter_ops": [
-                    {"key": "at_least", "label": "is at least",
-                     "predicate_kind": "criteria_count_gte",
-                     "value_control": "number_input"},
+                    {
+                        "key": "at_least",
+                        "label": "is at least",
+                        "predicate_kind": "criteria_count_gte",
+                        "value_control": "number_input",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Criteria are added by the agent's `propose` marker, not by a direct workflow effect.",
@@ -922,9 +1058,12 @@ def ui_catalog() -> dict:
                 "key": "field_present",
                 "label": "Description / Summary / Title",
                 "filter_ops": [
-                    {"key": "is_non_empty", "label": "is non-empty",
-                     "predicate_kind": "has_field",
-                     "value_control": "field_select"},
+                    {
+                        "key": "is_non_empty",
+                        "label": "is non-empty",
+                        "predicate_kind": "has_field",
+                        "value_control": "field_select",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Text fields are written by the agent step itself, not by direct workflow effects.",
@@ -933,8 +1072,12 @@ def ui_catalog() -> dict:
                 "key": "dependencies",
                 "label": "Dependencies",
                 "filter_ops": [
-                    {"key": "all_done", "label": "are all done",
-                     "predicate_kind": "deps_clear", "value_control": "none"},
+                    {
+                        "key": "all_done",
+                        "label": "are all done",
+                        "predicate_kind": "deps_clear",
+                        "value_control": "none",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Dependency state is intrinsic — it changes when other tickets reach Done.",
@@ -943,8 +1086,12 @@ def ui_catalog() -> dict:
                 "key": "tests",
                 "label": "Tests",
                 "filter_ops": [
-                    {"key": "are_covered", "label": "are covered",
-                     "predicate_kind": "tests_covered", "value_control": "none"},
+                    {
+                        "key": "are_covered",
+                        "label": "are covered",
+                        "predicate_kind": "tests_covered",
+                        "value_control": "none",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Test-coverage state is intrinsic — produced by the agent's work product.",
@@ -953,10 +1100,18 @@ def ui_catalog() -> dict:
                 "key": "spec",
                 "label": "Spec",
                 "filter_ops": [
-                    {"key": "is_linked", "label": "lane is declared",
-                     "predicate_kind": "spec_linked", "value_control": "none"},
-                    {"key": "validates", "label": "validates (openspec --strict)",
-                     "predicate_kind": "spec_validates", "value_control": "none"},
+                    {
+                        "key": "is_linked",
+                        "label": "lane is declared",
+                        "predicate_kind": "spec_linked",
+                        "value_control": "none",
+                    },
+                    {
+                        "key": "validates",
+                        "label": "validates (openspec --strict)",
+                        "predicate_kind": "spec_validates",
+                        "value_control": "none",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Spec state is intrinsic — set by `tickets-cli.py spec` and by OpenSpec itself.",
@@ -965,8 +1120,12 @@ def ui_catalog() -> dict:
                 "key": "verify",
                 "label": "Verify",
                 "filter_ops": [
-                    {"key": "passed", "label": "passed at HEAD",
-                     "predicate_kind": "verify_passed", "value_control": "none"},
+                    {
+                        "key": "passed",
+                        "label": "passed at HEAD",
+                        "predicate_kind": "verify_passed",
+                        "value_control": "none",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Verify state is evidence — recorded by `tickets-cli.py verify`, never asserted by hand.",
@@ -975,8 +1134,12 @@ def ui_catalog() -> dict:
                 "key": "run",
                 "label": "Run",
                 "filter_ops": [
-                    {"key": "no_active", "label": "is not in flight",
-                     "predicate_kind": "no_active_run", "value_control": "none"},
+                    {
+                        "key": "no_active",
+                        "label": "is not in flight",
+                        "predicate_kind": "no_active_run",
+                        "value_control": "none",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Run state is intrinsic — changed by the kitchen orchestrator.",
@@ -985,11 +1148,18 @@ def ui_catalog() -> dict:
                 "key": "parent",
                 "label": "Parent",
                 "filter_ops": [
-                    {"key": "done_or_absent", "label": "is done (or absent)",
-                     "predicate_kind": "parent_done", "value_control": "none"},
-                    {"key": "section_not_in", "label": "section is NOT one of",
-                     "predicate_kind": "parent_section_not_in",
-                     "value_control": "section_multi_select"},
+                    {
+                        "key": "done_or_absent",
+                        "label": "is done (or absent)",
+                        "predicate_kind": "parent_done",
+                        "value_control": "none",
+                    },
+                    {
+                        "key": "section_not_in",
+                        "label": "section is NOT one of",
+                        "predicate_kind": "parent_section_not_in",
+                        "value_control": "section_multi_select",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "To change parent attributes, set apply_to=parent on any action.",
@@ -998,20 +1168,36 @@ def ui_catalog() -> dict:
                 "key": "children",
                 "label": "Children",
                 "filter_ops": [
-                    {"key": "exist", "label": "exist",
-                     "predicate_kind": "has_children", "value_control": "none"},
-                    {"key": "all_status_in", "label": "all have status in",
-                     "predicate_kind": "children_all_status_in",
-                     "value_control": "status_multi_select"},
-                    {"key": "any_status_in", "label": "any has status in",
-                     "predicate_kind": "children_any_status_in",
-                     "value_control": "status_multi_select"},
-                    {"key": "have_open_bugs", "label": "include open bugs",
-                     "predicate_kind": "children_have_open_bugs",
-                     "value_control": "none"},
-                    {"key": "no_open_bugs", "label": "have no open bugs",
-                     "predicate_kind": "children_no_open_bugs",
-                     "value_control": "none"},
+                    {
+                        "key": "exist",
+                        "label": "exist",
+                        "predicate_kind": "has_children",
+                        "value_control": "none",
+                    },
+                    {
+                        "key": "all_status_in",
+                        "label": "all have status in",
+                        "predicate_kind": "children_all_status_in",
+                        "value_control": "status_multi_select",
+                    },
+                    {
+                        "key": "any_status_in",
+                        "label": "any has status in",
+                        "predicate_kind": "children_any_status_in",
+                        "value_control": "status_multi_select",
+                    },
+                    {
+                        "key": "have_open_bugs",
+                        "label": "include open bugs",
+                        "predicate_kind": "children_have_open_bugs",
+                        "value_control": "none",
+                    },
+                    {
+                        "key": "no_open_bugs",
+                        "label": "have no open bugs",
+                        "predicate_kind": "children_no_open_bugs",
+                        "value_control": "none",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Acting on children directly is not yet supported — use a self-mutating effect (e.g. add a tag) to break the loop.",
@@ -1020,13 +1206,20 @@ def ui_catalog() -> dict:
                 "key": "summary_cache",
                 "label": "Cached summary",
                 "filter_ops": [
-                    {"key": "is_stale", "label": "is stale",
-                     "predicate_kind": "summary_stale", "value_control": "none"},
+                    {
+                        "key": "is_stale",
+                        "label": "is stale",
+                        "predicate_kind": "summary_stale",
+                        "value_control": "none",
+                    },
                 ],
                 "action_ops": [
-                    {"key": "refresh_from_stdout", "label": "refresh from agent stdout",
-                     "on_success_key": "set_summary_oneliner",
-                     "value_control": "none"},
+                    {
+                        "key": "refresh_from_stdout",
+                        "label": "refresh from agent stdout",
+                        "on_success_key": "set_summary_oneliner",
+                        "value_control": "none",
+                    },
                 ],
             },
         ],
@@ -1081,8 +1274,9 @@ def ui_catalog() -> dict:
     }
 
 
-def lint_closed_loop(trigger_json: "dict | str | None",
-                     on_success_json: "dict | str | None") -> dict:
+def lint_closed_loop(
+    trigger_json: dict | str | None, on_success_json: dict | str | None
+) -> dict:
     """Check whether any action attribute matches any filter attribute.
 
     Returns a small dict the UI renders as an advisory:
@@ -1118,8 +1312,13 @@ def lint_closed_loop(trigger_json: "dict | str | None",
     oj = _coerce(on_success_json)
 
     if not tj:
-        return {"status": "manual", "filter_attributes": [], "action_attributes": [],
-                "shared": [], "message": "Manual run only — no auto-fire."}
+        return {
+            "status": "manual",
+            "filter_attributes": [],
+            "action_attributes": [],
+            "shared": [],
+            "message": "Manual run only — no auto-fire.",
+        }
 
     # Walk trigger predicates (flat or one-level nested all_of/any_of)
     def _collect_attrs(node) -> set:
@@ -1127,7 +1326,7 @@ def lint_closed_loop(trigger_json: "dict | str | None",
         if not isinstance(node, dict):
             return out
         if "all_of" in node or "any_of" in node:
-            for child in (node.get("all_of") or node.get("any_of") or []):
+            for child in node.get("all_of") or node.get("any_of") or []:
                 out |= _collect_attrs(child)
             return out
         kind = node.get("kind")
@@ -1138,25 +1337,37 @@ def lint_closed_loop(trigger_json: "dict | str | None",
     filter_attrs = _collect_attrs(tj)
     # Action attributes
     action_attrs: set = set()
-    for k, v in (oj.items() if isinstance(oj, dict) else []):
+    for k, v in oj.items() if isinstance(oj, dict) else []:
         if k == "apply_to":
             continue
         if k in eff_to_attr and v:
             action_attrs.add(eff_to_attr[k])
 
     if not action_attrs:
-        return {"status": "empty", "filter_attributes": sorted(filter_attrs),
-                "action_attributes": [], "shared": [],
-                "message": "No on_success effects — the agent step is the entire payload."}
+        return {
+            "status": "empty",
+            "filter_attributes": sorted(filter_attrs),
+            "action_attributes": [],
+            "shared": [],
+            "message": "No on_success effects — the agent step is the entire payload.",
+        }
 
     shared = filter_attrs & action_attrs
     if shared:
-        return {"status": "ok", "filter_attributes": sorted(filter_attrs),
-                "action_attributes": sorted(action_attrs), "shared": sorted(shared),
-                "message": f"Closed loop: actions mutate {', '.join(sorted(shared))}, "
-                           f"which the trigger reads."}
-    return {"status": "warn", "filter_attributes": sorted(filter_attrs),
-            "action_attributes": sorted(action_attrs), "shared": [],
-            "message": "Effects don't change any attribute the trigger reads — "
-                       "this rule may re-fire after running. Consider adding a "
-                       "tag effect to break the loop."}
+        return {
+            "status": "ok",
+            "filter_attributes": sorted(filter_attrs),
+            "action_attributes": sorted(action_attrs),
+            "shared": sorted(shared),
+            "message": f"Closed loop: actions mutate {', '.join(sorted(shared))}, "
+            f"which the trigger reads.",
+        }
+    return {
+        "status": "warn",
+        "filter_attributes": sorted(filter_attrs),
+        "action_attributes": sorted(action_attrs),
+        "shared": [],
+        "message": "Effects don't change any attribute the trigger reads — "
+        "this rule may re-fire after running. Consider adding a "
+        "tag effect to break the loop.",
+    }

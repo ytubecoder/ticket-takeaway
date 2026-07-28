@@ -6,30 +6,30 @@ Pure logic, no server, no Playwright.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
-import os
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import get_db, init_db
+from db import init_db
 from workflows_seed import (
-    seed_default_agents,
-    seed_default_endpoints,
-    seed_default_workflows,
+    CONSULTANT_REVIEW_TEMPLATE,
     DEFAULT_AGENTS,
     DEFAULT_WORKFLOWS,
     INITIAL_PLAN_TEMPLATE,
-    CONSULTANT_REVIEW_TEMPLATE,
     MEDIATION_SYNTHESIS_TEMPLATE,
+    seed_default_agents,
+    seed_default_endpoints,
+    seed_default_workflows,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def conn():
@@ -53,13 +53,18 @@ PROJECT_ID = "test-project"
 # Migration 11 — new columns exist
 # ---------------------------------------------------------------------------
 
+
 class TestMigration11:
     def test_workflow_agents_has_persist_session_column(self, conn):
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()}
+        cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()
+        }
         assert "persist_session" in cols
 
     def test_workflow_runs_has_session_ids_column(self, conn):
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()}
+        cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()
+        }
         assert "session_ids" in cols
 
     def test_persist_session_defaults_to_zero(self, conn):
@@ -93,6 +98,7 @@ class TestMigration11:
 # ---------------------------------------------------------------------------
 # seed_default_agents — basic insert behaviour
 # ---------------------------------------------------------------------------
+
 
 class TestSeedDefaultAgents:
     def test_inserts_default_agents_on_first_call(self, conn):
@@ -156,6 +162,7 @@ class TestSeedDefaultAgents:
 # seed_default_agents — agent_planchk migration
 # ---------------------------------------------------------------------------
 
+
 class TestAgentPlanchkMigration:
     def _insert_planchk(self, conn):
         """Helper: insert a fake agent_planchk row."""
@@ -167,15 +174,17 @@ class TestAgentPlanchkMigration:
 
     def _insert_workflow_referencing_planchk(self, conn):
         """Helper: insert a workflow whose steps JSON references agent_planchk."""
-        steps = json.dumps([
-            {
-                "agent_id": "agent_planchk",
-                "agent_name": "Plan Check",
-                "prompt_template": "Review {{ticket.title}}",
-                "on_failure": "pause",
-                "timeout_ms": 300000,
-            }
-        ])
+        steps = json.dumps(
+            [
+                {
+                    "agent_id": "agent_planchk",
+                    "agent_name": "Plan Check",
+                    "prompt_template": "Review {{ticket.title}}",
+                    "on_failure": "pause",
+                    "timeout_ms": 300000,
+                }
+            ]
+        )
         conn.execute(
             "INSERT INTO workflows (id, name, description, steps) "
             "VALUES ('wf-old', 'Old Plan Check', '', ?)",
@@ -204,9 +213,7 @@ class TestAgentPlanchkMigration:
         self._insert_planchk(conn)
         self._insert_workflow_referencing_planchk(conn)
         seed_default_agents(conn)
-        row = conn.execute(
-            "SELECT steps FROM workflows WHERE id = 'wf-old'"
-        ).fetchone()
+        row = conn.execute("SELECT steps FROM workflows WHERE id = 'wf-old'").fetchone()
         steps = json.loads(row["steps"])
         assert steps[0]["agent_id"] == "agent_consultant"
 
@@ -237,6 +244,7 @@ class TestAgentPlanchkMigration:
 # ---------------------------------------------------------------------------
 # Plan Check workflow in DEFAULT_WORKFLOWS
 # ---------------------------------------------------------------------------
+
 
 class TestPlanCheckWorkflowManifest:
     def _plan_check(self):
@@ -317,6 +325,7 @@ class TestPlanCheckWorkflowManifest:
 # ---------------------------------------------------------------------------
 # seed_default_workflows — includes Plan Check
 # ---------------------------------------------------------------------------
+
 
 class TestSeedDefaultWorkflowsWithPlanCheck:
     def test_links_ten_system_workflows(self, conn):

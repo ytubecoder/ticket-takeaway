@@ -48,6 +48,7 @@ Tables intentionally excluded (operational state, code-as-data):
 Re-import path: see import_db.py (companion), or use tickets-cli.py
 add/update for a CLI-driven re-import.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -159,9 +160,6 @@ def export_db(
     att_by = _bucket_by_ticket(attachments)
 
     # ---- tickets ----
-    ticket_cols = [
-        r[1] for r in conn.execute("PRAGMA table_info(tickets)").fetchall()
-    ]
     tw = "WHERE project_id = ?" if project_filter else ""
     ticket_rows = _rows(
         conn, f"SELECT * FROM tickets {tw} ORDER BY project_id, id", params
@@ -178,21 +176,37 @@ def export_db(
         # (an importer can default missing keys).
         ticket = {k: v for k, v in t.items() if v is not None}
         ticket["acceptance_criteria"] = [
-            {"text": c["text"], "checked": bool(c["checked"]), "sort_order": c["sort_order"]}
+            {
+                "text": c["text"],
+                "checked": bool(c["checked"]),
+                "sort_order": c["sort_order"],
+            }
             for c in crit_by.get((pid, tid), [])
         ]
         ticket["depends_on"] = [d["depends_on_id"] for d in dep_by.get((pid, tid), [])]
         ticket["tags"] = [tg["tag"] for tg in tag_by.get((pid, tid), [])]
         ticket["branches"] = [
-            {k: v for k, v in b.items() if k not in ("ticket_id", "project_id") and v is not None}
+            {
+                k: v
+                for k, v in b.items()
+                if k not in ("ticket_id", "project_id") and v is not None
+            }
             for b in branch_by.get((pid, tid), [])
         ]
         ticket["readiness_flags"] = [
-            {k: v for k, v in f.items() if k not in ("ticket_id", "project_id") and v is not None}
+            {
+                k: v
+                for k, v in f.items()
+                if k not in ("ticket_id", "project_id") and v is not None
+            }
             for f in flag_by.get((pid, tid), [])
         ]
         ticket["attachments"] = [
-            {k: v for k, v in a.items() if k not in ("ticket_id", "project_id") and v is not None}
+            {
+                k: v
+                for k, v in a.items()
+                if k not in ("ticket_id", "project_id") and v is not None
+            }
             for a in att_by.get((pid, tid), [])
         ]
         projects[pid]["tickets"].append(ticket)
@@ -255,13 +269,18 @@ def export_db(
         for k, v in conn.execute("SELECT key, value FROM settings").fetchall():
             # Settings keys aren't project-scoped in this schema; emit them at the top
             # under "_global" rather than fabricating a project mapping.
-            projects.setdefault("_global", {"tickets": [], "user_workflows": [], "journeys": [], "settings": {}})
+            projects.setdefault(
+                "_global",
+                {"tickets": [], "user_workflows": [], "journeys": [], "settings": {}},
+            )
             projects["_global"]["settings"][k] = v
 
     # ---- user agents (global) ----
     user_agents: list[dict] = []
     if _table_exists(conn, "workflow_agents"):
-        agent_cols = [r[1] for r in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()]
+        agent_cols = [
+            r[1] for r in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()
+        ]
         # If the schema has a `system` column (added in later migrations), filter to user-created.
         sql = "SELECT * FROM workflow_agents"
         if "system" in agent_cols:
@@ -309,9 +328,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Export ticket-takeaway data to a portable JSON file."
     )
-    parser.add_argument("--db", default=DEFAULT_DB, help=f"SQLite path (default: {DEFAULT_DB})")
-    parser.add_argument("--out", default=None, help="Output JSON path (default: ./tickets-export-{ts}.json)")
-    parser.add_argument("--project", default=None, help="Limit export to a single project_id")
+    parser.add_argument(
+        "--db", default=DEFAULT_DB, help=f"SQLite path (default: {DEFAULT_DB})"
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Output JSON path (default: ./tickets-export-{ts}.json)",
+    )
+    parser.add_argument(
+        "--project", default=None, help="Limit export to a single project_id"
+    )
     args = parser.parse_args(argv)
 
     out_path = args.out or _default_out_path()

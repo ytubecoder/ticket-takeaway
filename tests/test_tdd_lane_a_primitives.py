@@ -14,28 +14,27 @@ Pure logic, no server, no Playwright.
 
 from __future__ import annotations
 
-import json
+import os
 import sqlite3
 import sys
-import os
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import init_db
-from runners import _try_parse_marker, _try_parse_handoff
 from conditions import (
     CONDITION_CATALOG,
     evaluate_condition,
     evaluate_trigger,
 )
 from constants import (
-    GATE_BANNER_BY_SECTION,
-    EVENT_KIND_LABELS,
     EVENT_KIND_ICONS,
+    EVENT_KIND_LABELS,
+    GATE_BANNER_BY_SECTION,
     VALID_STATUSES_BY_SECTION,
 )
+from db import init_db
+from runners import _try_parse_handoff, _try_parse_marker
 from workflows_seed import (
     DEFAULT_AGENTS,
     DEFAULT_WORKFLOWS,
@@ -44,10 +43,10 @@ from workflows_seed import (
     seed_default_workflows,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def conn():
@@ -67,9 +66,14 @@ def conn():
 PROJECT_ID = "test-project"
 
 
-def _make_ticket(conn, tid="B-1", project_id=PROJECT_ID,
-                 section="Backlog", status="in-progress",
-                 description="desc"):
+def _make_ticket(
+    conn,
+    tid="B-1",
+    project_id=PROJECT_ID,
+    section="Backlog",
+    status="in-progress",
+    description="desc",
+):
     conn.execute(
         "INSERT INTO tickets (id, project_id, title, section, status, description) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -120,9 +124,12 @@ def _make_ctx(conn, tid="B-1", project_id=PROJECT_ID, active_run=False):
 # 1. Migration 17 column presence
 # ===========================================================================
 
+
 class TestMigration17Columns:
     def test_tickets_has_is_container_column(self, conn):
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+        cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(tickets)").fetchall()
+        }
         assert "is_container" in cols
 
     def test_is_container_default_zero(self, conn):
@@ -135,7 +142,10 @@ class TestMigration17Columns:
         assert row["is_container"] == 0
 
     def test_workflow_agents_has_system_column(self, conn):
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()}
+        cols = {
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()
+        }
         assert "system" in cols
 
     def test_workflow_agent_system_defaults_to_zero(self, conn):
@@ -165,7 +175,9 @@ class TestMigration17Columns:
             (PROJECT_ID,),
         )
         conn.commit()
-        row = conn.execute("SELECT needs_input_kind FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        row = conn.execute(
+            "SELECT needs_input_kind FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
         assert row is not None
         assert row["needs_input_kind"] is None
 
@@ -173,6 +185,7 @@ class TestMigration17Columns:
 # ===========================================================================
 # 2. Marker parsing: _try_parse_marker
 # ===========================================================================
+
 
 class TestTryParseMarker:
     def test_well_formed_ask_marker_parses(self):
@@ -231,6 +244,7 @@ class TestTryParseMarker:
 # ===========================================================================
 # 3. Handoff parsing: _try_parse_handoff
 # ===========================================================================
+
 
 class TestTryParseHandoff:
     def test_well_formed_handoff_all_keys_parses(self):
@@ -312,6 +326,7 @@ class TestTryParseHandoff:
 # 4. Tag predicates: has_tag, lacks_tag
 # ===========================================================================
 
+
 class TestHasTagPredicate:
     def test_has_tag_returns_true_when_ticket_has_all_listed_tags(self, conn):
         _make_ticket(conn)
@@ -319,7 +334,7 @@ class TestHasTagPredicate:
         _add_tag(conn, "B-1", "bar")
         ctx = _make_ctx(conn)
         cond = {"kind": "has_tag", "value": ["foo", "bar"]}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_has_tag_returns_false_when_ticket_missing_one_tag(self, conn):
@@ -335,14 +350,14 @@ class TestHasTagPredicate:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         cond = {"kind": "has_tag", "value": []}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_has_tag_false_when_ticket_has_no_tags_at_all(self, conn):
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         cond = {"kind": "has_tag", "value": ["required-tag"]}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is False
 
     def test_has_tag_single_string_value_coerced_to_list(self, conn):
@@ -364,7 +379,7 @@ class TestLacksTagPredicate:
         _add_tag(conn, "B-1", "other-tag")
         ctx = _make_ctx(conn)
         cond = {"kind": "lacks_tag", "value": ["excluded"]}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_lacks_tag_false_when_ticket_has_a_listed_tag(self, conn):
@@ -406,12 +421,13 @@ class TestLacksTagPredicate:
 # 5. lacks_readiness_flag predicate
 # ===========================================================================
 
+
 class TestLacksReadinessFlagPredicate:
     def test_lacks_readiness_flag_true_when_flag_not_set(self, conn):
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         cond = {"kind": "lacks_readiness_flag", "flag": "L"}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is True
 
     def test_lacks_readiness_flag_false_when_flag_set_with_content(self, conn):
@@ -420,7 +436,7 @@ class TestLacksReadinessFlagPredicate:
         _add_readiness_flag(conn, "B-1", "reviewed", content="Learnings captured here.")
         ctx = _make_ctx(conn)
         cond = {"kind": "lacks_readiness_flag", "flag": "L"}
-        passed, reason = evaluate_condition(cond, ctx)
+        passed, _reason = evaluate_condition(cond, ctx)
         assert passed is False
 
     def test_lacks_readiness_flag_true_when_flag_row_has_empty_content(self, conn):
@@ -447,6 +463,7 @@ class TestLacksReadinessFlagPredicate:
 # ===========================================================================
 # 6. Constants sanity
 # ===========================================================================
+
 
 class TestGateBannerBySection:
     def test_gate_banner_covers_ideas(self):
@@ -520,6 +537,7 @@ class TestEventKindLabelIconParity:
 # ===========================================================================
 # 7. Workflow seed: new workflows and system agents (Lane A additions)
 # ===========================================================================
+
 
 class TestNewWorkflowsInManifest:
     def _find(self, name: str) -> dict:
@@ -709,6 +727,7 @@ class TestSystemAgentSeeding:
 # 8. evaluate_trigger integration: tag predicates wired into the catalog
 # ===========================================================================
 
+
 class TestTagPredicatesViaEvaluateTrigger:
     def test_has_tag_trigger_passes_when_tag_present(self, conn):
         _make_ticket(conn)
@@ -723,7 +742,7 @@ class TestTagPredicatesViaEvaluateTrigger:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         trigger = {"all_of": [{"kind": "lacks_tag", "value": ["sprint-prev"]}]}
-        passed, failures = evaluate_trigger(trigger, ctx)
+        passed, _failures = evaluate_trigger(trigger, ctx)
         assert passed is True
 
     def test_sprint_tag_rotation_trigger_fires_on_matching_ticket(self, conn):
@@ -741,12 +760,12 @@ class TestTagPredicatesViaEvaluateTrigger:
         conn.commit()
         ctx = _make_ctx(conn)
         wf = next(wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Sprint tag rotation")
-        passed, failures = evaluate_trigger(wf["trigger_json"], ctx)
+        passed, _failures = evaluate_trigger(wf["trigger_json"], ctx)
         assert passed is True
 
     def test_sprint_tag_rotation_trigger_blocks_when_tag_absent(self, conn):
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         wf = next(wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Sprint tag rotation")
-        passed, failures = evaluate_trigger(wf["trigger_json"], ctx)
+        passed, _failures = evaluate_trigger(wf["trigger_json"], ctx)
         assert passed is False

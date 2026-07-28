@@ -4,25 +4,30 @@ Follows the same pattern as actions.py / journeys.py: every function takes
 an open sqlite3.Connection and returns a value. Callers commit and emit
 events. See docs/superpowers/specs/2026-05-12-pane-link-design.md.
 """
+
 from __future__ import annotations
 
 import re
 import sqlite3
 import time
-from typing import Optional
 
 from constants import (
-    ATTENTION_NONE, ATTENTION_QUESTION, ATTENTION_EXCEPTION, ATTENTION_IDLE,
-    PANE_TAIL_MAX_LINES, PANE_TAIL_MAX_BYTES, PANE_IDLE_THRESHOLD_S,
+    ATTENTION_EXCEPTION,
+    ATTENTION_IDLE,
+    ATTENTION_NONE,
+    ATTENTION_QUESTION,
+    PANE_IDLE_THRESHOLD_S,
+    PANE_TAIL_MAX_BYTES,
+    PANE_TAIL_MAX_LINES,
 )
 
 # Matches CSI escapes (ESC [ ... letter), OSC escapes (ESC ] ... BEL),
 # and lone two-byte ESC sequences. Conservative — strips known terminal
 # control sequences, leaves printable text and newlines untouched.
 _ANSI_RE = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]"   # CSI
-    r"|\x1b\][^\x07]*\x07"          # OSC ... BEL
-    r"|\x1b[@-Z\\-_]"               # Two-byte ESC
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI
+    r"|\x1b\][^\x07]*\x07"  # OSC ... BEL
+    r"|\x1b[@-Z\\-_]"  # Two-byte ESC
 )
 
 
@@ -46,9 +51,7 @@ def link_pane(
     Caller commits and emits activity event in the same transaction.
     """
     now = int(time.time())
-    conn.execute(
-        "DELETE FROM pane_links WHERE pane_address = ?", (pane_address,)
-    )
+    conn.execute("DELETE FROM pane_links WHERE pane_address = ?", (pane_address,))
     cur = conn.execute(
         """
         INSERT INTO pane_links
@@ -63,15 +66,13 @@ def link_pane(
 
 def unlink_pane(conn: sqlite3.Connection, pane_address: str) -> int:
     """Remove the pane→ticket link. Returns row count deleted."""
-    cur = conn.execute(
-        "DELETE FROM pane_links WHERE pane_address = ?", (pane_address,)
-    )
+    cur = conn.execute("DELETE FROM pane_links WHERE pane_address = ?", (pane_address,))
     return cur.rowcount
 
 
 def get_ticket_for_pane(
     conn: sqlite3.Connection, pane_address: str
-) -> Optional[sqlite3.Row]:
+) -> sqlite3.Row | None:
     """Return the pane_links row for *pane_address*, or None."""
     return conn.execute(
         "SELECT * FROM pane_links WHERE pane_address = ?", (pane_address,)
@@ -89,9 +90,7 @@ def list_pane_links_for_ticket(
     ).fetchall()
 
 
-def list_pane_links_for_host(
-    conn: sqlite3.Connection, host: str
-) -> list[sqlite3.Row]:
+def list_pane_links_for_host(conn: sqlite3.Connection, host: str) -> list[sqlite3.Row]:
     """Return active pane_links rows where host matches (for the capture worker)."""
     return conn.execute(
         "SELECT * FROM pane_links WHERE host = ? AND status = 'active'",
@@ -124,9 +123,7 @@ _QUESTION_PROMPTS = re.compile(
 _SHELL_PROMPT_TAIL = re.compile(r"(?:^|\n)[^\n]*[\$%>#]\s*$")
 
 
-def classify_attention(
-    tail: str, prev_tail: str, prev_time: int
-) -> str:
+def classify_attention(tail: str, prev_tail: str, prev_time: int) -> str:
     """Return one of ATTENTION_* constants for *tail*.
 
     *prev_tail* and *prev_time* describe the previous capture: if the tail
@@ -146,16 +143,15 @@ def classify_attention(
             return ATTENTION_EXCEPTION
 
     quiet = (
-        tail == prev_tail
-        and (int(time.time()) - prev_time) >= PANE_IDLE_THRESHOLD_S
+        tail == prev_tail and (int(time.time()) - prev_time) >= PANE_IDLE_THRESHOLD_S
     )
 
     # Question only when pane has settled
     if quiet:
-        last_line = next(
-            (ln for ln in reversed(tail.splitlines()) if ln.strip()), ""
-        )
-        if _QUESTION_TRAILING.search(last_line) or _QUESTION_PROMPTS.search(last_window):
+        last_line = next((ln for ln in reversed(tail.splitlines()) if ln.strip()), "")
+        if _QUESTION_TRAILING.search(last_line) or _QUESTION_PROMPTS.search(
+            last_window
+        ):
             return ATTENTION_QUESTION
         if _SHELL_PROMPT_TAIL.search(tail):
             return ATTENTION_IDLE
@@ -166,6 +162,7 @@ def classify_attention(
 # ---------------------------------------------------------------------------
 # Capture helpers
 # ---------------------------------------------------------------------------
+
 
 def trim_tail(text: str) -> str:
     """Bound tail text to PANE_TAIL_MAX_LINES and PANE_TAIL_MAX_BYTES.
@@ -180,7 +177,10 @@ def trim_tail(text: str) -> str:
     out = "\n".join(lines)
     if len(out.encode("utf-8", errors="replace")) > PANE_TAIL_MAX_BYTES:
         # Drop oldest lines until we fit
-        while len(out.encode("utf-8", errors="replace")) > PANE_TAIL_MAX_BYTES and len(lines) > 1:
+        while (
+            len(out.encode("utf-8", errors="replace")) > PANE_TAIL_MAX_BYTES
+            and len(lines) > 1
+        ):
             lines = lines[1:]
             out = "\n".join(lines)
     return out
@@ -211,7 +211,11 @@ def update_pane_capture(
         return
 
     tail_changed = current["tail_text"] != bounded
-    captured_at = now if (tail_changed or current["last_captured_at"] is None) else current["last_captured_at"]
+    captured_at = (
+        now
+        if (tail_changed or current["last_captured_at"] is None)
+        else current["last_captured_at"]
+    )
 
     # Only stamp attention_detected_at when entering a non-none state
     if attention_state == ATTENTION_NONE:

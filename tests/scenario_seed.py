@@ -224,7 +224,7 @@ def cleanup_tickets(created_ids: list[str], api_base: str) -> None:
                 )
             else:
                 logger.debug("Cleaned up seed ticket %s", ticket_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "Failed to delete seed ticket %s during cleanup: %s",
                 ticket_id,

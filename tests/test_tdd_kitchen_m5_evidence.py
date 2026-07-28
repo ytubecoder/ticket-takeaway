@@ -5,7 +5,6 @@ Hermetic. Uses a temp evidence root + monkey-patched datetime.now seam
 live → summarised → pruned ladder deterministically.
 """
 
-import gzip
 import os
 import sqlite3
 import sys
@@ -21,23 +20,30 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 def env(tmp_path, monkeypatch):
     """Init schema in tmp DB; evidence dir lives in tmp_path."""
     import constants
+
     db_file = tmp_path / "tickets.db"
     monkeypatch.setattr(constants, "DASHBOARD_DIR", tmp_path / ".claude" / "tt")
     (tmp_path / ".claude" / "tt").mkdir(parents=True, exist_ok=True)
 
-    import db
     import importlib
+
+    import db
+
     importlib.reload(db)
     import evidence
+
     importlib.reload(evidence)
 
-    c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
-    db.init_db(c); c.close()
+    c = sqlite3.connect(db_file)
+    c.row_factory = sqlite3.Row
+    db.init_db(c)
+    c.close()
 
     def conn_factory():
         c = sqlite3.connect(db_file)
         c.row_factory = sqlite3.Row
         return c
+
     return {
         "db_file": db_file,
         "conn_factory": conn_factory,
@@ -46,9 +52,16 @@ def env(tmp_path, monkeypatch):
     }
 
 
-def _seed_run(env, run_id, evidence_status="live", days_ago=0,
-              evidence_dir: Path | None = None,
-              summary="ok", error_class=None, error_message=None):
+def _seed_run(
+    env,
+    run_id,
+    evidence_status="live",
+    days_ago=0,
+    evidence_dir: Path | None = None,
+    summary="ok",
+    error_class=None,
+    error_message=None,
+):
     finished = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
     c = env["conn_factory"]()
     c.execute(
@@ -56,11 +69,20 @@ def _seed_run(env, run_id, evidence_status="live", days_ago=0,
         " status, summary, error_class, error_message, started_at, finished_at, "
         " heartbeat_at, evidence_dir, evidence_status, triggered_by) "
         "VALUES (?, 'p', 'ticket', 'B-1', 'agent', 'succeeded', ?, ?, ?, ?, ?, ?, ?, ?, 'human')",
-        (run_id, summary, error_class, error_message,
-         finished, finished, finished,
-         str(evidence_dir) if evidence_dir else None, evidence_status),
+        (
+            run_id,
+            summary,
+            error_class,
+            error_message,
+            finished,
+            finished,
+            finished,
+            str(evidence_dir) if evidence_dir else None,
+            evidence_status,
+        ),
     )
-    c.commit(); c.close()
+    c.commit()
+    c.close()
 
 
 def _make_evidence_dir(root: Path, run_id: int, with_files=True) -> Path:
@@ -70,7 +92,9 @@ def _make_evidence_dir(root: Path, run_id: int, with_files=True) -> Path:
         # Plain transcript over 1 KiB so it actually gets gzipped.
         (d / "transcript.txt").write_text("x" * 2048)
         (d / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
-        (d / "stdout.log").write_text("short log")  # under 1 KiB — should NOT be gzipped
+        (d / "stdout.log").write_text(
+            "short log"
+        )  # under 1 KiB — should NOT be gzipped
     return d
 
 
@@ -78,11 +102,14 @@ def _make_evidence_dir(root: Path, run_id: int, with_files=True) -> Path:
 # rotate_evidence — happy paths
 # ---------------------------------------------------------------------------
 
+
 class TestRotateEvidence:
     def test_recent_run_is_skipped(self, env):
         d = _make_evidence_dir(env["evidence_root"], 1)
         _seed_run(env, 1, evidence_status="live", days_ago=5, evidence_dir=d)
-        counts = env["evidence"].rotate_evidence(env["conn_factory"], live_days=30, summarised_days=60)
+        counts = env["evidence"].rotate_evidence(
+            env["conn_factory"], live_days=30, summarised_days=60
+        )
         assert counts["summarised"] == 0
         assert counts["pruned"] == 0
         # Still live.
@@ -95,8 +122,17 @@ class TestRotateEvidence:
 
     def test_old_live_run_transitions_to_summarised(self, env):
         d = _make_evidence_dir(env["evidence_root"], 2)
-        _seed_run(env, 2, evidence_status="live", days_ago=35, evidence_dir=d, summary="all good")
-        counts = env["evidence"].rotate_evidence(env["conn_factory"], live_days=30, summarised_days=60)
+        _seed_run(
+            env,
+            2,
+            evidence_status="live",
+            days_ago=35,
+            evidence_dir=d,
+            summary="all good",
+        )
+        counts = env["evidence"].rotate_evidence(
+            env["conn_factory"], live_days=30, summarised_days=60
+        )
         assert counts["summarised"] == 1
         c = env["conn_factory"]()
         row = c.execute("SELECT evidence_status FROM runs WHERE id=2").fetchone()
@@ -123,7 +159,9 @@ class TestRotateEvidence:
         # Pre-state: summarised, summary.md already there.
         (d / "summary.md").write_text("# Run #3\n\nWas summarised earlier.\n")
         _seed_run(env, 3, evidence_status="summarised", days_ago=100, evidence_dir=d)
-        counts = env["evidence"].rotate_evidence(env["conn_factory"], live_days=30, summarised_days=60)
+        counts = env["evidence"].rotate_evidence(
+            env["conn_factory"], live_days=30, summarised_days=60
+        )
         assert counts["pruned"] == 1
         c = env["conn_factory"]()
         row = c.execute("SELECT evidence_status FROM runs WHERE id=3").fetchone()
@@ -150,7 +188,9 @@ class TestRotateEvidence:
         counts = env["evidence"].rotate_evidence(env["conn_factory"])
         assert counts["summarised"] == 0
         assert counts["pruned"] == 0
-        assert counts["skipped"] == 0  # query excludes pruned, doesn't even surface them
+        assert (
+            counts["skipped"] == 0
+        )  # query excludes pruned, doesn't even surface them
 
     def test_unfinished_run_is_skipped(self, env):
         # Runs with finished_at = NULL aren't considered.
@@ -161,7 +201,8 @@ class TestRotateEvidence:
             "VALUES (6, 'p', 'ticket', 'B-1', 'agent', 'running', '2026-04-29T00:00:00Z', "
             "        '2026-04-29T00:00:00Z', 'live', 'human')"
         )
-        c.commit(); c.close()
+        c.commit()
+        c.close()
         counts = env["evidence"].rotate_evidence(env["conn_factory"])
         assert counts["summarised"] == 0
 
@@ -170,11 +211,20 @@ class TestRotateEvidence:
 # Failure-mode handling
 # ---------------------------------------------------------------------------
 
+
 class TestSummaryContent:
     def test_failed_run_summary_includes_error(self, env):
         d = _make_evidence_dir(env["evidence_root"], 7, with_files=False)
-        _seed_run(env, 7, evidence_status="live", days_ago=35, evidence_dir=d,
-                  summary="", error_class="non_zero_exit", error_message="exit 7\nstderr text")
+        _seed_run(
+            env,
+            7,
+            evidence_status="live",
+            days_ago=35,
+            evidence_dir=d,
+            summary="",
+            error_class="non_zero_exit",
+            error_message="exit 7\nstderr text",
+        )
         env["evidence"].rotate_evidence(env["conn_factory"])
         text = (d / "summary.md").read_text()
         assert "non_zero_exit" in text
@@ -184,6 +234,7 @@ class TestSummaryContent:
 # ---------------------------------------------------------------------------
 # Time-travel control with the `now` seam
 # ---------------------------------------------------------------------------
+
 
 class TestNowSeam:
     def test_explicit_now_overrides_wall_clock(self, env):
@@ -201,6 +252,7 @@ class TestNowSeam:
 # ---------------------------------------------------------------------------
 # Daemon lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestDaemonLifecycle:
     def test_start_stop_idempotent(self, env):

@@ -7,7 +7,6 @@ doesn't throw JS errors.
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # JS error capture fixture
 # ---------------------------------------------------------------------------
@@ -43,7 +42,7 @@ def test_search_input_filters_cards(page_no_js_errors):
     search = page.query_selector("#searchInput")
     assert search is not None, "#searchInput not found"
 
-    total_before = len(page.query_selector_all(".card[data-item-id]"))
+    len(page.query_selector_all(".card[data-item-id]"))
     search.fill("zzz-nonexistent-zzz")
     page.wait_for_timeout(300)
     # Either some cards are hidden or count changed (filtering happened)
@@ -88,9 +87,7 @@ def test_card_click_expands(page_no_js_errors):
 def test_detail_overlay_opens_and_closes(page_no_js_errors):
     """Detail overlay opens via JS API and closes via close button."""
     page = page_no_js_errors
-    tid = page.evaluate(
-        "document.querySelector('.card[data-item-id]').dataset.itemId"
-    )
+    tid = page.evaluate("document.querySelector('.card[data-item-id]').dataset.itemId")
     # Open overlay via JS API (single click only expands card)
     page.evaluate(f"window.openDetailOverlay('{tid}')")
     page.wait_for_timeout(500)
@@ -145,9 +142,7 @@ def test_bottom_section_toggles(page_no_js_errors):
 def test_dctrs_dots_visible_in_detail(page_no_js_errors):
     """DCTRS readiness dots render in the detail overlay."""
     page = page_no_js_errors
-    tid = page.evaluate(
-        "document.querySelector('.card[data-item-id]').dataset.itemId"
-    )
+    tid = page.evaluate("document.querySelector('.card[data-item-id]').dataset.itemId")
     page.evaluate(f"window.openDetailOverlay('{tid}')")
     page.wait_for_timeout(500)
 
@@ -200,9 +195,7 @@ def test_settings_drawer_opens(page_no_js_errors):
 def test_attachments_section_renders(page_no_js_errors):
     """Attachments section appears in the detail overlay."""
     page = page_no_js_errors
-    tid = page.evaluate(
-        "document.querySelector('.card[data-item-id]').dataset.itemId"
-    )
+    tid = page.evaluate("document.querySelector('.card[data-item-id]').dataset.itemId")
     page.evaluate(f"window.openDetailOverlay('{tid}')")
     page.wait_for_timeout(500)
 
@@ -213,9 +206,7 @@ def test_attachments_section_renders(page_no_js_errors):
 def test_record_button_visible_when_feedbacks_enabled(page_no_js_errors):
     """Record button appears in detail overlay when feedbacks is enabled."""
     page = page_no_js_errors
-    tid = page.evaluate(
-        "document.querySelector('.card[data-item-id]').dataset.itemId"
-    )
+    tid = page.evaluate("document.querySelector('.card[data-item-id]').dataset.itemId")
     page.evaluate(f"window.openDetailOverlay('{tid}')")
     page.wait_for_timeout(500)
 
@@ -228,9 +219,7 @@ def test_attachment_row_has_play_button(page_no_js_errors):
     page = page_no_js_errors
 
     # Use I-10 which has a real attachment
-    has_i10 = page.evaluate(
-        "!!document.querySelector('.card[data-item-id=\"I-10\"]')"
-    )
+    has_i10 = page.evaluate("!!document.querySelector('.card[data-item-id=\"I-10\"]')")
     if not has_i10:
         pytest.skip("Ticket I-10 not on dashboard")
 
@@ -248,16 +237,16 @@ def test_attachment_row_has_play_button(page_no_js_errors):
     # Play button uses class "attachment-action-btn" with text "Play"
     play_btn = rows[0].query_selector(".attachment-action-btn")
     assert play_btn is not None, "Attachment row missing action button"
-    assert play_btn.text_content().strip() == "Play", "First action button should be Play"
+    assert play_btn.text_content().strip() == "Play", (
+        "First action button should be Play"
+    )
 
 
 def test_attachment_thumbnail_loads(page_no_js_errors):
     """If a ticket has an attachment, the thumbnail image loads."""
     page = page_no_js_errors
 
-    has_i10 = page.evaluate(
-        "!!document.querySelector('.card[data-item-id=\"I-10\"]')"
-    )
+    has_i10 = page.evaluate("!!document.querySelector('.card[data-item-id=\"I-10\"]')")
     if not has_i10:
         pytest.skip("Ticket I-10 not on dashboard")
 

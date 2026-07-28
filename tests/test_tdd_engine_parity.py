@@ -9,37 +9,37 @@ Pure logic, no server, no Playwright, no subprocess.
 
 from __future__ import annotations
 
-import json
+import os
 import sqlite3
 import sys
-import os
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import init_db
 from actions import (
     ActorContext,
     _ticket_eligibility,  # type: ignore[attr-defined]
     set_automation_mode,
-    set_no_test_required,
 )
-from conditions import evaluate_trigger, build_subject_context
+from conditions import build_subject_context, evaluate_trigger
+from db import init_db
 from workflows_seed import DEFAULT_WORKFLOWS
-
 
 # ---------------------------------------------------------------------------
 # The "Backlog → WIP" trigger JSON — lifted from DEFAULT_WORKFLOWS.
 # ---------------------------------------------------------------------------
 
-_BACKLOG_TO_WIP_WF = next(wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Backlog → WIP")
+_BACKLOG_TO_WIP_WF = next(
+    wf for wf in DEFAULT_WORKFLOWS if wf["name"] == "Backlog → WIP"
+)
 _BACKLOG_TO_WIP_TRIGGER = _BACKLOG_TO_WIP_WF["trigger_json"]
 
 
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def conn():
@@ -68,8 +68,18 @@ def _add_ticket(
         "(id, project_id, title, section, status, description, draft, archived, "
         " no_test_required, no_test_required_note) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (tid, project_id, f"Title {tid}", section, status, description,
-         draft, archived, no_test_required, no_test_required_note),
+        (
+            tid,
+            project_id,
+            f"Title {tid}",
+            section,
+            status,
+            description,
+            draft,
+            archived,
+            no_test_required,
+            no_test_required_note,
+        ),
     )
 
 
@@ -84,7 +94,9 @@ def _set_auto(conn, tid="B-1", project_id="p"):
     set_automation_mode(conn, project_id, "ticket", tid, "auto", ActorContext.human())
 
 
-def _set_tests_flag(conn, tid="B-1", project_id="p", content="pytest tests/test_foo.py"):
+def _set_tests_flag(
+    conn, tid="B-1", project_id="p", content="pytest tests/test_foo.py"
+):
     """Legacy helper kept as a no-op for parity tests.
 
     Migration 15 collapsed the tests/smoke readiness flags into acceptance
@@ -92,7 +104,7 @@ def _set_tests_flag(conn, tid="B-1", project_id="p", content="pytest tests/test_
     Existing tests continue to call this for narrative clarity; we keep the
     function as a no-op so the test surface stays stable.
     """
-    return None
+    return
 
 
 def _declare_lane(conn, tid="B-1", project_id="p", lane="B"):
@@ -105,8 +117,14 @@ def _declare_lane(conn, tid="B-1", project_id="p", lane="B"):
     from actions import SpecLink, write_readiness_flag
 
     change = f"{tid.lower()}-title-{tid.lower()}"
-    write_readiness_flag(conn, project_id, tid, "spec",
-                         SpecLink(lane=lane, change=change).render(), set_by="test")
+    write_readiness_flag(
+        conn,
+        project_id,
+        tid,
+        "spec",
+        SpecLink(lane=lane, change=change).render(),
+        set_by="test",
+    )
 
 
 def _get_legacy_result(conn, tid="B-1", project_id="p"):
@@ -144,6 +162,7 @@ def _assert_parity(conn, tid="B-1", project_id="p"):
 # ---------------------------------------------------------------------------
 # Parity matrix — one test class per fixture case
 # ---------------------------------------------------------------------------
+
 
 class TestParityEligible:
     """Fully eligible — all conditions pass."""
@@ -260,15 +279,21 @@ class TestParityNoSpecLane:
     def test_lane_c_no_change_with_reason_is_enough_to_dispatch(self, conn):
         """A justified lane-C declaration satisfies the entry gate — the lane
         question is 'has intent been declared', not 'is there a delta'."""
-        from actions import SpecLink, write_readiness_flag, NO_CHANGE_SENTINEL
+        from actions import NO_CHANGE_SENTINEL, SpecLink, write_readiness_flag
 
         _add_ticket(conn)
         _add_criteria(conn)
         _set_auto(conn)
         write_readiness_flag(
-            conn, "p", "B-1", "spec",
-            SpecLink(lane="C", change=NO_CHANGE_SENTINEL, note="dep bump only").render(),
-            set_by="test")
+            conn,
+            "p",
+            "B-1",
+            "spec",
+            SpecLink(
+                lane="C", change=NO_CHANGE_SENTINEL, note="dep bump only"
+            ).render(),
+            set_by="test",
+        )
         conn.commit()
 
         legacy, wf_passed, _ = _assert_parity(conn)
@@ -318,8 +343,15 @@ class TestParityPausedMode:
     def test_paused_mode_both_block(self, conn):
         _add_ticket(conn)
         _add_criteria(conn)
-        set_automation_mode(conn, "p", "ticket", "B-1", "paused",
-                            ActorContext.human(), pause_reason="waiting on design")
+        set_automation_mode(
+            conn,
+            "p",
+            "ticket",
+            "B-1",
+            "paused",
+            ActorContext.human(),
+            pause_reason="waiting on design",
+        )
         _set_tests_flag(conn)
         _declare_lane(conn)
         conn.commit()
@@ -478,7 +510,7 @@ class TestParityNoTestRequiredBypass:
 
 PARITY_CASES = [
     # (name, setup_fn, expected_eligible)
-    ("fully_eligible",          None,                   True),  # baseline setup in parametrize body
+    ("fully_eligible", None, True),  # baseline setup in parametrize body
 ]
 
 

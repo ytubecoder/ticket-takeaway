@@ -12,23 +12,19 @@ Validates:
 
 from __future__ import annotations
 
-import sys
 import os
-
-import pytest
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from scenario_drafting import (
-    DraftRequest,
     DraftContext,
-    generate_drafts,
+    DraftRequest,
     _detect_intent,
     _slugify,
-    KNOWN_TESTIDS,
+    generate_drafts,
 )
-from scenarios import validate_manifest, ScenarioValidationError
-
+from scenarios import ScenarioValidationError, validate_manifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -182,7 +178,9 @@ class TestGenerateDrafts:
         result = generate_drafts(req)
         for c in result.candidates:
             for tag in ["showcase", "regression"]:
-                assert tag in c.manifest["tags"], f"Tag '{tag}' not in {c.manifest['tags']}"
+                assert tag in c.manifest["tags"], (
+                    f"Tag '{tag}' not in {c.manifest['tags']}"
+                )
 
     def test_no_context_uses_defaults(self):
         req = DraftRequest(goal="create a ticket")
@@ -249,9 +247,15 @@ class TestPrerequisiteDetection:
         req = DraftRequest(goal="create a ticket in backlog")
         result = generate_drafts(req)
         # Move candidate may have a prerequisite about drag; create candidates should not
-        create_candidates = [c for c in result.candidates if "create" in c.title.lower()]
+        create_candidates = [
+            c for c in result.candidates if "create" in c.title.lower()
+        ]
         for c in create_candidates:
-            auth_prereqs = [p for p in c.prerequisites if "auth" in p.lower() or "login" in p.lower()]
+            auth_prereqs = [
+                p
+                for p in c.prerequisites
+                if "auth" in p.lower() or "login" in p.lower()
+            ]
             assert auth_prereqs == []
 
 
@@ -267,7 +271,16 @@ class TestDuplicationWarning:
         # Grab the id the generator would produce
         generated_id = result.candidates[0].manifest["id"]
 
-        existing = [{"id": generated_id, "title": "Existing", "tags": [], "actors": {"u": {}}, "seed": {}, "steps": []}]
+        existing = [
+            {
+                "id": generated_id,
+                "title": "Existing",
+                "tags": [],
+                "actors": {"u": {}},
+                "seed": {},
+                "steps": [],
+            }
+        ]
         ctx = DraftContext(existing_scenarios=existing)
         result2 = generate_drafts(req, context=ctx)
         assert any(generated_id in w for w in result2.warnings)
@@ -299,5 +312,7 @@ class TestConfidenceLevels:
     def test_create_is_high_confidence(self):
         req = DraftRequest(goal="create a ticket in backlog")
         result = generate_drafts(req)
-        create_candidates = [c for c in result.candidates if "create" in c.title.lower()]
+        create_candidates = [
+            c for c in result.candidates if "create" in c.title.lower()
+        ]
         assert all(c.confidence == "high" for c in create_candidates)

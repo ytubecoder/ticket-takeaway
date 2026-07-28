@@ -10,33 +10,35 @@ import os
 import sqlite3
 import sys
 import tempfile
-import threading
 import time
-import unittest.mock as mock
+from unittest import mock
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import get_db, init_db
-
+from db import init_db
 
 # ---------------------------------------------------------------------------
 # Import helpers from serve — import module directly to avoid server startup
 # ---------------------------------------------------------------------------
 
+
 def _import_serve():
     import importlib.util
     from pathlib import Path
+
     spec = importlib.util.spec_from_file_location(
         "serve_module",
         Path(__file__).parent.parent / "src" / "serve.py",
     )
     module = importlib.util.module_from_spec(spec)
     # Minimal stubs so serve.py doesn't actually start anything on import
-    with mock.patch("subprocess.Popen"), \
-         mock.patch("threading.Thread"), \
-         mock.patch.dict(os.environ, {"TT_NO_SERVER_STARTUP": "1"}):
+    with (
+        mock.patch("subprocess.Popen"),
+        mock.patch("threading.Thread"),
+        mock.patch.dict(os.environ, {"TT_NO_SERVER_STARTUP": "1"}),
+    ):
         try:
             spec.loader.exec_module(module)
         except SystemExit:
@@ -67,6 +69,7 @@ except Exception as _e:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def conn():
     """In-memory DB with full schema."""
@@ -81,6 +84,7 @@ def conn():
 # _apply_resume_args — codex
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _SERVE_AVAILABLE, reason="serve.py could not be imported")
 class TestApplyResumeArgsCodex:
     def test_codex_no_resume_inserts_after_exec(self):
@@ -92,7 +96,9 @@ class TestApplyResumeArgsCodex:
         assert result == ["--flag", "exec", "resume", "sid-1", "-q"]
 
     def test_codex_existing_resume_replaces_session_id(self):
-        result = _apply_resume_args("codex", ["exec", "resume", "old-sid", "-q"], "sid-2")
+        result = _apply_resume_args(
+            "codex", ["exec", "resume", "old-sid", "-q"], "sid-2"
+        )
         assert result == ["exec", "resume", "sid-2", "-q"]
 
     def test_codex_existing_resume_no_trailing_sid_inserts(self):
@@ -118,6 +124,7 @@ class TestApplyResumeArgsCodex:
 # _apply_resume_args — claude / generic
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _SERVE_AVAILABLE, reason="serve.py could not be imported")
 class TestApplyResumeArgsClaude:
     def test_claude_appends_resume_flag(self):
@@ -125,7 +132,9 @@ class TestApplyResumeArgsClaude:
         assert result[-2:] == ["--resume", "sid-3"]
 
     def test_claude_replaces_existing_resume_flag(self):
-        result = _apply_resume_args("claude", ["--resume", "old", "-p", "hello"], "sid-new")
+        result = _apply_resume_args(
+            "claude", ["--resume", "old", "-p", "hello"], "sid-new"
+        )
         idx = result.index("--resume")
         assert result[idx + 1] == "sid-new"
 
@@ -143,6 +152,7 @@ class TestApplyResumeArgsClaude:
 # ---------------------------------------------------------------------------
 # _extract_session_id — codex
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _SERVE_AVAILABLE, reason="serve.py could not be imported")
 class TestExtractSessionIdCodex:
@@ -179,8 +189,10 @@ class TestExtractSessionIdCodex:
             old_time = time.time() - 10
             os.utime(fpath, (old_time, old_time))
 
-            with mock.patch("os.path.expanduser", return_value=tmpdir), \
-                 mock.patch("os.path.isdir", return_value=True):
+            with (
+                mock.patch("os.path.expanduser", return_value=tmpdir),
+                mock.patch("os.path.isdir", return_value=True),
+            ):
                 sid = _extract_session_id("codex", "", "", time.time())
             # started_before is now, file is 10s old — should not match
             assert sid is None
@@ -194,8 +206,10 @@ class TestExtractSessionIdCodex:
                 f.write("{}")
             # started_before is in the past — file is recent
             started = time.time() - 5
-            with mock.patch("os.path.expanduser", return_value=tmpdir), \
-                 mock.patch("os.path.isdir", return_value=True):
+            with (
+                mock.patch("os.path.expanduser", return_value=tmpdir),
+                mock.patch("os.path.isdir", return_value=True),
+            ):
                 sid = _extract_session_id("codex", "", "", started)
             assert sid == self.UUID
 
@@ -203,6 +217,7 @@ class TestExtractSessionIdCodex:
 # ---------------------------------------------------------------------------
 # _extract_session_id — claude
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _SERVE_AVAILABLE, reason="serve.py could not be imported")
 class TestExtractSessionIdClaude:
@@ -230,6 +245,7 @@ class TestExtractSessionIdClaude:
 # ---------------------------------------------------------------------------
 # Streaming: stub Popen to yield lines, verify flush behaviour
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _SERVE_AVAILABLE, reason="serve.py could not be imported")
 class TestStreamingFlushBehaviour:
@@ -270,10 +286,11 @@ class TestStreamingFlushBehaviour:
 
         def fake_update(run_id, **kwargs):
             flush_times.append(time.time())
-            return None
 
         lines = [f"line {i}\n" for i in range(9)]
-        delays = [0.12] * 9  # 0.12s between lines, flush_interval=0.1s → flush every ~line
+        delays = [
+            0.12
+        ] * 9  # 0.12s between lines, flush_interval=0.1s → flush every ~line
 
         fake_proc = self._make_fake_proc(lines, delays)
 
@@ -305,7 +322,9 @@ class TestStreamingFlushBehaviour:
 
         # At 0.12s per line and 0.1s interval, expect ~8 flushes
         # At minimum we need >=3 to confirm mid-stream flushing (not just end-of-run)
-        assert len(flush_times) >= 3, f"Expected >=3 mid-stream flushes, got {len(flush_times)}"
+        assert len(flush_times) >= 3, (
+            f"Expected >=3 mid-stream flushes, got {len(flush_times)}"
+        )
         # Verify content accumulated correctly
         assert turn["content"] == "".join(lines)
 
@@ -330,6 +349,7 @@ class TestStreamingFlushBehaviour:
 # ---------------------------------------------------------------------------
 # Session ids per-run isolation: two runs don't cross-contaminate
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _SERVE_AVAILABLE, reason="serve.py could not be imported")
 class TestSessionIdIsolation:
@@ -368,8 +388,12 @@ class TestSessionIdIsolation:
         )
         conn.commit()
 
-        row_a = conn.execute("SELECT session_ids FROM workflow_runs WHERE id = 'run-a'").fetchone()
-        row_b = conn.execute("SELECT session_ids FROM workflow_runs WHERE id = 'run-b'").fetchone()
+        row_a = conn.execute(
+            "SELECT session_ids FROM workflow_runs WHERE id = 'run-a'"
+        ).fetchone()
+        row_b = conn.execute(
+            "SELECT session_ids FROM workflow_runs WHERE id = 'run-b'"
+        ).fetchone()
         assert json.loads(row_a["session_ids"])["agent_consultant"] == self.UUID_A
         assert json.loads(row_b["session_ids"])["agent_consultant"] == self.UUID_B
         # No cross-contamination
@@ -380,6 +404,7 @@ class TestSessionIdIsolation:
 # ---------------------------------------------------------------------------
 # needs_input respond: conversation append + status paused + prompt cleared
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _SERVE_AVAILABLE, reason="serve.py could not be imported")
 class TestNeedsInputRespond:
@@ -405,21 +430,25 @@ class TestNeedsInputRespond:
             conversation = []
 
         from datetime import datetime
-        conversation.append({
-            "role": "user",
-            "step": current_step,
-            "content": response_text,
-            "ts": datetime.utcnow().isoformat(),
-        })
+
+        conversation.append(
+            {
+                "role": "user",
+                "step": current_step,
+                "content": response_text,
+                "ts": datetime.utcnow().isoformat(),
+            }
+        )
         conn.execute(
-            "UPDATE workflow_runs SET conversation = ?, status = 'paused' "
-            "WHERE id = ?",
+            "UPDATE workflow_runs SET conversation = ?, status = 'paused' WHERE id = ?",
             (json.dumps(conversation), run_id),
         )
         conn.commit()
-        return dict(conn.execute(
-            "SELECT * FROM workflow_runs WHERE id = ?", (run_id,)
-        ).fetchone())
+        return dict(
+            conn.execute(
+                "SELECT * FROM workflow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        )
 
     def test_respond_appends_user_turn(self, conn):
         conn.execute(
@@ -470,9 +499,9 @@ class TestNeedsInputRespond:
         assert updated["status"] == "paused"
 
     def test_respond_preserves_existing_conversation_turns(self, conn):
-        existing = json.dumps([
-            {"role": "agent", "content": "Initial review", "step": 0}
-        ])
+        existing = json.dumps(
+            [{"role": "agent", "content": "Initial review", "step": 0}]
+        )
         conn.execute(
             "INSERT INTO tickets (id, project_id, title) VALUES ('T-4', 'proj', 'Ticket')"
         )

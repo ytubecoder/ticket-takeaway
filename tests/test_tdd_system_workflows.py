@@ -13,18 +13,17 @@ tests. The serve.py-side guards are exercised by smoke tests below.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
-import os
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from conditions import build_subject_context, evaluate_trigger
 from db import init_db
 from workflows_seed import seed_default_workflows
-from conditions import build_subject_context, evaluate_trigger
-
 
 PROJECT_ID = "test-project"
 
@@ -32,6 +31,7 @@ PROJECT_ID = "test-project"
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def conn():
@@ -44,8 +44,16 @@ def conn():
     return c
 
 
-def _add_ticket(conn, tid, *, section="WIP", status="in-progress",
-                parent=None, project_id=PROJECT_ID, priority="medium"):
+def _add_ticket(
+    conn,
+    tid,
+    *,
+    section="WIP",
+    status="in-progress",
+    parent=None,
+    project_id=PROJECT_ID,
+    priority="medium",
+):
     conn.execute(
         "INSERT INTO tickets "
         "(id, project_id, title, section, status, description, priority, parent) "
@@ -57,6 +65,7 @@ def _add_ticket(conn, tid, *, section="WIP", status="in-progress",
 # ---------------------------------------------------------------------------
 # System workflow seeds — sanity
 # ---------------------------------------------------------------------------
+
 
 class TestSystemWorkflowSeeds:
     def test_parent_promote_seeded_enabled(self, conn):
@@ -85,6 +94,7 @@ class TestSystemWorkflowSeeds:
 # ---------------------------------------------------------------------------
 # Trigger evaluation against parent — system workflow doesn't need auto mode
 # ---------------------------------------------------------------------------
+
 
 class TestParentPromoteTriggerEvaluation:
     """The parent-promote workflow's trigger evaluates against the PARENT
@@ -158,6 +168,7 @@ class TestParentPromoteTriggerEvaluation:
 # Auto-accept trigger evaluation
 # ---------------------------------------------------------------------------
 
+
 class TestAutoAcceptTriggerEvaluation:
     def test_passes_in_review_done_no_open_bugs(self, conn):
         _add_ticket(conn, "B-1", section="For Review", status="done")
@@ -192,14 +203,15 @@ class TestAutoAcceptTriggerEvaluation:
 # apply_to: parent — runner effect routing
 # ---------------------------------------------------------------------------
 
+
 class TestApplyToParentRouting:
     """The runners._apply_on_success helper must support apply_to='parent' and
     move the parent ticket (not the subject) when invoked."""
 
     def test_apply_to_parent_moves_parent(self, tmp_path):
         # Build a real on-disk DB so the runner's conn_factory can reopen it.
-        from runners import AgentRunner
         from actions import ActorContext
+        from runners import AgentRunner
 
         db_path = tmp_path / "tt.db"
         c = sqlite3.connect(str(db_path))
@@ -230,17 +242,19 @@ class TestApplyToParentRouting:
         }
 
         AgentRunner._apply_on_success(
-            workflow_meta, PROJECT_ID, "BUG-1",
-            ActorContext.system(), conn_factory,
+            workflow_meta,
+            PROJECT_ID,
+            "BUG-1",
+            ActorContext.system(),
+            conn_factory,
         )
 
         c = conn_factory()
         try:
-            row = c.execute(
-                "SELECT section FROM tickets WHERE id = 'B-1'"
-            ).fetchone()
-            assert row["section"] == "For Review", \
+            row = c.execute("SELECT section FROM tickets WHERE id = 'B-1'").fetchone()
+            assert row["section"] == "For Review", (
                 "parent must have been moved by apply_to=parent"
+            )
 
             # System actor must be on the section_change event.
             ev = c.execute(
@@ -255,8 +269,8 @@ class TestApplyToParentRouting:
 
     def test_apply_to_parent_skips_when_no_parent(self, tmp_path):
         """When the subject has no parent, the apply_to='parent' branch is a no-op."""
-        from runners import AgentRunner
         from actions import ActorContext
+        from runners import AgentRunner
 
         db_path = tmp_path / "tt.db"
         c = sqlite3.connect(str(db_path))
@@ -284,15 +298,16 @@ class TestApplyToParentRouting:
         }
 
         AgentRunner._apply_on_success(
-            workflow_meta, PROJECT_ID, "B-1",
-            ActorContext.system(), conn_factory,
+            workflow_meta,
+            PROJECT_ID,
+            "B-1",
+            ActorContext.system(),
+            conn_factory,
         )
 
         c = conn_factory()
         try:
-            row = c.execute(
-                "SELECT section FROM tickets WHERE id = 'B-1'"
-            ).fetchone()
+            row = c.execute("SELECT section FROM tickets WHERE id = 'B-1'").fetchone()
             assert row["section"] == "WIP", "ticket should not have moved"
         finally:
             c.close()
@@ -302,13 +317,14 @@ class TestApplyToParentRouting:
 # accept_ticket effect — preconditions
 # ---------------------------------------------------------------------------
 
+
 class TestAcceptTicketEffect:
     """The accept_ticket effect must respect the same preconditions the
     human Accept button enforces: section='For Review' AND status='done'."""
 
     def test_skips_when_not_in_review(self, tmp_path):
-        from runners import AgentRunner
         from actions import ActorContext
+        from runners import AgentRunner
 
         db_path = tmp_path / "tt.db"
         c = sqlite3.connect(str(db_path))
@@ -334,22 +350,23 @@ class TestAcceptTicketEffect:
         }
 
         AgentRunner._apply_on_success(
-            workflow_meta, PROJECT_ID, "B-1",
-            ActorContext.system(), conn_factory,
+            workflow_meta,
+            PROJECT_ID,
+            "B-1",
+            ActorContext.system(),
+            conn_factory,
         )
 
         c = conn_factory()
         try:
-            row = c.execute(
-                "SELECT section FROM tickets WHERE id = 'B-1'"
-            ).fetchone()
+            row = c.execute("SELECT section FROM tickets WHERE id = 'B-1'").fetchone()
             assert row["section"] == "WIP", "must remain in WIP (preconditions failed)"
         finally:
             c.close()
 
     def test_skips_when_status_not_done(self, tmp_path):
-        from runners import AgentRunner
         from actions import ActorContext
+        from runners import AgentRunner
 
         db_path = tmp_path / "tt.db"
         c = sqlite3.connect(str(db_path))
@@ -374,8 +391,11 @@ class TestAcceptTicketEffect:
         }
 
         AgentRunner._apply_on_success(
-            workflow_meta, PROJECT_ID, "B-1",
-            ActorContext.system(), conn_factory,
+            workflow_meta,
+            PROJECT_ID,
+            "B-1",
+            ActorContext.system(),
+            conn_factory,
         )
 
         c = conn_factory()

@@ -27,16 +27,15 @@ import logging
 import os
 import sqlite3
 import threading
-import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
 
 from actions import ActorContext, emit_event, utcnow_iso
 from db import REGISTRY_PATH
-from runners import AgentRunner, NoopRunner, RunOutcome, Runner, ScenarioRunner
-from workspaces import WorkspaceInfo, create_or_reuse, run_hook, workspace_path_for
-from workflow_config import load_workflow_config, load_prompt_template
+from runners import AgentRunner, NoopRunner, Runner, ScenarioRunner
+from workflow_config import load_prompt_template, load_workflow_config
+from workspaces import WorkspaceInfo, create_or_reuse
 
 # Feature flag key stored in the settings table.
 _USE_DB_WORKFLOWS_KEY = "kitchen.use_db_workflows"
@@ -54,9 +53,11 @@ _INSTANCE_OWNER = f"kitchen:{os.getpid()}"
 # Module-level state
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _ActiveRun:
     """Tracking metadata for a run currently being executed in a thread."""
+
     run_id: int
     project_id: str
     subject_type: str
@@ -66,8 +67,8 @@ class _ActiveRun:
 
 
 _started = False
-_stop_event: Optional[threading.Event] = None
-_loop_thread: Optional[threading.Thread] = None
+_stop_event: threading.Event | None = None
+_loop_thread: threading.Thread | None = None
 _active_runs: dict[int, _ActiveRun] = {}
 _active_runs_lock = threading.Lock()
 
@@ -98,15 +99,19 @@ def _runner_kind_for(subject_type: str) -> str:
         return "scenario"
     return "agent"
 
+
 # Test seam: lets tests inject project paths without touching the real registry.
-_PROJECT_PATH_RESOLVER: Optional[Callable[[str], Optional[Path]]] = None
+_PROJECT_PATH_RESOLVER: Callable[[str], Path | None] | None = None
 
 
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
 
-def start(get_db: Callable[[], sqlite3.Connection], settings: dict | None = None) -> None:
+
+def start(
+    get_db: Callable[[], sqlite3.Connection], settings: dict | None = None
+) -> None:
     """Start the orchestrator background thread.
 
     On first start the paused flag is loaded from the settings table; if the
@@ -128,7 +133,9 @@ def start(get_db: Callable[[], sqlite3.Connection], settings: dict | None = None
             conn.close()
         if row is not None:
             with _paused_lock:
-                _paused = (str(row[0]).lower() != "false")  # missing/anything-else = paused
+                _paused = (
+                    str(row[0]).lower() != "false"
+                )  # missing/anything-else = paused
     except Exception:
         # Pre-migration or transient DB issue — stay paused (the safe default).
         pass
@@ -150,13 +157,15 @@ def start(get_db: Callable[[], sqlite3.Connection], settings: dict | None = None
 # Pause / resume — M6
 # ---------------------------------------------------------------------------
 
+
 def is_paused() -> bool:
     with _paused_lock:
         return _paused
 
 
-def pause(get_db: Optional[Callable[[], sqlite3.Connection]] = None,
-          actor=None, reason: str = "") -> bool:
+def pause(
+    get_db: Callable[[], sqlite3.Connection] | None = None, actor=None, reason: str = ""
+) -> bool:
     """Pause auto-dispatch. Returns True if state actually changed.
 
     Reconciliation (stall detection) keeps running; new runs do NOT get
@@ -174,8 +183,9 @@ def pause(get_db: Optional[Callable[[], sqlite3.Connection]] = None,
     return True
 
 
-def resume(get_db: Optional[Callable[[], sqlite3.Connection]] = None,
-           actor=None, reason: str = "") -> bool:
+def resume(
+    get_db: Callable[[], sqlite3.Connection] | None = None, actor=None, reason: str = ""
+) -> bool:
     """Resume auto-dispatch. Returns True if state actually changed.
 
     Idempotent: resuming while already running is a no-op.
@@ -219,14 +229,18 @@ def _emit_pause_event(get_db, kind: str, reason: str, actor) -> None:
     if get_db is None:
         return
     try:
-        from actions import emit_event, ActorContext
+        from actions import ActorContext, emit_event
+
         if actor is None:
             actor = ActorContext.system()
         conn = get_db()
         try:
             # Use a sentinel project_id so it's surfaceable in any cross-project view.
             emit_event(
-                conn, "_kitchen", "investigation", "lifecycle",
+                conn,
+                "_kitchen",
+                "investigation",
+                "lifecycle",
                 f"kitchen_{kind}",  # kitchen_paused | kitchen_resumed
                 {"reason": reason},
                 actor,
@@ -268,7 +282,8 @@ def stop(timeout: float = 5.0) -> None:
 # Test seams
 # ---------------------------------------------------------------------------
 
-def set_project_path_resolver(resolver: Optional[Callable[[str], Optional[Path]]]) -> None:
+
+def set_project_path_resolver(resolver: Callable[[str], Path | None] | None) -> None:
     """Swap how kitchen finds a project's repo path. Default reads registry.json."""
     global _PROJECT_PATH_RESOLVER
     _PROJECT_PATH_RESOLVER = resolver
@@ -283,12 +298,14 @@ def register_runner(kind: str, runner: Runner) -> None:
 # Project resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_project_path(project_id: str) -> Optional[Path]:
+
+def _resolve_project_path(project_id: str) -> Path | None:
     """Find the on-disk path for a project. Test seam wins; otherwise read registry."""
     if _PROJECT_PATH_RESOLVER is not None:
         return _PROJECT_PATH_RESOLVER(project_id)
     try:
         import json
+
         with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
             registry = json.load(f)
         for entry in registry.get("projects", []):
@@ -306,6 +323,7 @@ def _resolve_project_path(project_id: str) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 # The poll loop
 # ---------------------------------------------------------------------------
+
 
 def _run_loop(get_db: Callable, settings: dict, stop_event: threading.Event) -> None:
     """Tick on a fixed interval until stop_event is set."""
@@ -336,10 +354,11 @@ def tick(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
 # Reconciliation
 # ---------------------------------------------------------------------------
 
+
 def _reconcile(get_db: Callable[[], sqlite3.Connection]) -> None:
     """Sweep active runs:
-       - drop _active_runs entries whose threads have exited
-       - flag stalls (no heartbeat in STALL_TIMEOUT_S) and force them to 'stalled'
+    - drop _active_runs entries whose threads have exited
+    - flag stalls (no heartbeat in STALL_TIMEOUT_S) and force them to 'stalled'
     """
     # Drop dead-thread entries from our tracking map.
     with _active_runs_lock:
@@ -363,6 +382,7 @@ def _reconcile(get_db: Callable[[], sqlite3.Connection]) -> None:
             try:
                 # Cheap age check: parse the ISO string we wrote ourselves.
                 from datetime import datetime, timezone
+
                 hb_dt = datetime.fromisoformat(hb)
                 if hb_dt.tzinfo is None:
                     hb_dt = hb_dt.replace(tzinfo=timezone.utc)
@@ -376,7 +396,10 @@ def _reconcile(get_db: Callable[[], sqlite3.Connection]) -> None:
                     (now_iso, f"no heartbeat for {int(age_s)}s", r["id"]),
                 )
                 emit_event(
-                    conn, r["project_id"], r["subject_type"], r["subject_id"],
+                    conn,
+                    r["project_id"],
+                    r["subject_type"],
+                    r["subject_id"],
                     "run_stalled",
                     {"run_id": r["id"], "last_heartbeat_age_ms": int(age_s * 1000)},
                     ActorContext.system(),
@@ -389,6 +412,7 @@ def _reconcile(get_db: Callable[[], sqlite3.Connection]) -> None:
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
+
 
 def _count_active_consuming_slots(conn: sqlite3.Connection) -> int:
     """Per docs/KITCHEN.md §8: queued + needs_input do NOT consume slots.
@@ -423,7 +447,9 @@ def get_use_db_workflows(conn: sqlite3.Connection) -> bool:
     return str(row[0]).lower() == "true"
 
 
-def _dispatch_eligible(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
+def _dispatch_eligible(
+    get_db: Callable[[], sqlite3.Connection], settings: dict
+) -> None:
     """Route to the DB-workflow path or legacy path based on feature flag."""
     conn = get_db()
     try:
@@ -437,7 +463,9 @@ def _dispatch_eligible(get_db: Callable[[], sqlite3.Connection], settings: dict)
         _dispatch_via_legacy(get_db, settings)
 
 
-def _dispatch_via_legacy(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
+def _dispatch_via_legacy(
+    get_db: Callable[[], sqlite3.Connection], settings: dict
+) -> None:
     """Legacy dispatch path: evaluates tickets using _ticket_eligibility hardcoded predicate."""
     from actions import eligibility as _eligibility
 
@@ -489,7 +517,9 @@ def _dispatch_via_legacy(get_db: Callable[[], sqlite3.Connection], settings: dic
         conn.close()
 
 
-def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: dict) -> None:
+def _dispatch_via_workflows(
+    get_db: Callable[[], sqlite3.Connection], settings: dict
+) -> None:
     """DB-workflow dispatch path: evaluates tickets against enabled workflow triggers.
 
     System workflows (system=1) bypass the `automation_mode='auto'` filter so
@@ -500,8 +530,9 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
     workflow per ticket dispatches a run (one workflow per tick per subject).
     """
     import json as _json
-    from conditions import build_subject_context, evaluate_trigger
+
     from actions import _has_active_run  # type: ignore[import]
+    from conditions import build_subject_context, evaluate_trigger
 
     conn = get_db()
     try:
@@ -581,15 +612,17 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
                         if trigger_raw is None or trigger_raw == "null":
                             continue
                         trigger = (
-                            _json.loads(trigger_raw) if isinstance(trigger_raw, str)
+                            _json.loads(trigger_raw)
+                            if isinstance(trigger_raw, str)
                             else trigger_raw
                         )
                         ctx = build_subject_context(conn, project_id, ticket_id)
-                        passed, reasons = evaluate_trigger(trigger, ctx)
+                        passed, _reasons = evaluate_trigger(trigger, ctx)
                     except Exception:
                         logger.exception(
                             "workflow trigger evaluation failed for workflow %r ticket %r",
-                            wf["id"], ticket_id,
+                            wf["id"],
+                            ticket_id,
                         )
                         continue
 
@@ -598,7 +631,11 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
 
                     # Parse workflow metadata to pass into the run.
                     try:
-                        steps = _json.loads(wf["steps"]) if isinstance(wf["steps"], str) else wf["steps"]
+                        steps = (
+                            _json.loads(wf["steps"])
+                            if isinstance(wf["steps"], str)
+                            else wf["steps"]
+                        )
                     except Exception:
                         steps = []
                     on_success = None
@@ -622,7 +659,11 @@ def _dispatch_via_workflows(get_db: Callable[[], sqlite3.Connection], settings: 
                     }
 
                     if _try_claim_and_dispatch(
-                        get_db, project_id, "ticket", ticket_id, settings,
+                        get_db,
+                        project_id,
+                        "ticket",
+                        ticket_id,
+                        settings,
                         workflow_meta=workflow_meta,
                     ):
                         slots -= 1
@@ -645,7 +686,7 @@ def _try_claim_and_dispatch(
     subject_type: str,
     subject_id: str,
     settings: dict,
-    workflow_meta: Optional[dict] = None,
+    workflow_meta: dict | None = None,
 ) -> bool:
     """Atomic claim using BEGIN IMMEDIATE + the partial unique index.
 
@@ -667,9 +708,7 @@ def _try_claim_and_dispatch(
     # Detect zero-step workflows (pure mutation rules — e.g. system workflows
     # like parent-promote and auto-accept). These skip workspace + agent
     # subprocess and run via NoopRunner, which only applies on_success effects.
-    is_noop_workflow = bool(
-        workflow_meta and not (workflow_meta.get("steps") or [])
-    )
+    is_noop_workflow = bool(workflow_meta and not (workflow_meta.get("steps") or []))
 
     # When a workflow is specified, override the prompt template with the
     # workflow step's prompt_template (substitution happens in the runner).
@@ -698,14 +737,32 @@ def _try_claim_and_dispatch(
                 " claimed_at, claim_owner, heartbeat_at, started_at, triggered_by, "
                 " metadata_json) "
                 "VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, 'scheduled', ?)",
-                (project_id, subject_type, subject_id, runner_kind,
-                 utcnow_iso(), claim_owner, utcnow_iso(), utcnow_iso(), metadata),
+                (
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    runner_kind,
+                    utcnow_iso(),
+                    claim_owner,
+                    utcnow_iso(),
+                    utcnow_iso(),
+                    metadata,
+                ),
             )
             run_id = cur.lastrowid
-            emit_event(conn, project_id, subject_type, subject_id, "run_started",
-                       {"run_id": run_id, "runner_kind": runner_kind,
-                        "triggered_by": "scheduled"},
-                       ActorContext.system())
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_started",
+                {
+                    "run_id": run_id,
+                    "runner_kind": runner_kind,
+                    "triggered_by": "scheduled",
+                },
+                ActorContext.system(),
+            )
             conn.commit()
         except sqlite3.IntegrityError:
             conn.rollback()
@@ -727,7 +784,9 @@ def _try_claim_and_dispatch(
         )
     else:
         try:
-            ws = create_or_reuse(project_path, project_id, subject_type, subject_id, base_ref=base_ref)
+            ws = create_or_reuse(
+                project_path, project_id, subject_type, subject_id, base_ref=base_ref
+            )
         except ValueError as e:
             # Workspace setup failed — mark the run failed in a fresh tx.
             c = get_db()
@@ -737,9 +796,19 @@ def _try_claim_and_dispatch(
                     "error_message=?, finished_at=?, heartbeat_at=? WHERE id = ?",
                     (str(e), utcnow_iso(), utcnow_iso(), run_id),
                 )
-                emit_event(c, project_id, subject_type, subject_id, "run_failed",
-                           {"run_id": run_id, "error_class": "workspace_setup",
-                            "error_message": str(e)}, ActorContext.system())
+                emit_event(
+                    c,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "run_failed",
+                    {
+                        "run_id": run_id,
+                        "error_class": "workspace_setup",
+                        "error_message": str(e),
+                    },
+                    ActorContext.system(),
+                )
                 c.commit()
             finally:
                 c.close()
@@ -754,15 +823,28 @@ def _try_claim_and_dispatch(
     cancel = threading.Event()
     t = threading.Thread(
         target=_runner_thread,
-        args=(runner, run_id, project_id, subject_type, subject_id, ws, config, get_db, cancel),
+        args=(
+            runner,
+            run_id,
+            project_id,
+            subject_type,
+            subject_id,
+            ws,
+            config,
+            get_db,
+            cancel,
+        ),
         name=f"kitchen-runner-{run_id}",
         daemon=True,
     )
     with _active_runs_lock:
         _active_runs[run_id] = _ActiveRun(
-            run_id=run_id, project_id=project_id,
-            subject_type=subject_type, subject_id=subject_id,
-            thread=t, cancel_event=cancel,
+            run_id=run_id,
+            project_id=project_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            thread=t,
+            cancel_event=cancel,
         )
     t.start()
     return True
@@ -781,8 +863,16 @@ def _runner_thread(
 ) -> None:
     """Thread body — invokes runner.execute() and cleans up."""
     try:
-        runner.execute(run_id, project_id, subject_type, subject_id,
-                       ws, config, get_db, cancel_event=cancel_event)
+        runner.execute(
+            run_id,
+            project_id,
+            subject_type,
+            subject_id,
+            ws,
+            config,
+            get_db,
+            cancel_event=cancel_event,
+        )
     except Exception:
         logger.exception("runner thread crashed for run %d", run_id)
         # Best-effort: mark the run failed if it isn't terminal already.
@@ -795,10 +885,19 @@ def _runner_thread(
                     "WHERE id = ? AND status NOT IN ('succeeded','failed','stalled','cancelled')",
                     (utcnow_iso(), utcnow_iso(), run_id),
                 )
-                emit_event(c, project_id, subject_type, subject_id, "run_failed",
-                           {"run_id": run_id, "error_class": "runner_crash",
-                            "error_message": "runner thread crashed"},
-                           ActorContext.system())
+                emit_event(
+                    c,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "run_failed",
+                    {
+                        "run_id": run_id,
+                        "error_class": "runner_crash",
+                        "error_message": "runner thread crashed",
+                    },
+                    ActorContext.system(),
+                )
                 c.commit()
             finally:
                 c.close()
@@ -812,6 +911,7 @@ def _runner_thread(
 # ---------------------------------------------------------------------------
 # External hooks — invoked by serve.py for human-triggered actions
 # ---------------------------------------------------------------------------
+
 
 def request_cancel(run_id: int) -> bool:
     """Signal an active run to cancel. Returns True iff the run was tracked."""
@@ -833,9 +933,13 @@ def active_runs_snapshot() -> list[dict]:
     """Diagnostic surface — list of currently-tracked runs."""
     with _active_runs_lock:
         return [
-            {"run_id": ar.run_id, "project_id": ar.project_id,
-             "subject_type": ar.subject_type, "subject_id": ar.subject_id,
-             "alive": ar.thread.is_alive()}
+            {
+                "run_id": ar.run_id,
+                "project_id": ar.project_id,
+                "subject_type": ar.subject_type,
+                "subject_id": ar.subject_id,
+                "alive": ar.thread.is_alive(),
+            }
             for ar in _active_runs.values()
         ]
 
@@ -847,7 +951,7 @@ def trigger_run(
     subject_id: str,
     settings: dict,
     triggered_by: str = "human",
-) -> Optional[int]:
+) -> int | None:
     """Manually trigger a run for a subject. Returns the new run_id on success.
 
     Used by POST /api/tickets/{id}/run-now. Like dispatch, but bypasses the
@@ -872,14 +976,34 @@ def trigger_run(
                 "(project_id, subject_type, subject_id, runner_kind, status, "
                 " claimed_at, claim_owner, heartbeat_at, started_at, triggered_by) "
                 "VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
-                (project_id, subject_type, subject_id, runner_kind,
-                 utcnow_iso(), _INSTANCE_OWNER, utcnow_iso(), utcnow_iso(), triggered_by),
+                (
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    runner_kind,
+                    utcnow_iso(),
+                    _INSTANCE_OWNER,
+                    utcnow_iso(),
+                    utcnow_iso(),
+                    triggered_by,
+                ),
             )
             run_id = cur.lastrowid
-            emit_event(conn, project_id, subject_type, subject_id, "run_started",
-                       {"run_id": run_id, "runner_kind": runner_kind,
-                        "triggered_by": triggered_by},
-                       ActorContext.human() if triggered_by == "human" else ActorContext.system())
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_started",
+                {
+                    "run_id": run_id,
+                    "runner_kind": runner_kind,
+                    "triggered_by": triggered_by,
+                },
+                ActorContext.human()
+                if triggered_by == "human"
+                else ActorContext.system(),
+            )
             conn.commit()
         except sqlite3.IntegrityError:
             conn.rollback()
@@ -888,7 +1012,9 @@ def trigger_run(
         conn.close()
 
     try:
-        ws = create_or_reuse(project_path, project_id, subject_type, subject_id, base_ref=base_ref)
+        ws = create_or_reuse(
+            project_path, project_id, subject_type, subject_id, base_ref=base_ref
+        )
     except ValueError as e:
         c = get_db()
         try:
@@ -897,9 +1023,19 @@ def trigger_run(
                 "error_message=?, finished_at=?, heartbeat_at=? WHERE id = ?",
                 (str(e), utcnow_iso(), utcnow_iso(), run_id),
             )
-            emit_event(c, project_id, subject_type, subject_id, "run_failed",
-                       {"run_id": run_id, "error_class": "workspace_setup",
-                        "error_message": str(e)}, ActorContext.system())
+            emit_event(
+                c,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_failed",
+                {
+                    "run_id": run_id,
+                    "error_class": "workspace_setup",
+                    "error_message": str(e),
+                },
+                ActorContext.system(),
+            )
             c.commit()
         finally:
             c.close()
@@ -912,15 +1048,28 @@ def trigger_run(
     cancel = threading.Event()
     t = threading.Thread(
         target=_runner_thread,
-        args=(runner, run_id, project_id, subject_type, subject_id, ws, config, get_db, cancel),
+        args=(
+            runner,
+            run_id,
+            project_id,
+            subject_type,
+            subject_id,
+            ws,
+            config,
+            get_db,
+            cancel,
+        ),
         name=f"kitchen-runner-{run_id}",
         daemon=True,
     )
     with _active_runs_lock:
         _active_runs[run_id] = _ActiveRun(
-            run_id=run_id, project_id=project_id,
-            subject_type=subject_type, subject_id=subject_id,
-            thread=t, cancel_event=cancel,
+            run_id=run_id,
+            project_id=project_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            thread=t,
+            cancel_event=cancel,
         )
     t.start()
     return run_id

@@ -19,7 +19,6 @@ import html as _html
 import json
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -45,17 +44,18 @@ _STATE_CHIPS: list[tuple[str, str]] = [
 # Human-readable label for each Kitchen bucket. Used inline on cards so
 # users can see the run-state without a separate pictorial element.
 _BUCKET_LABELS: dict[str, str] = {
-    "needs_me":          "Needs me",
-    "running":           "Running",
+    "needs_me": "Needs me",
+    "running": "Running",
     "ready_to_delegate": "Ready",
-    "paused_ticket":     "Paused",
-    "failed":            "Failed",
+    "paused_ticket": "Paused",
+    "failed": "Failed",
 }
 
 
 # ---------------------------------------------------------------------------
 # Small escaping helpers (keep local to dodge serve.py import cycles)
 # ---------------------------------------------------------------------------
+
 
 def _t(s: Any) -> str:
     """Escape for text node context."""
@@ -70,6 +70,7 @@ def _a(s: Any) -> str:
 # ---------------------------------------------------------------------------
 # Card / chip render helpers
 # ---------------------------------------------------------------------------
+
 
 def _card_html(item: dict) -> str:
     """Render a single ticket card as an <a>.
@@ -100,11 +101,12 @@ def _card_html(item: dict) -> str:
         meta_parts.append(f'<span class="att-card-bucket">{_t(bucket_label)}</span>')
     if project_name:
         meta_parts.append(f'<span class="att-card-proj">{_t(project_name)}</span>')
-    meta_inner = '<span class="att-card-dot" aria-hidden="true">·</span>'.join(meta_parts)
+    meta_inner = '<span class="att-card-dot" aria-hidden="true">·</span>'.join(
+        meta_parts
+    )
 
     unread_html = (
-        '<span class="att-unread-dot" aria-label="Unread"></span>'
-        if is_unread else ""
+        '<span class="att-unread-dot" aria-label="Unread"></span>' if is_unread else ""
     )
 
     return (
@@ -119,11 +121,11 @@ def _card_html(item: dict) -> str:
         f'<span class="att-card-head">'
         f'<span class="att-card-id">{_t(ticket_id)}</span>'
         f'<span class="att-card-title">{_t(title)}</span>'
-        f'</span>'
+        f"</span>"
         f'<span class="att-card-meta">{meta_inner}</span>'
-        f'</span>'
-        f'{unread_html}'
-        f'</a>'
+        f"</span>"
+        f"{unread_html}"
+        f"</a>"
     )
 
 
@@ -132,10 +134,12 @@ def _state_chip_row_html(totals: dict, active_state: str) -> str:
     all_count = int(totals.get("all", 0))
     all_active = "active" if active_state == "all" else ""
     out = [
-        f'<button class="att-chip {all_active}" type="button" data-state="all">'
-        f'<span class="att-chip-label">All</span>'
-        f'<span class="att-chip-count">{all_count}</span>'
-        f'</button>'
+        (
+            f'<button class="att-chip {all_active}" type="button" data-state="all">'
+            f'<span class="att-chip-label">All</span>'
+            f'<span class="att-chip-count">{all_count}</span>'
+            f"</button>"
+        )
     ]
     for key, label in _STATE_CHIPS:
         count = int(totals.get(key, 0))
@@ -144,7 +148,7 @@ def _state_chip_row_html(totals: dict, active_state: str) -> str:
             f'<button class="att-chip {active}" type="button" data-state="{_a(key)}">'
             f'<span class="att-chip-label">{_t(label)}</span>'
             f'<span class="att-chip-count">{count}</span>'
-            f'</button>'
+            f"</button>"
         )
     return "".join(out)
 
@@ -166,7 +170,7 @@ def _project_checkboxes_html(projects: list, totals: dict) -> str:
             f'         data-project="{_a(pid)}" checked>'
             f'  <span class="att-proj-name">{_t(name)}</span>'
             f'  <span class="att-proj-count">{count}</span>'
-            f'</label>'
+            f"</label>"
         )
     if not rows:
         rows.append('<div class="att-proj-empty">No projects registered.</div>')
@@ -175,9 +179,9 @@ def _project_checkboxes_html(projects: list, totals: dict) -> str:
         '  <div class="att-proj-header">'
         '    <span class="att-proj-heading">Projects</span>'
         '    <button class="att-proj-toggle" type="button" data-action="all">All</button>'
-        '  </div>'
+        "  </div>"
         f'  <div class="att-proj-list">{"".join(rows)}</div>'
-        '</div>'
+        "</div>"
     )
 
 
@@ -190,7 +194,7 @@ def _bucket_section_html(time_key: str, label: str, items: list, hidden: bool) -
         f'<section class="{cls}" data-time-bucket="{_a(time_key)}">'
         f'<h2 class="att-bucket-label">{_t(label)}</h2>'
         f'<div class="att-bucket-list">{cards}</div>'
-        f'</section>'
+        f"</section>"
     )
 
 
@@ -1064,6 +1068,7 @@ _JS = r"""
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def render_attention_feed(
     state: dict,
     port: int,
@@ -1111,11 +1116,11 @@ def render_attention_feed(
         f'  <div class="{pause_status_cls}">'
         f'    <span class="att-pause-dot" aria-hidden="true"></span>'
         f'    <span class="att-pause-label">{_t(pause_dot_label)}</span>'
-        f'  </div>'
+        f"  </div>"
         f'  <div class="att-pause-note">{_t(pause_note)}</div>'
         f'  <button class="att-pause-btn" type="button">{_t(pause_btn_label)}</button>'
-        f'  {_project_checkboxes_html(projects, totals)}'
-        f'</div>'
+        f"  {_project_checkboxes_html(projects, totals)}"
+        f"</div>"
     )
 
     # Live/Paused state indicator surfaced in the header so users see it
@@ -1128,7 +1133,7 @@ def render_attention_feed(
         f'data-att-toggle-overflow="1">'
         f'<span class="att-header-status-dot" aria-hidden="true"></span>'
         f'<span class="att-header-status-label">{_t(pause_dot_label)}</span>'
-        f'</button>'
+        f"</button>"
     )
 
     header_html = (
@@ -1136,11 +1141,11 @@ def render_attention_feed(
         f'  <div class="att-header-spacer" aria-hidden="true"></div>'
         f'  <div class="att-header-title">Kitchen</div>'
         f'  <div class="att-header-actions">'
-        f'    {header_status}'
+        f"    {header_status}"
         f'    <button class="att-overflow-btn" type="button" aria-label="More options"'
         f'            aria-haspopup="menu" aria-expanded="false">&middot;&middot;&middot;</button>'
-        f'  </div>'
-        f'</header>'
+        f"  </div>"
+        f"</header>"
     )
 
     # ---- chip rows ---------------------------------------------------------
@@ -1158,9 +1163,7 @@ def render_attention_feed(
     # chip selection. We compute that filter here so first paint is correct.
     def _matches_default(it: dict) -> bool:
         # Project filter starts as all-checked, so it never excludes here.
-        if default_state != "all" and it.get("bucket") != default_state:
-            return False
-        return True
+        return not (default_state != "all" and it.get("bucket") != default_state)
 
     sections_html_parts: list[str] = []
     total_visible_default = 0
@@ -1183,16 +1186,16 @@ def render_attention_feed(
         f'<div class="{empty_cls}" role="status">'
         f'  <div class="att-empty-icon" aria-hidden="true">&#9788;</div>'
         f'  <div class="att-empty-msg">Nothing here.</div>'
-        f'</div>'
+        f"</div>"
     )
 
     # ---- boot script payload ----------------------------------------------
     boot_payload = (
-        f'<script>'
-        f'window.__ATT_PAUSED__={"true" if paused else "false"};'
-        f'window.__ATT_DEFAULT_STATE__={json.dumps(default_state)};'
-        f'window.__ATT_PORT__={json.dumps(int(port))};'
-        f'</script>'
+        f"<script>"
+        f"window.__ATT_PAUSED__={'true' if paused else 'false'};"
+        f"window.__ATT_DEFAULT_STATE__={json.dumps(default_state)};"
+        f"window.__ATT_PORT__={json.dumps(int(port))};"
+        f"</script>"
     )
 
     # ---- HTML --------------------------------------------------------------

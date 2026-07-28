@@ -6,10 +6,8 @@ Extracted from tickets-cli.py so it can be imported by both the CLI and serve.py
 import json
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 
 from constants import DASHBOARD_DIR, DB_PATH
-
 
 # Registry path — used by registry helpers in the CLI and other modules.
 REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
@@ -19,7 +17,8 @@ REGISTRY_PATH = DASHBOARD_DIR / "registry.json"
 # Database helpers
 # ---------------------------------------------------------------------------
 
-def get_db(db_path: str = None) -> sqlite3.Connection:
+
+def get_db(db_path: str | None = None) -> sqlite3.Connection:
     """Open (or create) the SQLite database with WAL mode and FK support."""
     path = db_path or str(DB_PATH)
     conn = sqlite3.connect(path)
@@ -105,13 +104,17 @@ def init_db(conn: sqlite3.Connection):
     # Migrate: add commit_hash and release_tag columns if missing
     for col, default in [("commit_hash", "''"), ("release_tag", "''")]:
         try:
-            conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+            conn.execute(
+                f"ALTER TABLE tickets ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}"
+            )
         except sqlite3.OperationalError:
             pass  # Column already exists
 
     # Migrate: add content column to readiness_flags if missing
     try:
-        conn.execute("ALTER TABLE readiness_flags ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "ALTER TABLE readiness_flags ADD COLUMN content TEXT NOT NULL DEFAULT ''"
+        )
     except sqlite3.OperationalError:
         pass  # Column already exists
 
@@ -140,11 +143,15 @@ def init_db(conn: sqlite3.Connection):
     # Migration 3: draft tickets, attachments, settings
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 3").fetchone():
         try:
-            conn.execute("ALTER TABLE tickets ADD COLUMN draft INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "ALTER TABLE tickets ADD COLUMN draft INTEGER NOT NULL DEFAULT 0"
+            )
         except sqlite3.OperationalError:
             pass
         try:
-            conn.execute("ALTER TABLE tickets ADD COLUMN source_attachment_id INTEGER DEFAULT NULL")
+            conn.execute(
+                "ALTER TABLE tickets ADD COLUMN source_attachment_id INTEGER DEFAULT NULL"
+            )
         except sqlite3.OperationalError:
             pass
 
@@ -361,7 +368,7 @@ def init_db(conn: sqlite3.Connection):
         # CHECK constraints on ALTER ADD COLUMN are version-dependent in SQLite;
         # the (0,1) invariant is enforced by actions.py helpers.
         for col, decl in [
-            ("no_test_required",      "INTEGER NOT NULL DEFAULT 0"),
+            ("no_test_required", "INTEGER NOT NULL DEFAULT 0"),
             ("no_test_required_note", "TEXT NOT NULL DEFAULT ''"),
         ]:
             try:
@@ -465,11 +472,11 @@ def init_db(conn: sqlite3.Connection):
     # so system workflows can carry declarative trigger/outcome JSON.
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 9").fetchone():
         for col, decl in [
-            ("system",          "INTEGER DEFAULT 0"),
-            ("enabled",         "INTEGER DEFAULT 1"),
-            ("trigger_json",    "TEXT"),
+            ("system", "INTEGER DEFAULT 0"),
+            ("enabled", "INTEGER DEFAULT 1"),
+            ("trigger_json", "TEXT"),
             ("on_success_json", "TEXT"),
-            ("subject_type",    "TEXT DEFAULT 'ticket'"),
+            ("subject_type", "TEXT DEFAULT 'ticket'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE workflows ADD COLUMN {col} {decl}")
@@ -491,7 +498,9 @@ def init_db(conn: sqlite3.Connection):
                SET project_id = substr(id, 1, instr(id, '::sys::') - 1)
              WHERE system = 1 AND project_id IS NULL AND instr(id, '::sys::') > 0
         """)
-        conn.execute("CREATE INDEX IF NOT EXISTS workflows_project ON workflows (project_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS workflows_project ON workflows (project_id)"
+        )
         conn.execute("INSERT INTO _migrations (version) VALUES (10)")
         conn.commit()
 
@@ -547,7 +556,7 @@ def init_db(conn: sqlite3.Connection):
             )
             new_create_sql = new_create_sql.replace(
                 'CREATE TABLE "runs"',
-                'CREATE TABLE runs_new',
+                "CREATE TABLE runs_new",
                 1,
             )
 
@@ -598,7 +607,9 @@ def init_db(conn: sqlite3.Connection):
     # applied (~239 tickets) survive, then drop the column. SQLite 3.35+
     # supports DROP COLUMN natively; Python 3.10+ ships with 3.45+.
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 13").fetchone():
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+        cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()
+        }
         if "complexity" in cols:
             conn.execute(
                 "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) "
@@ -621,9 +632,10 @@ def init_db(conn: sqlite3.Connection):
     # 'held' is ambiguous (problem? deliberate?), 'paused' signals user intent.
     # SQLite can't modify CHECK constraints in place, so we rebuild the table.
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 14").fetchone():
-        cols = {row["name"] for row in conn.execute(
-            "PRAGMA table_info(automation_subjects)"
-        ).fetchall()}
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(automation_subjects)").fetchall()
+        }
         if "hold_reason" in cols and "pause_reason" not in cols:
             conn.executescript("""
                 CREATE TABLE automation_subjects_new (
@@ -690,12 +702,9 @@ def init_db(conn: sqlite3.Connection):
                 (ticket_id, project_id),
             ).fetchall()
             existing_norm = {
-                " ".join((r["text"] or "").split()).lower()
-                for r in existing_rows
+                " ".join((r["text"] or "").split()).lower() for r in existing_rows
             }
-            next_order = max(
-                (r["sort_order"] for r in existing_rows), default=-1
-            ) + 1
+            next_order = max((r["sort_order"] for r in existing_rows), default=-1) + 1
             for raw_line in content.splitlines():
                 line = raw_line.strip()
                 if not line:
@@ -721,9 +730,7 @@ def init_db(conn: sqlite3.Connection):
                 )
                 existing_norm.add(norm)
                 next_order += 1
-        conn.execute(
-            "DELETE FROM readiness_flags WHERE flag IN ('tests', 'smoke')"
-        )
+        conn.execute("DELETE FROM readiness_flags WHERE flag IN ('tests', 'smoke')")
         conn.execute("INSERT INTO _migrations (version) VALUES (15)")
         conn.commit()
 
@@ -747,8 +754,12 @@ def init_db(conn: sqlite3.Connection):
                 FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
             )
         """)
-        conn.execute("CREATE INDEX IF NOT EXISTS wf_proj_workflow ON workflow_projects (workflow_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS wf_proj_project ON workflow_projects (project_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS wf_proj_workflow ON workflow_projects (workflow_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS wf_proj_project ON workflow_projects (project_id)"
+        )
 
         conn.execute("""
             INSERT OR IGNORE INTO workflow_projects (workflow_id, project_id, enabled)
@@ -767,7 +778,8 @@ def init_db(conn: sqlite3.Connection):
             name = r["name"]
             canonical_id = r["canonical_id"]
             dup_ids = [
-                row["id"] for row in conn.execute(
+                row["id"]
+                for row in conn.execute(
                     "SELECT id FROM workflows WHERE system = 1 AND name = ? AND id <> ?",
                     (name, canonical_id),
                 ).fetchall()
@@ -775,13 +787,16 @@ def init_db(conn: sqlite3.Connection):
             if not dup_ids:
                 continue
             placeholders = ",".join("?" * len(dup_ids))
-            conn.execute(f"""
+            conn.execute(
+                f"""
                 INSERT OR REPLACE INTO workflow_projects (workflow_id, project_id, enabled, created_at)
                 SELECT ?, project_id, MAX(enabled), MIN(created_at)
                 FROM workflow_projects
                 WHERE workflow_id IN ({placeholders})
                 GROUP BY project_id
-            """, (canonical_id, *dup_ids))
+            """,
+                (canonical_id, *dup_ids),
+            )
             conn.execute(
                 f"DELETE FROM workflow_projects WHERE workflow_id IN ({placeholders})",
                 dup_ids,
@@ -811,23 +826,28 @@ def init_db(conn: sqlite3.Connection):
     #                                  (structured patch accept/decline). NULL on all
     #                                  non-interactive runs.
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 17").fetchone():
-        cols_tickets = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+        cols_tickets = {
+            row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()
+        }
         if "is_container" not in cols_tickets:
             conn.execute(
                 "ALTER TABLE tickets ADD COLUMN is_container INTEGER NOT NULL DEFAULT 0"
             )
 
-        cols_agents = {row["name"] for row in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()}
+        cols_agents = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()
+        }
         if "system" not in cols_agents:
             conn.execute(
                 "ALTER TABLE workflow_agents ADD COLUMN system INTEGER NOT NULL DEFAULT 0"
             )
 
-        cols_runs = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        cols_runs = {
+            row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
         if "needs_input_kind" not in cols_runs:
-            conn.execute(
-                "ALTER TABLE runs ADD COLUMN needs_input_kind TEXT"
-            )
+            conn.execute("ALTER TABLE runs ADD COLUMN needs_input_kind TEXT")
 
         conn.execute("INSERT INTO _migrations (version) VALUES (17)")
         conn.commit()
@@ -843,7 +863,9 @@ def init_db(conn: sqlite3.Connection):
     #                         a freshly computed hash, i.e. content has changed
     #                         since the last summary. Empty hash = never summarised.
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 18").fetchone():
-        cols_tickets = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+        cols_tickets = {
+            row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()
+        }
         if "summary_oneliner" not in cols_tickets:
             conn.execute(
                 "ALTER TABLE tickets ADD COLUMN summary_oneliner TEXT NOT NULL DEFAULT ''"
@@ -865,6 +887,7 @@ def init_db(conn: sqlite3.Connection):
     # - Everything else gets origin='backfill' (unknown — predates tracking).
     if not conn.execute("SELECT 1 FROM _migrations WHERE version = 19").fetchone():
         import re as _re
+
         seek_re = _re.compile(r"^Source:\s+(\S+)\s+@\s+(.+):(\d+)")
         rows = conn.execute(
             "SELECT t.id, t.project_id, t.section, t.title, t.draft, "
@@ -899,8 +922,12 @@ def init_db(conn: sqlite3.Connection):
                 "(project_id, subject_type, subject_id, actor_type, actor_id, "
                 " event_kind, payload_json, occurred_at) "
                 "VALUES (?, 'ticket', ?, 'system', NULL, 'ticket_created', ?, ?)",
-                (r["project_id"], r["id"], json.dumps(payload, ensure_ascii=False),
-                 r["created_at"] or datetime.now(timezone.utc).isoformat()),
+                (
+                    r["project_id"],
+                    r["id"],
+                    json.dumps(payload, ensure_ascii=False),
+                    r["created_at"] or datetime.now(timezone.utc).isoformat(),
+                ),
             )
         conn.execute("INSERT INTO _migrations (version) VALUES (19)")
         conn.commit()
@@ -918,9 +945,7 @@ def _apply_migration_20(conn) -> None:
     inserted last, before the implicit commit, so partial state is
     impossible.
     """
-    if conn.execute(
-        "SELECT 1 FROM _migrations WHERE version = 20"
-    ).fetchone():
+    if conn.execute("SELECT 1 FROM _migrations WHERE version = 20").fetchone():
         return
 
     # 1. Create endpoints table
@@ -948,8 +973,7 @@ def _apply_migration_20(conn) -> None:
     """)
 
     # 2. Add endpoint_id column to workflow_agents (idempotent guard)
-    cols = {r[1] for r in conn.execute(
-        "PRAGMA table_info(workflow_agents)").fetchall()}
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(workflow_agents)").fetchall()}
     if "endpoint_id" not in cols:
         conn.execute(
             "ALTER TABLE workflow_agents ADD COLUMN endpoint_id TEXT "
@@ -973,6 +997,7 @@ def _backfill_endpoints_from_agents(conn) -> None:
     """
     import json as _json
     import logging as _logging
+
     log = _logging.getLogger("migration20.backfill")
 
     # Import canonical mappings lazily to avoid circular imports
@@ -996,8 +1021,13 @@ def _backfill_endpoints_from_agents(conn) -> None:
             return base + ["{prompt}"]
         return base + ["{prompt}"]
 
-    counters = {"created": 0, "reused": 0, "remapped": 0,
-                "malformed_args": 0, "collisions": 0}
+    counters = {
+        "created": 0,
+        "reused": 0,
+        "remapped": 0,
+        "malformed_args": 0,
+        "collisions": 0,
+    }
 
     agents = conn.execute("""
         SELECT id, command, args, system, persist_session
@@ -1006,12 +1036,13 @@ def _backfill_endpoints_from_agents(conn) -> None:
     """).fetchall()
 
     # First pass: compute per-agent tuple
-    plan = []   # list of (agent_id, command, raw_args_tuple, eff_argv_tuple, system, persist)
+    plan = []  # list of (agent_id, command, raw_args_tuple, eff_argv_tuple, system, persist)
     for agent_id, command, args_text, system_flag, persist in agents:
         try:
             raw_args = _json.loads(args_text or "[]")
             if not isinstance(raw_args, list) or not all(
-                    isinstance(x, str) for x in raw_args):
+                isinstance(x, str) for x in raw_args
+            ):
                 raise ValueError("args is not a list of strings")
         except Exception as e:
             log.warning(
@@ -1021,8 +1052,16 @@ def _backfill_endpoints_from_agents(conn) -> None:
             raw_args = []
             counters["malformed_args"] += 1
         eff_argv = _pinned_build_argv(command, raw_args)
-        plan.append((agent_id, command, tuple(raw_args), tuple(eff_argv),
-                     system_flag or 0, persist or 0))
+        plan.append(
+            (
+                agent_id,
+                command,
+                tuple(raw_args),
+                tuple(eff_argv),
+                system_flag or 0,
+                persist or 0,
+            )
+        )
 
     # Group by (command, effective_argv, system)
     groups = {}
@@ -1039,7 +1078,8 @@ def _backfill_endpoints_from_agents(conn) -> None:
         canonical_id = None
         if sysflag == 1:
             canonical_id = KNOWN_CLI_MAPPINGS.get(
-                (command, members[0][2]))   # members[0][2] = raw_args tuple
+                (command, members[0][2])
+            )  # members[0][2] = raw_args tuple
 
         if canonical_id:
             endpoint_id = canonical_id
@@ -1050,47 +1090,52 @@ def _backfill_endpoints_from_agents(conn) -> None:
                 "SELECT 1 FROM endpoints WHERE id = ?", (endpoint_id,)
             ).fetchone()
             if not existing:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO endpoints
                       (id, name, endpoint_type, command, args, system)
                     VALUES (?, ?, 'cli', ?, ?, 1)
-                """, (endpoint_id, endpoint_id, command,
-                      _json.dumps(list(eff_argv))))
+                """,
+                    (endpoint_id, endpoint_id, command, _json.dumps(list(eff_argv))),
+                )
                 counters["created"] += 1
             else:
                 counters["reused"] += 1
         else:
             # Synthesise a new endpoint
             endpoint_id = _synthesise_endpoint_id(
-                conn, command, list(eff_argv), sysflag)
+                conn, command, list(eff_argv), sysflag
+            )
             sessions = 1 if any(p for *_, p in members) else 0
             session_config = {}
             if command == "claude":
                 session_config = {
-                    "resume_args": list(eff_argv) +
-                                   ["--resume", "{session_id}"],
-                    "session_id_regex":
-                        r'"session_id"\s*:\s*"([0-9a-f-]+)"',
+                    "resume_args": list(eff_argv) + ["--resume", "{session_id}"],
+                    "session_id_regex": r'"session_id"\s*:\s*"([0-9a-f-]+)"',
                 }
             elif command == "codex":
                 session_config = {
                     "resume_args": ["exec", "resume", "{session_id}"],
-                    "session_id_regex":
-                        r"Session(?:\s+ID)?\s*:\s*([0-9a-f-]+)",
+                    "session_id_regex": r"Session(?:\s+ID)?\s*:\s*([0-9a-f-]+)",
                     "session_id_fallback_dir": "~/.codex/sessions/",
                 }
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO endpoints
                   (id, name, endpoint_type, command, args,
                    capabilities, session_config, system)
                 VALUES (?, ?, 'cli', ?, ?, ?, ?, ?)
-            """, (endpoint_id,
-                  _synth_name(command, list(eff_argv)),
-                  command,
-                  _json.dumps(list(eff_argv)),
-                  _json.dumps({"sessions": bool(sessions)}),
-                  _json.dumps(session_config),
-                  sysflag))
+            """,
+                (
+                    endpoint_id,
+                    _synth_name(command, list(eff_argv)),
+                    command,
+                    _json.dumps(list(eff_argv)),
+                    _json.dumps({"sessions": bool(sessions)}),
+                    _json.dumps(session_config),
+                    sysflag,
+                ),
+            )
             counters["created"] += 1
 
         # Remap every member agent to this endpoint
@@ -1114,12 +1159,12 @@ def _synthesise_endpoint_id(conn, command, eff_argv, sysflag) -> str:
     """Generate a unique slugified id from command + args. On collision,
     append -2, -3, ..."""
     import re as _re
+
     base = command or "endpoint"
     if eff_argv and len(eff_argv) > 0:
         # Use first non-placeholder arg if available
         non_placeholder = next(
-            (a for a in eff_argv
-             if a and not (a.startswith("{") and a.endswith("}"))),
+            (a for a in eff_argv if a and not (a.startswith("{") and a.endswith("}"))),
             None,
         )
         if non_placeholder:
@@ -1129,9 +1174,7 @@ def _synthesise_endpoint_id(conn, command, eff_argv, sysflag) -> str:
         slug = f"usr-{slug}"
     candidate = slug
     n = 2
-    while conn.execute(
-        "SELECT 1 FROM endpoints WHERE id = ?", (candidate,)
-    ).fetchone():
+    while conn.execute("SELECT 1 FROM endpoints WHERE id = ?", (candidate,)).fetchone():
         candidate = f"{slug}-{n}"
         n += 1
     return candidate
@@ -1139,17 +1182,14 @@ def _synthesise_endpoint_id(conn, command, eff_argv, sysflag) -> str:
 
 def _synth_name(command, eff_argv) -> str:
     summary = " ".join(
-        a for a in eff_argv
-        if not (a and a.startswith("{") and a.endswith("}"))
+        a for a in eff_argv if not (a and a.startswith("{") and a.endswith("}"))
     )[:50]
     return f"{command} {summary}".strip()
 
 
 def _apply_migration_21(conn) -> None:
     """Migration 21: bookmarks + recents per project."""
-    if conn.execute(
-        "SELECT 1 FROM _migrations WHERE version = 21"
-    ).fetchone():
+    if conn.execute("SELECT 1 FROM _migrations WHERE version = 21").fetchone():
         return
 
     conn.execute("""
@@ -1190,9 +1230,7 @@ def _apply_migration_23(conn) -> None:
     Numbered 23 (not 20/21/22) to avoid collision with main's
     endpoints=20 and bookmarks=21.  Migration 22 was never used.
     """
-    if conn.execute(
-        "SELECT 1 FROM _migrations WHERE version = 23"
-    ).fetchone():
+    if conn.execute("SELECT 1 FROM _migrations WHERE version = 23").fetchone():
         return
 
     conn.execute(
@@ -1213,7 +1251,11 @@ def _apply_migration_23(conn) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_links_ticket ON pane_links(project_id, ticket_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_links_host_status ON pane_links(host, status)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pane_links_ticket ON pane_links(project_id, ticket_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pane_links_host_status ON pane_links(host, status)"
+    )
     conn.execute("INSERT INTO _migrations (version) VALUES (23)")
     conn.commit()

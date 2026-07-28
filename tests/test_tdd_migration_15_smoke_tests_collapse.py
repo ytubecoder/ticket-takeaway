@@ -74,6 +74,7 @@ def conn():
 
 def _run_init_db(conn):
     from db import init_db
+
     init_db(conn)
 
 
@@ -144,7 +145,8 @@ class TestMigration15:
         _run_init_db(conn)
 
         flags = {
-            r["flag"] for r in conn.execute(
+            r["flag"]
+            for r in conn.execute(
                 "SELECT flag FROM readiness_flags WHERE ticket_id = 'B-3' "
                 "AND project_id = 'p'"
             ).fetchall()

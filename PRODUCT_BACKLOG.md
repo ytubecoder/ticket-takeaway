@@ -182,6 +182,10 @@ Five lanes shipped from the Factory.ai missions talk. **A**: migration 17 (ticke
 - [ ] All TDD tests pass (791/1; 1 unrelated pre-existing failure)
 - [ ] Manual flow: orchestrator interview on a fresh Idea (deferred — needs end-user driving)
 
+### B-70: Lint wall cleanup — style debt cleared, lint bar pinned in ruff.toml
+Priority: medium | Status: for-review
+Tags: cleanup, tech-debt
+
 ## Backlog
 
 ### B-45: Show eligibility reasons in ticket detail overlay when not ready
@@ -358,6 +362,14 @@ test pet
 ### I-42: Rethink system-row lock: lock on workflow usage, not seed provenance
 Priority: medium | Status: proposed
 After the endpoint abstraction (PR #11), system agents got a partial unlock — the endpoint dropdown is editable but persona fields stay locked. The current 'system=1 means uneditable' model is provenance-based (the row came from workflows_seed.py) but should be usage-based (the row is referenced by a live workflow). User raised this during the model-endpoints PR review. Concretely: - A persona's name + system_prompt should be editable UNLESS some live workflow step uses that agent - The 'system' flag becomes informational (this row's defaults come from a seed file), not enforcement - Same model could apply to workflows (a workflow is locked if it's currently scheduled/active) - This unifies workflow + agent locking under one rule: lock on use, not on origin The seed re-upsert problem is real but solvable separately: teach seed_default_* to only INSERT (no UPDATE clause) for user-modified fields. Migration #20 already did this for endpoint_id specifically — same pattern generalised. Touches: workflows_seed.py (seed semantics), serve.py (PUT 403 logic on system rows), compare_seed_to_db.py (drift detection becomes informational not enforcement), CLAUDE.md docs. Context: ~/projects/ticket-takeaway PR #11 merge commit 70aee2b, follow-up branch from main.
+
+### I-44: Timezone-aware timestamps — naive utcnow()/now() is the stored format (DTZ debt)
+Priority: low | Status: proposed
+Tags: tech-debt
+
+### I-45: Workflows view: trigger + effects rows are built but never rendered — restore or confirm removal
+Priority: low | Status: proposed
+Tags: dashboard, ux
 
 ## Bugs
 

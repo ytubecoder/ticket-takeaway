@@ -5,11 +5,13 @@ this fixture requires serve.py to actually start, which is reliable on
 WSL but hangs on macOS (~/.claude/ticket-takeaway/CLAUDE.md gotcha:
 socket.getfqdn). Run these tests on WSL.
 """
+
 import json
-import uuid
-import pytest
-import urllib.request
 import urllib.error
+import urllib.request
+import uuid
+
+import pytest
 
 
 def _unique_id(prefix: str) -> str:
@@ -33,7 +35,8 @@ def _get(url):
 def _post(url, body):
     data = json.dumps(body).encode()
     req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"})
+        url, data=data, headers={"Content-Type": "application/json"}
+    )
     try:
         with urllib.request.urlopen(req) as r:
             return r.status, json.loads(r.read().decode())
@@ -44,8 +47,8 @@ def _post(url, body):
 def _put(url, body):
     data = json.dumps(body).encode()
     req = urllib.request.Request(
-        url, data=data, method="PUT",
-        headers={"Content-Type": "application/json"})
+        url, data=data, method="PUT", headers={"Content-Type": "application/json"}
+    )
     try:
         with urllib.request.urlopen(req) as r:
             return r.status, json.loads(r.read().decode())
@@ -77,13 +80,16 @@ def test_get_endpoints_returns_seed(api_url):
 
 def test_post_creates_user_endpoint(api_url):
     ep_id = _unique_id("test-user-ep")
-    status, body = _post(api_url, {
-        "id": ep_id,
-        "name": "Test User Endpoint",
-        "endpoint_type": "cli",
-        "command": "echo",
-        "args": ["{prompt}"],
-    })
+    status, body = _post(
+        api_url,
+        {
+            "id": ep_id,
+            "name": "Test User Endpoint",
+            "endpoint_type": "cli",
+            "command": "echo",
+            "args": ["{prompt}"],
+        },
+    )
     assert status == 201
     assert body["id"] == ep_id
     assert body["system"] == 0
@@ -92,62 +98,76 @@ def test_post_creates_user_endpoint(api_url):
 
 
 def test_post_rejects_invalid_id(api_url):
-    status, body = _post(api_url, {
-        "id": "bad id with spaces",
-        "name": "x",
-        "endpoint_type": "cli",
-        "command": "echo",
-    })
+    status, body = _post(
+        api_url,
+        {
+            "id": "bad id with spaces",
+            "name": "x",
+            "endpoint_type": "cli",
+            "command": "echo",
+        },
+    )
     assert status == 400
     assert "error" in body
 
 
 def test_post_rejects_duplicate_id(api_url):
     ep_id = _unique_id("dup-test")
-    status, _ = _post(api_url, {
-        "id": ep_id,
-        "name": "x",
-        "endpoint_type": "cli",
-        "command": "echo",
-    })
+    status, _ = _post(
+        api_url,
+        {
+            "id": ep_id,
+            "name": "x",
+            "endpoint_type": "cli",
+            "command": "echo",
+        },
+    )
     assert status == 201
-    status, _ = _post(api_url, {
-        "id": ep_id,
-        "name": "x",
-        "endpoint_type": "cli",
-        "command": "echo",
-    })
+    status, _ = _post(
+        api_url,
+        {
+            "id": ep_id,
+            "name": "x",
+            "endpoint_type": "cli",
+            "command": "echo",
+        },
+    )
     assert status == 409
     _delete(f"{api_url}/{ep_id}")  # best-effort cleanup
 
 
 def test_post_rejects_api_type_without_api_key_env(api_url):
-    status, body = _post(api_url, {
-        "id": _unique_id("api-no-key"),
-        "name": "x",
-        "endpoint_type": "openai_api",
-        "provider": "openai",
-    })
+    status, body = _post(
+        api_url,
+        {
+            "id": _unique_id("api-no-key"),
+            "name": "x",
+            "endpoint_type": "openai_api",
+            "provider": "openai",
+        },
+    )
     assert status == 400
     assert "api_key_env" in str(body)
 
 
 def test_post_rejects_args_not_array_of_strings(api_url):
-    status, body = _post(api_url, {
-        "id": _unique_id("bad-args"),
-        "name": "x",
-        "endpoint_type": "cli",
-        "command": "echo",
-        "args": ["ok", 42, "also-ok"],
-    })
+    status, body = _post(
+        api_url,
+        {
+            "id": _unique_id("bad-args"),
+            "name": "x",
+            "endpoint_type": "cli",
+            "command": "echo",
+            "args": ["ok", 42, "also-ok"],
+        },
+    )
     assert status == 400
     assert "[1]" in str(body) or "index 1" in str(body)
 
 
 def test_put_updates_user_endpoint(api_url):
     eid = _unique_id("put-test")
-    _post(api_url, {"id": eid, "name": "x",
-                    "endpoint_type": "cli", "command": "echo"})
+    _post(api_url, {"id": eid, "name": "x", "endpoint_type": "cli", "command": "echo"})
     status, body = _put(f"{api_url}/{eid}", {"name": "renamed"})
     assert status == 200
     assert body["name"] == "renamed"
@@ -161,14 +181,13 @@ def test_put_system_endpoint_returns_403(api_url):
 
 
 def test_delete_system_endpoint_returns_403(api_url):
-    status, body = _delete(f"{api_url}/claude-cli")
+    status, _body = _delete(f"{api_url}/claude-cli")
     assert status == 403
 
 
 def test_delete_user_endpoint_returns_unlinked_count(api_url):
     eid = _unique_id("del-test")
-    _post(api_url, {"id": eid, "name": "x",
-                    "endpoint_type": "cli", "command": "echo"})
+    _post(api_url, {"id": eid, "name": "x", "endpoint_type": "cli", "command": "echo"})
     status, body = _delete(f"{api_url}/{eid}")
     # 204 has empty body; 200 has agents_unlinked
     assert status in (200, 204)

@@ -6,8 +6,7 @@ Opens a ticket detail overlay, edits a field, verifies persistence.
 import time
 
 import pytest
-
-from conftest import api_get, api_post, api_put, api_delete
+from conftest import api_delete, api_get, api_post, api_put
 
 
 @pytest.fixture()
@@ -71,8 +70,10 @@ def test_add_acceptance_criterion_persists(dashboard_server, editable_ticket):
     assert status_code == 200
 
     ticket = api_get(dashboard_server, f"/api/tickets/{tid}")
-    criteria_texts = [c["text"] if isinstance(c, dict) else c[1]
-                      for c in ticket.get("acceptance_criteria", [])]
+    criteria_texts = [
+        c["text"] if isinstance(c, dict) else c[1]
+        for c in ticket.get("acceptance_criteria", [])
+    ]
     assert criterion_text in criteria_texts
 
 
@@ -123,4 +124,3 @@ def test_edit_reflects_in_dashboard(live_page, dashboard_server):
 @pytest.mark.skip(reason="undo/redo not yet implemented in detail overlay")
 def test_undo_redo():
     """Placeholder for undo/redo test when implemented."""
-    pass

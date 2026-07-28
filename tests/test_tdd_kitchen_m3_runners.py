@@ -24,19 +24,39 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 def repo(tmp_path):
     upstream = tmp_path / "upstream.git"
     work = tmp_path / "project"
-    subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(upstream)],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "init", "--initial-branch=main", str(work)],
-                   check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(upstream)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", str(work)],
+        check=True,
+        capture_output=True,
+    )
     for k, v in [("user.email", "test@example.invalid"), ("user.name", "Test")]:
-        subprocess.run(["git", "-C", str(work), "config", k, v], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(work), "config", k, v], check=True, capture_output=True
+        )
     (work / "README.md").write_text("# project\n")
-    subprocess.run(["git", "-C", str(work), "add", "."], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-m", "init"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(upstream)],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "push", "-u", "origin", "main"],
-                   check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(work), "add", "."], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "remote", "add", "origin", str(upstream)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
     return work
 
 
@@ -49,20 +69,28 @@ def env(tmp_path, monkeypatch, repo):
     workspace (WorkspaceInfo for ticket B-1).
     """
     import constants
+
     db_file = tmp_path / "tickets.db"
-    monkeypatch.setattr(constants, "DASHBOARD_DIR", tmp_path / ".claude" / "ticket-takeaway")
+    monkeypatch.setattr(
+        constants, "DASHBOARD_DIR", tmp_path / ".claude" / "ticket-takeaway"
+    )
     (tmp_path / ".claude" / "ticket-takeaway").mkdir(parents=True, exist_ok=True)
 
     import db
+
     importlib.reload(db)
     import workspaces
+
     importlib.reload(workspaces)
     import runners
+
     importlib.reload(runners)
 
     # Init schema.
-    c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
-    db.init_db(c); c.close()
+    c = sqlite3.connect(db_file)
+    c.row_factory = sqlite3.Row
+    db.init_db(c)
+    c.close()
 
     # Seed a ticket.
     c = sqlite3.connect(db_file)
@@ -70,7 +98,8 @@ def env(tmp_path, monkeypatch, repo):
         "INSERT INTO tickets (id, project_id, title, section, status, description) "
         "VALUES ('B-1', 'p', 'Test ticket', 'Backlog', 'specified', 'desc')"
     )
-    c.commit(); c.close()
+    c.commit()
+    c.close()
 
     # Create a workspace.
     ws = workspaces.create_or_reuse(repo, "p", "ticket", "B-1")
@@ -100,14 +129,17 @@ def _new_run(env, runner_kind="agent", status="queued"):
         (runner_kind, status),
     )
     rid = cur.lastrowid
-    c.commit(); c.close()
+    c.commit()
+    c.close()
     return rid
 
 
 def _events(env, run_id=None, kind=None):
     c = env["conn_factory"]()
-    sql = ("SELECT event_kind, actor_type, actor_id, payload_json "
-           "FROM activity_events WHERE 1=1")
+    sql = (
+        "SELECT event_kind, actor_type, actor_id, payload_json "
+        "FROM activity_events WHERE 1=1"
+    )
     args: list = []
     if run_id is not None:
         sql += " AND actor_id = ?"
@@ -132,12 +164,23 @@ def _run_row(env, run_id):
 # AgentRunner — happy path
 # ---------------------------------------------------------------------------
 
+
 class TestAgentRunnerHappyPath:
     def test_successful_command_succeeds(self, env):
         run_id = _new_run(env)
         config = {"agent": {"command": "echo OK"}, "hooks": {}, "_prompt_template": ""}
-        outcome = env["runners"].AgentRunner().execute(
-            run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"]
+        outcome = (
+            env["runners"]
+            .AgentRunner()
+            .execute(
+                run_id,
+                "p",
+                "ticket",
+                "B-1",
+                env["workspace"],
+                config,
+                env["conn_factory"],
+            )
         )
         assert outcome.final_status == "succeeded"
         row = _run_row(env, run_id)
@@ -178,12 +221,23 @@ class TestAgentRunnerHappyPath:
 # AgentRunner — failure modes
 # ---------------------------------------------------------------------------
 
+
 class TestAgentRunnerFailures:
     def test_non_zero_exit_marks_failed(self, env):
         run_id = _new_run(env)
         config = {"agent": {"command": "false"}, "hooks": {}}
-        outcome = env["runners"].AgentRunner().execute(
-            run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"]
+        outcome = (
+            env["runners"]
+            .AgentRunner()
+            .execute(
+                run_id,
+                "p",
+                "ticket",
+                "B-1",
+                env["workspace"],
+                config,
+                env["conn_factory"],
+            )
         )
         assert outcome.final_status == "failed"
         row = _run_row(env, run_id)
@@ -198,8 +252,18 @@ class TestAgentRunnerFailures:
     def test_missing_command_fails_cleanly(self, env):
         run_id = _new_run(env)
         config = {"agent": {"command": "   "}, "hooks": {}}
-        outcome = env["runners"].AgentRunner().execute(
-            run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"]
+        outcome = (
+            env["runners"]
+            .AgentRunner()
+            .execute(
+                run_id,
+                "p",
+                "ticket",
+                "B-1",
+                env["workspace"],
+                config,
+                env["conn_factory"],
+            )
         )
         assert outcome.final_status == "failed"
         row = _run_row(env, run_id)
@@ -207,9 +271,22 @@ class TestAgentRunnerFailures:
 
     def test_unknown_command_fails(self, env):
         run_id = _new_run(env)
-        config = {"agent": {"command": "this-binary-definitely-does-not-exist-xyz"}, "hooks": {}}
-        outcome = env["runners"].AgentRunner().execute(
-            run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"]
+        config = {
+            "agent": {"command": "this-binary-definitely-does-not-exist-xyz"},
+            "hooks": {},
+        }
+        outcome = (
+            env["runners"]
+            .AgentRunner()
+            .execute(
+                run_id,
+                "p",
+                "ticket",
+                "B-1",
+                env["workspace"],
+                config,
+                env["conn_factory"],
+            )
         )
         assert outcome.final_status == "failed"
         row = _run_row(env, run_id)
@@ -220,6 +297,7 @@ class TestAgentRunnerFailures:
 # AgentRunner — hook integration
 # ---------------------------------------------------------------------------
 
+
 class TestAgentRunnerHooks:
     def test_after_create_runs_only_when_not_bootstrapped(self, env):
         # First run: workspace.bootstrapped = False from create_or_reuse → should run.
@@ -227,7 +305,11 @@ class TestAgentRunnerHooks:
         run_id = _new_run(env)
         config = {
             "agent": {"command": "true"},
-            "hooks": {"after_create": f"touch {marker}", "before_run": "", "after_run": ""},
+            "hooks": {
+                "after_create": f"touch {marker}",
+                "before_run": "",
+                "after_run": "",
+            },
         }
         env["runners"].AgentRunner().execute(
             run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"]
@@ -260,8 +342,18 @@ class TestAgentRunnerHooks:
             "agent": {"command": "echo should-not-run"},
             "hooks": {"before_run": "exit 7"},
         }
-        outcome = env["runners"].AgentRunner().execute(
-            run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"]
+        outcome = (
+            env["runners"]
+            .AgentRunner()
+            .execute(
+                run_id,
+                "p",
+                "ticket",
+                "B-1",
+                env["workspace"],
+                config,
+                env["conn_factory"],
+            )
         )
         assert outcome.final_status == "failed"
         row = _run_row(env, run_id)
@@ -275,8 +367,18 @@ class TestAgentRunnerHooks:
             "agent": {"command": "echo done"},
             "hooks": {"after_run": "exit 9"},
         }
-        outcome = env["runners"].AgentRunner().execute(
-            run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"]
+        outcome = (
+            env["runners"]
+            .AgentRunner()
+            .execute(
+                run_id,
+                "p",
+                "ticket",
+                "B-1",
+                env["workspace"],
+                config,
+                env["conn_factory"],
+            )
         )
         # Run still succeeded — after_run failure logs but doesn't fail the run.
         assert outcome.final_status == "succeeded"
@@ -291,15 +393,26 @@ class TestAgentRunnerHooks:
 # Cancellation
 # ---------------------------------------------------------------------------
 
+
 class TestAgentRunnerCancellation:
     def test_cancel_event_before_subprocess_marks_cancelled(self, env):
         run_id = _new_run(env)
         config = {"agent": {"command": "echo never"}, "hooks": {}}
         ev = threading.Event()
         ev.set()  # request cancel before execute even starts
-        outcome = env["runners"].AgentRunner().execute(
-            run_id, "p", "ticket", "B-1", env["workspace"], config, env["conn_factory"],
-            cancel_event=ev,
+        outcome = (
+            env["runners"]
+            .AgentRunner()
+            .execute(
+                run_id,
+                "p",
+                "ticket",
+                "B-1",
+                env["workspace"],
+                config,
+                env["conn_factory"],
+                cancel_event=ev,
+            )
         )
         assert outcome.final_status == "cancelled"
         row = _run_row(env, run_id)
@@ -313,6 +426,7 @@ class TestAgentRunnerCancellation:
 # ---------------------------------------------------------------------------
 # State invariants — every status update bumps heartbeat_at
 # ---------------------------------------------------------------------------
+
 
 class TestStateInvariants:
     def test_heartbeat_updated_on_status_change(self, env):
@@ -338,4 +452,6 @@ class TestStateInvariants:
             (str(run_id),),
         ).fetchall()
         c.close()
-        assert all(r["subject_type"] == "ticket" and r["subject_id"] == "B-1" for r in rows)
+        assert all(
+            r["subject_type"] == "ticket" and r["subject_id"] == "B-1" for r in rows
+        )

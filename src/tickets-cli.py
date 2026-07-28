@@ -27,27 +27,39 @@ _src_dir = str(Path(__file__).resolve().parent)
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
+from actions import (
+    ActorContext,
+    accept_ticket,
+    add_ticket,
+    emit_event,
+    get_project_branches,
+    get_ticket_branches,
+    link_branch,
+    move_ticket,
+    scan_branches,
+    scan_prs,
+    unlink_branch,
+    update_ticket,
+)
 from constants import (
-    SECTION_ORDER, SECTION_SLUGS, SLUG_TO_SECTION,
-    DEFAULT_STATUS_BY_SECTION, SECTION_PREFIX, STATUSES,
-    VALID_STATUSES_BY_SECTION, compute_status_on_move,
-    DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
-    READINESS_FLAG_LABELS, READINESS_LABEL_TO_FLAG, VALID_READINESS_FLAGS,
-    SPEC_LANES, DEFAULT_SPEC_LANE,
+    DASHBOARD_DIR,
+    DEFAULT_SPEC_LANE,
+    DEFAULT_STATUS_BY_SECTION,
+    READINESS_FLAG_LABELS,
+    READINESS_LABEL_TO_FLAG,
+    REGISTRY_PATH,
+    SECTION_ORDER,
+    SECTION_SLUGS,  # noqa: F401 — re-exported; tests access it via cli_mod
+    SLUG_TO_SECTION,
+    SPEC_LANES,
+    VALID_READINESS_FLAGS,
 )
 from db import get_db, init_db
-from actions import (
-    move_ticket, accept_ticket, add_ticket, update_ticket,
-    capture_commit_hash,
-    link_branch, unlink_branch, get_ticket_branches, get_project_branches,
-    scan_branches, scan_prs,
-    emit_event, ActorContext,
-)
-
 
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
+
 
 def load_registry() -> list[dict]:
     """Load project list from registry.json."""
@@ -68,7 +80,9 @@ def find_project(projects: list[dict], project_id: str) -> dict:
     sys.exit(1)
 
 
-def resolve_project_id(projects: list[dict], project_id: str = None) -> list[dict]:
+def resolve_project_id(
+    projects: list[dict], project_id: str | None = None
+) -> list[dict]:
     """Resolve to a list of projects — specific one or all if auto-detect fails."""
     if project_id:
         return [find_project(projects, project_id)]
@@ -84,6 +98,7 @@ def resolve_project_id(projects: list[dict], project_id: str = None) -> list[dic
 # ---------------------------------------------------------------------------
 # Markdown parsing (adapted from generate.py)
 # ---------------------------------------------------------------------------
+
 
 def _parse_ticket_header(header: str) -> tuple[str, str]:
     """Parse 'ID: Title' into (id, title)."""
@@ -186,21 +201,27 @@ def parse_backlog(filepath: str) -> list[dict]:
         if current_ticket and line_stripped.startswith("Depends:"):
             val = line_stripped.split(":", 1)[1].strip()
             if val:
-                current_ticket["depends"] = [d.strip() for d in val.split(",") if d.strip()]
+                current_ticket["depends"] = [
+                    d.strip() for d in val.split(",") if d.strip()
+                ]
             continue
 
         # Tags
         if current_ticket and line_stripped.startswith("Tags:"):
             val = line_stripped.split(":", 1)[1].strip()
             if val:
-                current_ticket["tags"] = [t.strip().lower() for t in val.split(",") if t.strip()]
+                current_ticket["tags"] = [
+                    t.strip().lower() for t in val.split(",") if t.strip()
+                ]
             continue
 
         # Branches
         if current_ticket and line_stripped.startswith("Branch:"):
             val = line_stripped.split(":", 1)[1].strip()
             if val:
-                current_ticket["branches"] = [b.strip() for b in val.split(",") if b.strip()]
+                current_ticket["branches"] = [
+                    b.strip() for b in val.split(",") if b.strip()
+                ]
             continue
 
         # Commit hash
@@ -275,6 +296,7 @@ def parse_backlog(filepath: str) -> list[dict]:
 # Resolve section name from CLI arg (accepts both "wip" and "WIP")
 # ---------------------------------------------------------------------------
 
+
 def resolve_section(name: str) -> str:
     """Resolve a section name from a CLI arg. Accepts column aliases like 'wip'."""
     # Exact match
@@ -294,14 +316,16 @@ def resolve_section(name: str) -> str:
     }
     if name.lower() in aliases:
         return aliases[name.lower()]
-    print(f"Unknown section: '{name}'. Valid: {', '.join(SECTION_ORDER)}", file=sys.stderr)
+    print(
+        f"Unknown section: '{name}'. Valid: {', '.join(SECTION_ORDER)}", file=sys.stderr
+    )
     sys.exit(1)
-
 
 
 # ---------------------------------------------------------------------------
 # Sync: DB → PRODUCT_BACKLOG.md
 # ---------------------------------------------------------------------------
+
 
 def _extract_preserved_content(filepath: Path) -> tuple[list[str], list[str]]:
     """Extract content from existing markdown that should be preserved across syncs.
@@ -380,104 +404,133 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
 
         if tid in db_ids:
             # Existing ticket — update fields from markdown (markdown wins)
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE tickets SET title=?, priority=?, status=?,
                     section=?, description=?, parent=?,
                     sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
                     release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
-            """, (
-                t["title"], t["priority"], t["status"],
-                t["section"], t["description"], t["parent"],
-                t["sort_order"],
-                t.get("commit_hash", ""), t.get("release_tag", ""),
-                datetime.now().isoformat(),
-                tid, project_id,
-            ))
+            """,
+                (
+                    t["title"],
+                    t["priority"],
+                    t["status"],
+                    t["section"],
+                    t["description"],
+                    t["parent"],
+                    t["sort_order"],
+                    t.get("commit_hash", ""),
+                    t.get("release_tag", ""),
+                    datetime.now().isoformat(),
+                    tid,
+                    project_id,
+                ),
+            )
 
             # Replace acceptance criteria
             conn.execute(
                 "DELETE FROM acceptance_criteria WHERE ticket_id=? AND project_id=?",
-                (tid, project_id)
+                (tid, project_id),
             )
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
                 conn.execute(
                     "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
-                    (tid, project_id, text, int(checked), i)
+                    (tid, project_id, text, int(checked), i),
                 )
 
             # Replace depends
             conn.execute(
                 "DELETE FROM depends WHERE ticket_id=? AND project_id=?",
-                (tid, project_id)
+                (tid, project_id),
             )
             for dep_id in t["depends"]:
                 conn.execute(
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
-                    (tid, project_id, dep_id)
+                    (tid, project_id, dep_id),
                 )
 
             # Replace tags
             if "tags" in t:
                 conn.execute(
                     "DELETE FROM ticket_tags WHERE ticket_id=? AND project_id=?",
-                    (tid, project_id)
+                    (tid, project_id),
                 )
                 for tag in t["tags"]:
                     conn.execute(
                         "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?,?,?)",
-                        (tid, project_id, tag)
+                        (tid, project_id, tag),
                     )
 
             # Replace branches (from markdown only — preserve metadata for existing links)
             if "branches" in t:
-                existing = {r["branch_name"] for r in conn.execute(
-                    "SELECT branch_name FROM ticket_branches WHERE ticket_id=? AND project_id=?",
-                    (tid, project_id)
-                ).fetchall()}
+                existing = {
+                    r["branch_name"]
+                    for r in conn.execute(
+                        "SELECT branch_name FROM ticket_branches WHERE ticket_id=? AND project_id=?",
+                        (tid, project_id),
+                    ).fetchall()
+                }
                 md_branches = set(t["branches"])
                 # Remove branches no longer in markdown
                 for removed in existing - md_branches:
                     conn.execute(
                         "DELETE FROM ticket_branches WHERE ticket_id=? AND project_id=? AND branch_name=?",
-                        (tid, project_id, removed)
+                        (tid, project_id, removed),
                     )
                 # Add new branches from markdown
                 for added in md_branches - existing:
                     conn.execute(
                         "INSERT OR IGNORE INTO ticket_branches (ticket_id, project_id, branch_name) VALUES (?,?,?)",
-                        (tid, project_id, added)
+                        (tid, project_id, added),
                     )
 
             # Upsert readiness content from markdown
             for flag, content in t.get("readiness_content", {}).items():
                 if content:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
                         VALUES (?, ?, ?, ?, 'markdown')
                         ON CONFLICT (ticket_id, project_id, flag)
                         DO UPDATE SET content = excluded.content
-                    """, (tid, project_id, flag, content))
+                    """,
+                        (tid, project_id, flag, content),
+                    )
                 else:
                     conn.execute(
                         "DELETE FROM readiness_flags WHERE ticket_id=? AND project_id=? AND flag=?",
-                        (tid, project_id, flag)
+                        (tid, project_id, flag),
                     )
         else:
             # New ticket added directly to markdown — insert into DB
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO tickets (id, project_id, title, priority, status,
                                      section, description, parent, sort_order,
                                      commit_hash, release_tag)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                tid, project_id, t["title"], t["priority"],
-                t["status"], t["section"], t["description"],
-                t["parent"], t["sort_order"],
-                t.get("commit_hash", ""), t.get("release_tag", ""),
-            ))
+            """,
+                (
+                    tid,
+                    project_id,
+                    t["title"],
+                    t["priority"],
+                    t["status"],
+                    t["section"],
+                    t["description"],
+                    t["parent"],
+                    t["sort_order"],
+                    t.get("commit_hash", ""),
+                    t.get("release_tag", ""),
+                ),
+            )
             emit_event(
-                conn, project_id, "ticket", tid, "ticket_created",
+                conn,
+                project_id,
+                "ticket",
+                tid,
+                "ticket_created",
                 {
                     "origin": "markdown_edit",
                     "source_file": "PRODUCT_BACKLOG.md",
@@ -488,35 +541,38 @@ def _ingest_markdown_changes(conn: sqlite3.Connection, project_id: str, filepath
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
                 conn.execute(
                     "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
-                    (tid, project_id, text, int(checked), i)
+                    (tid, project_id, text, int(checked), i),
                 )
             for dep_id in t["depends"]:
                 conn.execute(
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
-                    (tid, project_id, dep_id)
+                    (tid, project_id, dep_id),
                 )
 
             # Insert tags for new tickets
             for tag in t.get("tags", []):
                 conn.execute(
                     "INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag) VALUES (?,?,?)",
-                    (tid, project_id, tag)
+                    (tid, project_id, tag),
                 )
 
             # Insert branches for new tickets
             for branch in t.get("branches", []):
                 conn.execute(
                     "INSERT OR IGNORE INTO ticket_branches (ticket_id, project_id, branch_name) VALUES (?,?,?)",
-                    (tid, project_id, branch)
+                    (tid, project_id, branch),
                 )
 
             # Insert readiness content for new tickets
             for flag, content in t.get("readiness_content", {}).items():
                 if content:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
                         VALUES (?, ?, ?, ?, 'markdown')
-                    """, (tid, project_id, flag, content))
+                    """,
+                        (tid, project_id, flag, content),
+                    )
 
     # DB is the single source of truth. Tickets only in the DB (not in markdown)
     # are preserved — they may have been added via CLI or direct DB insert.
@@ -565,7 +621,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
 
         tickets = conn.execute(
             "SELECT * FROM tickets WHERE project_id = ? AND section = ? AND draft = 0 ORDER BY sort_order ASC",
-            (project_id, section)
+            (project_id, section),
         ).fetchall()
 
         for t in tickets:
@@ -582,7 +638,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             # Depends
             deps = conn.execute(
                 "SELECT depends_on_id FROM depends WHERE ticket_id = ? AND project_id = ?",
-                (t["id"], project_id)
+                (t["id"], project_id),
             ).fetchall()
             if deps:
                 dep_ids = ", ".join(d["depends_on_id"] for d in deps)
@@ -591,7 +647,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             # Tags
             tags = conn.execute(
                 "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
-                (t["id"], project_id)
+                (t["id"], project_id),
             ).fetchall()
             if tags:
                 tag_names = ", ".join(tg["tag"] for tg in tags)
@@ -601,7 +657,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             try:
                 branches = conn.execute(
                     "SELECT branch_name FROM ticket_branches WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
-                    (t["id"], project_id)
+                    (t["id"], project_id),
                 ).fetchall()
                 if branches:
                     branch_names = ", ".join(b["branch_name"] for b in branches)
@@ -622,7 +678,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             # Acceptance criteria
             criteria = conn.execute(
                 "SELECT * FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
-                (t["id"], project_id)
+                (t["id"], project_id),
             ).fetchall()
             for c in criteria:
                 check = "x" if c["checked"] else " "
@@ -635,7 +691,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
             # markdown, so adding one means adding it there, not here.
             flags = conn.execute(
                 "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND content != '' ORDER BY flag",
-                (t["id"], project_id)
+                (t["id"], project_id),
             ).fetchall()
             for f in flags:
                 label = READINESS_FLAG_LABELS.get(f["flag"])
@@ -659,7 +715,7 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
     md_hash = hashlib.sha256(content.encode()).hexdigest()
     conn.execute(
         "INSERT OR REPLACE INTO _sync_state (project_id, last_md_hash, last_sync_at) VALUES (?, ?, ?)",
-        (project_id, md_hash, datetime.now().isoformat())
+        (project_id, md_hash, datetime.now().isoformat()),
     )
     conn.commit()
 
@@ -714,8 +770,7 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
 
     # Look up stored hash
     row = conn.execute(
-        "SELECT last_md_hash FROM _sync_state WHERE project_id = ?",
-        (project_id,)
+        "SELECT last_md_hash FROM _sync_state WHERE project_id = ?", (project_id,)
     ).fetchone()
     stored_hash = row["last_md_hash"] if row else ""
 
@@ -730,7 +785,7 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
         # just update the hash so we don't re-check every cycle
         conn.execute(
             "INSERT OR REPLACE INTO _sync_state (project_id, last_md_hash, last_sync_at) VALUES (?, ?, ?)",
-            (project_id, current_hash, datetime.now().isoformat())
+            (project_id, current_hash, datetime.now().isoformat()),
         )
         conn.commit()
         return False
@@ -752,72 +807,98 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
         if tid.upper() in db_ids:
             # Existing ticket — update fields from markdown (markdown wins)
             real_id = db_ids[tid.upper()]
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE tickets SET title=?, priority=?, status=?,
                     section=?, description=?, parent=?,
                     sort_order=?, commit_hash=COALESCE(NULLIF(?, ''), commit_hash),
                     release_tag=COALESCE(NULLIF(?, ''), release_tag), updated_at=?
                 WHERE id=? AND project_id=?
-            """, (
-                t["title"], t["priority"], t["status"],
-                t["section"], t["description"], t["parent"],
-                t["sort_order"],
-                t.get("commit_hash", ""), t.get("release_tag", ""),
-                datetime.now().isoformat(),
-                real_id, project_id,
-            ))
+            """,
+                (
+                    t["title"],
+                    t["priority"],
+                    t["status"],
+                    t["section"],
+                    t["description"],
+                    t["parent"],
+                    t["sort_order"],
+                    t.get("commit_hash", ""),
+                    t.get("release_tag", ""),
+                    datetime.now().isoformat(),
+                    real_id,
+                    project_id,
+                ),
+            )
 
             # Replace acceptance criteria
             conn.execute(
                 "DELETE FROM acceptance_criteria WHERE ticket_id=? AND project_id=?",
-                (real_id, project_id)
+                (real_id, project_id),
             )
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
                 conn.execute(
                     "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
-                    (real_id, project_id, text, int(checked), i)
+                    (real_id, project_id, text, int(checked), i),
                 )
 
             # Replace depends
             conn.execute(
                 "DELETE FROM depends WHERE ticket_id=? AND project_id=?",
-                (real_id, project_id)
+                (real_id, project_id),
             )
             for dep_id in t["depends"]:
                 conn.execute(
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
-                    (real_id, project_id, dep_id)
+                    (real_id, project_id, dep_id),
                 )
 
             # Upsert readiness content
             for flag, content in t.get("readiness_content", {}).items():
                 if content:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
                         VALUES (?, ?, ?, ?, 'external-edit')
                         ON CONFLICT (ticket_id, project_id, flag)
                         DO UPDATE SET content = excluded.content
-                    """, (real_id, project_id, flag, content))
+                    """,
+                        (real_id, project_id, flag, content),
+                    )
                 else:
                     conn.execute(
                         "DELETE FROM readiness_flags WHERE ticket_id=? AND project_id=? AND flag=?",
-                        (real_id, project_id, flag)
+                        (real_id, project_id, flag),
                     )
         else:
             # New ticket added directly to markdown — insert into DB
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO tickets (id, project_id, title, priority, status,
                                      section, description, parent, sort_order,
                                      commit_hash, release_tag)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                tid, project_id, t["title"], t["priority"],
-                t["status"], t["section"], t["description"],
-                t["parent"], t["sort_order"],
-                t.get("commit_hash", ""), t.get("release_tag", ""),
-            ))
+            """,
+                (
+                    tid,
+                    project_id,
+                    t["title"],
+                    t["priority"],
+                    t["status"],
+                    t["section"],
+                    t["description"],
+                    t["parent"],
+                    t["sort_order"],
+                    t.get("commit_hash", ""),
+                    t.get("release_tag", ""),
+                ),
+            )
             emit_event(
-                conn, project_id, "ticket", tid, "ticket_created",
+                conn,
+                project_id,
+                "ticket",
+                tid,
+                "ticket_created",
                 {
                     "origin": "markdown_edit",
                     "source_file": "PRODUCT_BACKLOG.md",
@@ -828,19 +909,22 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
             for i, (checked, text) in enumerate(t["acceptance_criteria"]):
                 conn.execute(
                     "INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order) VALUES (?,?,?,?,?)",
-                    (tid, project_id, text, int(checked), i)
+                    (tid, project_id, text, int(checked), i),
                 )
             for dep_id in t["depends"]:
                 conn.execute(
                     "INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id) VALUES (?,?,?)",
-                    (tid, project_id, dep_id)
+                    (tid, project_id, dep_id),
                 )
             for flag, content in t.get("readiness_content", {}).items():
                 if content:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
                         VALUES (?, ?, ?, ?, 'external-edit')
-                    """, (tid, project_id, flag, content))
+                    """,
+                        (tid, project_id, flag, content),
+                    )
 
     # Do NOT delete tickets that are in DB but missing from markdown.
     # They may have been added via CLI or direct DB insert. Just flag them
@@ -848,7 +932,9 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
     missing_from_md = set(db_ids.keys()) - md_ids
     if missing_from_md:
         real_missing = [db_ids[uid] for uid in missing_from_md]
-        print(f"[{project_id}] Note: {len(real_missing)} ticket(s) in DB but not in markdown (preserved): {', '.join(real_missing)}")
+        print(
+            f"[{project_id}] Note: {len(real_missing)} ticket(s) in DB but not in markdown (preserved): {', '.join(real_missing)}"
+        )
 
     conn.commit()
 
@@ -861,6 +947,7 @@ def detect_external_edits(conn: sqlite3.Connection, project: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Subcommand: seed
 # ---------------------------------------------------------------------------
+
 
 def seed_project(conn: sqlite3.Connection, project: dict) -> int:
     """Parse PRODUCT_BACKLOG.md for a single project and import into DB. Returns ticket count."""
@@ -885,20 +972,34 @@ def seed_project(conn: sqlite3.Connection, project: dict) -> int:
     )
 
     for t in tickets:
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO tickets (id, project_id, title, priority, status,
                                  section, description, parent, sort_order,
                                  commit_hash, release_tag)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            t["id"], project_id, t["title"], t["priority"],
-            t["status"], t["section"], t["description"],
-            t["parent"], t["sort_order"],
-            t.get("commit_hash", ""), t.get("release_tag", ""),
-        ))
+        """,
+            (
+                t["id"],
+                project_id,
+                t["title"],
+                t["priority"],
+                t["status"],
+                t["section"],
+                t["description"],
+                t["parent"],
+                t["sort_order"],
+                t.get("commit_hash", ""),
+                t.get("release_tag", ""),
+            ),
+        )
 
         emit_event(
-            conn, project_id, "ticket", t["id"], "ticket_created",
+            conn,
+            project_id,
+            "ticket",
+            t["id"],
+            "ticket_created",
             {
                 "origin": "seed",
                 "source_file": "PRODUCT_BACKLOG.md",
@@ -910,32 +1011,44 @@ def seed_project(conn: sqlite3.Connection, project: dict) -> int:
 
         # Acceptance criteria
         for i, (checked, text) in enumerate(t["acceptance_criteria"]):
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO acceptance_criteria (ticket_id, project_id, text, checked, sort_order)
                 VALUES (?, ?, ?, ?, ?)
-            """, (t["id"], project_id, text, int(checked), i))
+            """,
+                (t["id"], project_id, text, int(checked), i),
+            )
 
         # Dependencies
         for dep_id in t["depends"]:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO depends (ticket_id, project_id, depends_on_id)
                 VALUES (?, ?, ?)
-            """, (t["id"], project_id, dep_id))
+            """,
+                (t["id"], project_id, dep_id),
+            )
 
         # Tags
         for tag in t.get("tags", []):
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO ticket_tags (ticket_id, project_id, tag)
                 VALUES (?, ?, ?)
-            """, (t["id"], project_id, tag))
+            """,
+                (t["id"], project_id, tag),
+            )
 
         # Readiness content
         for flag, content in t.get("readiness_content", {}).items():
             if content:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by)
                     VALUES (?, ?, ?, ?, 'seed')
-                """, (t["id"], project_id, flag, content))
+                """,
+                    (t["id"], project_id, flag, content),
+                )
 
     conn.commit()
     return len(tickets)
@@ -955,7 +1068,9 @@ def scaffold_project(conn: sqlite3.Connection, project: dict):
 
     spec = Path(project_path) / "PRODUCT_SPECIFICATION.md"
     if not spec.exists():
-        spec.write_text(f"# Product Specification \u2014 {project_name}\n\n", encoding="utf-8")
+        spec.write_text(
+            f"# Product Specification \u2014 {project_name}\n\n", encoding="utf-8"
+        )
         print(f"Created {spec}")
 
 
@@ -972,7 +1087,9 @@ def cmd_seed(args):
         if count:
             print(f"Seeded {count} tickets for {proj['name']}")
         else:
-            print(f"No tickets found in {os.path.join(os.path.expanduser(proj.get('path', '')), 'PRODUCT_BACKLOG.md')}")
+            print(
+                f"No tickets found in {os.path.join(os.path.expanduser(proj.get('path', '')), 'PRODUCT_BACKLOG.md')}"
+            )
 
     conn.close()
 
@@ -980,6 +1097,7 @@ def cmd_seed(args):
 # ---------------------------------------------------------------------------
 # Subcommand: list
 # ---------------------------------------------------------------------------
+
 
 def cmd_list(args):
     """List tickets from DB."""
@@ -1016,7 +1134,9 @@ def cmd_list(args):
             continue
 
         print(f"\n{proj['name']} ({len(rows)} tickets)")
-        print(f"{'Section':<14} {'ID':<10} {'Title':<40} {'Priority':<8} {'Status':<12} {'Cx'}")
+        print(
+            f"{'Section':<14} {'ID':<10} {'Title':<40} {'Priority':<8} {'Status':<12} {'Cx'}"
+        )
         print("-" * 90)
 
         current_section = None
@@ -1024,7 +1144,9 @@ def cmd_list(args):
             if r["section"] != current_section:
                 current_section = r["section"]
             title = r["title"][:38] + ".." if len(r["title"]) > 40 else r["title"]
-            print(f"{r['section']:<14} {r['id']:<10} {title:<40} {r['priority']:<8} {r['status']:<12}")
+            print(
+                f"{r['section']:<14} {r['id']:<10} {title:<40} {r['priority']:<8} {r['status']:<12}"
+            )
 
         # Summary
         counts = {}
@@ -1040,6 +1162,7 @@ def cmd_list(args):
 # Subcommand: add
 # ---------------------------------------------------------------------------
 
+
 def cmd_add(args):
     """Add a new ticket."""
     projects = load_registry()
@@ -1052,14 +1175,14 @@ def cmd_add(args):
     init_db(conn)
     ingest_markdown(conn, proj)
 
-    add_kwargs = dict(
-        section=section,
-        priority=args.priority or "medium",
-        description=args.description or "",
-        parent=args.parent,
-        draft=args.draft,
-        tags=args.tag,
-    )
+    add_kwargs = {
+        "section": section,
+        "priority": args.priority or "medium",
+        "description": args.description or "",
+        "parent": args.parent,
+        "draft": args.draft,
+        "tags": args.tag,
+    }
     if args.container:
         add_kwargs["is_container"] = 1
 
@@ -1070,12 +1193,13 @@ def cmd_add(args):
     regenerate_dashboard(proj)
     conn.close()
 
-    print(f"Added {ticket_id}: \"{args.title}\" to {section}")
+    print(f'Added {ticket_id}: "{args.title}" to {section}')
 
 
 # ---------------------------------------------------------------------------
 # Subcommand: update
 # ---------------------------------------------------------------------------
+
 
 def cmd_update(args):
     """Partial update of a ticket."""
@@ -1141,6 +1265,7 @@ def cmd_update(args):
 
     if args.confirm:
         from actions import confirm_ticket
+
         confirm_ticket(conn, project_id, args.id)
 
     conn.commit()
@@ -1153,6 +1278,7 @@ def cmd_update(args):
 # ---------------------------------------------------------------------------
 # Subcommand: move
 # ---------------------------------------------------------------------------
+
 
 def cmd_move(args):
     """Move a ticket to a different section."""
@@ -1185,6 +1311,7 @@ def cmd_move(args):
 # Subcommand: accept
 # ---------------------------------------------------------------------------
 
+
 def cmd_accept(args):
     """Accept a ticket: move to Done and append to PRODUCT_SPECIFICATION.md."""
     projects = load_registry()
@@ -1199,7 +1326,11 @@ def cmd_accept(args):
 
     try:
         tid = accept_ticket(
-            conn, project_id, args.id, project_path, project_name,
+            conn,
+            project_id,
+            args.id,
+            project_path,
+            project_name,
             force=getattr(args, "force", "") or "",
         )
     except ValueError as e:
@@ -1222,6 +1353,7 @@ def cmd_accept(args):
 # All the actual rules live in actions.py / openspec_adapter.py \u2014 everything
 # below is argument handling and printing.
 
+
 def _resolve_ticket(conn, project_id: str, ticket_id: str):
     """Look up a ticket, exiting non-zero with a clear message if it's missing."""
     row = conn.execute(
@@ -1238,7 +1370,7 @@ def _resolve_ticket(conn, project_id: str, ticket_id: str):
 def cmd_spec(args):
     """Declare a ticket's spec lane and create its OpenSpec change."""
     import openspec_adapter as osa
-    from actions import SpecLink, write_readiness_flag, NO_CHANGE_SENTINEL
+    from actions import NO_CHANGE_SENTINEL, SpecLink, write_readiness_flag
 
     projects = load_registry()
     proj = find_project(projects, args.project)
@@ -1247,7 +1379,10 @@ def cmd_spec(args):
 
     lane = (args.lane or DEFAULT_SPEC_LANE).upper()
     if lane not in SPEC_LANES:
-        print(f"Invalid lane {lane!r}. Valid: {', '.join(sorted(SPEC_LANES))}", file=sys.stderr)
+        print(
+            f"Invalid lane {lane!r}. Valid: {', '.join(sorted(SPEC_LANES))}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     conn = get_db()
@@ -1259,12 +1394,16 @@ def cmd_spec(args):
     # observable changed. Without a reason it is just a bypass, so refuse it.
     if lane == "C" and args.no_change:
         if not (args.reason or "").strip():
-            print("Lane C with --no-change requires --reason \"<why nothing observable changed>\"",
-                  file=sys.stderr)
+            print(
+                'Lane C with --no-change requires --reason "<why nothing observable changed>"',
+                file=sys.stderr,
+            )
             conn.close()
             sys.exit(1)
         link = SpecLink(lane="C", change=NO_CHANGE_SENTINEL, note=args.reason.strip())
-        write_readiness_flag(conn, project_id, tid, "spec", link.render(), set_by="cli:spec")
+        write_readiness_flag(
+            conn, project_id, tid, "spec", link.render(), set_by="cli:spec"
+        )
         conn.commit()
         sync_to_markdown(conn, proj)
         conn.close()
@@ -1295,7 +1434,9 @@ def cmd_spec(args):
         sys.exit(1)
 
     link = SpecLink(lane=lane, change=change)
-    write_readiness_flag(conn, project_id, tid, "spec", link.render(), set_by="cli:spec")
+    write_readiness_flag(
+        conn, project_id, tid, "spec", link.render(), set_by="cli:spec"
+    )
     conn.commit()
     sync_to_markdown(conn, proj)
     regenerate_dashboard(proj)
@@ -1304,14 +1445,15 @@ def cmd_spec(args):
     print(f"{tid}: lane {lane} \u2192 openspec/changes/{change}/")
     print(f"  {SPEC_LANES[lane]}")
     wanted = ["proposal", "specs"] + (["design", "tasks"] if lane == "A" else [])
-    print("  Next: " + "; ".join(
-        f"openspec instructions {a} --change {change}" for a in wanted
-    ))
+    print(
+        "  Next: "
+        + "; ".join(f"openspec instructions {a} --change {change}" for a in wanted)
+    )
 
 
 def cmd_verify(args):
     """Run the project's verify command and record the real result on the ticket."""
-    from actions import run_verify, resolve_verify_command
+    from actions import resolve_verify_command, run_verify
 
     projects = load_registry()
     proj = find_project(projects, args.project)
@@ -1398,7 +1540,7 @@ def cmd_flag(args):
 
     row = conn.execute(
         "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-        (args.ticket_id, project_id)
+        (args.ticket_id, project_id),
     ).fetchone()
     if not row:
         print(f"Ticket {args.ticket_id} not found")
@@ -1408,7 +1550,7 @@ def cmd_flag(args):
     tid = row["id"]
     conn.execute(
         "INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, set_by) VALUES (?, ?, ?, ?)",
-        (tid, project_id, flag, args.by or "cli")
+        (tid, project_id, flag, args.by or "cli"),
     )
     conn.commit()
     print(f"Set {flag} on {tid}")
@@ -1431,7 +1573,7 @@ def cmd_unflag(args):
 
     row = conn.execute(
         "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-        (args.ticket_id, project_id)
+        (args.ticket_id, project_id),
     ).fetchone()
     if not row:
         print(f"Ticket {args.ticket_id} not found")
@@ -1441,7 +1583,7 @@ def cmd_unflag(args):
     tid = row["id"]
     conn.execute(
         "DELETE FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
-        (tid, project_id, flag)
+        (tid, project_id, flag),
     )
     conn.commit()
     print(f"Cleared {flag} on {tid}")
@@ -1467,6 +1609,7 @@ def cmd_sync(args):
 # Subcommand: watch
 # ---------------------------------------------------------------------------
 
+
 def cmd_seek(args):
     """Discover ticket-like items in project files and create draft tickets."""
     projects = load_registry()
@@ -1483,6 +1626,7 @@ def cmd_seek(args):
     ingest_markdown(conn, proj)
 
     from seek import run_seek
+
     result = run_seek(conn, proj["id"], project_path, sources=sources)
 
     sync_to_markdown(conn, proj)
@@ -1492,20 +1636,24 @@ def cmd_seek(args):
     print(f"Discovered: {result['discovered']} items")
     print(f"Created: {result['created']} draft ticket(s)")
     print(f"Skipped: {result['skipped_duplicates']} duplicate(s)")
-    if result['tickets']:
+    if result["tickets"]:
         print("New drafts:")
-        for tid in result['tickets']:
+        for tid in result["tickets"]:
             print(f"  {tid}")
 
 
 def cmd_register(args):
     """Register a new project in the registry."""
     import re as _re
-    _SLUG_RE = _re.compile(r'^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$')
+
+    _SLUG_RE = _re.compile(r"^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$")
 
     pid = args.id
     if not _SLUG_RE.match(pid):
-        print("Error: ID must be 2-40 chars, lowercase alphanumeric and hyphens", file=sys.stderr)
+        print(
+            "Error: ID must be 2-40 chars, lowercase alphanumeric and hyphens",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     path = os.path.realpath(os.path.expanduser(args.path))
@@ -1607,13 +1755,18 @@ def cmd_watch(args):
         path = Path(os.path.expanduser(proj.get("path", ""))) / "PRODUCT_BACKLOG.md"
         mtimes[proj["id"]] = path.stat().st_mtime if path.exists() else 0
 
-    print(f"Watching {len(target)} project(s) for changes (every {interval}s). Ctrl+C to stop.")
+    print(
+        f"Watching {len(target)} project(s) for changes (every {interval}s). Ctrl+C to stop."
+    )
 
     try:
         while True:
             time.sleep(interval)
             for proj in target:
-                path = Path(os.path.expanduser(proj.get("path", ""))) / "PRODUCT_BACKLOG.md"
+                path = (
+                    Path(os.path.expanduser(proj.get("path", "")))
+                    / "PRODUCT_BACKLOG.md"
+                )
                 current_mtime = path.stat().st_mtime if path.exists() else 0
 
                 if current_mtime != mtimes[proj["id"]]:
@@ -1636,6 +1789,7 @@ def cmd_watch(args):
 # Subcommand: criteria
 # ---------------------------------------------------------------------------
 
+
 def cmd_criteria(args):
     """Manage acceptance criteria on a ticket."""
     projects = load_registry()
@@ -1649,7 +1803,7 @@ def cmd_criteria(args):
     if args.criteria_command == "list":
         ticket = conn.execute(
             "SELECT id, title FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
-            (args.id, project_id)
+            (args.id, project_id),
         ).fetchone()
         if not ticket:
             print(f"Ticket {args.id} not found.", file=sys.stderr)
@@ -1658,7 +1812,7 @@ def cmd_criteria(args):
         rows = conn.execute(
             "SELECT sort_order, checked, text FROM acceptance_criteria "
             "WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
-            (ticket["id"], project_id)
+            (ticket["id"], project_id),
         ).fetchall()
         if not rows:
             print(f"{ticket['id']}: {ticket['title']} — no criteria yet")
@@ -1723,6 +1877,7 @@ def cmd_criteria(args):
 # Subcommand: agent
 # ---------------------------------------------------------------------------
 
+
 def cmd_agent(args):
     """Manage workflow agents."""
     conn = get_db()
@@ -1739,17 +1894,23 @@ def cmd_agent(args):
                 prompt_preview = (r["system_prompt"] or "")[:40]
                 if len(r["system_prompt"] or "") > 40:
                     prompt_preview += "..."
-                print(f"{r['id']:<20} {r['name']:<25} {r['command']:<15} {r['args']:<20} {prompt_preview}")
+                print(
+                    f"{r['id']:<20} {r['name']:<25} {r['command']:<15} {r['args']:<20} {prompt_preview}"
+                )
 
     elif args.agent_command == "add":
         if args.cmd is not None or args.args is not None:
-            print("WARN: --cmd/--args on agent commands are deprecated. "
-                  "Create an endpoint via 'endpoint add' and reference it with "
-                  "--endpoint-id instead. Compat columns will be removed in a "
-                  "future release.", file=sys.stderr)
+            print(
+                "WARN: --cmd/--args on agent commands are deprecated. "
+                "Create an endpoint via 'endpoint add' and reference it with "
+                "--endpoint-id instead. Compat columns will be removed in a "
+                "future release.",
+                file=sys.stderr,
+            )
         endpoint_id = getattr(args, "endpoint_id", None)
         if endpoint_id is not None:
             from endpoints import get_endpoint
+
             if get_endpoint(conn, endpoint_id) is None:
                 print(f"endpoint not found: {endpoint_id}", file=sys.stderr)
                 conn.close()
@@ -1761,7 +1922,14 @@ def cmd_agent(args):
         try:
             conn.execute(
                 "INSERT INTO workflow_agents (id, name, command, args, system_prompt, endpoint_id) VALUES (?, ?, ?, ?, ?, ?)",
-                (args.agent_id, name, cmd_val, args_val, args.system_prompt, endpoint_id)
+                (
+                    args.agent_id,
+                    name,
+                    cmd_val,
+                    args_val,
+                    args.system_prompt,
+                    endpoint_id,
+                ),
             )
             conn.commit()
             print(f"Added agent: {args.agent_id} ({name})")
@@ -1772,13 +1940,17 @@ def cmd_agent(args):
 
     elif args.agent_command == "update":
         if args.cmd is not None or args.args is not None:
-            print("WARN: --cmd/--args on agent commands are deprecated. "
-                  "Create an endpoint via 'endpoint add' and reference it with "
-                  "--endpoint-id instead. Compat columns will be removed in a "
-                  "future release.", file=sys.stderr)
+            print(
+                "WARN: --cmd/--args on agent commands are deprecated. "
+                "Create an endpoint via 'endpoint add' and reference it with "
+                "--endpoint-id instead. Compat columns will be removed in a "
+                "future release.",
+                file=sys.stderr,
+            )
         endpoint_id = getattr(args, "endpoint_id", None)
         if endpoint_id is not None:
             from endpoints import get_endpoint
+
             if get_endpoint(conn, endpoint_id) is None:
                 print(f"endpoint not found: {endpoint_id}", file=sys.stderr)
                 conn.close()
@@ -1796,7 +1968,10 @@ def cmd_agent(args):
             fields["endpoint_id"] = endpoint_id
 
         if not fields:
-            print("Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt, --endpoint-id.", file=sys.stderr)
+            print(
+                "Nothing to update. Provide at least one of --name, --cmd, --args, --system-prompt, --endpoint-id.",
+                file=sys.stderr,
+            )
             conn.close()
             sys.exit(1)
 
@@ -1839,7 +2014,7 @@ def cmd_agent(args):
             setting_key = f"{proj['id']}.agent.default"
             conn.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (setting_key, args.agent_id)
+                (setting_key, args.agent_id),
             )
         conn.commit()
         proj_names = ", ".join(p["id"] for p in target)
@@ -1852,6 +2027,7 @@ def cmd_agent(args):
 # Subcommand: endpoint
 # ---------------------------------------------------------------------------
 
+
 def cmd_endpoint(args):
     """Manage runtime endpoints."""
     conn = get_db()
@@ -1859,19 +2035,23 @@ def cmd_endpoint(args):
 
     if args.endpoint_command == "list":
         from endpoints import list_endpoints
+
         eps = list_endpoints(conn)
         if not eps:
             print("No endpoints defined.")
         else:
             if getattr(args, "format", "table") == "json":
                 from dataclasses import asdict
+
                 print(json.dumps([asdict(e) for e in eps], indent=2, default=str))
             else:
                 print(f"{'ID':<25} {'TYPE':<10} {'CMD':<15} {'SYS'}")
                 print("-" * 60)
                 for e in eps:
-                    print(f"{e.id:<25} {e.endpoint_type:<10} "
-                          f"{(e.command or ''):<15} {e.system}")
+                    print(
+                        f"{e.id:<25} {e.endpoint_type:<10} "
+                        f"{(e.command or ''):<15} {e.system}"
+                    )
 
     elif args.endpoint_command == "add":
         if args.type != "cli":
@@ -1883,7 +2063,8 @@ def cmd_endpoint(args):
             )
             conn.close()
             sys.exit(2)
-        from endpoints import Endpoint, create_endpoint, EndpointMisconfigured
+        from endpoints import Endpoint, EndpointMisconfigured, create_endpoint
+
         try:
             parsed_args = json.loads(args.args) if args.args else []
         except json.JSONDecodeError as e:
@@ -1907,7 +2088,8 @@ def cmd_endpoint(args):
         print(f"created endpoint {created.id}")
 
     elif args.endpoint_command == "update":
-        from endpoints import update_endpoint, EndpointMisconfigured
+        from endpoints import EndpointMisconfigured, update_endpoint
+
         fields = {}
         if args.name is not None:
             fields["name"] = args.name
@@ -1923,7 +2105,10 @@ def cmd_endpoint(args):
         if args.timeout_s is not None:
             fields["timeout_s"] = args.timeout_s
         if not fields:
-            print("Nothing to update. Provide at least one of --name, --cmd, --args, --timeout-s.", file=sys.stderr)
+            print(
+                "Nothing to update. Provide at least one of --name, --cmd, --args, --timeout-s.",
+                file=sys.stderr,
+            )
             conn.close()
             sys.exit(1)
         try:
@@ -1948,6 +2133,7 @@ def cmd_endpoint(args):
 
     elif args.endpoint_command == "remove":
         from endpoints import delete_endpoint
+
         try:
             n = delete_endpoint(conn, args.id)
         except KeyError:
@@ -1955,7 +2141,9 @@ def cmd_endpoint(args):
             conn.close()
             sys.exit(1)
         except PermissionError:
-            print(f"endpoint {args.id} is a system row — cannot remove", file=sys.stderr)
+            print(
+                f"endpoint {args.id} is a system row — cannot remove", file=sys.stderr
+            )
             conn.close()
             sys.exit(2)
         print(f"removed endpoint {args.id} (unlinked {n} agents)")
@@ -1966,6 +2154,7 @@ def cmd_endpoint(args):
 # ---------------------------------------------------------------------------
 # Subcommand: workflow
 # ---------------------------------------------------------------------------
+
 
 def cmd_workflow(args):
     """Manage workflow definitions."""
@@ -1985,7 +2174,11 @@ def cmd_workflow(args):
                     label = step.get("label", step.get("agent_id", "?"))
                     agent = step.get("agent_id", "?")
                     modifier = step.get("prompt_modifier", "")
-                    mod_preview = f"  [{modifier[:30]}...]" if len(modifier) > 30 else (f"  [{modifier}]" if modifier else "")
+                    mod_preview = (
+                        f"  [{modifier[:30]}...]"
+                        if len(modifier) > 30
+                        else (f"  [{modifier}]" if modifier else "")
+                    )
                     print(f"  {i}: agent={agent}  label={label}{mod_preview}")
 
     elif args.workflow_command == "add":
@@ -1993,34 +2186,47 @@ def cmd_workflow(args):
         try:
             conn.execute(
                 "INSERT INTO workflows (id, name, description, steps) VALUES (?, ?, ?, ?)",
-                (args.workflow_id, name, args.description or "", "[]")
+                (args.workflow_id, name, args.description or "", "[]"),
             )
             conn.commit()
             print(f"Added workflow: {args.workflow_id} ({name})")
         except sqlite3.IntegrityError:
-            print(f"Error: Workflow '{args.workflow_id}' already exists.", file=sys.stderr)
+            print(
+                f"Error: Workflow '{args.workflow_id}' already exists.", file=sys.stderr
+            )
             conn.close()
             sys.exit(1)
 
     elif args.workflow_command == "add-step":
-        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (args.workflow_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM workflows WHERE id = ?", (args.workflow_id,)
+        ).fetchone()
         if not row:
             print(f"Workflow '{args.workflow_id}' not found.", file=sys.stderr)
             conn.close()
             sys.exit(1)
 
         steps = json.loads(row["steps"] or "[]")
-        steps.append({
-            "agent_id": args.agent,
-            "label": args.label or args.agent,
-            "prompt_modifier": args.prompt_modifier or "",
-        })
-        conn.execute("UPDATE workflows SET steps = ? WHERE id = ?", (json.dumps(steps), args.workflow_id))
+        steps.append(
+            {
+                "agent_id": args.agent,
+                "label": args.label or args.agent,
+                "prompt_modifier": args.prompt_modifier or "",
+            }
+        )
+        conn.execute(
+            "UPDATE workflows SET steps = ? WHERE id = ?",
+            (json.dumps(steps), args.workflow_id),
+        )
         conn.commit()
-        print(f"Added step {len(steps) - 1} (agent={args.agent}) to workflow {args.workflow_id}")
+        print(
+            f"Added step {len(steps) - 1} (agent={args.agent}) to workflow {args.workflow_id}"
+        )
 
     elif args.workflow_command == "remove-step":
-        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (args.workflow_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM workflows WHERE id = ?", (args.workflow_id,)
+        ).fetchone()
         if not row:
             print(f"Workflow '{args.workflow_id}' not found.", file=sys.stderr)
             conn.close()
@@ -2029,14 +2235,21 @@ def cmd_workflow(args):
         steps = json.loads(row["steps"] or "[]")
         idx = args.step
         if idx < 0 or idx >= len(steps):
-            print(f"Step index {idx} out of range (0-{len(steps) - 1}).", file=sys.stderr)
+            print(
+                f"Step index {idx} out of range (0-{len(steps) - 1}).", file=sys.stderr
+            )
             conn.close()
             sys.exit(1)
 
         removed = steps.pop(idx)
-        conn.execute("UPDATE workflows SET steps = ? WHERE id = ?", (json.dumps(steps), args.workflow_id))
+        conn.execute(
+            "UPDATE workflows SET steps = ? WHERE id = ?",
+            (json.dumps(steps), args.workflow_id),
+        )
         conn.commit()
-        print(f"Removed step {idx} (agent={removed.get('agent_id', '?')}) from workflow {args.workflow_id}")
+        print(
+            f"Removed step {idx} (agent={removed.get('agent_id', '?')}) from workflow {args.workflow_id}"
+        )
 
     elif args.workflow_command == "remove":
         conn.execute("DELETE FROM workflows WHERE id = ?", (args.workflow_id,))
@@ -2049,6 +2262,7 @@ def cmd_workflow(args):
 # ---------------------------------------------------------------------------
 # Subcommand: branches
 # ---------------------------------------------------------------------------
+
 
 def cmd_branches(args):
     """Manage branch-ticket links."""
@@ -2068,12 +2282,16 @@ def cmd_branches(args):
         if not rows:
             print("No branches linked.")
         else:
-            print(f"{'Ticket':<12} {'Branch':<40} {'PR':<8} {'Status':<10} {'Ahead':<6} {'Behind':<6} {'Auto'}")
+            print(
+                f"{'Ticket':<12} {'Branch':<40} {'PR':<8} {'Status':<10} {'Ahead':<6} {'Behind':<6} {'Auto'}"
+            )
             print("-" * 96)
             for r in rows:
                 pr_str = f"#{r['pr_number']}" if r.get("pr_number") else ""
                 auto_str = "auto" if r.get("auto_linked") else ""
-                print(f"{r['ticket_id']:<12} {r['branch_name']:<40} {pr_str:<8} {r.get('pr_status', ''):<10} {r.get('ahead', 0):<6} {r.get('behind', 0):<6} {auto_str}")
+                print(
+                    f"{r['ticket_id']:<12} {r['branch_name']:<40} {pr_str:<8} {r.get('pr_status', ''):<10} {r.get('ahead', 0):<6} {r.get('behind', 0):<6} {auto_str}"
+                )
 
     elif args.branches_command == "link":
         ingest_markdown(conn, proj)
@@ -2089,7 +2307,7 @@ def cmd_branches(args):
         if created:
             print(f"Linked {args.branch_name} → {args.ticket_id}")
         else:
-            print(f"Already linked.")
+            print("Already linked.")
 
     elif args.branches_command == "unlink":
         ingest_markdown(conn, proj)
@@ -2100,12 +2318,14 @@ def cmd_branches(args):
         if removed:
             print(f"Unlinked {args.branch_name} from {args.ticket_id}")
         else:
-            print(f"Link not found.")
+            print("Link not found.")
 
     elif args.branches_command == "scan":
         ingest_markdown(conn, proj)
         result = scan_branches(conn, project_id, project_path)
-        print(f"Scanned {result.get('total_remote', 0)} remote branches, auto-linked {result.get('linked', 0)} new.")
+        print(
+            f"Scanned {result.get('total_remote', 0)} remote branches, auto-linked {result.get('linked', 0)} new."
+        )
         if result.get("error"):
             print(f"  Warning: {result['error']}")
 
@@ -2126,15 +2346,20 @@ def cmd_branches(args):
 # Subcommand: pane-link (link / current / unlink / panes)
 # ---------------------------------------------------------------------------
 
+
 def _require_tmux_pane():
     """Return $TMUX_PANE or exit with a clear error."""
     import re as _re
+
     pane = os.environ.get("TMUX_PANE")
     if not pane:
         print("error: $TMUX_PANE is unset — run this inside tmux", file=sys.stderr)
         sys.exit(1)
     if not _re.match(r"^%[0-9]+$", pane):
-        print(f"error: $TMUX_PANE has unexpected format {pane!r} (expected ^%[0-9]+$)", file=sys.stderr)
+        print(
+            f"error: $TMUX_PANE has unexpected format {pane!r} (expected ^%[0-9]+$)",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return pane
 
@@ -2142,11 +2367,20 @@ def _require_tmux_pane():
 def _tmux_pane_descriptor(pane_address):
     """Resolve %23 → 'session:window.pane' via tmux. Returns '' on failure."""
     import subprocess as _sub
+
     try:
         out = _sub.run(
-            ["tmux", "display-message", "-p", "-t", pane_address,
-             "#{session_name}:#{window_index}.#{pane_index}"],
-            capture_output=True, text=True, timeout=2,
+            [
+                "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                pane_address,
+                "#{session_name}:#{window_index}.#{pane_index}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
         return out.stdout.strip() if out.returncode == 0 else ""
     except Exception:
@@ -2156,7 +2390,9 @@ def _tmux_pane_descriptor(pane_address):
 def cmd_link(args):
     """Link this tmux pane to a ticket."""
     import socket
+
     import pane_links
+
     pane = _require_tmux_pane()
     host = socket.gethostname()
     desc = _tmux_pane_descriptor(pane)
@@ -2178,13 +2414,22 @@ def cmd_link(args):
         "SELECT 1 FROM tickets WHERE id = ? AND project_id = ?",
         (args.ticket_id, project_id),
     ).fetchone():
-        print(f"error: ticket {args.ticket_id} not found in project {project_id}", file=sys.stderr)
+        print(
+            f"error: ticket {args.ticket_id} not found in project {project_id}",
+            file=sys.stderr,
+        )
         conn.close()
         sys.exit(1)
     pane_links.link_pane(conn, args.ticket_id, project_id, pane, host, desc)
-    emit_event(conn, project_id, "ticket", args.ticket_id, "pane_linked",
-               {"pane_address": pane, "host": host, "pane_descriptor": desc},
-               ActorContext.human())
+    emit_event(
+        conn,
+        project_id,
+        "ticket",
+        args.ticket_id,
+        "pane_linked",
+        {"pane_address": pane, "host": host, "pane_descriptor": desc},
+        ActorContext.human(),
+    )
     conn.commit()
     conn.close()
     print(f"linked tmux pane {desc or pane} to ticket {args.ticket_id}")
@@ -2193,6 +2438,7 @@ def cmd_link(args):
 def cmd_current(args):
     """Print the bound ticket for this tmux pane."""
     import pane_links
+
     pane = _require_tmux_pane()
     conn = get_db()
     init_db(conn)
@@ -2213,7 +2459,9 @@ def cmd_current(args):
     ).fetchall()
     conn.close()
     print(f"{t['id']}: {t['title']}")
-    print(f"Status: {t['status']}  Section: {t['section']}  Parent: {t['parent'] or '(none)'}")
+    print(
+        f"Status: {t['status']}  Section: {t['section']}  Parent: {t['parent'] or '(none)'}"
+    )
     print("---")
     print("DESCRIPTION")
     print(t["description"] or "(none)")
@@ -2227,6 +2475,7 @@ def cmd_current(args):
 def cmd_unlink(args):
     """Remove the pane→ticket link for this tmux pane."""
     import pane_links
+
     pane = _require_tmux_pane()
     conn = get_db()
     init_db(conn)
@@ -2236,8 +2485,15 @@ def cmd_unlink(args):
         conn.close()
         return
     pane_links.unlink_pane(conn, pane)
-    emit_event(conn, row["project_id"], "ticket", row["ticket_id"], "pane_unlinked",
-               {"pane_address": pane}, ActorContext.human())
+    emit_event(
+        conn,
+        row["project_id"],
+        "ticket",
+        row["ticket_id"],
+        "pane_unlinked",
+        {"pane_address": pane},
+        ActorContext.human(),
+    )
     conn.commit()
     conn.close()
     print(f"unlinked pane {pane} from ticket {row['ticket_id']}")
@@ -2263,18 +2519,21 @@ def cmd_panes(args):
         print("No pane links.")
         return
     for r in rows:
-        print(f"{r['pane_address']:<8} → {r['project_id']}/{r['ticket_id']:<8} "
-              f"[{r['status']}/{r['attention_state']}] {r['host']} {r['pane_descriptor']}")
+        print(
+            f"{r['pane_address']:<8} → {r['project_id']}/{r['ticket_id']:<8} "
+            f"[{r['status']}/{r['attention_state']}] {r['host']} {r['pane_descriptor']}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         prog="tickets-cli",
-        description="Ticket Takeaway CLI \u2014 SQLite-backed ticket management"
+        description="Ticket Takeaway CLI \u2014 SQLite-backed ticket management",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -2298,7 +2557,12 @@ def main():
     p_add.add_argument("--description", help="Description text")
     p_add.add_argument("--tag", action="append", help="Add tag (repeatable)")
     p_add.add_argument("--draft", action="store_true", help="Create as draft ticket")
-    p_add.add_argument("--container", action="store_true", default=False, help="Mark as container (epic) ticket")
+    p_add.add_argument(
+        "--container",
+        action="store_true",
+        default=False,
+        help="Mark as container (epic) ticket",
+    )
 
     # update
     p_upd = sub.add_parser("update", help="Update a ticket")
@@ -2310,20 +2574,51 @@ def main():
     p_upd.add_argument("--description", help="New description")
     p_upd.add_argument("--parent", help="New parent ID (empty to clear)")
     p_upd.add_argument("--summary", help="New summary")
-    p_upd.add_argument("--add-criteria", action="append", help="Add acceptance criterion (repeatable)")
-    p_upd.add_argument("--check-criteria", type=int, help="Check Nth criterion (1-indexed)")
-    p_upd.add_argument("--uncheck-criteria", type=int, help="Uncheck Nth criterion (1-indexed)")
-    p_upd.add_argument("--remove-criteria", type=int, help="Remove Nth criterion (1-indexed)")
-    p_upd.add_argument("--add-depends", action="append", help="Add dependency (repeatable)")
-    p_upd.add_argument("--remove-depends", action="append", help="Remove dependency (repeatable)")
+    p_upd.add_argument(
+        "--add-criteria", action="append", help="Add acceptance criterion (repeatable)"
+    )
+    p_upd.add_argument(
+        "--check-criteria", type=int, help="Check Nth criterion (1-indexed)"
+    )
+    p_upd.add_argument(
+        "--uncheck-criteria", type=int, help="Uncheck Nth criterion (1-indexed)"
+    )
+    p_upd.add_argument(
+        "--remove-criteria", type=int, help="Remove Nth criterion (1-indexed)"
+    )
+    p_upd.add_argument(
+        "--add-depends", action="append", help="Add dependency (repeatable)"
+    )
+    p_upd.add_argument(
+        "--remove-depends", action="append", help="Remove dependency (repeatable)"
+    )
     p_upd.add_argument("--add-tag", action="append", help="Add tag (repeatable)")
     p_upd.add_argument("--remove-tag", action="append", help="Remove tag (repeatable)")
     p_upd.add_argument("--add-branch", action="append", help="Link branch (repeatable)")
-    p_upd.add_argument("--remove-branch", action="append", help="Unlink branch (repeatable)")
-    p_upd.add_argument("--confirm", action="store_true", help="Confirm a draft ticket (set draft=false)")
+    p_upd.add_argument(
+        "--remove-branch", action="append", help="Unlink branch (repeatable)"
+    )
+    p_upd.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm a draft ticket (set draft=false)",
+    )
     container_grp = p_upd.add_mutually_exclusive_group()
-    container_grp.add_argument("--container", dest="container", action="store_const", const=True, default=None, help="Mark ticket as container (epic)")
-    container_grp.add_argument("--no-container", dest="container", action="store_const", const=False, help="Clear container flag")
+    container_grp.add_argument(
+        "--container",
+        dest="container",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Mark ticket as container (epic)",
+    )
+    container_grp.add_argument(
+        "--no-container",
+        dest="container",
+        action="store_const",
+        const=False,
+        help="Clear container flag",
+    )
 
     # move
     p_move = sub.add_parser("move", help="Move ticket to section")
@@ -2336,32 +2631,47 @@ def main():
     p_acc.add_argument("project", help="Project ID")
     p_acc.add_argument("id", help="Ticket ID")
     p_acc.add_argument(
-        "--force", metavar="REASON", default="",
+        "--force",
+        metavar="REASON",
+        default="",
         help="Bypass the close gate, recording REASON on the ticket and in the audit log",
     )
 
     # spec — declare the lane and create the OpenSpec change
-    p_spec = sub.add_parser("spec", help="Declare a ticket's spec lane + create its OpenSpec change")
+    p_spec = sub.add_parser(
+        "spec", help="Declare a ticket's spec lane + create its OpenSpec change"
+    )
     p_spec.add_argument("project", help="Project ID")
     p_spec.add_argument("id", help="Ticket ID")
     p_spec.add_argument(
-        "--lane", default=DEFAULT_SPEC_LANE, choices=sorted(SPEC_LANES) + [l.lower() for l in sorted(SPEC_LANES)],
+        "--lane",
+        default=DEFAULT_SPEC_LANE,
+        choices=sorted(SPEC_LANES) + [l.lower() for l in sorted(SPEC_LANES)],
         help="; ".join(f"{k} = {v}" for k, v in SPEC_LANES.items()),
     )
-    p_spec.add_argument("--change", help="Change name (default: <ticket-id>-<title-slug>)")
     p_spec.add_argument(
-        "--no-change", action="store_true",
+        "--change", help="Change name (default: <ticket-id>-<title-slug>)"
+    )
+    p_spec.add_argument(
+        "--no-change",
+        action="store_true",
         help="Lane C only: close without a spec delta because nothing observable changed (needs --reason)",
     )
-    p_spec.add_argument("--reason", default="", help="Why no spec delta is needed (with --no-change)")
+    p_spec.add_argument(
+        "--reason", default="", help="Why no spec delta is needed (with --no-change)"
+    )
 
     # verify — run the declared verify command and record real evidence
-    p_ver = sub.add_parser("verify", help="Run the project's verify command and record the result")
+    p_ver = sub.add_parser(
+        "verify", help="Run the project's verify command and record the result"
+    )
     p_ver.add_argument("project", help="Project ID")
     p_ver.add_argument("id", help="Ticket ID")
 
     # gate — read-only preview of what accept would decide
-    p_gate = sub.add_parser("gate", help="Show what the accept gate currently sees for a ticket")
+    p_gate = sub.add_parser(
+        "gate", help="Show what the accept gate currently sees for a ticket"
+    )
     p_gate.add_argument("project", help="Project ID")
     p_gate.add_argument("id", help="Ticket ID")
 
@@ -2370,9 +2680,13 @@ def main():
     p_sync.add_argument("--project", help="Project ID (default: auto-detect or all)")
 
     # watch
-    p_watch = sub.add_parser("watch", help="Watch markdown for changes, auto-regenerate dashboard")
+    p_watch = sub.add_parser(
+        "watch", help="Watch markdown for changes, auto-regenerate dashboard"
+    )
     p_watch.add_argument("--project", help="Project ID (default: auto-detect or all)")
-    p_watch.add_argument("--interval", type=int, default=2, help="Poll interval in seconds (default: 2)")
+    p_watch.add_argument(
+        "--interval", type=int, default=2, help="Poll interval in seconds (default: 2)"
+    )
 
     p_flag = sub.add_parser("flag", help="Set a readiness flag on a ticket")
     p_flag.add_argument("project", help="Project ID")
@@ -2387,7 +2701,10 @@ def main():
 
     p_seek = sub.add_parser("seek", help="Discover ticket-like items and create drafts")
     p_seek.add_argument("project", help="Project ID")
-    p_seek.add_argument("--sources", help="Comma-separated: md_task,readme_todo,code_todo,changelog,github_issue")
+    p_seek.add_argument(
+        "--sources",
+        help="Comma-separated: md_task,readme_todo,code_todo,changelog,github_issue",
+    )
 
     p_reg = sub.add_parser("register", help="Register a new project")
     p_reg.add_argument("--id", required=True, help="Project ID (lowercase, hyphens OK)")
@@ -2397,7 +2714,11 @@ def main():
 
     p_unreg = sub.add_parser("unregister", help="Deactivate a project")
     p_unreg.add_argument("id", help="Project ID to deactivate")
-    p_unreg.add_argument("--delete-tickets", action="store_true", help="Also delete tickets from DB (destructive)")
+    p_unreg.add_argument(
+        "--delete-tickets",
+        action="store_true",
+        help="Also delete tickets from DB (destructive)",
+    )
 
     # criteria
     p_crit = sub.add_parser("criteria", help="Manage acceptance criteria on a ticket")
@@ -2415,11 +2736,15 @@ def main():
     p_crit_rm.add_argument("id", help="Ticket ID")
     p_crit_rm.add_argument("n", type=int, help="Criterion index (1-indexed)")
 
-    p_crit_check = crit_sub.add_parser("check", help="Mark Nth criterion as done (1-indexed)")
+    p_crit_check = crit_sub.add_parser(
+        "check", help="Mark Nth criterion as done (1-indexed)"
+    )
     p_crit_check.add_argument("id", help="Ticket ID")
     p_crit_check.add_argument("n", type=int, help="Criterion index (1-indexed)")
 
-    p_crit_uncheck = crit_sub.add_parser("uncheck", help="Unmark Nth criterion (1-indexed)")
+    p_crit_uncheck = crit_sub.add_parser(
+        "uncheck", help="Unmark Nth criterion (1-indexed)"
+    )
     p_crit_uncheck.add_argument("id", help="Ticket ID")
     p_crit_uncheck.add_argument("n", type=int, help="Criterion index (1-indexed)")
 
@@ -2432,27 +2757,52 @@ def main():
     p_agent_add = agent_sub.add_parser("add", help="Add a workflow agent")
     p_agent_add.add_argument("agent_id", help="Agent ID")
     p_agent_add.add_argument("--name", help="Display name (default: derived from ID)")
-    p_agent_add.add_argument("--cmd", default=None, help="Command to run (deprecated; use --endpoint-id)")
-    p_agent_add.add_argument("--args", default=None, help="JSON array of command args (deprecated; use --endpoint-id)")
-    p_agent_add.add_argument("--system-prompt", default="", help="System prompt for the agent")
-    p_agent_add.add_argument("--endpoint-id", default=None, dest="endpoint_id",
-                             help="ID of an endpoint this agent should use")
+    p_agent_add.add_argument(
+        "--cmd", default=None, help="Command to run (deprecated; use --endpoint-id)"
+    )
+    p_agent_add.add_argument(
+        "--args",
+        default=None,
+        help="JSON array of command args (deprecated; use --endpoint-id)",
+    )
+    p_agent_add.add_argument(
+        "--system-prompt", default="", help="System prompt for the agent"
+    )
+    p_agent_add.add_argument(
+        "--endpoint-id",
+        default=None,
+        dest="endpoint_id",
+        help="ID of an endpoint this agent should use",
+    )
 
     p_agent_upd = agent_sub.add_parser("update", help="Update a workflow agent")
     p_agent_upd.add_argument("agent_id", help="Agent ID")
     p_agent_upd.add_argument("--name", help="New display name")
-    p_agent_upd.add_argument("--cmd", help="New command (deprecated; use --endpoint-id)")
-    p_agent_upd.add_argument("--args", help="New JSON array of command args (deprecated; use --endpoint-id)")
+    p_agent_upd.add_argument(
+        "--cmd", help="New command (deprecated; use --endpoint-id)"
+    )
+    p_agent_upd.add_argument(
+        "--args", help="New JSON array of command args (deprecated; use --endpoint-id)"
+    )
     p_agent_upd.add_argument("--system-prompt", help="New system prompt")
-    p_agent_upd.add_argument("--endpoint-id", default=None, dest="endpoint_id",
-                             help="ID of an endpoint this agent should use")
+    p_agent_upd.add_argument(
+        "--endpoint-id",
+        default=None,
+        dest="endpoint_id",
+        help="ID of an endpoint this agent should use",
+    )
 
     p_agent_rm = agent_sub.add_parser("remove", help="Remove a workflow agent")
     p_agent_rm.add_argument("agent_id", help="Agent ID to remove")
 
-    p_agent_setdef = agent_sub.add_parser("set-default", help="Set the project default agent (stored in settings as agent.default)")
+    p_agent_setdef = agent_sub.add_parser(
+        "set-default",
+        help="Set the project default agent (stored in settings as agent.default)",
+    )
     p_agent_setdef.add_argument("agent_id", help="Agent ID to set as default")
-    p_agent_setdef.add_argument("--project", help="Project ID (default: auto-detect or all)")
+    p_agent_setdef.add_argument(
+        "--project", help="Project ID (default: auto-detect or all)"
+    )
 
     # endpoint
     p_ep = sub.add_parser("endpoint", help="Manage runtime endpoints")
@@ -2463,18 +2813,34 @@ def main():
 
     ep_add = ep_sub.add_parser("add", help="Add an endpoint")
     ep_add.add_argument("id", help="Endpoint ID")
-    ep_add.add_argument("--type", default="cli", help="Endpoint type (phase 1: cli only)")
-    ep_add.add_argument("--name", default=None, help="Display name (default: same as ID)")
+    ep_add.add_argument(
+        "--type", default="cli", help="Endpoint type (phase 1: cli only)"
+    )
+    ep_add.add_argument(
+        "--name", default=None, help="Display name (default: same as ID)"
+    )
     ep_add.add_argument("--cmd", required=True, help="Command to run")
     ep_add.add_argument("--args", default="[]", help="JSON array of command args")
-    ep_add.add_argument("--timeout-s", type=int, default=120, dest="timeout_s", help="Timeout in seconds (default: 120)")
+    ep_add.add_argument(
+        "--timeout-s",
+        type=int,
+        default=120,
+        dest="timeout_s",
+        help="Timeout in seconds (default: 120)",
+    )
 
     ep_upd = ep_sub.add_parser("update", help="Update an endpoint")
     ep_upd.add_argument("id", help="Endpoint ID")
     ep_upd.add_argument("--name", default=None, help="New display name")
     ep_upd.add_argument("--cmd", default=None, help="New command")
     ep_upd.add_argument("--args", default=None, help="New JSON array of command args")
-    ep_upd.add_argument("--timeout-s", type=int, default=None, dest="timeout_s", help="New timeout in seconds")
+    ep_upd.add_argument(
+        "--timeout-s",
+        type=int,
+        default=None,
+        dest="timeout_s",
+        help="New timeout in seconds",
+    )
 
     ep_rm = ep_sub.add_parser("remove", help="Remove an endpoint")
     ep_rm.add_argument("id", help="Endpoint ID to remove")
@@ -2494,11 +2860,15 @@ def main():
     p_wf_step.add_argument("workflow_id", help="Workflow ID")
     p_wf_step.add_argument("--agent", required=True, help="Agent ID for this step")
     p_wf_step.add_argument("--label", help="Step label (default: agent ID)")
-    p_wf_step.add_argument("--prompt-modifier", default="", help="Prompt modifier for this step")
+    p_wf_step.add_argument(
+        "--prompt-modifier", default="", help="Prompt modifier for this step"
+    )
 
     p_wf_rmstep = wf_sub.add_parser("remove-step", help="Remove a step from a workflow")
     p_wf_rmstep.add_argument("workflow_id", help="Workflow ID")
-    p_wf_rmstep.add_argument("--step", type=int, required=True, help="Step index to remove (0-based)")
+    p_wf_rmstep.add_argument(
+        "--step", type=int, required=True, help="Step index to remove (0-based)"
+    )
 
     p_wf_rm = wf_sub.add_parser("remove", help="Remove a workflow")
     p_wf_rm.add_argument("workflow_id", help="Workflow ID to remove")
@@ -2521,16 +2891,20 @@ def main():
     p_br_unlink.add_argument("branch_name", help="Branch name")
 
     p_br_scan = br_sub.add_parser("scan", help="Scan remote branches and PRs")
-    p_br_scan.add_argument("--no-prs", action="store_true", help="Skip PR enrichment via gh")
+    p_br_scan.add_argument(
+        "--no-prs", action="store_true", help="Skip PR enrichment via gh"
+    )
 
     # ---- pane link --------------------------------------------------------
     p_link = sub.add_parser("link", help="Link this tmux pane to a ticket")
     p_link.add_argument("ticket_id", help="Ticket ID (e.g. B-12)")
-    p_link.add_argument("--project", default=None, help="Project ID (default: auto-detect)")
+    p_link.add_argument(
+        "--project", default=None, help="Project ID (default: auto-detect)"
+    )
 
-    p_current = sub.add_parser("current", help="Print the bound ticket for this tmux pane")
+    sub.add_parser("current", help="Print the bound ticket for this tmux pane")
 
-    p_unlink = sub.add_parser("unlink", help="Remove the pane→ticket link for this tmux pane")
+    sub.add_parser("unlink", help="Remove the pane→ticket link for this tmux pane")
 
     p_panes = sub.add_parser("panes", help="List all pane links (debug)")
     p_panes.add_argument("--project", default=None)

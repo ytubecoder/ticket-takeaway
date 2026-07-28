@@ -15,7 +15,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO_DIR = Path(__file__).resolve().parent
 INSTALL_DIR = Path.home() / ".claude" / "ticket-takeaway"
 DASHBOARD_DIR = Path.home() / ".claude" / "dashboard"
@@ -49,22 +48,54 @@ def install_system_files():
     print("Installing system files...")
 
     # Core files
-    copy_file(REPO_DIR / "src" / "tickets-cli.py", INSTALL_DIR / "tickets-cli.py", "CLI")
-    copy_file(REPO_DIR / "src" / "generate.py", INSTALL_DIR / "generate.py", "Generator")
+    copy_file(
+        REPO_DIR / "src" / "tickets-cli.py", INSTALL_DIR / "tickets-cli.py", "CLI"
+    )
+    copy_file(
+        REPO_DIR / "src" / "generate.py", INSTALL_DIR / "generate.py", "Generator"
+    )
     copy_file(REPO_DIR / "src" / "serve.py", INSTALL_DIR / "serve.py", "Server")
     copy_file(REPO_DIR / "src" / "actions.py", INSTALL_DIR / "actions.py", "Actions")
-    copy_file(REPO_DIR / "src" / "constants.py", INSTALL_DIR / "constants.py", "Constants")
+    copy_file(
+        REPO_DIR / "src" / "constants.py", INSTALL_DIR / "constants.py", "Constants"
+    )
     copy_file(REPO_DIR / "src" / "db.py", INSTALL_DIR / "db.py", "Database")
-    copy_file(REPO_DIR / "src" / "conditions.py", INSTALL_DIR / "conditions.py", "Conditions")
-    copy_file(REPO_DIR / "src" / "workflows_seed.py", INSTALL_DIR / "workflows_seed.py", "Workflows seeder")
+    copy_file(
+        REPO_DIR / "src" / "conditions.py", INSTALL_DIR / "conditions.py", "Conditions"
+    )
+    copy_file(
+        REPO_DIR / "src" / "workflows_seed.py",
+        INSTALL_DIR / "workflows_seed.py",
+        "Workflows seeder",
+    )
     # Sole OpenSpec shell-out point — the gates in actions.py import it, so the
     # CLI is broken without it.
-    copy_file(REPO_DIR / "src" / "openspec_adapter.py", INSTALL_DIR / "openspec_adapter.py", "OpenSpec adapter")
-    copy_file(REPO_DIR / "src" / "workflow_config.py", INSTALL_DIR / "workflow_config.py", "Workflow config reader")
-    copy_file(REPO_DIR / "src" / "trigger_describe.py", INSTALL_DIR / "trigger_describe.py", "Trigger describer")
+    copy_file(
+        REPO_DIR / "src" / "openspec_adapter.py",
+        INSTALL_DIR / "openspec_adapter.py",
+        "OpenSpec adapter",
+    )
+    copy_file(
+        REPO_DIR / "src" / "workflow_config.py",
+        INSTALL_DIR / "workflow_config.py",
+        "Workflow config reader",
+    )
+    copy_file(
+        REPO_DIR / "src" / "trigger_describe.py",
+        INSTALL_DIR / "trigger_describe.py",
+        "Trigger describer",
+    )
     copy_file(REPO_DIR / "src" / "runners.py", INSTALL_DIR / "runners.py", "Runners")
-    copy_file(REPO_DIR / "src" / "kitchen_feed.py", INSTALL_DIR / "kitchen_feed.py", "Kitchen feed (data)")
-    copy_file(REPO_DIR / "src" / "kitchen_view.py", INSTALL_DIR / "kitchen_view.py", "Kitchen view (renderer)")
+    copy_file(
+        REPO_DIR / "src" / "kitchen_feed.py",
+        INSTALL_DIR / "kitchen_feed.py",
+        "Kitchen feed (data)",
+    )
+    copy_file(
+        REPO_DIR / "src" / "kitchen_view.py",
+        INSTALL_DIR / "kitchen_view.py",
+        "Kitchen view (renderer)",
+    )
 
     # PWA static assets (manifest, service worker, icons) — served at root scope.
     copy_tree(REPO_DIR / "src" / "static", INSTALL_DIR / "static", "PWA assets")
@@ -104,7 +135,11 @@ def install_system_files():
     print("System files installed.")
 
 
-def register_project(project_id: str = None, project_name: str = None, project_path: str = None):
+def register_project(
+    project_id: str | None = None,
+    project_name: str | None = None,
+    project_path: str | None = None,
+):
     """Register the current (or specified) project in the registry."""
     if project_path is None:
         project_path = os.getcwd()
@@ -134,13 +169,15 @@ def register_project(project_id: str = None, project_name: str = None, project_p
             return
 
     # Add new entry
-    registry["projects"].append({
-        "id": project_id,
-        "name": project_name,
-        "path": project_path,
-        "description": "",
-        "active": True,
-    })
+    registry["projects"].append(
+        {
+            "id": project_id,
+            "name": project_name,
+            "path": project_path,
+            "description": "",
+            "active": True,
+        }
+    )
 
     REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
@@ -149,7 +186,7 @@ def register_project(project_id: str = None, project_name: str = None, project_p
     print(f"Registered: {project_id} ({project_name}) -> {project_path}")
 
 
-def seed_project(project_id: str = None):
+def seed_project(project_id: str | None = None):
     """Seed the DB from existing PRODUCT_BACKLOG.md."""
     cli = str(INSTALL_DIR / "tickets-cli.py")
     cmd = [sys.executable, cli, "seed"]
@@ -159,16 +196,18 @@ def seed_project(project_id: str = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Install or upgrade Ticket Takeaway"
+    parser = argparse.ArgumentParser(description="Install or upgrade Ticket Takeaway")
+    parser.add_argument(
+        "--register",
+        action="store_true",
+        help="Register the current project in the registry",
     )
-    parser.add_argument("--register", action="store_true",
-                        help="Register the current project in the registry")
     parser.add_argument("--id", help="Project ID (default: directory name)")
     parser.add_argument("--name", help="Project display name (default: directory name)")
     parser.add_argument("--path", help="Project path (default: current directory)")
-    parser.add_argument("--no-seed", action="store_true",
-                        help="Skip seeding the DB from markdown")
+    parser.add_argument(
+        "--no-seed", action="store_true", help="Skip seeding the DB from markdown"
+    )
 
     args = parser.parse_args()
 
@@ -183,7 +222,9 @@ def main():
         # Seed the DB from markdown
         if not args.no_seed:
             print()
-            project_id = args.id or os.path.basename(args.path or os.getcwd()).lower().replace(" ", "-")
+            project_id = args.id or os.path.basename(
+                args.path or os.getcwd()
+            ).lower().replace(" ", "-")
             seed_project(project_id)
 
         # Seed default system workflows (idempotent)
@@ -191,13 +232,18 @@ def main():
             sys.path.insert(0, str(INSTALL_DIR))
             from db import get_db, init_db  # type: ignore[import]
             from workflows_seed import seed_default_workflows  # type: ignore[import]
+
             _conn = get_db()
             init_db(_conn)
-            _pid = args.id or os.path.basename(args.path or os.getcwd()).lower().replace(" ", "-")
+            _pid = args.id or os.path.basename(
+                args.path or os.getcwd()
+            ).lower().replace(" ", "-")
             _res = seed_default_workflows(_conn, _pid)
             _conn.close()
             if _res["inserted"]:
-                print(f"  Seeded {_res['inserted']} default workflow(s) for project {_pid!r}")
+                print(
+                    f"  Seeded {_res['inserted']} default workflow(s) for project {_pid!r}"
+                )
         except Exception as _e:
             print(f"  Warning: could not seed default workflows: {_e}")
 

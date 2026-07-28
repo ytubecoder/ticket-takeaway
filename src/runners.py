@@ -22,18 +22,18 @@ import sqlite3
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Optional
-
+from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from actions import ActorContext, emit_event, utcnow_iso
 from endpoints import (
-    build_invocation, extract_session_id, get_endpoint, Endpoint,
-    UnsupportedEndpointType, EndpointMisconfigured,
+    Endpoint,
+    EndpointMisconfigured,
+    build_invocation,
+    get_endpoint,
 )
-from workspaces import HookResult, run_hook, WorkspaceInfo, mark_bootstrapped
+from workspaces import HookResult, WorkspaceInfo, mark_bootstrapped, run_hook
 
 _log = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ _seen_compat_agents: set = set()
 # ---------------------------------------------------------------------------
 # Agent-field helper — works with dict, sqlite.Row, or dataclass
 # ---------------------------------------------------------------------------
+
 
 def _agent_field(agent, name, default=None):
     """Read a field from an agent object that may be a dict, sqlite Row,
@@ -67,7 +68,9 @@ def _log_compat_path_once(agent_id, command, args):
     _log.warning(
         "runner: agent=%s using compat command=%s args=%s"
         " — endpoint_id is NULL (legacy or unmigrated)",
-        agent_id, command, args,
+        agent_id,
+        command,
+        args,
     )
 
 
@@ -123,6 +126,7 @@ def _resolve_argv_for_agent(conn, agent, prompt, session_id=None):
 # so we wrap it to ensure both happen.
 # ---------------------------------------------------------------------------
 
+
 @contextmanager
 def db_session(conn_factory: Callable[[], sqlite3.Connection]):
     """Open a connection via the factory, commit on success, always close."""
@@ -141,34 +145,41 @@ def db_session(conn_factory: Callable[[], sqlite3.Connection]):
 # Run row helpers — shared status-transition + heartbeat plumbing.
 # ---------------------------------------------------------------------------
 
+
 def _set_run_status(
     conn: sqlite3.Connection,
     run_id: int,
     status: str,
     *,
-    error_class: Optional[str] = None,
-    error_message: Optional[str] = None,
-    summary: Optional[str] = None,
-    workspace_path: Optional[str] = None,
+    error_class: str | None = None,
+    error_message: str | None = None,
+    summary: str | None = None,
+    workspace_path: str | None = None,
     finished: bool = False,
-    exit_code: Optional[int] = None,
+    exit_code: int | None = None,
 ) -> None:
     """Atomic-ish status flip. Caller commits."""
     fields = ["status = ?", "heartbeat_at = ?"]
     args: list = [status, utcnow_iso()]
     if error_class is not None:
-        fields.append("error_class = ?"); args.append(error_class)
+        fields.append("error_class = ?")
+        args.append(error_class)
     if error_message is not None:
-        fields.append("error_message = ?"); args.append(error_message)
+        fields.append("error_message = ?")
+        args.append(error_message)
     if summary is not None:
-        fields.append("summary = ?"); args.append(summary)
+        fields.append("summary = ?")
+        args.append(summary)
     if workspace_path is not None:
-        fields.append("workspace_path = ?"); args.append(workspace_path)
+        fields.append("workspace_path = ?")
+        args.append(workspace_path)
     if exit_code is not None:
-        fields.append("exit_code = ?"); args.append(exit_code)
+        fields.append("exit_code = ?")
+        args.append(exit_code)
     if finished:
         now = utcnow_iso()
-        fields.append("finished_at = ?"); args.append(now)
+        fields.append("finished_at = ?")
+        args.append(now)
     args.append(run_id)
     conn.execute(f"UPDATE runs SET {', '.join(fields)} WHERE id = ?", args)
 
@@ -177,7 +188,8 @@ def _set_run_status(
 # Interactive-marker helpers
 # ---------------------------------------------------------------------------
 
-def _try_parse_marker(line: str) -> Optional[dict]:
+
+def _try_parse_marker(line: str) -> dict | None:
     """Attempt to parse a line as an interactive marker JSON object.
 
     Returns the parsed dict if the line is a valid JSON object with an 'ask'
@@ -204,7 +216,9 @@ def _try_parse_handoff(text: str) -> dict:
     Returns the parsed dict (possibly with only a subset of keys), or {} if
     no valid handoff object was found.  Never raises.
     """
-    _HANDOFF_KEYS = frozenset(["implemented", "undone", "commands", "issues", "procedures_followed"])
+    _HANDOFF_KEYS = frozenset(
+        ["implemented", "undone", "commands", "issues", "procedures_followed"]
+    )
     lines = (text or "").splitlines()
     for line in reversed(lines[-50:]):
         stripped = line.strip()
@@ -215,11 +229,11 @@ def _try_parse_handoff(text: str) -> dict:
             if isinstance(obj, dict) and (_HANDOFF_KEYS & set(obj.keys())):
                 # Normalise: missing keys → empty arrays / null
                 return {
-                    "implemented":          obj.get("implemented") or [],
-                    "undone":               obj.get("undone") or [],
-                    "commands":             obj.get("commands") or [],
-                    "issues":               obj.get("issues") or [],
-                    "procedures_followed":  obj.get("procedures_followed") or [],
+                    "implemented": obj.get("implemented") or [],
+                    "undone": obj.get("undone") or [],
+                    "commands": obj.get("commands") or [],
+                    "issues": obj.get("issues") or [],
+                    "procedures_followed": obj.get("procedures_followed") or [],
                 }
         except (json.JSONDecodeError, ValueError):
             continue
@@ -228,7 +242,9 @@ def _try_parse_handoff(text: str) -> dict:
 
 def _read_run_metadata(conn: sqlite3.Connection, run_id: int) -> dict:
     """Read and parse runs.metadata_json for a run.  Returns {} on any error."""
-    row = conn.execute("SELECT metadata_json FROM runs WHERE id = ?", (run_id,)).fetchone()
+    row = conn.execute(
+        "SELECT metadata_json FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
     if not row:
         return {}
     try:
@@ -260,6 +276,7 @@ def _append_chat_entry(
 # Result types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RunOutcome:
     """Returned by Runner.execute() for the orchestrator to log/observe.
@@ -267,17 +284,19 @@ class RunOutcome:
     The runner has already written the terminal status to the DB by this point;
     the outcome is informational.
     """
+
     run_id: int
-    final_status: str         # succeeded | failed | stalled | cancelled
+    final_status: str  # succeeded | failed | stalled | cancelled
     duration_ms: int
     summary: str
-    error_class: Optional[str] = None
-    error_message: Optional[str] = None
+    error_class: str | None = None
+    error_message: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Runner ABC
 # ---------------------------------------------------------------------------
+
 
 class Runner(ABC):
     """Common base for every kind of run executor.
@@ -315,6 +334,7 @@ class Runner(ABC):
 # AgentRunner — subprocess to whatever agent.command is configured
 # ---------------------------------------------------------------------------
 
+
 class AgentRunner(Runner):
     """Runs the configured `agent.command` as a subprocess in the workspace.
 
@@ -334,9 +354,12 @@ class AgentRunner(Runner):
         before_run failure → fatal (error_class='hook_before_run')
         after_run failure → logged, ignored
     """
+
     runner_kind = "agent"
 
-    DEFAULT_TIMEOUT_S = 1800  # 30 min — orchestrator stall_timeout supersedes for hung subprocesses
+    DEFAULT_TIMEOUT_S = (
+        1800  # 30 min — orchestrator stall_timeout supersedes for hung subprocesses
+    )
 
     def execute(
         self,
@@ -358,43 +381,101 @@ class AgentRunner(Runner):
 
         # ── Phase 1: preparing ── workspace exists, run hooks ─────────────
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "preparing", workspace_path=str(workspace.path))
-            emit_event(conn, project_id, subject_type, subject_id, "workspace_created",
-                       {"path": str(workspace.path), "reused": not workspace.created_now}, actor)
+            _set_run_status(
+                conn, run_id, "preparing", workspace_path=str(workspace.path)
+            )
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "workspace_created",
+                {"path": str(workspace.path), "reused": not workspace.created_now},
+                actor,
+            )
             conn.commit()
 
         # after_create — only on first bootstrap, marker-guarded.
         if not workspace.bootstrapped and hooks_cfg.get("after_create"):
-            r = self._run_hook(workspace.path, "after_create", hooks_cfg["after_create"],
-                               hook_timeout_ms, run_id, project_id, subject_type, subject_id,
-                               actor, conn_factory)
+            r = self._run_hook(
+                workspace.path,
+                "after_create",
+                hooks_cfg["after_create"],
+                hook_timeout_ms,
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+            )
             if r is not None and not r.succeeded:
-                return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                                  conn_factory, started, "hook_after_create",
-                                  r.stderr or r.stdout or "after_create failed")
+                return self._fail(
+                    run_id,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    actor,
+                    conn_factory,
+                    started,
+                    "hook_after_create",
+                    r.stderr or r.stdout or "after_create failed",
+                )
             mark_bootstrapped(workspace.path)
 
         # before_run — every attempt.
         if hooks_cfg.get("before_run"):
-            r = self._run_hook(workspace.path, "before_run", hooks_cfg["before_run"],
-                               hook_timeout_ms, run_id, project_id, subject_type, subject_id,
-                               actor, conn_factory)
+            r = self._run_hook(
+                workspace.path,
+                "before_run",
+                hooks_cfg["before_run"],
+                hook_timeout_ms,
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+            )
             if r is not None and not r.succeeded:
-                return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                                  conn_factory, started, "hook_before_run",
-                                  r.stderr or r.stdout or "before_run failed")
+                return self._fail(
+                    run_id,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    actor,
+                    conn_factory,
+                    started,
+                    "hook_before_run",
+                    r.stderr or r.stdout or "before_run failed",
+                )
 
         # Cancellation check before launching the agent.
         if cancel_event is not None and cancel_event.is_set():
-            return self._cancel(run_id, project_id, subject_type, subject_id, actor,
-                                conn_factory, started)
+            return self._cancel(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+            )
 
         # ── Phase 2: running ── spawn the agent subprocess ────────────────
         cmd_str = (agent_cfg.get("command") or "").strip()
         if not cmd_str:
-            return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                              conn_factory, started, "missing_command",
-                              "WORKFLOW.toml [agent].command is empty")
+            return self._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "missing_command",
+                "WORKFLOW.toml [agent].command is empty",
+            )
 
         # For DB-workflow path: render ticket fields into the prompt template.
         workflow_meta = config.get("_workflow_meta")
@@ -412,11 +493,19 @@ class AgentRunner(Runner):
         try:
             cmd = shlex.split(cmd_str)
         except ValueError as e:
-            return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                              conn_factory, started, "bad_command", str(e))
+            return self._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "bad_command",
+                str(e),
+            )
 
         # Determine whether this agent has persist_session enabled (for resume support).
-        agent_persist_session = bool(agent_cfg.get("persist_session", 0))
 
         # Build stdin: prior conversation (for resume) + current prompt.
         stdin_text = self._build_stdin(run_id, prompt, conn_factory)
@@ -426,25 +515,63 @@ class AgentRunner(Runner):
                 cmd,
                 cwd=str(workspace.path),
                 input=stdin_text,
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 timeout=self.DEFAULT_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired as e:
-            return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                              conn_factory, started, "timeout",
-                              f"agent timed out after {self.DEFAULT_TIMEOUT_S}s",
-                              stdout_for_summary=(e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")))
+            return self._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "timeout",
+                f"agent timed out after {self.DEFAULT_TIMEOUT_S}s",
+                stdout_for_summary=(
+                    e.stdout.decode("utf-8", "replace")
+                    if isinstance(e.stdout, bytes)
+                    else (e.stdout or "")
+                ),
+            )
         except FileNotFoundError as e:
-            return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                              conn_factory, started, "agent_not_found", str(e))
+            return self._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "agent_not_found",
+                str(e),
+            )
         except (OSError, subprocess.SubprocessError) as e:
-            return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                              conn_factory, started, "subprocess_error", str(e))
+            return self._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "subprocess_error",
+                str(e),
+            )
 
         # Cancellation flagged while we were running — honor it.
         if cancel_event is not None and cancel_event.is_set():
-            return self._cancel(run_id, project_id, subject_type, subject_id, actor,
-                                conn_factory, started)
+            return self._cancel(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+            )
 
         stdout_text = r.stdout or ""
 
@@ -452,7 +579,7 @@ class AgentRunner(Runner):
         # Scan stdout lines for the LAST interactive marker.  The marker takes
         # precedence over the exit code — an agent that emits a marker should
         # also exit 0, but we detect the marker regardless of exit code.
-        detected_marker: Optional[dict] = None
+        detected_marker: dict | None = None
         non_marker_lines: list[str] = []
         for line in stdout_text.splitlines():
             m = _try_parse_marker(line)
@@ -495,8 +622,14 @@ class AgentRunner(Runner):
         if r.returncode == 0:
             with db_session(conn_factory) as conn:
                 summary = stdout_tail or "agent completed"
-                _set_run_status(conn, run_id, "succeeded",
-                                summary=summary, exit_code=r.returncode, finished=True)
+                _set_run_status(
+                    conn,
+                    run_id,
+                    "succeeded",
+                    summary=summary,
+                    exit_code=r.returncode,
+                    finished=True,
+                )
                 # Append final agent output to chat log.
                 if stdout_tail:
                     _append_chat_entry(conn, run_id, "agent", stdout_tail)
@@ -506,25 +639,63 @@ class AgentRunner(Runner):
                     meta = _read_run_metadata(conn, run_id)
                     meta["handoff"] = handoff
                     _write_run_metadata(conn, run_id, meta)
-                    emit_event(conn, project_id, subject_type, subject_id, "handoff_recorded",
-                               {"run_id": run_id, "handoff": handoff}, actor)
-                emit_event(conn, project_id, subject_type, subject_id, "agent_output",
-                           {"run_id": run_id, "summary": summary}, actor)
-                emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
-                           {"run_id": run_id, "summary": summary, "duration_ms": elapsed_ms}, actor)
+                    emit_event(
+                        conn,
+                        project_id,
+                        subject_type,
+                        subject_id,
+                        "handoff_recorded",
+                        {"run_id": run_id, "handoff": handoff},
+                        actor,
+                    )
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "agent_output",
+                    {"run_id": run_id, "summary": summary},
+                    actor,
+                )
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "run_succeeded",
+                    {"run_id": run_id, "summary": summary, "duration_ms": elapsed_ms},
+                    actor,
+                )
                 conn.commit()
-            self._maybe_after_run(workspace, hooks_cfg, hook_timeout_ms, run_id,
-                                  project_id, subject_type, subject_id, actor, conn_factory)
+            self._maybe_after_run(
+                workspace,
+                hooks_cfg,
+                hook_timeout_ms,
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+            )
             # Apply on_success actions for DB-workflow path (Phase 2: single-step only).
             # TODO(phase-3): multi-step chaining — after step_index completes, advance
             # to step_index+1 and dispatch a follow-on run instead of applying on_success.
             if workflow_meta and subject_type == "ticket":
                 self._apply_on_success(
-                    workflow_meta, project_id, subject_id, actor, conn_factory,
+                    workflow_meta,
+                    project_id,
+                    subject_id,
+                    actor,
+                    conn_factory,
                     stdout_text=stdout_text,
                 )
-            return RunOutcome(run_id=run_id, final_status="succeeded",
-                              duration_ms=elapsed_ms, summary=summary)
+            return RunOutcome(
+                run_id=run_id,
+                final_status="succeeded",
+                duration_ms=elapsed_ms,
+                summary=summary,
+            )
 
         # Non-zero exit → failed.
         err_msg = self._tail(r.stderr) or stdout_tail or f"exit {r.returncode}"
@@ -536,9 +707,19 @@ class AgentRunner(Runner):
                 meta["handoff"] = handoff
                 _write_run_metadata(conn, run_id, meta)
                 conn.commit()
-        return self._fail(run_id, project_id, subject_type, subject_id, actor,
-                          conn_factory, started, "non_zero_exit", err_msg,
-                          exit_code=r.returncode, stdout_for_summary=stdout_tail)
+        return self._fail(
+            run_id,
+            project_id,
+            subject_type,
+            subject_id,
+            actor,
+            conn_factory,
+            started,
+            "non_zero_exit",
+            err_msg,
+            exit_code=r.returncode,
+            stdout_for_summary=stdout_tail,
+        )
 
     # ── helpers ────────────────────────────────────────────────────────────
 
@@ -638,7 +819,8 @@ class AgentRunner(Runner):
                 parts.append(f"removed tags: {accepted['remove_tags']}")
             user_response_text = (
                 "User accepted: " + ("; ".join(parts) if parts else "nothing")
-                if accepted else "User declined the proposal."
+                if accepted
+                else "User declined the proposal."
             )
         else:
             user_response_text = str(response_payload.get("response") or "")
@@ -658,15 +840,32 @@ class AgentRunner(Runner):
         agent_cfg = config.get("agent", {})
         cmd_str = (agent_cfg.get("command") or "").strip()
         if not cmd_str:
-            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
-                               conn_factory, started, "missing_command",
-                               "agent command is empty on resume")
+            return cls()._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "missing_command",
+                "agent command is empty on resume",
+            )
 
         try:
             cmd = shlex.split(cmd_str)
         except ValueError as e:
-            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
-                               conn_factory, started, "bad_command", str(e))
+            return cls()._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "bad_command",
+                str(e),
+            )
 
         stdin_text = cls._build_stdin(run_id, user_response_text, conn_factory)
 
@@ -675,29 +874,67 @@ class AgentRunner(Runner):
                 cmd,
                 cwd=str(workspace.path),
                 input=stdin_text,
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 timeout=cls.DEFAULT_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired as e:
-            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
-                               conn_factory, started, "timeout",
-                               f"agent timed out after {cls.DEFAULT_TIMEOUT_S}s",
-                               stdout_for_summary=(e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")))
+            return cls()._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "timeout",
+                f"agent timed out after {cls.DEFAULT_TIMEOUT_S}s",
+                stdout_for_summary=(
+                    e.stdout.decode("utf-8", "replace")
+                    if isinstance(e.stdout, bytes)
+                    else (e.stdout or "")
+                ),
+            )
         except FileNotFoundError as e:
-            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
-                               conn_factory, started, "agent_not_found", str(e))
+            return cls()._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "agent_not_found",
+                str(e),
+            )
         except (OSError, subprocess.SubprocessError) as e:
-            return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
-                               conn_factory, started, "subprocess_error", str(e))
+            return cls()._fail(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "subprocess_error",
+                str(e),
+            )
 
         if cancel_event is not None and cancel_event.is_set():
-            return cls()._cancel(run_id, project_id, subject_type, subject_id, actor,
-                                 conn_factory, started)
+            return cls()._cancel(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+            )
 
         stdout_text = r.stdout or ""
 
         # Check for another interactive marker in the resumed output.
-        detected_marker: Optional[dict] = None
+        detected_marker: dict | None = None
         non_marker_lines: list[str] = []
         for line in stdout_text.splitlines():
             m = _try_parse_marker(line)
@@ -736,8 +973,14 @@ class AgentRunner(Runner):
         if r.returncode == 0:
             with db_session(conn_factory) as conn:
                 summary = stdout_tail or "agent completed"
-                _set_run_status(conn, run_id, "succeeded",
-                                summary=summary, exit_code=r.returncode, finished=True)
+                _set_run_status(
+                    conn,
+                    run_id,
+                    "succeeded",
+                    summary=summary,
+                    exit_code=r.returncode,
+                    finished=True,
+                )
                 if stdout_tail:
                     _append_chat_entry(conn, run_id, "agent", stdout_tail)
                 handoff = _try_parse_handoff(stdout_text)
@@ -745,20 +988,49 @@ class AgentRunner(Runner):
                     meta = _read_run_metadata(conn, run_id)
                     meta["handoff"] = handoff
                     _write_run_metadata(conn, run_id, meta)
-                    emit_event(conn, project_id, subject_type, subject_id, "handoff_recorded",
-                               {"run_id": run_id, "handoff": handoff}, actor)
-                emit_event(conn, project_id, subject_type, subject_id, "agent_output",
-                           {"run_id": run_id, "summary": summary}, actor)
-                emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
-                           {"run_id": run_id, "summary": summary, "duration_ms": elapsed_ms}, actor)
+                    emit_event(
+                        conn,
+                        project_id,
+                        subject_type,
+                        subject_id,
+                        "handoff_recorded",
+                        {"run_id": run_id, "handoff": handoff},
+                        actor,
+                    )
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "agent_output",
+                    {"run_id": run_id, "summary": summary},
+                    actor,
+                )
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "run_succeeded",
+                    {"run_id": run_id, "summary": summary, "duration_ms": elapsed_ms},
+                    actor,
+                )
                 conn.commit()
             if workflow_meta and subject_type == "ticket":
                 cls._apply_on_success(
-                    workflow_meta, project_id, subject_id, actor, conn_factory,
+                    workflow_meta,
+                    project_id,
+                    subject_id,
+                    actor,
+                    conn_factory,
                     stdout_text=stdout_text,
                 )
-            return RunOutcome(run_id=run_id, final_status="succeeded",
-                              duration_ms=elapsed_ms, summary=summary)
+            return RunOutcome(
+                run_id=run_id,
+                final_status="succeeded",
+                duration_ms=elapsed_ms,
+                summary=summary,
+            )
 
         err_msg = cls._tail(r.stderr) or stdout_tail or f"exit {r.returncode}"
         with db_session(conn_factory) as conn:
@@ -768,9 +1040,19 @@ class AgentRunner(Runner):
                 meta["handoff"] = handoff
                 _write_run_metadata(conn, run_id, meta)
                 conn.commit()
-        return cls()._fail(run_id, project_id, subject_type, subject_id, actor,
-                           conn_factory, started, "non_zero_exit", err_msg,
-                           exit_code=r.returncode, stdout_for_summary=stdout_tail)
+        return cls()._fail(
+            run_id,
+            project_id,
+            subject_type,
+            subject_id,
+            actor,
+            conn_factory,
+            started,
+            "non_zero_exit",
+            err_msg,
+            exit_code=r.returncode,
+            stdout_for_summary=stdout_tail,
+        )
 
     @staticmethod
     def _apply_proposal_to_ticket(
@@ -806,7 +1088,9 @@ class AgentRunner(Runner):
             conn = conn_factory()
             try:
                 if update_kwargs:
-                    update_ticket(conn, project_id, ticket_id, actor=actor, **update_kwargs)
+                    update_ticket(
+                        conn, project_id, ticket_id, actor=actor, **update_kwargs
+                    )
 
                 # Handle criteria add/remove (update_ticket supports add_criteria).
                 if accepted.get("add_criteria"):
@@ -817,7 +1101,13 @@ class AgentRunner(Runner):
                                 "(ticket_id, project_id, text, checked, sort_order) "
                                 "SELECT ?, ?, ?, 0, COALESCE(MAX(sort_order)+1, 0) "
                                 "FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ?",
-                                (ticket_id, project_id, crit_text.strip(), ticket_id, project_id),
+                                (
+                                    ticket_id,
+                                    project_id,
+                                    crit_text.strip(),
+                                    ticket_id,
+                                    project_id,
+                                ),
                             )
                 if accepted.get("remove_criteria"):
                     for crit_text in accepted["remove_criteria"]:
@@ -879,9 +1169,11 @@ class AgentRunner(Runner):
             finally:
                 conn.close()
 
-            criteria_text = "\n".join(
-                f"- {r['text']}" for r in criteria_rows
-            ) if criteria_rows else "(none)"
+            criteria_text = (
+                "\n".join(f"- {r['text']}" for r in criteria_rows)
+                if criteria_rows
+                else "(none)"
+            )
 
             result = template
             result = result.replace("{{ticket.id}}", trow["id"] or "")
@@ -933,12 +1225,17 @@ class AgentRunner(Runner):
         if not on_success:
             return
         try:
+            from actions import (
+                accept_ticket as _accept_ticket,
+            )
             from actions import (  # type: ignore[import]
                 move_ticket,
                 update_ticket,
-                accept_ticket as _accept_ticket,
+            )
+            from actions import (
                 set_automation_mode as _set_automation_mode,
             )
+
             conn = conn_factory()
             try:
                 # Resolve effect target — either the subject (self) or its parent.
@@ -980,22 +1277,42 @@ class AgentRunner(Runner):
                 if set_is_container is not None:
                     update_kwargs["is_container"] = 1 if set_is_container else 0
                 if add_tags:
-                    update_kwargs["add_tags"] = list(add_tags) if not isinstance(add_tags, list) else add_tags
+                    update_kwargs["add_tags"] = (
+                        list(add_tags) if not isinstance(add_tags, list) else add_tags
+                    )
                 if remove_tags:
-                    update_kwargs["remove_tags"] = list(remove_tags) if not isinstance(remove_tags, list) else remove_tags
+                    update_kwargs["remove_tags"] = (
+                        list(remove_tags)
+                        if not isinstance(remove_tags, list)
+                        else remove_tags
+                    )
                 if update_kwargs:
-                    update_ticket(conn, project_id, target_id, actor=actor, **update_kwargs)
+                    update_ticket(
+                        conn, project_id, target_id, actor=actor, **update_kwargs
+                    )
 
                 # set_automation_mode: switch the per-ticket automation toggle.
                 if set_auto_mode:
-                    mode_str = str(set_auto_mode).lower() if not isinstance(set_auto_mode, dict) else \
-                        str(set_auto_mode.get("mode", "")).lower()
-                    pause_reason = set_auto_mode.get("pause_reason") if isinstance(set_auto_mode, dict) else None
+                    mode_str = (
+                        str(set_auto_mode).lower()
+                        if not isinstance(set_auto_mode, dict)
+                        else str(set_auto_mode.get("mode", "")).lower()
+                    )
+                    pause_reason = (
+                        set_auto_mode.get("pause_reason")
+                        if isinstance(set_auto_mode, dict)
+                        else None
+                    )
                     if mode_str in ("auto", "manual", "paused"):
                         try:
                             _set_automation_mode(
-                                conn, project_id, "ticket", target_id,
-                                mode_str, actor=actor, pause_reason=pause_reason,
+                                conn,
+                                project_id,
+                                "ticket",
+                                target_id,
+                                mode_str,
+                                actor=actor,
+                                pause_reason=pause_reason,
                             )
                         except ValueError:
                             pass  # invalid mode — silently skip
@@ -1009,18 +1326,29 @@ class AgentRunner(Runner):
                         "WHERE UPPER(id) = UPPER(?) AND project_id = ?",
                         (target_id, project_id),
                     ).fetchone()
-                    if trow and trow["section"] == "For Review" and trow["status"] == "done":
+                    if (
+                        trow
+                        and trow["section"] == "For Review"
+                        and trow["status"] == "done"
+                    ):
                         # Resolve project_path / project_name for spec writing.
                         project_path = ""
                         project_name = project_id
                         try:
-                            from db import REGISTRY_PATH  # type: ignore[import]
                             import json as _json
-                            registry = _json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+
+                            from db import REGISTRY_PATH  # type: ignore[import]
+
+                            registry = _json.loads(
+                                REGISTRY_PATH.read_text(encoding="utf-8")
+                            )
                             for p in registry.get("projects", []):
                                 if p.get("id") == project_id:
                                     import os as _os
-                                    project_path = _os.path.expanduser(p.get("path", ""))
+
+                                    project_path = _os.path.expanduser(
+                                        p.get("path", "")
+                                    )
                                     project_name = p.get("name", project_id)
                                     break
                         except Exception:
@@ -1030,8 +1358,12 @@ class AgentRunner(Runner):
                         # surface as a failed run: an automated accept that
                         # silently no-ops would be indistinguishable from success.
                         _accept_ticket(
-                            conn, project_id, target_id,
-                            project_path, project_name, actor=actor,
+                            conn,
+                            project_id,
+                            target_id,
+                            project_path,
+                            project_name,
+                            actor=actor,
                         )
                     # else: silently skip — preconditions not met.
 
@@ -1040,8 +1372,10 @@ class AgentRunner(Runner):
                 # workflow trigger doesn't fire again on the same content.
                 if set_summary:
                     from actions import compute_summary_hash  # type: ignore[import]
+
                     raw_lines = [
-                        line.strip() for line in (stdout_text or "").splitlines()
+                        line.strip()
+                        for line in (stdout_text or "").splitlines()
                         if line.strip() and _try_parse_marker(line) is None
                     ]
                     sentence = next((ln for ln in raw_lines if ln), "")
@@ -1068,7 +1402,8 @@ class AgentRunner(Runner):
                     if from_spec == "stdout":
                         # Strip marker lines from stdout before using as content.
                         content_lines = [
-                            line for line in (stdout_text or "").splitlines()
+                            line
+                            for line in (stdout_text or "").splitlines()
                             if _try_parse_marker(line) is None
                         ]
                         content = "\n".join(content_lines).strip()
@@ -1101,7 +1436,8 @@ class AgentRunner(Runner):
         except Exception:
             _log.exception(
                 "on_success actions failed for workflow %r ticket %r",
-                workflow_meta.get("workflow_id"), ticket_id,
+                workflow_meta.get("workflow_id"),
+                ticket_id,
             )
 
     @staticmethod
@@ -1111,74 +1447,197 @@ class AgentRunner(Runner):
         text = text.strip()
         if len(text) <= max_chars:
             return text
-        return "…" + text[-(max_chars - 1):]
+        return "…" + text[-(max_chars - 1) :]
 
-    def _run_hook(self, workspace_path, name, script, timeout_ms,
-                  run_id, project_id, subject_type, subject_id, actor, conn_factory) -> Optional[HookResult]:
+    def _run_hook(
+        self,
+        workspace_path,
+        name,
+        script,
+        timeout_ms,
+        run_id,
+        project_id,
+        subject_type,
+        subject_id,
+        actor,
+        conn_factory,
+    ) -> HookResult | None:
         with db_session(conn_factory) as conn:
-            emit_event(conn, project_id, subject_type, subject_id, "hook_started",
-                       {"hook": name, "run_id": run_id}, actor)
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "hook_started",
+                {"hook": name, "run_id": run_id},
+                actor,
+            )
             conn.commit()
         try:
             result = run_hook(workspace_path, name, script, timeout_ms=timeout_ms)
         except Exception as e:
             with db_session(conn_factory) as conn:
-                emit_event(conn, project_id, subject_type, subject_id, "hook_failed",
-                           {"hook": name, "run_id": run_id, "error_class": "hook_exception",
-                            "error_message": str(e)}, actor)
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "hook_failed",
+                    {
+                        "hook": name,
+                        "run_id": run_id,
+                        "error_class": "hook_exception",
+                        "error_message": str(e),
+                    },
+                    actor,
+                )
                 conn.commit()
-            return HookResult(hook=name, exit_code=-1, stdout="", stderr=str(e),
-                              duration_ms=0, timed_out=False)
+            return HookResult(
+                hook=name,
+                exit_code=-1,
+                stdout="",
+                stderr=str(e),
+                duration_ms=0,
+                timed_out=False,
+            )
         with db_session(conn_factory) as conn:
             if result.succeeded:
-                emit_event(conn, project_id, subject_type, subject_id, "hook_succeeded",
-                           {"hook": name, "run_id": run_id, "duration_ms": result.duration_ms}, actor)
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "hook_succeeded",
+                    {"hook": name, "run_id": run_id, "duration_ms": result.duration_ms},
+                    actor,
+                )
             else:
-                emit_event(conn, project_id, subject_type, subject_id, "hook_failed",
-                           {"hook": name, "run_id": run_id,
-                            "error_class": "timeout" if result.timed_out else "non_zero_exit",
-                            "error_message": (result.stderr or result.stdout or "")[:500]}, actor)
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "hook_failed",
+                    {
+                        "hook": name,
+                        "run_id": run_id,
+                        "error_class": "timeout"
+                        if result.timed_out
+                        else "non_zero_exit",
+                        "error_message": (result.stderr or result.stdout or "")[:500],
+                    },
+                    actor,
+                )
             conn.commit()
         return result
 
-    def _maybe_after_run(self, workspace, hooks_cfg, hook_timeout_ms, run_id,
-                         project_id, subject_type, subject_id, actor, conn_factory):
+    def _maybe_after_run(
+        self,
+        workspace,
+        hooks_cfg,
+        hook_timeout_ms,
+        run_id,
+        project_id,
+        subject_type,
+        subject_id,
+        actor,
+        conn_factory,
+    ):
         """Run after_run hook on terminal success. Failure is logged, not fatal."""
         if not hooks_cfg.get("after_run"):
             return
         # Best-effort; we don't fail the (already-succeeded) run if this fails.
-        self._run_hook(workspace.path, "after_run", hooks_cfg["after_run"],
-                       hook_timeout_ms, run_id, project_id, subject_type, subject_id,
-                       actor, conn_factory)
+        self._run_hook(
+            workspace.path,
+            "after_run",
+            hooks_cfg["after_run"],
+            hook_timeout_ms,
+            run_id,
+            project_id,
+            subject_type,
+            subject_id,
+            actor,
+            conn_factory,
+        )
 
-    def _fail(self, run_id, project_id, subject_type, subject_id, actor,
-              conn_factory, started, error_class, error_message,
-              exit_code=None, stdout_for_summary=""):
+    def _fail(
+        self,
+        run_id,
+        project_id,
+        subject_type,
+        subject_id,
+        actor,
+        conn_factory,
+        started,
+        error_class,
+        error_message,
+        exit_code=None,
+        stdout_for_summary="",
+    ):
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        summary = stdout_for_summary or error_message[:200] if error_message else "agent failed"
+        summary = (
+            stdout_for_summary or error_message[:200]
+            if error_message
+            else "agent failed"
+        )
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "failed",
-                            error_class=error_class, error_message=error_message,
-                            summary=summary, exit_code=exit_code, finished=True)
-            emit_event(conn, project_id, subject_type, subject_id, "run_failed",
-                       {"run_id": run_id, "error_class": error_class,
-                        "error_message": error_message[:500]}, actor)
+            _set_run_status(
+                conn,
+                run_id,
+                "failed",
+                error_class=error_class,
+                error_message=error_message,
+                summary=summary,
+                exit_code=exit_code,
+                finished=True,
+            )
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_failed",
+                {
+                    "run_id": run_id,
+                    "error_class": error_class,
+                    "error_message": error_message[:500],
+                },
+                actor,
+            )
             conn.commit()
-        return RunOutcome(run_id=run_id, final_status="failed",
-                          duration_ms=elapsed_ms, summary=summary,
-                          error_class=error_class, error_message=error_message)
+        return RunOutcome(
+            run_id=run_id,
+            final_status="failed",
+            duration_ms=elapsed_ms,
+            summary=summary,
+            error_class=error_class,
+            error_message=error_message,
+        )
 
-    def _cancel(self, run_id, project_id, subject_type, subject_id, actor,
-                conn_factory, started):
+    def _cancel(
+        self, run_id, project_id, subject_type, subject_id, actor, conn_factory, started
+    ):
         elapsed_ms = int((time.monotonic() - started) * 1000)
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "cancelled",
-                            summary="cancelled by user", finished=True)
-            emit_event(conn, project_id, subject_type, subject_id, "run_cancelled",
-                       {"run_id": run_id}, actor)
+            _set_run_status(
+                conn, run_id, "cancelled", summary="cancelled by user", finished=True
+            )
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_cancelled",
+                {"run_id": run_id},
+                actor,
+            )
             conn.commit()
-        return RunOutcome(run_id=run_id, final_status="cancelled",
-                          duration_ms=elapsed_ms, summary="cancelled by user")
+        return RunOutcome(
+            run_id=run_id,
+            final_status="cancelled",
+            duration_ms=elapsed_ms,
+            summary="cancelled by user",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1197,7 +1656,13 @@ class AgentRunner(Runner):
 # ---------------------------------------------------------------------------
 
 _SELECTOR_TARGET_KEYS = {"testid", "css", "role", "text"}
-_TIMEOUT_PHRASES = ("timeout", "net::err", "connection refused", "econnrefused", "socket")
+_TIMEOUT_PHRASES = (
+    "timeout",
+    "net::err",
+    "connection refused",
+    "econnrefused",
+    "socket",
+)
 _SCREEN_PHRASES = ("404", "403", "500", "502", "503", "not found", "page not found")
 
 
@@ -1221,13 +1686,13 @@ def classify_scenario_failure(result, manifest: dict) -> dict:
     failed_step_index = result.failed_step_index
 
     # Screenshot: last entry in screenshots list that contains "FAILURE", else last overall.
-    screenshot_path: Optional[str] = None
+    screenshot_path: str | None = None
     if result.screenshots:
         failure_shots = [s for s in result.screenshots if "FAILURE" in s]
         screenshot_path = failure_shots[-1] if failure_shots else result.screenshots[-1]
 
-    failed_step_action: Optional[str] = None
-    failed_step_target: Optional[dict] = None
+    failed_step_action: str | None = None
+    failed_step_target: dict | None = None
     if failed_step:
         failed_step_action = failed_step.get("action")
         failed_step_target = failed_step.get("target")
@@ -1271,15 +1736,28 @@ def classify_scenario_failure(result, manifest: dict) -> dict:
     em_lower = error_message.lower()
     if any(phrase in em_lower for phrase in _TIMEOUT_PHRASES):
         # But if it's a selector-style target that timed out, prefer missing_selector
-        if failed_step_target and _SELECTOR_TARGET_KEYS & set(failed_step_target.keys()):
+        if failed_step_target and _SELECTOR_TARGET_KEYS & set(
+            failed_step_target.keys()
+        ):
             return _build("missing_selector")
         return _build("external_dependency")
 
     # Rule 5: wait_for / click / fill etc. with a selector target → missing_selector
-    if failed_step_action in ("wait_for", "click", "fill", "select", "press",
-                               "double_click", "dblclick"):
-        if failed_step_target and _SELECTOR_TARGET_KEYS & set(failed_step_target.keys()):
-            return _build("missing_selector")
+    if (
+        failed_step_action
+        in (
+            "wait_for",
+            "click",
+            "fill",
+            "select",
+            "press",
+            "double_click",
+            "dblclick",
+        )
+        and failed_step_target
+        and _SELECTOR_TARGET_KEYS & set(failed_step_target.keys())
+    ):
+        return _build("missing_selector")
 
     # Rule 4: assert_visible → missing_feature
     if failed_step_action == "assert_visible":
@@ -1303,6 +1781,7 @@ def classify_scenario_failure(result, manifest: dict) -> dict:
 # Longer-term, the engine should be copied to src/ so the path hack goes away.
 # ---------------------------------------------------------------------------
 
+
 class ScenarioRunner(Runner):
     runner_kind = "scenario"
 
@@ -1322,8 +1801,8 @@ class ScenarioRunner(Runner):
         # Late imports — keep top-of-module clean; playwright + journeys + scenarios
         # are only needed for this runner.
         import json as _json
-        import sys as _sys
         import os as _os
+        import sys as _sys
 
         # Make the scenario_runner engine importable from tests/.
         _tests_dir = _os.path.join(_os.path.dirname(__file__), "..", "tests")
@@ -1336,7 +1815,8 @@ class ScenarioRunner(Runner):
         if _src_dir not in _sys.path:
             _sys.path.insert(0, _src_dir)
 
-        from scenario_runner import execute_scenario, ScenarioContext, RunResult
+        from scenario_runner import RunResult, ScenarioContext, execute_scenario
+
         from journeys import compile_to_manifest
         from scenarios import validate_manifest
 
@@ -1345,16 +1825,31 @@ class ScenarioRunner(Runner):
 
         # ── Phase 1: preparing ─────────────────────────────────────────────
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "preparing",
-                            workspace_path=str(workspace.path))
-            emit_event(conn, project_id, subject_type, subject_id, "workspace_created",
-                       {"path": str(workspace.path), "reused": not workspace.created_now}, actor)
+            _set_run_status(
+                conn, run_id, "preparing", workspace_path=str(workspace.path)
+            )
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "workspace_created",
+                {"path": str(workspace.path), "reused": not workspace.created_now},
+                actor,
+            )
             conn.commit()
 
         # Honour cancel before touching Playwright.
         if cancel_event is not None and cancel_event.is_set():
-            return self._cancel(run_id, project_id, subject_type, subject_id,
-                                actor, conn_factory, started)
+            return self._cancel(
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+            )
 
         # ── Compile + validate manifest ────────────────────────────────────
         try:
@@ -1363,9 +1858,18 @@ class ScenarioRunner(Runner):
             validate_manifest(manifest)
         except Exception as exc:
             return self._fail_with_gap(
-                run_id, project_id, subject_type, subject_id, actor,
-                conn_factory, started, "manifest_error", str(exc),
-                manifest=None, result=None, conn_factory_for_meta=conn_factory,
+                run_id,
+                project_id,
+                subject_type,
+                subject_id,
+                actor,
+                conn_factory,
+                started,
+                "manifest_error",
+                str(exc),
+                manifest=None,
+                result=None,
+                conn_factory_for_meta=conn_factory,
             )
 
         # ── Phase 2: running ───────────────────────────────────────────────
@@ -1387,7 +1891,7 @@ class ScenarioRunner(Runner):
         base_url = base_url.replace("{project_id}", project_id)
 
         # ── Launch Playwright and run the scenario ─────────────────────────
-        result: Optional[RunResult] = None
+        result: RunResult | None = None
         try:
             from playwright.sync_api import sync_playwright
 
@@ -1431,14 +1935,25 @@ class ScenarioRunner(Runner):
         if result is not None and result.status == "passed":
             summary = f"scenario passed ({step_count} steps)"
             with db_session(conn_factory) as conn:
-                _set_run_status(conn, run_id, "succeeded",
-                                summary=summary, finished=True)
-                emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
-                           {"run_id": run_id, "summary": summary,
-                            "duration_ms": elapsed_ms}, actor)
+                _set_run_status(
+                    conn, run_id, "succeeded", summary=summary, finished=True
+                )
+                emit_event(
+                    conn,
+                    project_id,
+                    subject_type,
+                    subject_id,
+                    "run_succeeded",
+                    {"run_id": run_id, "summary": summary, "duration_ms": elapsed_ms},
+                    actor,
+                )
                 conn.commit()
-            return RunOutcome(run_id=run_id, final_status="succeeded",
-                              duration_ms=elapsed_ms, summary=summary)
+            return RunOutcome(
+                run_id=run_id,
+                final_status="succeeded",
+                duration_ms=elapsed_ms,
+                summary=summary,
+            )
 
         # Non-passing — build gap report and store in metadata_json.
         if result is None:
@@ -1455,35 +1970,63 @@ class ScenarioRunner(Runner):
             "scenario_step_failed" if result.status == "failed" else "scenario_error"
         )
         error_msg = result.error_message or "scenario did not pass"
-        summary = (error_msg[:200] if error_msg else "scenario failed")
+        summary = error_msg[:200] if error_msg else "scenario failed"
 
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "failed",
-                            error_class=error_class,
-                            error_message=error_msg,
-                            summary=summary,
-                            finished=True)
+            _set_run_status(
+                conn,
+                run_id,
+                "failed",
+                error_class=error_class,
+                error_message=error_msg,
+                summary=summary,
+                finished=True,
+            )
             conn.execute(
                 "UPDATE runs SET metadata_json = ? WHERE id = ?",
                 (_json.dumps({"gap_report": gap_report}), run_id),
             )
-            emit_event(conn, project_id, subject_type, subject_id, "run_failed",
-                       {"run_id": run_id, "error_class": error_class,
-                        "error_message": error_msg[:500]}, actor)
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_failed",
+                {
+                    "run_id": run_id,
+                    "error_class": error_class,
+                    "error_message": error_msg[:500],
+                },
+                actor,
+            )
             conn.commit()
 
         return RunOutcome(
-            run_id=run_id, final_status="failed",
-            duration_ms=elapsed_ms, summary=summary,
-            error_class=error_class, error_message=error_msg,
+            run_id=run_id,
+            final_status="failed",
+            duration_ms=elapsed_ms,
+            summary=summary,
+            error_class=error_class,
+            error_message=error_msg,
         )
 
     def _fail_with_gap(
-        self, run_id, project_id, subject_type, subject_id, actor,
-        conn_factory, started, error_class, error_message,
-        manifest, result, conn_factory_for_meta,
+        self,
+        run_id,
+        project_id,
+        subject_type,
+        subject_id,
+        actor,
+        conn_factory,
+        started,
+        error_class,
+        error_message,
+        manifest,
+        result,
+        conn_factory_for_meta,
     ):
         import json as _json
+
         elapsed_ms = int((time.monotonic() - started) * 1000)
         summary = error_message[:200] if error_message else "scenario failed"
 
@@ -1514,40 +2057,82 @@ class ScenarioRunner(Runner):
             }
 
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "failed",
-                            error_class=error_class,
-                            error_message=error_message,
-                            summary=summary, finished=True)
+            _set_run_status(
+                conn,
+                run_id,
+                "failed",
+                error_class=error_class,
+                error_message=error_message,
+                summary=summary,
+                finished=True,
+            )
             conn.execute(
                 "UPDATE runs SET metadata_json = ? WHERE id = ?",
                 (_json.dumps({"gap_report": gap_report}), run_id),
             )
-            emit_event(conn, project_id, subject_type, subject_id, "run_failed",
-                       {"run_id": run_id, "error_class": error_class,
-                        "error_message": error_message[:500]}, actor)
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_failed",
+                {
+                    "run_id": run_id,
+                    "error_class": error_class,
+                    "error_message": error_message[:500],
+                },
+                actor,
+            )
             conn.commit()
-        return RunOutcome(run_id=run_id, final_status="failed",
-                          duration_ms=elapsed_ms, summary=summary,
-                          error_class=error_class, error_message=error_message)
+        return RunOutcome(
+            run_id=run_id,
+            final_status="failed",
+            duration_ms=elapsed_ms,
+            summary=summary,
+            error_class=error_class,
+            error_message=error_message,
+        )
 
-    def _cancel(self, run_id, project_id, subject_type, subject_id, actor,
-                conn_factory, started):
+    def _cancel(
+        self, run_id, project_id, subject_type, subject_id, actor, conn_factory, started
+    ):
         elapsed_ms = int((time.monotonic() - started) * 1000)
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "cancelled",
-                            summary="cancelled by user", finished=True)
-            emit_event(conn, project_id, subject_type, subject_id, "run_cancelled",
-                       {"run_id": run_id}, actor)
+            _set_run_status(
+                conn, run_id, "cancelled", summary="cancelled by user", finished=True
+            )
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_cancelled",
+                {"run_id": run_id},
+                actor,
+            )
             conn.commit()
-        return RunOutcome(run_id=run_id, final_status="cancelled",
-                          duration_ms=elapsed_ms, summary="cancelled by user")
+        return RunOutcome(
+            run_id=run_id,
+            final_status="cancelled",
+            duration_ms=elapsed_ms,
+            summary="cancelled by user",
+        )
 
 
 class GapAnalyzer(Runner):
     runner_kind = "gap_analyzer"
 
-    def execute(self, run_id, project_id, subject_type, subject_id,
-                workspace, config, conn_factory, cancel_event=None):
+    def execute(
+        self,
+        run_id,
+        project_id,
+        subject_type,
+        subject_id,
+        workspace,
+        config,
+        conn_factory,
+        cancel_event=None,
+    ):
         raise NotImplementedError("GapAnalyzer lands in M4 (closed loop)")
 
 
@@ -1559,8 +2144,10 @@ class GapAnalyzer(Runner):
 # stub; see kitchen._try_claim_and_dispatch zero-step path).
 # ---------------------------------------------------------------------------
 
+
 class NoopRunner(Runner):
     """Runner for zero-step workflows: applies on_success effects only."""
+
     runner_kind = "noop"
 
     def execute(
@@ -1592,11 +2179,22 @@ class NoopRunner(Runner):
         wf_name = (workflow_meta or {}).get("workflow_name", "system workflow")
         summary = f"{wf_name} applied"
         with db_session(conn_factory) as conn:
-            _set_run_status(conn, run_id, "succeeded",
-                            summary=summary, exit_code=0, finished=True)
-            emit_event(conn, project_id, subject_type, subject_id, "run_succeeded",
-                       {"run_id": run_id, "summary": summary,
-                        "duration_ms": elapsed_ms}, actor)
+            _set_run_status(
+                conn, run_id, "succeeded", summary=summary, exit_code=0, finished=True
+            )
+            emit_event(
+                conn,
+                project_id,
+                subject_type,
+                subject_id,
+                "run_succeeded",
+                {"run_id": run_id, "summary": summary, "duration_ms": elapsed_ms},
+                actor,
+            )
             conn.commit()
-        return RunOutcome(run_id=run_id, final_status="succeeded",
-                          duration_ms=elapsed_ms, summary=summary)
+        return RunOutcome(
+            run_id=run_id,
+            final_status="succeeded",
+            duration_ms=elapsed_ms,
+            summary=summary,
+        )

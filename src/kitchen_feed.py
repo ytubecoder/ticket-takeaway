@@ -57,7 +57,6 @@ from datetime import datetime, timedelta
 
 from actions import eligibility as _elig
 
-
 _BUCKETS: tuple[str, ...] = (
     "needs_me",
     "running",
@@ -146,9 +145,7 @@ def _is_unread(
         return False
     if bucket in ("needs_me", "failed", "paused_ticket"):
         return True
-    if status in ("proposed", "blocked"):
-        return True
-    return False
+    return status in ("proposed", "blocked")
 
 
 def build_attention_feed(
@@ -216,33 +213,37 @@ def build_attention_feed(
             time_bucket = _time_bucket_for(updated_dt, now)
             is_unread = _is_unread(bucket, t["status"], updated_dt, now)
 
-            items.append({
-                "ticket_id": tid,
-                "project_id": pid,
-                "project_name": pname,
-                "title": t["title"],
-                "section": t["section"],
-                "status": t["status"],
-                "bucket": bucket,
-                "time_bucket": time_bucket,
-                "updated_at": updated_raw or "",
-                "is_unread": is_unread,
-                "automation_mode": mode,
-                "agent_name": agent_name,
-                "latest_run_status": run_status,
-                "pause_reason": pause_reason,
-            })
+            items.append(
+                {
+                    "ticket_id": tid,
+                    "project_id": pid,
+                    "project_name": pname,
+                    "title": t["title"],
+                    "section": t["section"],
+                    "status": t["status"],
+                    "bucket": bucket,
+                    "time_bucket": time_bucket,
+                    "updated_at": updated_raw or "",
+                    "is_unread": is_unread,
+                    "automation_mode": mode,
+                    "agent_name": agent_name,
+                    "latest_run_status": run_status,
+                    "pause_reason": pause_reason,
+                }
+            )
 
             pcounts["all"] += 1
             pcounts[bucket] += 1
             totals["all"] += 1
             totals[bucket] += 1
 
-        project_summaries.append({
-            "id": pid,
-            "name": pname,
-            "counts": pcounts,
-        })
+        project_summaries.append(
+            {
+                "id": pid,
+                "name": pname,
+                "counts": pcounts,
+            }
+        )
 
     # Newest first overall; tiebreak by ticket_id desc for determinism.
     items.sort(key=lambda x: (x["updated_at"], x["ticket_id"]), reverse=True)

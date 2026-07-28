@@ -2,8 +2,16 @@
 
 Skipped if tmux isn't on PATH.
 """
+
 from __future__ import annotations
-import os, subprocess, time, shutil, pytest, requests
+
+import os
+import shutil
+import subprocess
+import time
+
+import pytest
+import requests
 
 if not shutil.which("tmux"):
     pytestmark = pytest.mark.skip(reason="tmux not installed")
@@ -14,10 +22,14 @@ SESSION = "tt-e2e-pane"
 @pytest.fixture
 def tmux_session():
     subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True)
-    subprocess.run(["tmux", "new-session", "-d", "-s", SESSION, "-x", "80", "-y", "24"], check=True)
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", SESSION, "-x", "80", "-y", "24"], check=True
+    )
     pane = subprocess.run(
         ["tmux", "list-panes", "-t", SESSION, "-F", "#{pane_id}"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     yield pane
     subprocess.run(["tmux", "kill-session", "-t", SESSION], capture_output=True)
@@ -33,11 +45,17 @@ def test_capture_after_link(dashboard_server, tmux_session):
     tid = tickets[0]["id"]
     requests.post(
         f"{base}/api/tickets/{tid}/pane-links",
-        json={"pane_address": pane, "host": os.uname()[1], "pane_descriptor": f"{SESSION}:0.0"},
+        json={
+            "pane_address": pane,
+            "host": os.uname()[1],
+            "pane_descriptor": f"{SESSION}:0.0",
+        },
         timeout=5,
     )
     # Send some output into the pane
-    subprocess.run(["tmux", "send-keys", "-t", pane, "echo 'hello from pane'", "Enter"], check=True)
+    subprocess.run(
+        ["tmux", "send-keys", "-t", pane, "echo 'hello from pane'", "Enter"], check=True
+    )
     # Wait for capture worker to pick it up (interval 2s + buffer)
     time.sleep(4)
     r = requests.get(f"{base}/api/tickets/{tid}/pane-links", timeout=5)
@@ -57,7 +75,11 @@ def test_send_keys_writes_to_pane(dashboard_server, tmux_session):
     tid = tickets[0]["id"]
     requests.post(
         f"{base}/api/tickets/{tid}/pane-links",
-        json={"pane_address": pane, "host": os.uname()[1], "pane_descriptor": f"{SESSION}:0.0"},
+        json={
+            "pane_address": pane,
+            "host": os.uname()[1],
+            "pane_descriptor": f"{SESSION}:0.0",
+        },
         timeout=5,
     )
     requests.post(

@@ -11,14 +11,15 @@ import re
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from actions import NotFoundError
-from scenarios import VALID_ACTIONS, validate_manifest
+from scenarios import VALID_ACTIONS
 
 
 class JourneyNotFoundError(NotFoundError):
     code = "journey_not_found"
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -33,20 +34,25 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _slugify(text: str) -> str:
     """Convert text to a URL-safe slug."""
     slug = _SLUG_RE.sub("-", text.lower()).strip("-")
     return slug or "journey"
 
 
-def _find_journey(conn: sqlite3.Connection, project_id: str, journey_id: str) -> sqlite3.Row:
+def _find_journey(
+    conn: sqlite3.Connection, project_id: str, journey_id: str
+) -> sqlite3.Row:
     """Locate a journey by ID. Raises JourneyNotFoundError if not found."""
     row = conn.execute(
         "SELECT * FROM journeys WHERE id = ? AND project_id = ?",
         (journey_id, project_id),
     ).fetchone()
     if not row:
-        raise JourneyNotFoundError(f"Journey '{journey_id}' not found in project '{project_id}'.")
+        raise JourneyNotFoundError(
+            f"Journey '{journey_id}' not found in project '{project_id}'."
+        )
     return row
 
 
@@ -82,6 +88,7 @@ def _unique_id(conn: sqlite3.Connection, project_id: str, base_slug: str) -> str
 # Journey CRUD
 # ---------------------------------------------------------------------------
 
+
 def add_journey(
     conn: sqlite3.Connection,
     project_id: str,
@@ -116,8 +123,14 @@ def update_journey(
         )
 
     allowed = {
-        "title", "description", "persona", "status",
-        "seed_json", "actors_json", "viewport_json", "theme",
+        "title",
+        "description",
+        "persona",
+        "status",
+        "seed_json",
+        "actors_json",
+        "viewport_json",
+        "theme",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -188,8 +201,7 @@ def get_journey(
 
     # Linked tickets
     links = conn.execute(
-        "SELECT * FROM journey_tickets "
-        "WHERE journey_id = ? AND project_id = ?",
+        "SELECT * FROM journey_tickets WHERE journey_id = ? AND project_id = ?",
         (journey_id, project_id),
     ).fetchall()
     journey["linked_tickets"] = [dict(l) for l in links]
@@ -200,6 +212,7 @@ def get_journey(
 # ---------------------------------------------------------------------------
 # Step CRUD
 # ---------------------------------------------------------------------------
+
 
 def add_step(
     conn: sqlite3.Connection,
@@ -217,9 +230,7 @@ def add_step(
 ) -> dict[str, Any]:
     """Add a step to a journey.  Returns the inserted row as a dict."""
     if action not in VALID_ACTIONS:
-        raise ValueError(
-            f"Invalid action '{action}'; valid: {sorted(VALID_ACTIONS)}"
-        )
+        raise ValueError(f"Invalid action '{action}'; valid: {sorted(VALID_ACTIONS)}")
 
     sort_order = _next_step_order(conn, journey_id, project_id)
     target_json = json.dumps(target) if target else "{}"
@@ -231,8 +242,19 @@ def add_step(
         "(journey_id, project_id, sort_order, label, actor, action, "
         "target_json, value, key, capture_json, assert_json) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (journey_id, project_id, sort_order, label, actor, action,
-         target_json, value, key, capture_json, assert_json),
+        (
+            journey_id,
+            project_id,
+            sort_order,
+            label,
+            actor,
+            action,
+            target_json,
+            value,
+            key,
+            capture_json,
+            assert_json,
+        ),
     )
     row = conn.execute(
         "SELECT * FROM journey_steps WHERE id = ?", (cursor.lastrowid,)
@@ -267,9 +289,9 @@ def update_step(conn: sqlite3.Connection, step_id: int, **fields) -> dict[str, A
     values = list(updates.values()) + [step_id]
     conn.execute(f"UPDATE journey_steps SET {set_clause} WHERE id = ?", values)
 
-    return dict(conn.execute(
-        "SELECT * FROM journey_steps WHERE id = ?", (step_id,)
-    ).fetchone())
+    return dict(
+        conn.execute("SELECT * FROM journey_steps WHERE id = ?", (step_id,)).fetchone()
+    )
 
 
 def delete_step(conn: sqlite3.Connection, step_id: int) -> None:
@@ -295,6 +317,7 @@ def reorder_steps(
 # ---------------------------------------------------------------------------
 # Compilation: Journey → Scenario Manifest
 # ---------------------------------------------------------------------------
+
 
 def _step_to_manifest_step(step: dict[str, Any]) -> dict[str, Any]:
     """Convert a journey_steps row dict into a scenario manifest step dict."""
@@ -371,6 +394,7 @@ def compile_to_manifest(
 # Run result storage
 # ---------------------------------------------------------------------------
 
+
 def store_run_results(
     conn: sqlite3.Connection,
     project_id: str,
@@ -389,9 +413,12 @@ def store_run_results(
         "duration_ms, error_message, artifact_dir) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            run_id, journey_id, project_id,
+            run_id,
+            journey_id,
+            project_id,
             run_result["status"],
-            now, now,
+            now,
+            now,
             run_result.get("duration_ms", 0),
             run_result.get("error_message", ""),
             artifact_dir,
@@ -400,16 +427,20 @@ def store_run_results(
 
     failed_idx = run_result.get("failed_step_index")
     for i, step_id in enumerate(step_ids):
-        if run_result["status"] == "passed":
-            step_status = "passed"
-        elif failed_idx is not None and i < failed_idx:
+        if (
+            run_result["status"] == "passed"
+            or failed_idx is not None
+            and i < failed_idx
+        ):
             step_status = "passed"
         elif failed_idx is not None and i == failed_idx:
             step_status = "failed"
         else:
             step_status = "skipped"
 
-        error_msg = run_result.get("error_message", "") if step_status == "failed" else ""
+        error_msg = (
+            run_result.get("error_message", "") if step_status == "failed" else ""
+        )
         conn.execute(
             "INSERT INTO journey_step_results "
             "(run_id, step_id, sort_order, status, error_message) "
@@ -429,11 +460,10 @@ def _backfill_screenshots(
 ) -> None:
     """Scan artifact dir for .png files and assign to capture step results."""
     import os
+
     if not os.path.isdir(artifact_dir):
         return
-    pngs = sorted(
-        f for f in os.listdir(artifact_dir) if f.endswith(".png")
-    )
+    pngs = sorted(f for f in os.listdir(artifact_dir) if f.endswith(".png"))
     if not pngs:
         return
 
@@ -461,6 +491,7 @@ def _backfill_screenshots(
 # ---------------------------------------------------------------------------
 # Ticket linking
 # ---------------------------------------------------------------------------
+
 
 def link_ticket(
     conn: sqlite3.Connection,
@@ -496,6 +527,7 @@ def unlink_ticket(
 # Inference engine: tickets → journey suggestions
 # ---------------------------------------------------------------------------
 
+
 def _manifest_step_to_db_fields(step: dict[str, Any]) -> dict[str, Any]:
     """Convert a scenario manifest step dict to journey_steps DB fields."""
     value = step.get("value", "")
@@ -526,11 +558,11 @@ def infer_journeys(
         actors_json, seed_json
     """
     from scenario_drafting import (
-        _steps_open_board,
         _steps_capture,
-        _steps_create_ticket,
-        _steps_open_detail,
         _steps_close_detail,
+        _steps_create_ticket,
+        _steps_open_board,
+        _steps_open_detail,
     )
 
     tickets = conn.execute(
@@ -551,15 +583,19 @@ def infer_journeys(
         by_section.setdefault(sec, []).append(dict(t))
 
     # 1. Board overview journey (always)
-    overview_steps = _steps_open_board("user") + _steps_capture("user", "board-overview")
-    suggestions.append({
-        "title": "Board Overview",
-        "description": "Open the board and verify it loads correctly",
-        "persona": "Any user",
-        "steps": [_manifest_step_to_db_fields(s) for s in overview_steps],
-        "actors_json": '{"user": {"label": "User"}}',
-        "seed_json": "{}",
-    })
+    overview_steps = _steps_open_board("user") + _steps_capture(
+        "user", "board-overview"
+    )
+    suggestions.append(
+        {
+            "title": "Board Overview",
+            "description": "Open the board and verify it loads correctly",
+            "persona": "Any user",
+            "steps": [_manifest_step_to_db_fields(s) for s in overview_steps],
+            "actors_json": '{"user": {"label": "User"}}',
+            "seed_json": "{}",
+        }
+    )
 
     # 2. Feature creation journey (from Ideas/Backlog tickets)
     idea_tickets = by_section.get("Ideas", []) + by_section.get("Backlog", [])
@@ -570,14 +606,16 @@ def infer_journeys(
             + _steps_create_ticket("user", sample["title"], "Backlog")
             + _steps_capture("user", "after-create")
         )
-        suggestions.append({
-            "title": f"Create Feature: {sample['title']}",
-            "description": f"Create a new ticket for '{sample['title']}' and verify it appears",
-            "persona": "Product manager",
-            "steps": [_manifest_step_to_db_fields(s) for s in create_steps],
-            "actors_json": '{"user": {"label": "Product Manager"}}',
-            "seed_json": "{}",
-        })
+        suggestions.append(
+            {
+                "title": f"Create Feature: {sample['title']}",
+                "description": f"Create a new ticket for '{sample['title']}' and verify it appears",
+                "persona": "Product manager",
+                "steps": [_manifest_step_to_db_fields(s) for s in create_steps],
+                "actors_json": '{"user": {"label": "Product Manager"}}',
+                "seed_json": "{}",
+            }
+        )
 
     # 3. Feature inspection journey (from WIP/Review tickets)
     active_tickets = by_section.get("WIP", []) + by_section.get("For Review", [])
@@ -590,14 +628,16 @@ def infer_journeys(
             + _steps_close_detail("user")
         )
         seed = {"tickets": [{"title": sample["title"], "section": sample["section"]}]}
-        suggestions.append({
-            "title": f"Inspect: {sample['title']}",
-            "description": f"Open the detail view for '{sample['title']}' and verify fields",
-            "persona": "Developer",
-            "steps": [_manifest_step_to_db_fields(s) for s in inspect_steps],
-            "actors_json": '{"user": {"label": "Developer"}}',
-            "seed_json": json.dumps(seed),
-        })
+        suggestions.append(
+            {
+                "title": f"Inspect: {sample['title']}",
+                "description": f"Open the detail view for '{sample['title']}' and verify fields",
+                "persona": "Developer",
+                "steps": [_manifest_step_to_db_fields(s) for s in inspect_steps],
+                "actors_json": '{"user": {"label": "Developer"}}',
+                "seed_json": json.dumps(seed),
+            }
+        )
 
     # 4. Completed feature verification (from Done tickets)
     done_tickets = by_section.get("Done", [])
@@ -610,14 +650,16 @@ def infer_journeys(
             + _steps_close_detail("user")
         )
         seed = {"tickets": [{"title": sample["title"], "section": "Done"}]}
-        suggestions.append({
-            "title": f"Verify Done: {sample['title']}",
-            "description": f"Verify completed feature '{sample['title']}' is accessible",
-            "persona": "QA",
-            "steps": [_manifest_step_to_db_fields(s) for s in verify_steps],
-            "actors_json": '{"user": {"label": "QA"}}',
-            "seed_json": json.dumps(seed),
-        })
+        suggestions.append(
+            {
+                "title": f"Verify Done: {sample['title']}",
+                "description": f"Verify completed feature '{sample['title']}' is accessible",
+                "persona": "QA",
+                "steps": [_manifest_step_to_db_fields(s) for s in verify_steps],
+                "actors_json": '{"user": {"label": "QA"}}',
+                "seed_json": json.dumps(seed),
+            }
+        )
 
     return suggestions
 
@@ -678,12 +720,17 @@ def build_steps_from_path(
 
         if screen != current_screen and interaction is None:
             route = _SCREEN_ROUTES.get(screen, "")
-            steps.append(_make_step(actor, "open", label=f"Go to {screen}", value=route))
-            steps.append(_make_step(
-                actor, "capture",
-                label=f"Screenshot: {screen}",
-                capture={"name": screen.lower().replace(" ", "-")},
-            ))
+            steps.append(
+                _make_step(actor, "open", label=f"Go to {screen}", value=route)
+            )
+            steps.append(
+                _make_step(
+                    actor,
+                    "capture",
+                    label=f"Screenshot: {screen}",
+                    capture={"name": screen.lower().replace(" ", "-")},
+                )
+            )
             current_screen = screen
             continue
 
@@ -695,42 +742,61 @@ def build_steps_from_path(
         name = interaction.get("name", "")
 
         if itype == "screenshot":
-            steps.append(_make_step(
-                actor, "capture",
-                label=f"Screenshot: {name or current_screen}",
-                capture={"name": (name or current_screen or "capture").lower().replace(" ", "-")},
-            ))
+            steps.append(
+                _make_step(
+                    actor,
+                    "capture",
+                    label=f"Screenshot: {name or current_screen}",
+                    capture={
+                        "name": (name or current_screen or "capture")
+                        .lower()
+                        .replace(" ", "-")
+                    },
+                )
+            )
         elif itype in ("text-input", "textarea"):
             target = {"testid": testid} if testid else None
-            steps.append(_make_step(
-                actor, "fill",
-                label=f"Fill: {name}",
-                value=interaction.get("fill_value", ""),
-                target=target,
-            ))
+            steps.append(
+                _make_step(
+                    actor,
+                    "fill",
+                    label=f"Fill: {name}",
+                    value=interaction.get("fill_value", ""),
+                    target=target,
+                )
+            )
         elif itype == "select":
             target = {"testid": testid} if testid else None
-            steps.append(_make_step(
-                actor, "select",
-                label=f"Select: {name}",
-                value=interaction.get("fill_value", ""),
-                target=target,
-            ))
+            steps.append(
+                _make_step(
+                    actor,
+                    "select",
+                    label=f"Select: {name}",
+                    value=interaction.get("fill_value", ""),
+                    target=target,
+                )
+            )
         else:
             target = {"testid": testid} if testid else None
-            steps.append(_make_step(
-                actor, "click",
-                label=f"Click: {name}",
-                target=target,
-            ))
+            steps.append(
+                _make_step(
+                    actor,
+                    "click",
+                    label=f"Click: {name}",
+                    target=target,
+                )
+            )
 
         navigates_to = interaction.get("navigates_to")
         if navigates_to:
             current_screen = navigates_to
-            steps.append(_make_step(
-                actor, "capture",
-                label=f"Screenshot: {navigates_to}",
-                capture={"name": navigates_to.lower().replace(" ", "-")},
-            ))
+            steps.append(
+                _make_step(
+                    actor,
+                    "capture",
+                    label=f"Screenshot: {navigates_to}",
+                    capture={"name": navigates_to.lower().replace(" ", "-")},
+                )
+            )
 
     return steps

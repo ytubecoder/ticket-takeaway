@@ -5,15 +5,14 @@ See docs/KITCHEN.md §11.
 """
 
 import copy
-import sys
 import os
+import sys
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from workflow_config import DEFAULTS, load_prompt_template, load_workflow_config
-
 
 # ---------------------------------------------------------------------------
 # load_workflow_config
@@ -71,7 +70,7 @@ def test_unknown_section_preserved(tmp_path):
 def test_unknown_leaf_keys_within_known_section_preserved(tmp_path):
     """Unknown leaf keys inside a known section are kept (forward-compat)."""
     (tmp_path / "WORKFLOW.toml").write_text(
-        '[agent]\nfuture_flag = true\n', encoding="utf-8"
+        "[agent]\nfuture_flag = true\n", encoding="utf-8"
     )
     result = load_workflow_config(tmp_path)
 
@@ -127,9 +126,7 @@ def test_missing_prompt_md_returns_empty(tmp_path):
 
 def test_prompt_md_returns_trimmed_content(tmp_path):
     """File with leading/trailing whitespace → content stripped."""
-    (tmp_path / "PROMPT.md").write_text(
-        "\n\n  You are an agent.\n\n", encoding="utf-8"
-    )
+    (tmp_path / "PROMPT.md").write_text("\n\n  You are an agent.\n\n", encoding="utf-8")
     result = load_prompt_template(tmp_path)
     assert result == "You are an agent."
 

@@ -1,5 +1,26 @@
 # Session Log
 
+## 2026-07-28/29 — Lint wall cleared (B-70), OpenSpec work integrated, TT enrolled in its own lifecycle
+
+### Summary
+- Cleared the 179-finding lint wall repo-wide: 773 ruff findings → 0, policy pinned in `ruff.toml`, verify gate pinned in `WORKFLOW.toml [verify]` (TDD suite only). Root cause was ruff 0.16's ~415-rule default set — no config had ever existed. Landed as PR #18 in five commits with the ~9.7k-line mechanical layer quarantined and re-derivable from two documented commands.
+- The pass surfaced two real F821 runtime bugs (`_page_scan_cache`/`_page_scan_lock` lost from src/, phantom `_get_project()` in the feedbacks callback) plus two long-failing trigger tests encoding the pre-master-switch design — TDD suite green end-to-end (907 passed) for the first time.
+- Integrated with the OpenSpec work per Tom: merged PR #17 first, then re-derived the cleanup branch from scratch on the new main (policy-first ordering) and merged PR #18. Deployed to the runtime copy, restarted serve.py on 8788.
+- Enrolled ticket-takeaway itself via `workflows/enroll-project-openspec.txt`: openspec init (footprint verified), config context, lane-C change for B-70 with a `screen-discovery` delta. Gate verified both ways: B-70 PASSES, unready B-17 refused exit 1. B-70 left in For Review — accept is Tom's call.
+
+### Lessons Learned
+- **Gotcha:** ruff's SIM118 autofix (`in d.keys()` → `in d`) is wrong on `sqlite3.Row` — `in row` iterates *values*, not keys. It silently rewrote 14 membership tests; all reverted, rule policy-ignored with the rationale. [Also in CLAUDE.md Lint bar]
+- **Gotcha:** ruff's F841 fix conservatively leaves side-effect-free calls as bare expression statements (`sum(...)`, `escape(...)`) — the fix needs a follow-up pass (AST-driven here) to actually remove the residue, while keeping genuinely side-effecting calls like `auto_promote_parents()`.
+- **Gotcha:** the bare-`pytest` verify fallback would run the smoke suites — which write to the real tickets.db and can spawn billed agent sessions. Caught before wiring verify; `WORKFLOW.toml` now pins the TDD suite with a warning comment.
+- **Accepted:** re-derive over rebase for mechanical passes. Rebasing 9.7k formatting lines across #17 was hopeless; re-running the scripted pipeline on the new main took minutes and produced a cleaner result (policy-first meant SIM118 never fired at all).
+- **Accepted:** baseline-diff verification — run the same suite on the branch and on origin/main in a throwaway worktree and diff the failure lists. Byte-identical sets proved all 72 smoke failures pre-existing with zero effort spent triaging them individually.
+- **Gotcha:** the two "pre-existing" trigger-test failures were stale *tests*, not product bugs — they encoded "system workflow doesn't need auto mode," which the shipped master-switch design (automation_mode='auto' in every default mutating trigger) superseded. Fixture fix follows the `test_tdd_lane_a_primitives` idiom.
+
+### Decisions
+- Deliberately NOT fixed in a style pass, each policy-ignored with rationale: DTZ naive datetimes (stored-format change → I-44), TRY004 ValueError→TypeError (API surface), PLW1510 check= (callers inspect returncode), BLE001/S110 (server-resilience excepts).
+- Dead workflows-view trigger/effects HTML and container badge deleted as dead code but filed as I-45 — they smell like lost-UI regressions from an earlier clobber, restore-or-confirm is a product call.
+- B-70 closed through the real gate (verify at 9ea20ca + lane C + validated change), not --force — the cleanup dogfoods the lifecycle it just integrated.
+
 ## 2026-07-25 — Entry gate: spec_linked now binding at Kitchen dispatch
 
 ### Summary

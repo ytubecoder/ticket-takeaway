@@ -79,7 +79,8 @@ Work is described through OpenSpec change proposals and closed through one unifo
 - **Close = verify (real command, real exit code, recorded) → obligations → `validate --strict` → `archive` → write spec.** Identical in all three lanes (A spec'd / B interviewed / C direct); the lane only changes where obligations are read from. `--force "reason"` is the sole bypass and records the reason everywhere.
 - **All `openspec` shell-outs go through `src/openspec_adapter.py`.** Pinned to `@fission-ai/openspec@1.6.0` — **not** the bare `openspec` npm name (dead 2019 squat, no `bin`) — with `OPENSPEC_TELEMETRY=0`. Captured fixtures in `tests/fixtures/openspec/` guard the JSON parsing; regenerate them (see LIFECYCLE.md §4c) after any deliberate version bump.
 - **Adding a readiness flag is a 3-place change, not one.** The DB accepts any name, so the real gates are: `constants.READINESS_FLAG_LABELS` (both surfaces validate against it), and it supplies the `PRODUCT_BACKLOG.md` line prefix for both the writer and the parser. A flag missing from that registry is written to the DB and then silently dropped on the next regeneration.
-- **Per-project verify command:** `WORKFLOW.toml` `[verify] command`. Fallbacks: `tests/run-tests.sh` → `package.json` test → `pytest` → ask once and write it in.
+- **Per-project verify command:** `WORKFLOW.toml` `[verify] command`. Fallbacks: `tests/run-tests.sh` → `package.json` test → `pytest` → ask once and write it in. This repo's own is pinned to the TDD suite — never widen it (see Testing).
+- **TT itself is enrolled** (`openspec/` root present, since 2026-07-29). Enroll other projects via `workflows/enroll-project-openspec.txt` — 9 steps with footprint verification against a baseline snapshot.
 
 ## Workflow Bounce (I-19) — quick map
 
@@ -106,6 +107,10 @@ python3 -m pytest tests/test_e2e_*.py -v     # full workflows (needs serve.py + 
 ```
 
 Business logic in `actions.py`, constants in `constants.py`, DB in `db.py` — all importable without side effects. `conftest.py` provides `dashboard_server`, `browser`/`page` (mocked gate-check), `live_page` (no mocks).
+
+**Suite safety:** the smoke/e2e suites' `dashboard_server` fixture writes to the **real** `tickets.db`, and the streaming smokes can spawn real billed `claude -p` sessions. Run them deliberately, never in a loop or as a gate — the verify gate (`WORKFLOW.toml [verify]`) is pinned to the TDD suite for exactly this reason.
+
+**Lint bar:** `ruff.toml` pins the ruleset (ruff 0.16+ ships a ~415-rule default set — the bar comes from this file, not ruff's drifting defaults; `uvx ruff check` is clean as of 2026-07-29). Every ignored rule carries its WHY in a comment — read it before "fixing" an ignored category. SIM118 in particular stays ignored: membership tests here are on `sqlite3.Row`, where `.keys()` is correct and `in row` iterates *values* — auto-applying ruff's fix broke 14 sites.
 
 **Scenario runner** (manifest-driven UI scenarios with screenshot gallery publishing): `python3 -m pytest tests/test_scenarios.py -v [--scenario-id ID] [--publish] [--backend=playwright|cdp]`. Manifests in `tests/scenarios/*.json`. Backend toggle in journey detail view.
 

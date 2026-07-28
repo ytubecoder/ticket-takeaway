@@ -1,0 +1,26 @@
+# Lint bar for this repo, pinned so the wall doesn't move with ruff releases.
+# Base = ruff's shipped default ruleset (0.16+). Every ignore below is a
+# deliberate policy call, not deferred work — keep the WHY comment when
+# adding one. Style debt was cleared in one pass (chore/lint-wall-cleanup).
+
+target-version = "py310"
+
+[lint]
+ignore = [
+    "BLE001",  # blanket `except Exception` is the resilience pattern in server/watcher/daemon loops
+    "S110",    # try/except/pass: deliberate swallow in poll loops — a crash would kill the thread
+    "S112",    # try/except/continue: same pattern as S110
+    "DTZ003",  # naive utcnow() is the stored timestamp format today; tz-aware migration
+    "DTZ005",  # is a behavior change (isoformat gains +00:00) — tracked as follow-up, not style
+    "SIM118",  # membership tests here are on sqlite3.Row: .keys() is correct; `in row` iterates VALUES
+    "PLW1510", # subprocess.run callers inspect .returncode explicitly rather than pass check=
+    "B008",    # ActorContext.human() argument defaults are intentional API (immutable context)
+    "TRY004",  # raised exception types are API surface; not swapping ValueError→TypeError in a style pass
+    "PLC0206", # write-back loops over dict keys (d[k] = ...) are legitimate
+]
+
+[lint.per-file-ignores]
+"tests/*" = [
+    "RUF012",  # test stub classes use plain dict class attributes
+    "B017",    # asserting a broad Exception is deliberate in a few tests
+]

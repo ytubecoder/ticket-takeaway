@@ -61,7 +61,8 @@ from constants import (SECTION_SLUGS, DEFAULT_STATUS_BY_SECTION, SECTION_ORDER,
                        compute_status_on_move, DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
                        WORKFLOW_AGENT_TIMEOUT, WORKFLOW_RUN_STATUSES,
                        GATE_BANNER_BY_SECTION, EVENT_KIND_LABELS, EVENT_KIND_ICONS,
-                       EVENT_KIND_GROUPS, EVENT_GROUP_COLORS)
+                       EVENT_KIND_GROUPS, EVENT_GROUP_COLORS,
+                       VALID_READINESS_FLAGS as _CANONICAL_READINESS_FLAGS)
 from db import get_db, init_db
 from actions import (
     move_ticket as _actions_move_ticket,
@@ -1174,8 +1175,14 @@ def _delete_ticket(proj: dict, ticket_id: str) -> bool:
     return True
 
 
-def _accept_ticket(proj: dict, ticket_id: str) -> bool:
-    """Accept a ticket — move to Done with status 'done'. Returns True on success."""
+def _accept_ticket(proj: dict, ticket_id: str, force: str = "") -> tuple[bool, str]:
+    """Accept a ticket — move to Done with status 'done'.
+
+    Returns ``(ok, message)``. On refusal the message is the close gate's own
+    explanation, forwarded verbatim: a dashboard click must be told exactly what
+    a CLI caller would be told, or the two surfaces have effectively different
+    rules. The gate itself lives in actions.accept_ticket().
+    """
     project_id = proj["id"]
     with _db_lock:
         conn = get_db()
@@ -1185,19 +1192,23 @@ def _accept_ticket(proj: dict, ticket_id: str) -> bool:
         project_path = os.path.expanduser(proj.get("path", ""))
         project_name = proj.get("name", proj.get("id", ""))
         try:
-            _actions_accept_ticket(conn, project_id, ticket_id, project_path, project_name)
-        except ValueError:
+            _actions_accept_ticket(
+                conn, project_id, ticket_id, project_path, project_name, force=force
+            )
+        except ValueError as exc:
             conn.close()
-            return False
+            return (False, str(exc))
 
         conn.commit()
         cli.sync_to_markdown(conn, proj)
         cli.regenerate_dashboard(proj)
         conn.close()
-    return True
+    return (True, "")
 
 
-VALID_READINESS_FLAGS = {"reviewed"}
+# Same registry the CLI validates against — the HTTP surface must not be able to
+# accept a flag the headless path rejects, or vice versa.
+VALID_READINESS_FLAGS = _CANONICAL_READINESS_FLAGS
 
 
 # ---------------------------------------------------------------------------
@@ -10620,11 +10631,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/accept$", remainder)
         if m:
             ticket_id = m.group(1)
-            if _accept_ticket(proj, ticket_id):
+            # Accept has historically been a bodyless POST; keep that working and
+            # treat a body purely as the optional {"force": "<reason>"} override.
+            try:
+                body = self._read_body() or {}
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            ok, message = _accept_ticket(proj, ticket_id, force=str(body.get("force", "") or ""))
+            if ok:
                 t = _get_ticket_json(proj["id"], ticket_id)
                 self._send_json(t or {"ok": True})
             else:
-                self._send_json({"error": "Failed to accept ticket"}, 400)
+                # Forward the gate's reason rather than a generic failure, so the
+                # dashboard can show what the CLI would have printed.
+                self._send_json({"error": message or "Failed to accept ticket"}, 400)
             return
 
         # Create ticket

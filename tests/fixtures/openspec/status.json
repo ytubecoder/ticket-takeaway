@@ -1,0 +1,88 @@
+{
+  "changeName": "b-1-sample-capability",
+  "schemaName": "spec-driven",
+  "planningHome": {
+    "kind": "repo",
+    "root": "<PROJECT_ROOT>",
+    "changesDir": "<PROJECT_ROOT>/openspec/changes",
+    "defaultSchema": "spec-driven"
+  },
+  "changeRoot": "<PROJECT_ROOT>/openspec/changes/b-1-sample-capability",
+  "artifactPaths": {
+    "proposal": {
+      "outputPath": "proposal.md",
+      "resolvedOutputPath": "<PROJECT_ROOT>/openspec/changes/b-1-sample-capability/proposal.md",
+      "existingOutputPaths": [
+        "<PROJECT_ROOT>/openspec/changes/b-1-sample-capability/proposal.md"
+      ]
+    },
+    "specs": {
+      "outputPath": "specs/**/*.md",
+      "resolvedOutputPath": "<PROJECT_ROOT>/openspec/changes/b-1-sample-capability/specs/**/*.md",
+      "existingOutputPaths": []
+    },
+    "design": {
+      "outputPath": "design.md",
+      "resolvedOutputPath": "<PROJECT_ROOT>/openspec/changes/b-1-sample-capability/design.md",
+      "existingOutputPaths": []
+    },
+    "tasks": {
+      "outputPath": "tasks.md",
+      "resolvedOutputPath": "<PROJECT_ROOT>/openspec/changes/b-1-sample-capability/tasks.md",
+      "existingOutputPaths": [
+        "<PROJECT_ROOT>/openspec/changes/b-1-sample-capability/tasks.md"
+      ]
+    }
+  },
+  "isComplete": false,
+  "applyRequires": [
+    "tasks"
+  ],
+  "nextSteps": [
+    "Run openspec instructions design --change \"b-1-sample-capability\" --json before writing that artifact."
+  ],
+  "actionContext": {
+    "mode": "repo-local",
+    "sourceOfTruth": "repo",
+    "planningArtifacts": [
+      "proposal",
+      "design",
+      "specs",
+      "tasks"
+    ],
+    "linkedContext": [],
+    "allowedEditRoots": [
+      "<PROJECT_ROOT>"
+    ],
+    "requiresAffectedAreaSelection": false,
+    "constraints": [
+      "Repo-local change artifacts and implementation edits are scoped to this project."
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "proposal",
+      "outputPath": "proposal.md",
+      "status": "done"
+    },
+    {
+      "id": "design",
+      "outputPath": "design.md",
+      "status": "ready"
+    },
+    {
+      "id": "specs",
+      "outputPath": "specs/**/*.md",
+      "status": "ready"
+    },
+    {
+      "id": "tasks",
+      "outputPath": "tasks.md",
+      "status": "done"
+    }
+  ],
+  "root": {
+    "path": "<PROJECT_ROOT>",
+    "source": "nearest"
+  }
+}

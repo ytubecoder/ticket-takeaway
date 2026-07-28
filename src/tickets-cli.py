@@ -32,6 +32,8 @@ from constants import (
     DEFAULT_STATUS_BY_SECTION, SECTION_PREFIX, STATUSES,
     VALID_STATUSES_BY_SECTION, compute_status_on_move,
     DASHBOARD_DIR, DB_PATH, REGISTRY_PATH,
+    READINESS_FLAG_LABELS, READINESS_LABEL_TO_FLAG, VALID_READINESS_FLAGS,
+    SPEC_LANES, DEFAULT_SPEC_LANE,
 )
 from db import get_db, init_db
 from actions import (
@@ -222,16 +224,25 @@ def parse_backlog(filepath: str) -> list[dict]:
             current_ticket["acceptance_criteria"].append((checked, text_content))
             continue
 
-        # Readiness content: Reviewed (Learnings). Tests/Smoke are no longer
-        # tracked separately — their content moved into acceptance criteria
-        # (migration 15). Legacy `Tests:` / `Smoke:` lines from older markdown
-        # are silently ignored on ingest; the next sync will drop them, along
-        # with any 4-space-indented continuation lines that followed them.
-        if current_ticket and line_stripped.startswith("Reviewed:"):
-            _, _, val = line_stripped.partition(":")
-            current_ticket["readiness_content"]["reviewed"] = val.strip()
-            current_ticket["_swallow_indented"] = False
-            continue
+        # Readiness content: Reviewed (Learnings), Spec (OpenSpec lane + change),
+        # Verified (verify-command evidence). Labels come from the constants
+        # registry so the writer below and this parser can never drift — a flag
+        # missing from that map would be silently dropped on regeneration.
+        # Tests/Smoke are no longer tracked separately — their content moved into
+        # acceptance criteria (migration 15). Legacy `Tests:` / `Smoke:` lines
+        # from older markdown are silently ignored on ingest; the next sync will
+        # drop them, along with any 4-space-indented continuation lines.
+        if current_ticket:
+            _matched_flag = None
+            for _prefix, _flag in READINESS_LABEL_TO_FLAG.items():
+                if line_stripped.startswith(_prefix):
+                    _matched_flag = _flag
+                    break
+            if _matched_flag:
+                _, _, val = line_stripped.partition(":")
+                current_ticket["readiness_content"][_matched_flag] = val.strip()
+                current_ticket["_swallow_indented"] = False
+                continue
         if current_ticket and line_stripped.startswith(("Tests:", "Smoke:")):
             current_ticket["_swallow_indented"] = True
             continue
@@ -617,14 +628,17 @@ def sync_to_markdown(conn: sqlite3.Connection, project: dict):
                 check = "x" if c["checked"] else " "
                 lines.append(f"- [{check}] {c['text']}")
 
-            # Readiness content (Reviewed → Learnings). Tests/Smoke were
-            # collapsed into acceptance criteria in migration 15.
+            # Readiness content (Reviewed → Learnings, Spec → OpenSpec linkage,
+            # Verified → verify evidence). Tests/Smoke were collapsed into
+            # acceptance criteria in migration 15. Labels come from the shared
+            # registry — a flag absent from it is intentionally not persisted to
+            # markdown, so adding one means adding it there, not here.
             flags = conn.execute(
                 "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND content != '' ORDER BY flag",
                 (t["id"], project_id)
             ).fetchall()
             for f in flags:
-                label = {"reviewed": "Reviewed"}.get(f["flag"])
+                label = READINESS_FLAG_LABELS.get(f["flag"])
                 if label and f["content"]:
                     content_lines = f["content"].split("\n")
                     lines.append(f"{label}: {content_lines[0]}")
@@ -1184,7 +1198,10 @@ def cmd_accept(args):
     ingest_markdown(conn, proj)
 
     try:
-        tid = accept_ticket(conn, project_id, args.id, project_path, project_name)
+        tid = accept_ticket(
+            conn, project_id, args.id, project_path, project_name,
+            force=getattr(args, "force", "") or "",
+        )
     except ValueError as e:
         print(str(e), file=sys.stderr)
         conn.close()
@@ -1198,10 +1215,171 @@ def cmd_accept(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommands: spec / verify  (the spec lifecycle, \u00a74e)
+# ---------------------------------------------------------------------------
+#
+# These exist so the headless agent path and the dashboard drive the same code.
+# All the actual rules live in actions.py / openspec_adapter.py \u2014 everything
+# below is argument handling and printing.
+
+def _resolve_ticket(conn, project_id: str, ticket_id: str):
+    """Look up a ticket, exiting non-zero with a clear message if it's missing."""
+    row = conn.execute(
+        "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+        (ticket_id, project_id),
+    ).fetchone()
+    if not row:
+        print(f"Ticket {ticket_id} not found in {project_id}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    return row
+
+
+def cmd_spec(args):
+    """Declare a ticket's spec lane and create its OpenSpec change."""
+    import openspec_adapter as osa
+    from actions import SpecLink, write_readiness_flag, NO_CHANGE_SENTINEL
+
+    projects = load_registry()
+    proj = find_project(projects, args.project)
+    project_id = proj["id"]
+    project_path = os.path.expanduser(proj.get("path", ""))
+
+    lane = (args.lane or DEFAULT_SPEC_LANE).upper()
+    if lane not in SPEC_LANES:
+        print(f"Invalid lane {lane!r}. Valid: {', '.join(sorted(SPEC_LANES))}", file=sys.stderr)
+        sys.exit(1)
+
+    conn = get_db()
+    init_db(conn)
+    ticket = _resolve_ticket(conn, project_id, args.id)
+    tid = ticket["id"]
+
+    # Lane C with --no-change records an explicit, justified claim that nothing
+    # observable changed. Without a reason it is just a bypass, so refuse it.
+    if lane == "C" and args.no_change:
+        if not (args.reason or "").strip():
+            print("Lane C with --no-change requires --reason \"<why nothing observable changed>\"",
+                  file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+        link = SpecLink(lane="C", change=NO_CHANGE_SENTINEL, note=args.reason.strip())
+        write_readiness_flag(conn, project_id, tid, "spec", link.render(), set_by="cli:spec")
+        conn.commit()
+        sync_to_markdown(conn, proj)
+        conn.close()
+        print(f"{tid}: lane C, no spec delta \u2014 {args.reason.strip()}")
+        return
+
+    if not osa.is_initialised(project_path):
+        print(
+            f"{project_path} has no openspec/ root.\n"
+            f"  cd {project_path} && openspec init --tools claude\n"
+            f"(never --force: it deletes legacy command directories unprompted)",
+            file=sys.stderr,
+        )
+        conn.close()
+        sys.exit(1)
+
+    ok, reason = osa.check_cli(project_path)
+    if not ok:
+        print(reason, file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    change = args.change or osa.change_name(tid, ticket["title"] or "")
+    res = osa.new_change(project_path, change)
+    if not res.ok:
+        print(f"openspec new change {change} failed: {res.message}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    link = SpecLink(lane=lane, change=change)
+    write_readiness_flag(conn, project_id, tid, "spec", link.render(), set_by="cli:spec")
+    conn.commit()
+    sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
+    conn.close()
+
+    print(f"{tid}: lane {lane} \u2192 openspec/changes/{change}/")
+    print(f"  {SPEC_LANES[lane]}")
+    wanted = ["proposal", "specs"] + (["design", "tasks"] if lane == "A" else [])
+    print("  Next: " + "; ".join(
+        f"openspec instructions {a} --change {change}" for a in wanted
+    ))
+
+
+def cmd_verify(args):
+    """Run the project's verify command and record the real result on the ticket."""
+    from actions import run_verify, resolve_verify_command
+
+    projects = load_registry()
+    proj = find_project(projects, args.project)
+    project_id = proj["id"]
+    project_path = os.path.expanduser(proj.get("path", ""))
+
+    command, _timeout, source = resolve_verify_command(project_path)
+    if not command:
+        print(
+            f"No verify command for {project_id}. Declare one so this step is\n"
+            f"deterministic rather than improvised \u2014 {os.path.join(project_path, 'WORKFLOW.toml')}:\n\n"
+            "    [verify]\n"
+            '    command = "tests/run-tests.sh"\n'
+            "    timeout_ms = 600000\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    conn = get_db()
+    init_db(conn)
+    ticket = _resolve_ticket(conn, project_id, args.id)
+    tid = ticket["id"]
+
+    print(f"{tid}: running `{command}` (from {source}) in {project_path}")
+    record = run_verify(conn, project_id, tid, project_path)
+    conn.commit()
+    sync_to_markdown(conn, proj)
+    regenerate_dashboard(proj)
+    conn.close()
+
+    if record.output_tail:
+        print(record.output_tail)
+    verdict = "passed" if record.passed else f"FAILED (exit {record.exit_code})"
+    print(f"{tid}: verify {verdict} at commit {record.commit or 'unknown'}")
+    if not record.passed:
+        sys.exit(1)
+
+
+def cmd_gate(args):
+    """Show what the accept gate currently sees for a ticket. Read-only."""
+    from actions import evaluate_accept_gate
+
+    projects = load_registry()
+    proj = find_project(projects, args.project)
+    project_id = proj["id"]
+
+    conn = get_db()
+    init_db(conn)
+    ticket = _resolve_ticket(conn, project_id, args.id)
+    gate = evaluate_accept_gate(conn, ticket)
+    conn.close()
+
+    print(f"{ticket['id']}: accept gate {'PASSES' if gate.passed else 'REFUSES'}")
+    for line in gate.evidence:
+        print(f"  ok   {line}")
+    for line in gate.failures:
+        print(f"  FAIL {line}")
+    if not gate.passed:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: sync
 # ---------------------------------------------------------------------------
 
-VALID_FLAGS = {"reviewed"}
+# Both surfaces validate against the same registry in constants.py — see the
+# note there on why a flag needs a markdown label before it is usable.
+VALID_FLAGS = VALID_READINESS_FLAGS
 
 
 def cmd_flag(args):
@@ -2157,6 +2335,35 @@ def main():
     p_acc = sub.add_parser("accept", help="Accept ticket (move to Done + spec)")
     p_acc.add_argument("project", help="Project ID")
     p_acc.add_argument("id", help="Ticket ID")
+    p_acc.add_argument(
+        "--force", metavar="REASON", default="",
+        help="Bypass the close gate, recording REASON on the ticket and in the audit log",
+    )
+
+    # spec — declare the lane and create the OpenSpec change
+    p_spec = sub.add_parser("spec", help="Declare a ticket's spec lane + create its OpenSpec change")
+    p_spec.add_argument("project", help="Project ID")
+    p_spec.add_argument("id", help="Ticket ID")
+    p_spec.add_argument(
+        "--lane", default=DEFAULT_SPEC_LANE, choices=sorted(SPEC_LANES) + [l.lower() for l in sorted(SPEC_LANES)],
+        help="; ".join(f"{k} = {v}" for k, v in SPEC_LANES.items()),
+    )
+    p_spec.add_argument("--change", help="Change name (default: <ticket-id>-<title-slug>)")
+    p_spec.add_argument(
+        "--no-change", action="store_true",
+        help="Lane C only: close without a spec delta because nothing observable changed (needs --reason)",
+    )
+    p_spec.add_argument("--reason", default="", help="Why no spec delta is needed (with --no-change)")
+
+    # verify — run the declared verify command and record real evidence
+    p_ver = sub.add_parser("verify", help="Run the project's verify command and record the result")
+    p_ver.add_argument("project", help="Project ID")
+    p_ver.add_argument("id", help="Ticket ID")
+
+    # gate — read-only preview of what accept would decide
+    p_gate = sub.add_parser("gate", help="Show what the accept gate currently sees for a ticket")
+    p_gate.add_argument("project", help="Project ID")
+    p_gate.add_argument("id", help="Ticket ID")
 
     # sync
     p_sync = sub.add_parser("sync", help="Regenerate PRODUCT_BACKLOG.md from DB")
@@ -2337,6 +2544,9 @@ def main():
         "update": cmd_update,
         "move": cmd_move,
         "accept": cmd_accept,
+        "spec": cmd_spec,
+        "verify": cmd_verify,
+        "gate": cmd_gate,
         "sync": cmd_sync,
         "watch": cmd_watch,
         "flag": cmd_flag,

@@ -105,9 +105,9 @@ Every ticket is described by three independent layers, each answering a differen
 |-------|-----------|-------|---------------------|
 | **Section** | `section` / `column` | `Ticket.section`, `Ticket.column` | **Where is the work?** — which kanban column (Ideas → Backlog → WIP → For Review → Done) |
 | **Status** | `status` | `Ticket.status` | **How is the work going?** — lifecycle state within a column (proposed, in-progress, blocked, rework, etc.) |
-| **Readiness Flags** | `readiness_flags` | `Ticket.readiness_flags` | **What's been done?** — workflow checkpoints tracking completeness (D C T R S) |
+| **Readiness Flags** | `readiness_flags` | `Ticket.readiness_flags` | **What's been done?** — workflow checkpoints tracking completeness (D C L, plus `spec` / `verified`) |
 
-These layers are orthogonal: a ticket in WIP (section) can be `blocked` (status) with 3/5 readiness flags filled.
+These layers are orthogonal: a ticket in WIP (section) can be `blocked` (status) with some readiness flags filled.
 
 ---
 
@@ -133,28 +133,38 @@ Each ticket has a `Status:` value. The section determines the dashboard column; 
 
 ---
 
-## 4b. Readiness Flags (D C T R S)
+## 4b. Readiness Flags (D C L)
 
-Readiness flags are workflow checkpoints displayed as 5 dots on each card. Each flag tracks whether a specific aspect of the feature has been addressed. Flags have associated **content** — the actual text/notes for that checkpoint — stored in the database.
+Readiness flags are workflow checkpoints displayed as dots on each card. Each flag tracks whether a specific aspect of the feature has been addressed. Flags have associated **content** — the actual text/notes for that checkpoint — stored in the database.
 
-### The Five Flags
+> **Migration 15 collapsed Tests (T) and Smoke (S) into acceptance criteria.** The D-C-T-R-S model described by earlier versions of this document no longer exists, and neither does the `docs/features/{ID}/TESTS.md` content source it referenced. The `R` pane is stored under the legacy DB flag name `reviewed` and is surfaced as **L (Learnings)** in the UI.
 
-| Letter | Name | Type | Content Source | Where Content Lives |
-|--------|------|------|---------------|---------------------|
-| **D** | Description | Auto-computed | Ticket description field | DB `tickets.description` + `PRODUCT_BACKLOG.md` (inline) |
-| **C** | Criteria | Auto-computed | Acceptance criteria list | DB `tickets.acceptance_criteria` + `PRODUCT_BACKLOG.md` (checkboxes) |
-| **T** | Tests | Manual + content | Test definitions & plan | DB `readiness_flags.content` + `docs/features/{ID}/TESTS.md` |
-| **R** | Reviewed | Manual + content | Collective review output | DB `readiness_flags.content` + `docs/features/{ID}/REVIEW.md` + `.feedbacks/{ID}/` |
-| **S** | Smoke tested | Manual + content | Verification checklist & results | DB `readiness_flags.content` |
+### The Flags
+
+| Letter | DB flag | Type | Content Source | Where Content Lives |
+|--------|---------|------|---------------|---------------------|
+| **D** | *(none — computed)* | Auto-computed | Ticket description field | DB `tickets.description` + `PRODUCT_BACKLOG.md` (inline) |
+| **C** | *(none — computed)* | Auto-computed | Acceptance criteria list | DB `acceptance_criteria` + `PRODUCT_BACKLOG.md` (checkboxes) |
+| **L** | `reviewed` | Manual + content | Collective review output | DB `readiness_flags.content` + `.feedbacks/{ID}/` |
+
+Two further flags are written by the spec lifecycle (§4c) rather than by hand:
+
+| DB flag | Markdown label | Written by | Content |
+|---------|---------------|------------|---------|
+| `spec` | `Spec:` | `tickets-cli.py spec` | `<lane>:<change-name>`, e.g. `A:b-44-knowledge-ingestion-pipeline` |
+| `verified` | `Verified:` | `tickets-cli.py verify` | `exit=<n> commit=<sha> at=<iso> cmd=<command>` + indented output tail |
+
+**Adding a flag is a three-place change, not one.** The DB accepts any flag name, so the constraints are elsewhere: `constants.READINESS_FLAG_LABELS` is the single registry that (a) both surfaces validate against and (b) supplies the `PRODUCT_BACKLOG.md` line prefix for both the writer and the parser. A flag missing from it is accepted into the DB and then silently dropped on the next markdown regeneration.
 
 ### Auto vs Manual
 
 - **D and C** are auto-computed: the dot fills when the ticket has a description or criteria. No explicit toggle needed.
-- **T, R, S** are manual flags with content: the dot auto-fills when content is saved, auto-empties when content is cleared.
+- **L** is a manual flag with content: the dot auto-fills when content is saved, auto-empties when content is cleared.
+- **`spec` and `verified`** are written by the CLI only. Hand-editing them defeats the point — `verified` in particular is meant to be evidence, not an assertion.
 
-### Review (R) — Definition
+### Review (L) — Definition
 
-"Reviewed" is a qualitative checkpoint distinct from Tests and Smoke (which are mechanical/repeatable). A reviewed feature has been through a structured process capturing:
+"Reviewed" is a qualitative checkpoint, distinct from the mechanical/repeatable evidence in the `verified` flag. A reviewed feature has been through a structured process capturing:
 
 - **`/sync` output** — session learnings, decisions made during development
 - **Bugs found** — and their resolution status
@@ -174,18 +184,124 @@ Priority: high | Complexity: L | Status: in-progress
 Description text here.
 - [x] Criterion 1
 - [ ] Criterion 2
-Tests: Test plan and definitions
 Reviewed: Review notes and decisions
-Smoke: Verification checklist and results
+Spec: A:b-05-feature-title
+Verified: exit=0 commit=abc1234 at=2026-07-23T02:00:00 cmd=tests/run-tests.sh
+    Ran 278 tests in 22.387s
+    OK
 ```
 
 Multi-line content uses 4-space indented continuation:
 
 ```
-Tests: First line of test content
+Reviewed: First line of review content
     Continuation line 2
     Continuation line 3
 ```
+
+Legacy `Tests:` / `Smoke:` lines in older markdown are ignored on ingest and dropped by the next sync, along with their indented continuations.
+
+---
+
+## 4c. The Spec Lifecycle (OpenSpec)
+
+Ticket Takeaway describes work through [OpenSpec](https://openspec.dev) change proposals and closes it through one uniform gate. OpenSpec supplies the artifact lifecycle (proposal → delta → `archive` merges the delta into canonical `openspec/specs/`); Ticket Takeaway supplies the review gate OpenSpec deliberately does not have.
+
+**Pinned to `@fission-ai/openspec@1.6.0`.** Not `latest`, not `@next` (stale at 0.3.0), and never the bare `openspec` npm name — that is a dead 2019 squat with no `bin`. 1.6.0 is the first release where `archive` and `validate` return reliable exit codes; earlier versions exited 0 even when validation failed and nothing was archived. Every invocation goes through `src/openspec_adapter.py`, which pins the version and sets `OPENSPEC_TELEMETRY=0`. Nothing else in the codebase shells out to `openspec`, so a version bump has one blast radius.
+
+### Lanes — chosen by intent, not size
+
+| Lane | When | Artifacts up front |
+|---|---|---|
+| **A — Spec'd** | You intend to hand this to agents and run it to production | `proposal.md` + `specs/<cap>/spec.md` delta + `design.md` + `tasks.md` |
+| **B — Interviewed** | You know the rough shape; good questions would make it spec-able | `proposal.md` + spec delta only |
+| **C — Direct** | Drip-fed, worked out as you go, rename, dep bump | none |
+
+Lane C is not an escape hatch from rigour — it acknowledges that some work can't be described before it's done. Its obligation is *retroactive*: at close, if observable behaviour changed, a delta is written **from the diff**; if nothing observable changed, no spec is touched, but the claim must be recorded with a reason.
+
+Change names are deterministic — `<ticket-id-lowercased>-<kebab-slug>` — so the ticket ↔ change mapping works in both directions with no join table.
+
+### The close — identical in all three lanes
+
+Enforced in `actions.accept_ticket()`:
+
+1. Run the project's verify command. Real output recorded. Non-zero → refuse.
+2. Check each obligation against the diff — lane A/B against the requirement scenarios in the spec delta, lane C against the ticket's acceptance criteria. Same rigour, same evidence standard, different source.
+3. Behaviour changed but no delta exists (lane C) → write one now, from the diff.
+4. `openspec validate <change> --strict` → must pass.
+5. `openspec archive <change> -y` → merges the delta into `openspec/specs/`.
+6. Commit the archive diff with the accept commit.
+7. Write `PRODUCT_SPECIFICATION.md` / mark Done.
+
+Archiving lands at step 5, *before* the commit, deliberately: archiving after a merge strands a second diff needing its own PR.
+
+### The entry gate — no dispatch without a declared lane
+
+The close gate has an entry-side counterpart: `_ticket_eligibility` and the seeded `Backlog → WIP` trigger both require `spec_linked`, so the Kitchen will not hand a ticket to an implementing agent on free text alone. A justified lane-C declaration satisfies it — the question at entry is "has intent been declared", not "is there a delta". This is safe to enforce against old tickets because eligibility already requires `automation_mode='auto'` (per-ticket opt-in, default manual): declaring a lane is simply part of switching a ticket on. `tests/test_tdd_engine_parity.py` enforces that the two paths agree.
+
+So the automation pipeline is gated at three points:
+
+| Transition | Gate |
+|---|---|
+| Backlog → WIP (dispatch) | `spec_linked` — a lane is declared |
+| WIP → For Review | `commit_hash` present + `verify_passed` |
+| For Review → Done (accept) | `verify_passed` at HEAD + `spec_validates` + archive |
+
+### Where the rules live
+
+In the **shared core** — `conditions.py` predicates and `actions.py` enforcement — which both surfaces already call. Consequences:
+
+- An agent running headless through `tickets-cli.py` is bound by exactly the same gates as a click in the dashboard. Obligated by default, GUI never required.
+- The skills (`/spec`, `/accept`) are **thin callers**. Rules are not restated as prose across `SKILL.md` files, where they would be advisory and bypassable.
+- A future MCP server inherits the gates for free, with no rule duplication.
+
+The dashboard's role is **cockpit, not intake form**: display which artifacts exist, what's blocking, and launch or resume the conversation. It never collects the spec.
+
+### Declaring the verify command
+
+Per project, in `WORKFLOW.toml` at the project root (read by `workflow_config.py`, which deep-merges and preserves unknown keys):
+
+```toml
+[verify]
+command = "tests/run-tests.sh"
+timeout_ms = 600000
+```
+
+Fallback when absent: `tests/run-tests.sh` → `package.json` `test` script → `pytest` → ask once and write the answer into `WORKFLOW.toml`.
+
+### Predicates
+
+| Kind | Passes when |
+|---|---|
+| `spec_linked` | A lane is declared: an OpenSpec change, or an explicit-and-justified lane-C claim |
+| `spec_validates` | `openspec validate <change> --strict` exits 0 (vacuously true for a justified lane-C no-delta) |
+| `verify_passed` | A `verified` flag exists, exited 0, and was recorded against current HEAD |
+| `tests_covered` | Any of: `verify_passed`, a linked journey that compiles+validates, or explicit `no_test_required` with a rationale |
+
+`tests_covered` gained the verify path because it was a live trap: six projects already carried it in their `Backlog → WIP` triggers while `journey_tickets` was empty and nothing set `no_test_required`, so those tickets were unsatisfiable.
+
+### The override
+
+```bash
+python3 $CLI accept <project> <ID> --force "<reason>"
+```
+
+Records the reason on the ticket's `spec` flag, as a `gate_override` activity event, and in `PRODUCT_SPECIFICATION.md`. There is no silent bypass.
+
+### Regenerating the adapter fixtures
+
+`tests/fixtures/openspec/*.json` are real payloads pinning the JSON shapes the adapter parses — OpenSpec ships ~2 releases/month and self-reports inconsistent key casing. After a deliberate version bump, recapture them in a scratch project:
+
+```bash
+openspec init --tools none
+openspec new change b-1-sample-capability
+# write proposal.md, tasks.md, and specs/sample/spec.md
+openspec status   --change b-1-sample-capability --json > status.json
+openspec validate --all --strict --json --no-interactive > validate-{ok,fail}.json
+openspec archive  b-1-sample-capability -y --json > archive-{ok,refused}.json
+```
+
+Then normalise absolute paths to `<PROJECT_ROOT>` and zero out `durationMs`.
 
 ---
 
@@ -328,7 +444,7 @@ Development notes:
 |---------|-------------|
 | `/dashboard` | Run `generate.py` → render HTML → open browser |
 | `/dashboard status {project} {ID} {section}` | Move ticket between sections in PRODUCT_BACKLOG.md |
-| `/accept {ID}` | Run `/sync` first, then move ticket to PRODUCT_SPECIFICATION.md with summary, then clean up `docs/features/{ID}/` |
+| `/accept {ID}` | Run `/sync` first, then `verify`, then `accept` — which gates on verify + spec validation, archives the OpenSpec change, and writes PRODUCT_SPECIFICATION.md — then clean up `docs/features/{ID}/` |
 | `/dashboard add {project} "{title}"` | Add new ticket to PRODUCT_BACKLOG.md |
 | `/dashboard show` | Print summary table to terminal |
 

@@ -116,7 +116,7 @@ Show the ticket as-is:
 - Any existing acceptance criteria (may be empty)
 - Priority if set
 
-#### 4b. Explore the Idea
+#### 4b. Explore the Idea, and Pick the Lane
 
 Have a brief conversation to understand what the user wants. Ask:
 - **"What should this do?"** — if no description exists
@@ -124,6 +124,51 @@ Have a brief conversation to understand what the user wants. Ask:
 - **"Any constraints or dependencies?"** — to surface blockers early
 
 Keep this conversational, not interrogative. If the user gives a one-liner, that's fine — work with what they give. If they want to go deep, go deep.
+
+Then ask **one** more question — the lane. Default to B.
+
+| Lane | When | Artifacts up front |
+|---|---|---|
+| **A — Spec'd** | You intend to hand this to agents and run it to production | `proposal.md` + spec delta + `design.md` + `tasks.md` |
+| **B — Interviewed** | You know the rough shape; good questions would make it spec-able | `proposal.md` + spec delta |
+| **C — Direct** | Drip-fed, worked out as you go, rename, dep bump | none |
+
+Lane is chosen by **intent, not size**. Lane C is not an escape hatch from rigour — it acknowledges that some work can't be described before it's done. Its spec obligation is *retroactive*: at close, if observable behaviour changed, a delta is written from the diff.
+
+Record it — this creates the OpenSpec change and links it to the ticket:
+
+```bash
+CLI=~/.claude/ticket-takeaway/tickets-cli.py
+python3 $CLI spec <project> <ID> --lane A|B|C
+# lane C where nothing observable will change:
+python3 $CLI spec <project> <ID> --lane C --no-change --reason "<why>"
+```
+
+The CLI owns the rules (valid lanes, change naming, the `openspec/` precondition). Do not hand-create change directories or hand-edit the `spec` readiness flag — if the CLI refuses, report the refusal rather than working around it.
+
+#### 4b-ii. Write the OpenSpec Artifacts (lanes A and B)
+
+Do **not** invent a document shape. Ask OpenSpec for the template plus the project's `config.yaml` context:
+
+```bash
+openspec instructions proposal --change <change-name>
+openspec instructions specs    --change <change-name>
+# lane A also:
+openspec instructions design   --change <change-name>
+openspec instructions tasks    --change <change-name>
+```
+
+**Backfilling the dark ages.** If the capability being touched has no spec under `openspec/specs/` yet, open the delta with `## ADDED Requirements` documenting the **existing behaviour the change must preserve**, then the new behaviour. `openspec archive` turns that into canon automatically at close, so there is no migration project and dead code never gets spec'd.
+
+- **Derive it from code, never from `docs/`.** Legacy docs are a hint about what to look for; enshrining stale docs as canonical requirements is the worst outcome available here. Confirm in source.
+- **Scope to the capability being touched**, not the subsystem.
+- If a backfill exceeds roughly a page, split it into its own ticket rather than letting it swallow the change.
+
+Before handing back, confirm it parses:
+
+```bash
+openspec validate <change-name> --strict   # must exit 0
+```
 
 #### 4c. Draft the Spec
 
@@ -199,6 +244,8 @@ On confirmation:
    python3 ~/.claude/ticket-takeaway/tickets-cli.py update <project> <ID> --status specified
    ```
    (The move sets default status; the update overrides to `specified`)
+
+3. **Check the lane is recorded.** `python3 $CLI gate <project> <ID>` shows what the close gate currently sees. At spec time it will still report the missing verify run — that is expected and is the point. It should *not* report a missing spec lane.
 
 ### Step 6: Continue
 

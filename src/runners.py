@@ -1025,6 +1025,10 @@ class AgentRunner(Runner):
                                     break
                         except Exception:
                             pass
+                        # The close gate lives inside accept_ticket, so a workflow
+                        # cannot auto-accept an unverified ticket. Let the refusal
+                        # surface as a failed run: an automated accept that
+                        # silently no-ops would be indistinguishable from success.
                         _accept_ticket(
                             conn, project_id, target_id,
                             project_path, project_name, actor=actor,

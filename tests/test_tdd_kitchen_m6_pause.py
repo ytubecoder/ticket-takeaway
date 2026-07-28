@@ -103,6 +103,12 @@ def _seed_eligible(env, tid="B-1"):
         "INSERT INTO acceptance_criteria (ticket_id, project_id, text) VALUES (?, 'p', 'X')",
         (tid,),
     )
+    # Entry gate into automation: eligibility requires a declared spec lane.
+    c.execute(
+        "INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by) "
+        "VALUES (?, 'p', 'spec', ?, 'test')",
+        (tid, f"B:{tid.lower()}-test-change"),
+    )
     set_no_test_required(c, "p", tid, True, "docs only", ActorContext.human())
     set_automation_mode(c, "p", "ticket", tid, "auto", ActorContext.human())
     c.commit(); c.close()

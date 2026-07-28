@@ -377,13 +377,39 @@ DEFAULT_WORKFLOWS: list[dict] = [
             {
                 "agent_id": "agent_orchestrator",
                 "agent_name": "Orchestrator",
+                # This is the canonical spec-intake prompt; /spec mirrors it.
+                # The interview stays an interview — the dashboard is a cockpit,
+                # not an intake form — but it now produces OpenSpec artifacts
+                # instead of free text, and it asks the lane question first.
                 "prompt_template": (
                     "You are starting an interview for ticket {{ticket.id}}: {{ticket.title}}\n\n"
                     "Current description:\n{{ticket.description}}\n\n"
                     "Current acceptance criteria:\n{{ticket.acceptance_criteria}}\n\n"
-                    "Interview the user to clarify the goal and produce a crisp description "
-                    "with at least one concrete acceptance criterion. Use the interactive "
-                    "markers (ask/propose) as instructed in your system prompt."
+                    "Interview the user to clarify the goal. Use the interactive markers "
+                    "(ask/propose) as instructed in your system prompt.\n\n"
+                    "STEP 1 — the lane. Ask which lane this work is in, and default to B:\n"
+                    "  A  Spec'd — you intend to hand this to agents and run it to production\n"
+                    "  B  Interviewed — you know the rough shape; good questions would make it spec-able\n"
+                    "  C  Direct — drip-fed, worked out as you go, rename, dep bump\n"
+                    "Lane C is not an escape hatch: its spec obligation is retroactive, written "
+                    "from the diff at close if observable behaviour changed.\n\n"
+                    "STEP 2 — record it:\n"
+                    "  python3 ~/.claude/ticket-takeaway/tickets-cli.py spec {{project.id}} {{ticket.id}} --lane <A|B|C>\n"
+                    "For lane C where nothing observable will change, add --no-change --reason \"<why>\".\n\n"
+                    "STEP 3 — write the artifacts. Do NOT invent a document shape; ask OpenSpec "
+                    "for the template and the project's config.yaml context:\n"
+                    "  openspec instructions proposal --change <change-name>\n"
+                    "  openspec instructions specs    --change <change-name>\n"
+                    "Lane A also needs `design` and `tasks`. Lane B stops after proposal + specs.\n\n"
+                    "If the capability being touched has no spec under openspec/specs/ yet, open "
+                    "the delta with `## ADDED Requirements` describing the EXISTING behaviour the "
+                    "change must preserve — derived by reading the code, never from docs/, which "
+                    "may be stale. Scope it to the capability being touched, not the subsystem; if "
+                    "the backfill exceeds about a page, split it into its own ticket.\n\n"
+                    "STEP 4 — finish the ticket: a crisp description plus at least one concrete "
+                    "acceptance criterion.\n\n"
+                    "Validate before you hand back: `openspec validate <change-name> --strict` "
+                    "must exit 0."
                 ),
                 "on_failure": "pause",
                 "timeout_ms": 900000,  # 15 min — multi-turn interview
@@ -404,6 +430,11 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 {"kind": "automation_mode", "value": "auto"},
                 {"kind": "has_field", "field": "description"},
                 {"kind": "criteria_count_gte", "value": 1},
+                # Entry gate into automation: a spec lane must be declared
+                # before an implementing agent is dispatched. Mirrors the
+                # binding spec_linked check in actions._ticket_eligibility —
+                # test_tdd_engine_parity.py enforces that the two agree.
+                {"kind": "spec_linked"},
                 {"kind": "deps_clear"},
                 {"kind": "no_active_run"},
             ]
@@ -441,7 +472,11 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 # a user who toggled automation off on a specific ticket would
                 # still get auto-moved on commit — surprising behaviour.
                 {"kind": "automation_mode", "value": "auto"},
-                # TODO: add "tests_pass" condition once a test-runner integration exists
+                # The long-standing "no test-runner integration exists" hole is
+                # now closed: `verify_passed` reads a real recorded run (command,
+                # exit code, output tail, commit) written by `tickets-cli.py
+                # verify`, and refuses a green recorded against an older commit.
+                {"kind": "verify_passed"},
                 {"kind": "no_active_run"},
             ]
         },

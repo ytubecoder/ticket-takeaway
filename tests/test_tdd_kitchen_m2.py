@@ -87,6 +87,18 @@ def _set_no_test_required(db_file, pid, tid, note="docs only"):
     c.commit(); c.close()
 
 
+def _declare_lane(db_file, pid, tid, lane="B"):
+    """Declare a spec lane — required for the ready_to_delegate bucket, since
+    eligibility now gates automation entry on spec_linked."""
+    c = sqlite3.connect(db_file)
+    c.execute(
+        "INSERT OR REPLACE INTO readiness_flags (ticket_id, project_id, flag, content, set_by) "
+        "VALUES (?, ?, 'spec', ?, 'test')",
+        (tid, pid, f"{lane}:{tid.lower()}-test-change"),
+    )
+    c.commit(); c.close()
+
+
 # ---------------------------------------------------------------------------
 # Aggregator bucket assignment
 # ---------------------------------------------------------------------------
@@ -119,6 +131,7 @@ class TestAggregatorBuckets:
         serve, db_file = serve_mod
         _seed_ticket(db_file, "alpha", "B-1")
         _set_no_test_required(db_file, "alpha", "B-1")
+        _declare_lane(db_file, "alpha", "B-1")
         _set_mode(db_file, "alpha", "B-1", "auto")
         state = serve._aggregate_kitchen_state()
         ready = state["buckets"]["ready_to_delegate"]
@@ -158,6 +171,7 @@ class TestAggregatorBuckets:
         # Mix across both projects with different states.
         _seed_ticket(db_file, "alpha", "B-1")
         _set_no_test_required(db_file, "alpha", "B-1")
+        _declare_lane(db_file, "alpha", "B-1")
         _set_mode(db_file, "alpha", "B-1", "auto")  # ready
 
         _seed_ticket(db_file, "alpha", "B-2")

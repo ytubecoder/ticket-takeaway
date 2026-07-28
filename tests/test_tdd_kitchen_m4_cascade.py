@@ -133,7 +133,9 @@ class TestCascade:
         _seed_ticket(conn, section="For Review", status="for-review")
         _seed_journey(conn, "J-1"); _link(conn, "J-1", "B-1")
         conn.commit()
-        accept_ticket(conn, "p", "B-1", "/tmp", "p", actor=ActorContext.human())
+        # About the journey cascade, not the close gate — bypass it explicitly.
+        accept_ticket(conn, "p", "B-1", "/tmp", "p", actor=ActorContext.human(),
+                      force="test fixture: exercising journey cascade")
         conn.commit()
         assert len(cascade_recorder) == 1
         args, kwargs = cascade_recorder[0]

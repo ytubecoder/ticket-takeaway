@@ -453,6 +453,10 @@ _scenario_runs_lock = threading.Lock()
 _workflow_runs: dict[str, dict] = {}
 _workflow_runs_lock = threading.Lock()
 
+# Page scan results — POST /api/screens/scan writes, GET /api/screens serves
+_page_scan_cache: dict[str, list[dict]] = {}  # project_id -> scans_to_json result
+_page_scan_lock = threading.Lock()
+
 # Managed CDP Chrome process — spawned on demand when a CDP run is dispatched
 # and nothing is already listening on the debug port. Reused across runs.
 _cdp_chrome_proc: subprocess.Popen | None = None
@@ -11775,7 +11779,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not ticket_id or not session_name:
                 self._send_json({"error": "ticket_id and session_name required"}, 400)
                 return
-            proj = _get_project()
             att = _add_attachment(
                 proj["id"],
                 ticket_id,

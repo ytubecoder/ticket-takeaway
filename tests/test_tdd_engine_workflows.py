@@ -12,27 +12,23 @@ Pure logic: no server, no subprocess.  Runner is stubbed to record dispatch call
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
-import os
-import threading
-from pathlib import Path
-from typing import Callable, Optional
-from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import init_db
-from actions import ActorContext, set_automation_mode
-from workflows_seed import seed_default_workflows
 import kitchen
-
+from actions import ActorContext, set_automation_mode
+from db import init_db
+from workflows_seed import seed_default_workflows
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def reset_kitchen_state():
@@ -71,8 +67,14 @@ def db_factory(tmp_path):
     return _factory
 
 
-def _add_ticket(db_factory, tid="B-1", section="Backlog", status="specified",
-                description="A real description.", project_id="p"):
+def _add_ticket(
+    db_factory,
+    tid="B-1",
+    section="Backlog",
+    status="specified",
+    description="A real description.",
+    project_id="p",
+):
     conn = db_factory()
     conn.execute(
         "INSERT INTO tickets (id, project_id, title, section, status, description) "
@@ -100,6 +102,7 @@ def _freeze_summary_hash(db_factory, tid="B-1", project_id="p"):
     ticket. Use in tests that want to assert "no workflow is eligible".
     """
     from actions import compute_summary_hash
+
     conn = db_factory()
     h = compute_summary_hash(conn, project_id, tid)
     conn.execute(
@@ -117,7 +120,7 @@ def _set_tests_flag(db_factory, tid="B-1", project_id="p"):
     criteria. Existing tests still call this for narrative clarity; we keep
     the function as a no-op so the test surface stays stable.
     """
-    return None
+    return
 
 
 def _declare_lane(db_factory, tid="B-1", project_id="p"):
@@ -161,6 +164,7 @@ def _get_queued_runs(db_factory):
 # get_use_db_workflows helper
 # ---------------------------------------------------------------------------
 
+
 class TestGetUseDbWorkflows:
     def test_default_is_false(self, db_factory):
         conn = db_factory()
@@ -201,25 +205,40 @@ class TestGetUseDbWorkflows:
 # Stub runner — records dispatch calls without subprocesses
 # ---------------------------------------------------------------------------
 
+
 class _StubRunner:
     """Records execute() calls. Immediately marks runs as succeeded."""
+
     runner_kind = "agent"
 
     def __init__(self):
         self.calls: list[dict] = []
 
-    def execute(self, run_id, project_id, subject_type, subject_id,
-                workspace, config, conn_factory, cancel_event=None):
+    def execute(
+        self,
+        run_id,
+        project_id,
+        subject_type,
+        subject_id,
+        workspace,
+        config,
+        conn_factory,
+        cancel_event=None,
+    ):
         from runners import RunOutcome
-        self.calls.append({
-            "run_id": run_id,
-            "project_id": project_id,
-            "subject_type": subject_type,
-            "subject_id": subject_id,
-            "config": config,
-        })
+
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "project_id": project_id,
+                "subject_type": subject_type,
+                "subject_id": subject_id,
+                "config": config,
+            }
+        )
         # Mark the run succeeded immediately so the DB is left in a clean state.
         from actions import utcnow_iso
+
         conn = conn_factory()
         conn.execute(
             "UPDATE runs SET status='succeeded', finished_at=?, heartbeat_at=? WHERE id=?",
@@ -228,14 +247,17 @@ class _StubRunner:
         conn.commit()
         conn.close()
         return RunOutcome(
-            run_id=run_id, final_status="succeeded",
-            duration_ms=0, summary="stub",
+            run_id=run_id,
+            final_status="succeeded",
+            duration_ms=0,
+            summary="stub",
         )
 
 
 # ---------------------------------------------------------------------------
 # DB-workflow dispatch path
 # ---------------------------------------------------------------------------
+
 
 class TestDispatchViaWorkflows:
     """With kitchen.use_db_workflows=true, a queued run with workflow metadata appears."""
@@ -265,19 +287,25 @@ class TestDispatchViaWorkflows:
         kitchen._dispatch_eligible(db_factory, settings)
 
         # Give the thread a moment to start and record.
-        import time; time.sleep(0.2)
+        import time
+
+        time.sleep(0.2)
 
         runs = _get_queued_runs(db_factory)
         # Run may already be succeeded (stub transitions immediately); check all.
         conn = db_factory()
-        all_runs = conn.execute("SELECT id, subject_id, metadata_json, status FROM runs").fetchall()
+        all_runs = conn.execute(
+            "SELECT id, subject_id, metadata_json, status FROM runs"
+        ).fetchall()
         conn.close()
         assert len(all_runs) == 1, f"Expected 1 run, got {len(all_runs)}"
         run = all_runs[0]
         assert run["subject_id"] == "B-1"
         meta = json.loads(run["metadata_json"])
         assert "workflow_id" in meta
-        assert "Backlog" in meta["workflow_id"] or "backlog" in meta["workflow_id"].lower()
+        assert (
+            "Backlog" in meta["workflow_id"] or "backlog" in meta["workflow_id"].lower()
+        )
         assert meta["workflow_name"] == "Backlog → WIP"
         assert meta["step_index"] == 0
 
@@ -292,10 +320,14 @@ class TestDispatchViaWorkflows:
         kitchen._paused = False
         kitchen._dispatch_eligible(db_factory, settings)
 
-        import time; time.sleep(0.2)
+        import time
+
+        time.sleep(0.2)
 
         conn = db_factory()
-        run = conn.execute("SELECT metadata_json FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        run = conn.execute(
+            "SELECT metadata_json FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
         conn.close()
         assert run is not None
         meta = json.loads(run["metadata_json"])
@@ -329,7 +361,9 @@ class TestDispatchViaWorkflows:
         kitchen._paused = False
         kitchen._dispatch_eligible(db_factory, settings)
 
-        import time; time.sleep(0.1)
+        import time
+
+        time.sleep(0.1)
 
         conn = db_factory()
         count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
@@ -358,7 +392,9 @@ class TestDispatchViaWorkflows:
         kitchen._paused = False
         kitchen._dispatch_eligible(db_factory, settings)
 
-        import time; time.sleep(0.2)
+        import time
+
+        time.sleep(0.2)
 
         conn = db_factory()
         all_runs = conn.execute("SELECT metadata_json FROM runs").fetchall()
@@ -386,7 +422,9 @@ class TestDispatchViaWorkflows:
         kitchen._paused = False
         kitchen._dispatch_eligible(db_factory, settings)
 
-        import time; time.sleep(0.1)
+        import time
+
+        time.sleep(0.1)
 
         conn = db_factory()
         count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
@@ -397,6 +435,7 @@ class TestDispatchViaWorkflows:
 # ---------------------------------------------------------------------------
 # Legacy path with flag=false
 # ---------------------------------------------------------------------------
+
 
 class TestLegacyPathWithFlagFalse:
     """With kitchen.use_db_workflows=false (default), legacy path still runs."""
@@ -419,10 +458,14 @@ class TestLegacyPathWithFlagFalse:
         kitchen._paused = False
         kitchen._dispatch_eligible(db_factory, settings)
 
-        import time; time.sleep(0.2)
+        import time
+
+        time.sleep(0.2)
 
         conn = db_factory()
-        all_runs = conn.execute("SELECT id, subject_id, metadata_json, status FROM runs").fetchall()
+        all_runs = conn.execute(
+            "SELECT id, subject_id, metadata_json, status FROM runs"
+        ).fetchall()
         conn.close()
         assert len(all_runs) == 1
         assert all_runs[0]["subject_id"] == "B-1"
@@ -446,7 +489,9 @@ class TestLegacyPathWithFlagFalse:
         kitchen._paused = False
         kitchen._dispatch_eligible(db_factory, settings)
 
-        import time; time.sleep(0.2)
+        import time
+
+        time.sleep(0.2)
 
         conn = db_factory()
         count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
@@ -467,7 +512,9 @@ class TestLegacyPathWithFlagFalse:
         kitchen._paused = False
         kitchen._dispatch_eligible(db_factory, settings)
 
-        import time; time.sleep(0.1)
+        import time
+
+        time.sleep(0.1)
 
         conn = db_factory()
         count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
@@ -478,6 +525,7 @@ class TestLegacyPathWithFlagFalse:
 # ---------------------------------------------------------------------------
 # Tick routing
 # ---------------------------------------------------------------------------
+
 
 class TestTickRouting:
     """tick() routes to the correct dispatch path based on flag."""
@@ -491,7 +539,9 @@ class TestTickRouting:
         conn.close()
         assert count == 0
 
-    def test_tick_uses_db_workflows_when_flag_true(self, db_factory, tmp_path, monkeypatch):
+    def test_tick_uses_db_workflows_when_flag_true(
+        self, db_factory, tmp_path, monkeypatch
+    ):
         """When flag=true, tick dispatches via workflow path (no legacy path called)."""
         _add_ticket(db_factory, tid="B-1", section="Backlog")
         _set_auto(db_factory, tid="B-1")
@@ -506,9 +556,13 @@ class TestTickRouting:
         kitchen.register_runner("agent", stub)
 
         kitchen._paused = False
-        kitchen.tick(db_factory, {"max_concurrent_runs": 3, "max_concurrent_per_project": 1})
+        kitchen.tick(
+            db_factory, {"max_concurrent_runs": 3, "max_concurrent_per_project": 1}
+        )
 
-        import time; time.sleep(0.2)
+        import time
+
+        time.sleep(0.2)
 
         conn = db_factory()
         all_runs = conn.execute("SELECT metadata_json FROM runs").fetchall()

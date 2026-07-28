@@ -6,7 +6,6 @@ endpoints accept the documented requests and return the documented shapes.
 """
 
 import pytest
-
 from conftest import api_get, api_post
 
 

@@ -16,11 +16,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
-from constants import (SECTION_ORDER, SECTION_SLUGS, SLUG_TO_SECTION,
-                       DEFAULT_STATUS_BY_SECTION, CARD_CLASS_BY_SLUG, STATUSES, FEEDBACKS_REPO_URL)
+from constants import (
+    CARD_CLASS_BY_SLUG,
+    DEFAULT_STATUS_BY_SECTION,
+    FEEDBACKS_REPO_URL,
+    SECTION_ORDER,
+    SECTION_SLUGS,
+    STATUSES,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -74,10 +79,12 @@ SVG_ICONS = {
 def _svg_icon(name: str, size: int = 16, cls: str = "") -> str:
     """Return an inline SVG icon element."""
     extra = f' class="{cls}"' if cls else ""
-    return (f'<svg{extra} width="{size}" height="{size}" viewBox="0 0 24 24" '
-            f'fill="none" stroke="currentColor" stroke-width="2" '
-            f'stroke-linecap="round" stroke-linejoin="round">'
-            f'{SVG_ICONS.get(name, "")}</svg>')
+    return (
+        f'<svg{extra} width="{size}" height="{size}" viewBox="0 0 24 24" '
+        f'fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round">'
+        f"{SVG_ICONS.get(name, '')}</svg>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +106,7 @@ def _svg_icon(name: str, size: int = 16, cls: str = "") -> str:
 # Projects / divider / Bookmarks (section) / Recents (section) / spacer /
 # Settings (bottom). Workflows + Settings deep-link to the kanban
 # (?bounce=1 / ?settings=1) so the inline panel + drawer auto-open.
+
 
 def build_nav_rail_css() -> str:
     """CSS for the left navigation rail. Inject inside any <style> block."""
@@ -319,11 +327,14 @@ def build_nav_rail_js() -> str:
         "chevron-right": SVG_ICONS["chevron-right"],
     }
     icons_pairs = ",".join(f'"{k}":{json.dumps(v)}' for k, v in icons_js.items())
-    return """
+    return (
+        """
 (function(){
   var KEY = 'tt-rail-expanded';
   var LAST_PROJ_KEY = 'tt-last-project';
-  var ICONS = {""" + icons_pairs + """};
+  var ICONS = {"""
+        + icons_pairs
+        + """};
 
   function svg(name, size){
     size = size || 16;
@@ -816,6 +827,7 @@ def build_nav_rail_js() -> str:
   }
 })();
 """
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -823,6 +835,7 @@ def build_nav_rail_js() -> str:
 # The kanban view embeds its own inline drawer that adds scenario sections
 # on top of the global theme + feedbacks shell; keep the markup/JS in sync.
 # ---------------------------------------------------------------------------
+
 
 def build_settings_drawer_css() -> str:
     """CSS for the rail-anchored settings drawer + its inner controls."""
@@ -910,7 +923,7 @@ def build_settings_drawer_html(close_icon_svg: str) -> str:
     """Drawer markup: a hidden toggle button (rail clicks dispatch to it) +
     the slide-out drawer with theme + feedbacks sections."""
     return f"""
-<button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings" style="display:none">{_svg_icon('settings', 16)}</button>
+<button class="settings-toggle" id="settingsToggleBtn" data-testid="settings-toggle" title="Settings" style="display:none">{_svg_icon("settings", 16)}</button>
 <div id="settings-drawer" class="settings-drawer hidden">
   <div class="settings-drawer-header">
     <h2>Settings</h2>
@@ -1113,6 +1126,7 @@ def build_settings_drawer_js() -> str:
 # Data model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Ticket:
     id: str
@@ -1122,7 +1136,7 @@ class Ticket:
     section: str = "Ideas"
     description: str = ""
     acceptance_criteria: list = field(default_factory=list)
-    parent: Optional[str] = None
+    parent: str | None = None
     depends: list = field(default_factory=list)
     summary: str = ""
     archived: bool = False
@@ -1133,14 +1147,16 @@ class Ticket:
     draft: bool = False
     attachment_count: int = 0
     # Kitchen (M1a) — derived for the card badge.
-    automation_mode: str = "manual"   # manual | auto | held
-    latest_run_status: Optional[str] = None  # None until M3 produces real runs
+    automation_mode: str = "manual"  # manual | auto | held
+    latest_run_status: str | None = None  # None until M3 produces real runs
     # Kitchen (M2) — computed eligibility (auto ∧ all DCSTL gates clear).
     automation_eligible: bool = False
     tags: list = field(default_factory=list)
-    branches: list = field(default_factory=list)  # list of dicts: name, pr_number, pr_status, ahead, behind
+    branches: list = field(
+        default_factory=list
+    )  # list of dicts: name, pr_number, pr_status, ahead, behind
     is_container: bool = False
-    pane_attention: str = "none"   # "none" | "question" | "exception" (from pane_links)
+    pane_attention: str = "none"  # "none" | "question" | "exception" (from pane_links)
 
     @property
     def slug(self) -> str:
@@ -1154,8 +1170,7 @@ class Ticket:
         (migration 15); criteria are now the bar.
         """
         return (
-            self.latest_run_status == "succeeded"
-            and len(self.acceptance_criteria) > 0
+            self.latest_run_status == "succeeded" and len(self.acceptance_criteria) > 0
         )
 
 
@@ -1184,12 +1199,12 @@ class Project:
 # Shell helpers
 # ---------------------------------------------------------------------------
 
+
 def run_cmd(cmd: str, cwd: str = None, default: str = "") -> str:
     """Run a shell command and return stdout, or default on failure."""
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
-            cwd=cwd, timeout=10
+            cmd, shell=True, capture_output=True, text=True, cwd=cwd, timeout=10
         )
         return result.stdout.strip() if result.returncode == 0 else default
     except Exception:
@@ -1200,6 +1215,7 @@ def run_cmd(cmd: str, cwd: str = None, default: str = "") -> str:
 # Parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_backlog(filepath: str) -> list[Ticket]:
     """Parse a PRODUCT_BACKLOG.md file into a list of Tickets."""
     path = Path(filepath)
@@ -1208,8 +1224,8 @@ def parse_backlog(filepath: str) -> list[Ticket]:
 
     text = path.read_text(encoding="utf-8")
     tickets: list[Ticket] = []
-    current_section: Optional[str] = None
-    current_ticket: Optional[Ticket] = None
+    current_section: str | None = None
+    current_ticket: Ticket | None = None
 
     for line in text.splitlines():
         line_stripped = line.strip()
@@ -1262,7 +1278,9 @@ def parse_backlog(filepath: str) -> list[Ticket]:
         if current_ticket and line_stripped.startswith("Depends:"):
             deps_value = line_stripped.split(":", 1)[1].strip()
             if deps_value:
-                current_ticket.depends = [d.strip() for d in deps_value.split(",") if d.strip()]
+                current_ticket.depends = [
+                    d.strip() for d in deps_value.split(",") if d.strip()
+                ]
             continue
 
         # Acceptance criteria (checkbox lines)
@@ -1316,12 +1334,13 @@ def _parse_metadata_line(line: str) -> dict:
 def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
     """Load tickets from SQLite database, returning Ticket objects matching parse_backlog format."""
     import sqlite3
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
     rows = conn.execute(
         "SELECT * FROM tickets WHERE project_id = ? ORDER BY sort_order ASC",
-        (project_id,)
+        (project_id,),
     ).fetchall()
 
     tickets = []
@@ -1329,14 +1348,14 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         # Acceptance criteria
         criteria_rows = conn.execute(
             "SELECT text, checked FROM acceptance_criteria WHERE ticket_id = ? AND project_id = ? ORDER BY sort_order ASC",
-            (r["id"], project_id)
+            (r["id"], project_id),
         ).fetchall()
         criteria = [(bool(c["checked"]), c["text"]) for c in criteria_rows]
 
         # Dependencies
         dep_rows = conn.execute(
             "SELECT depends_on_id FROM depends WHERE ticket_id = ? AND project_id = ?",
-            (r["id"], project_id)
+            (r["id"], project_id),
         ).fetchall()
         depends = [d["depends_on_id"] for d in dep_rows]
 
@@ -1354,7 +1373,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         try:
             flag_rows = conn.execute(
                 "SELECT flag, content FROM readiness_flags WHERE ticket_id = ? AND project_id = ?",
-                (r["id"], project_id)
+                (r["id"], project_id),
             ).fetchall()
             flags = {f["flag"] for f in flag_rows}
             readiness_content = {f["flag"]: f["content"] for f in flag_rows}
@@ -1372,7 +1391,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         try:
             att_row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM ticket_attachments WHERE ticket_id = ? AND project_id = ?",
-                (r["id"], project_id)
+                (r["id"], project_id),
             ).fetchone()
             attachment_count = att_row["cnt"] if att_row else 0
         except Exception:
@@ -1400,7 +1419,10 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
                 latest_run_status = lr["status"]
             # M2: compute eligibility once at load. Cheap because conn is hot.
             try:
-                from actions import eligibility as _kitchen_eligibility  # local import: avoids hard dep at module load
+                from actions import (
+                    eligibility as _kitchen_eligibility,  # local import: avoids hard dep at module load
+                )
+
                 er = _kitchen_eligibility(conn, project_id, "ticket", r["id"])
                 automation_eligible = er.eligible
             except Exception:
@@ -1412,7 +1434,7 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
         try:
             tag_rows = conn.execute(
                 "SELECT tag FROM ticket_tags WHERE ticket_id = ? AND project_id = ? ORDER BY tag",
-                (r["id"], project_id)
+                (r["id"], project_id),
             ).fetchall()
             tags = [t["tag"] for t in tag_rows]
         except Exception:
@@ -1423,44 +1445,51 @@ def load_tickets_from_db(db_path: str, project_id: str) -> list[Ticket]:
             branch_rows = conn.execute(
                 "SELECT branch_name, pr_number, pr_status, pr_url, ahead, behind, auto_linked "
                 "FROM ticket_branches WHERE ticket_id = ? AND project_id = ? ORDER BY created_at",
-                (r["id"], project_id)
+                (r["id"], project_id),
             ).fetchall()
             branches = [
-                {"name": b["branch_name"], "pr_number": b["pr_number"],
-                 "pr_status": b["pr_status"], "pr_url": b["pr_url"] if "pr_url" in b.keys() else "",
-                 "ahead": b["ahead"], "behind": b["behind"],
-                 "auto_linked": bool(b["auto_linked"])}
+                {
+                    "name": b["branch_name"],
+                    "pr_number": b["pr_number"],
+                    "pr_status": b["pr_status"],
+                    "pr_url": b["pr_url"] if "pr_url" in b.keys() else "",
+                    "ahead": b["ahead"],
+                    "behind": b["behind"],
+                    "auto_linked": bool(b["auto_linked"]),
+                }
                 for b in branch_rows
             ]
         except Exception:
             branches = []
 
         is_container = bool(r["is_container"]) if "is_container" in r.keys() else False
-        tickets.append(Ticket(
-            id=r["id"],
-            title=r["title"],
-            priority=r["priority"],
-            status=r["status"],
-            section=r["section"],
-            description=r["description"],
-            acceptance_criteria=criteria,
-            parent=r["parent"],
-            depends=depends,
-            summary=r["summary"],
-            archived=bool(r["archived"]),
-            commit_hash=commit_hash,
-            release_tag=release_tag,
-            readiness_flags=flags,
-            readiness_content=readiness_content,
-            draft=is_draft,
-            attachment_count=attachment_count,
-            automation_mode=automation_mode,
-            latest_run_status=latest_run_status,
-            automation_eligible=automation_eligible,
-            tags=tags,
-            branches=branches,
-            is_container=is_container,
-        ))
+        tickets.append(
+            Ticket(
+                id=r["id"],
+                title=r["title"],
+                priority=r["priority"],
+                status=r["status"],
+                section=r["section"],
+                description=r["description"],
+                acceptance_criteria=criteria,
+                parent=r["parent"],
+                depends=depends,
+                summary=r["summary"],
+                archived=bool(r["archived"]),
+                commit_hash=commit_hash,
+                release_tag=release_tag,
+                readiness_flags=flags,
+                readiness_content=readiness_content,
+                draft=is_draft,
+                attachment_count=attachment_count,
+                automation_mode=automation_mode,
+                latest_run_status=latest_run_status,
+                automation_eligible=automation_eligible,
+                tags=tags,
+                branches=branches,
+                is_container=is_container,
+            )
+        )
 
     # Enrich tickets with pane-link attention state (migration 23)
     try:
@@ -1526,7 +1555,9 @@ def parse_spec_for_done(filepath: str) -> list[Ticket]:
 
         # Skip metadata/release lines, capture description as summary
         if current_ticket and line_stripped:
-            if line_stripped.startswith("Priority:") or line_stripped.startswith("Released:"):
+            if line_stripped.startswith("Priority:") or line_stripped.startswith(
+                "Released:"
+            ):
                 continue
             if line_stripped.startswith("#") or line_stripped.startswith("---"):
                 continue
@@ -1550,8 +1581,11 @@ def compute_dependency_state(tickets: list[Ticket]) -> dict[str, dict]:
         if not t.depends:
             result[t.id] = {"deps_resolved": True, "blocking_deps": []}
             continue
-        blocking = [dep for dep in t.depends
-                    if status_by_id.get(dep, "unknown") not in DONE_STATUSES]
+        blocking = [
+            dep
+            for dep in t.depends
+            if status_by_id.get(dep, "unknown") not in DONE_STATUSES
+        ]
         result[t.id] = {"deps_resolved": len(blocking) == 0, "blocking_deps": blocking}
     return result
 
@@ -1586,6 +1620,7 @@ def auto_promote_parents(
 # Code stats collection
 # ---------------------------------------------------------------------------
 
+
 def collect_code_stats(project_path: str) -> CodeStats:
     """Collect git and codebase stats for a project."""
     stats = CodeStats()
@@ -1606,7 +1641,8 @@ def collect_code_stats(project_path: str) -> CodeStats:
             f"find '{src_path}' -type f \\( -name '*.ts' -o -name '*.tsx' -o -name '*.js' "
             f"-o -name '*.jsx' -o -name '*.py' -o -name '*.css' \\) "
             f"-exec cat {{}} + 2>/dev/null | wc -l",
-            cwd=cwd, default="0"
+            cwd=cwd,
+            default="0",
         )
         loc_num = int(loc_raw) if loc_raw.isdigit() else 0
         if loc_num >= 1000:
@@ -1653,8 +1689,7 @@ def collect_code_stats(project_path: str) -> CodeStats:
 
     # Sparkline data: commits per week for last 12 weeks
     sparkline_raw = run_cmd(
-        "git log --since='12 weeks ago' --format=%ct 2>/dev/null",
-        cwd=cwd, default=""
+        "git log --since='12 weeks ago' --format=%ct 2>/dev/null", cwd=cwd, default=""
     )
     if sparkline_raw:
         now = datetime.now().timestamp()
@@ -1674,6 +1709,7 @@ def collect_code_stats(project_path: str) -> CodeStats:
 # ---------------------------------------------------------------------------
 # HTML generation
 # ---------------------------------------------------------------------------
+
 
 def generate_html(project: Project) -> str:
     """Generate the full self-contained HTML dashboard for a single project."""
@@ -1735,11 +1771,24 @@ def generate_html(project: Project) -> str:
     count_total = count_backlog + count_wip + count_review + count_ideas + count_done
 
     # Cross-cutting filter counts (across all sections, excluding children)
-    all_visible = [t for sec in by_section.values() for t in sec if t.id not in parented_ids]
-    count_status_proposed = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "proposed")
-    count_status_inprogress = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "in-progress")
-    count_status_forreview = sum(1 for t in all_visible if t.status.replace(" ", "-").lower() == "for-review")
-    count_type_bug = sum(1 for t in all_visible if t.section == "Bugs" or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed"))
+    all_visible = [
+        t for sec in by_section.values() for t in sec if t.id not in parented_ids
+    ]
+    count_status_proposed = sum(
+        1 for t in all_visible if t.status.replace(" ", "-").lower() == "proposed"
+    )
+    count_status_inprogress = sum(
+        1 for t in all_visible if t.status.replace(" ", "-").lower() == "in-progress"
+    )
+    count_status_forreview = sum(
+        1 for t in all_visible if t.status.replace(" ", "-").lower() == "for-review"
+    )
+    count_type_bug = sum(
+        1
+        for t in all_visible
+        if t.section == "Bugs"
+        or t.status.replace(" ", "-").lower() in ("bug", "bug-fixed")
+    )
 
     # Rationalised automation filter counts.
     # 'Auto' counts only mode == 'auto' by default; 'paused' is opt-in via the
@@ -1748,14 +1797,18 @@ def generate_html(project: Project) -> str:
     count_auto = sum(1 for t in all_visible if t.automation_mode == "auto")
     count_paused = sum(1 for t in all_visible if t.automation_mode == "paused")
     count_ready = sum(
-        1 for t in all_visible
+        1
+        for t in all_visible
         if t.automation_mode == "auto"
         and t.automation_eligible
         and t.latest_run_status not in _ACTIVE_RUN_STATUSES
     )
-    count_running = sum(1 for t in all_visible if t.latest_run_status in _ACTIVE_RUN_STATUSES)
+    count_running = sum(
+        1 for t in all_visible if t.latest_run_status in _ACTIVE_RUN_STATUSES
+    )
     count_needs_attention = sum(
-        1 for t in all_visible
+        1
+        for t in all_visible
         if t.latest_run_status in ("needs_input", "failed", "stalled", "cancelled")
     )
     count_for_review_auto = sum(1 for t in all_visible if t.automation_for_review)
@@ -1764,46 +1817,62 @@ def generate_html(project: Project) -> str:
     # `has-branch` is "any branch linked"; pr-* counts the worst (most active) PR
     # state across linked branches so a ticket with [merged, open] counts as open.
     def _ticket_pr_state(t) -> str:
-        states = {b.get("pr_status") or "" for b in (getattr(t, 'branches', []) or [])}
+        states = {b.get("pr_status") or "" for b in (getattr(t, "branches", []) or [])}
         for s in ("open", "draft", "merged", "closed"):
             if s in states:
                 return s
         return ""
-    count_has_branch = sum(1 for t in all_visible if getattr(t, 'branches', []))
-    count_pr_open    = sum(1 for t in all_visible if _ticket_pr_state(t) in ("open", "draft"))
-    count_pr_merged  = sum(1 for t in all_visible if _ticket_pr_state(t) == "merged")
-    count_no_branch  = sum(1 for t in all_visible if not getattr(t, 'branches', []))
+
+    count_has_branch = sum(1 for t in all_visible if getattr(t, "branches", []))
+    count_pr_open = sum(
+        1 for t in all_visible if _ticket_pr_state(t) in ("open", "draft")
+    )
+    count_pr_merged = sum(1 for t in all_visible if _ticket_pr_state(t) == "merged")
+    count_no_branch = sum(1 for t in all_visible if not getattr(t, "branches", []))
 
     # Collect all unique tags with counts (for filter bar)
     tag_counts: dict[str, int] = {}
     for t in all_visible:
-        for tag in getattr(t, 'tags', []):
+        for tag in getattr(t, "tags", []):
             tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
     # Progress: done items / (done + remaining)
     total_all = count_total + count_wontdo + count_icebox
-    progress_pct = round((count_done / total_all * 100)) if total_all > 0 else 0
+    progress_pct = round(count_done / total_all * 100) if total_all > 0 else 0
 
     # Compute dependency state
     dep_state = compute_dependency_state(all_tickets)
 
     # Build card HTML
-    backlog_cards = _render_cards(by_section["Backlog"], "backlog", child_tickets, dep_state)
+    backlog_cards = _render_cards(
+        by_section["Backlog"], "backlog", child_tickets, dep_state
+    )
     wip_cards = _render_cards(by_section["WIP"], "wip", child_tickets, dep_state)
     ideas_cards = _render_cards(by_section["Ideas"], "ideas", child_tickets, dep_state)
     # Bottom list sections: newest first (reverse insertion order)
-    wontdo_cards = _render_list_rows(list(reversed(by_section["Won't Do"])), "wontdo", child_tickets, dep_state)
-    review_cards = _render_cards(by_section["For Review"], "review", child_tickets, dep_state)
-    done_cards = _render_list_rows(list(reversed(by_section["Done"])), "done", child_tickets, dep_state)
-    icebox_cards = _render_list_rows(list(reversed(by_section["Icebox"])), "icebox", child_tickets, dep_state)
-    bugs_cards = _render_list_rows(list(reversed(by_section["Bugs"])), "bugs", child_tickets, dep_state)
+    wontdo_cards = _render_list_rows(
+        list(reversed(by_section["Won't Do"])), "wontdo", child_tickets, dep_state
+    )
+    review_cards = _render_cards(
+        by_section["For Review"], "review", child_tickets, dep_state
+    )
+    done_cards = _render_list_rows(
+        list(reversed(by_section["Done"])), "done", child_tickets, dep_state
+    )
+    icebox_cards = _render_list_rows(
+        list(reversed(by_section["Icebox"])), "icebox", child_tickets, dep_state
+    )
+    bugs_cards = _render_list_rows(
+        list(reversed(by_section["Bugs"])), "bugs", child_tickets, dep_state
+    )
 
     releases_text = f"{cs.releases} releases" if cs.releases != 1 else "1 release"
     # Hide the version pill when the project has no package.json (the only
     # case where cs.version stays at the literal default).
     version_badge_html = (
         f'<span class="version-badge">{escape(cs.version)}</span>'
-        if cs.version and cs.version != "v0.0.0" else ""
+        if cs.version and cs.version != "v0.0.0"
+        else ""
     )
 
     # Pre-computed nav rail fragments (must be built outside the f-string
@@ -1818,11 +1887,13 @@ def generate_html(project: Project) -> str:
     _icon_bounce = _svg_icon("ladle", 14)
     _icon_close = _svg_icon("x", 14)
     _icon_open = _svg_icon("arrow-up-right", 12)
-    _dctrs_icons = ''.join([
-        f'<button class="readiness-dot" data-flag="description" title="Description" aria-label="Description">{_svg_icon("file-text", 12)}</button>',
-        f'<button class="readiness-dot" data-flag="criteria" title="Criteria" aria-label="Criteria">{_svg_icon("check-square", 12)}</button>',
-        f'<button class="readiness-dot" data-flag="reviewed" title="Learnings" aria-label="Learnings">{_svg_icon("eye", 12)}</button>',
-    ])
+    _dctrs_icons = "".join(
+        [
+            f'<button class="readiness-dot" data-flag="description" title="Description" aria-label="Description">{_svg_icon("file-text", 12)}</button>',
+            f'<button class="readiness-dot" data-flag="criteria" title="Criteria" aria-label="Criteria">{_svg_icon("check-square", 12)}</button>',
+            f'<button class="readiness-dot" data-flag="reviewed" title="Learnings" aria-label="Learnings">{_svg_icon("eye", 12)}</button>',
+        ]
+    )
 
     # Build tag filter buttons (only shown if tags exist)
     _tag_filter_html = ""
@@ -1837,8 +1908,8 @@ def generate_html(project: Project) -> str:
         _tag_filter_html = (
             '  <span class="filter-divider"></span>\n'
             '  <span class="filter-group" data-group-name="tags" id="tagFilterGroup">\n'
-            '    ' + '\n    '.join(tag_btns) + '\n'
-            '  </span>\n'
+            "    " + "\n    ".join(tag_btns) + "\n"
+            "  </span>\n"
         )
 
     html = f"""<!DOCTYPE html>
@@ -6741,13 +6812,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
     // Contextual action buttons — copy workflow prompt to clipboard
     var actionDefs = {{
-      D: {{ icon: '\U0001F4C4', label: 'Write Description',
+      D: {{ icon: '\U0001f4c4', label: 'Write Description',
             prompt: function(t) {{ return 'Write a detailed description for ' + t.id + ': "' + t.title + '". Include problem statement, proposed solution, scope, and constraints.'; }} }},
       C: {{ icon: '\\u2611', label: 'Add Criteria',
             prompt: function(t) {{ return 'Write acceptance criteria for ' + t.id + ': "' + t.title + '". Use Given/When/Then format.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
-      L: {{ icon: '\U0001F441', label: 'Start Learnings',
+      L: {{ icon: '\U0001f441', label: 'Start Learnings',
             prompt: function(t) {{ return 'Capture learnings, decisions, and follow-ups for ' + t.id + ': "' + t.title + '".\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }},
-      R: {{ icon: '\U0001F441', label: 'Start Learnings',
+      R: {{ icon: '\U0001f441', label: 'Start Learnings',
             prompt: function(t) {{ return 'Perform a code review for ' + t.id + ': "' + t.title + '". Check correctness, edge cases, and document decisions.\\n\\nDescription:\\n' + (t.description || '(empty)'); }} }}
     }};
     var actionDef = actionDefs[cat];
@@ -11751,7 +11822,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     if (active && !existing) {{
       var ind = document.createElement('span');
       ind.className = 'card-wf-indicator';
-      ind.textContent = '\u25B6 workflow running';
+      ind.textContent = '\u25b6 workflow running';
       var titleEl = card.querySelector('.card-title') || card.querySelector('.item-title');
       if (titleEl) titleEl.parentNode.insertBefore(ind, titleEl.nextSibling);
       else card.appendChild(ind);
@@ -11978,13 +12049,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
   var FEED_MODE_KEY = 'tt-workflow-feed-mode';
   var TOOL_CALL_HIDE_PATTERNS = [
-    /^\s*<\/?(?:tool|function_calls|invoke)/i,
-    /^\s*<parameter\s/i,
-    /^\s*<tool_use_id\s/i,
-    /^\s*```(?:json|tool|tool_use)/,
-    /^\s*Tool:\s/,
-    /^\s*{{"tool"/,
-    /^\s*{{"name"\s*:\s*"[A-Z]/
+    /^\\s*<\\/?(?:tool|function_calls|invoke)/i,
+    /^\\s*<parameter\\s/i,
+    /^\\s*<tool_use_id\\s/i,
+    /^\\s*```(?:json|tool|tool_use)/,
+    /^\\s*Tool:\\s/,
+    /^\\s*{{"tool"/,
+    /^\\s*{{"name"\\s*:\\s*"[A-Z]/
   ];
 
   function getMode() {{
@@ -12017,12 +12088,12 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       var ln = lines[i];
       if (isToolCallLine(ln)) {{
         hiddenCount++;
-        inToolBlock = /<\s*(tool|function_calls|invoke|parameter)[>\s/]/i.test(ln);
+        inToolBlock = /<\\s*(tool|function_calls|invoke|parameter)[>\\s/]/i.test(ln);
         continue;
       }}
       if (inToolBlock) {{
         hiddenCount++;
-        if (/<\s*\/(tool|function_calls|invoke|parameter)\s*>/i.test(ln)) inToolBlock = false;
+        if (/<\\s*\\/(tool|function_calls|invoke|parameter)\\s*>/i.test(ln)) inToolBlock = false;
         continue;
       }}
       visibleLines.push(ln);
@@ -12381,7 +12452,12 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     return html
 
 
-def _render_cards(tickets: list[Ticket], slug: str, child_tickets: dict[str, list] = None, dep_state: dict = None) -> str:
+def _render_cards(
+    tickets: list[Ticket],
+    slug: str,
+    child_tickets: dict[str, list] = None,
+    dep_state: dict = None,
+) -> str:
     """Render full-size kanban cards."""
     if child_tickets is None:
         child_tickets = {}
@@ -12414,19 +12490,27 @@ def _render_cards(tickets: list[Ticket], slug: str, child_tickets: dict[str, lis
                 f'<span class="arrow">&#9660;</span> {n_children}</span>'
             )
 
-        lines.append(_render_single_card(t, slug, card_class, dep_state, child_badge_html))
+        lines.append(
+            _render_single_card(t, slug, card_class, dep_state, child_badge_html)
+        )
 
         # Render children as full cards in a connected group
         if children:
-            lines.append(f'      <div class="child-group collapsed" data-parent="{id_esc}">')
+            lines.append(
+                f'      <div class="child-group collapsed" data-parent="{id_esc}">'
+            )
             for child in children:
-                lines.append(_render_single_card(child, slug, card_class, dep_state, ""))
-            lines.append(f'      </div>')
+                lines.append(
+                    _render_single_card(child, slug, card_class, dep_state, "")
+                )
+            lines.append("      </div>")
 
     return "\n".join(lines)
 
 
-def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_badge_html: str) -> str:
+def _render_single_card(
+    t, slug: str, card_class: str, dep_state: dict, child_badge_html: str
+) -> str:
     """Render a single card (parent or child) as full HTML."""
     title_esc = escape(t.title)
     id_esc = escape(t.id)
@@ -12438,9 +12522,13 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
 
     # Parent link — always render (empty placeholder when no parent, for click-to-add)
     if t.parent:
-        parent_link_html = f'        <div class="card-parent-link">\u21b3 {escape(t.parent)}</div>\n'
+        parent_link_html = (
+            f'        <div class="card-parent-link">\u21b3 {escape(t.parent)}</div>\n'
+        )
     else:
-        parent_link_html = f'        <div class="card-parent-link empty">+ parent</div>\n'
+        parent_link_html = (
+            '        <div class="card-parent-link empty">+ parent</div>\n'
+        )
 
     # Depends — always render (empty placeholder when no deps)
     if t.depends:
@@ -12450,13 +12538,13 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         if blocking:
             deps_html += f'        <span class="card-blocked-badge">blocked by: {escape(", ".join(blocking))}</span>\n'
     else:
-        deps_html = f'        <div class="card-deps empty">+ depends</div>\n'
+        deps_html = '        <div class="card-deps empty">+ depends</div>\n'
 
     desc_html = ""
     if t.description:
         desc_html = f'        <div class="card-desc">{desc_esc}</div>\n'
     else:
-        desc_html = f'        <div class="card-desc empty">+ description</div>\n'
+        desc_html = '        <div class="card-desc empty">+ description</div>\n'
 
     criteria_html = ""
     criteria_items = []
@@ -12464,9 +12552,15 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         for checked, text in t.acceptance_criteria:
             cls = ' class="criterion checked"' if checked else ' class="criterion"'
             marker = "&#9745;" if checked else "&#9744;"
-            criteria_items.append(f'          <div{cls}>{marker} {escape(text)}</div>')
-    criteria_items.append('          <button class="add-criterion-btn">+ Add Criterion</button>')
-    criteria_html = '        <div class="card-criteria">\n' + "\n".join(criteria_items) + "\n        </div>\n"
+            criteria_items.append(f"          <div{cls}>{marker} {escape(text)}</div>")
+    criteria_items.append(
+        '          <button class="add-criterion-btn">+ Add Criterion</button>'
+    )
+    criteria_html = (
+        '        <div class="card-criteria">\n'
+        + "\n".join(criteria_items)
+        + "\n        </div>\n"
+    )
 
     # Git traceability (shown on expanded cards)
     git_html = ""
@@ -12478,10 +12572,14 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     readiness_html = _render_readiness_row(t)
     actions_html = _render_action_buttons(slug, id_esc)
 
-    draft_class = " is-draft" if getattr(t, 'draft', False) else ""
-    draft_attr = ' data-draft="true"' if getattr(t, 'draft', False) else ""
-    att_count = getattr(t, 'attachment_count', 0)
-    att_badge_html = f'<span class="attachment-count-badge" title="{att_count} attachment(s)">{att_count}</span>' if att_count > 0 else ""
+    draft_class = " is-draft" if getattr(t, "draft", False) else ""
+    draft_attr = ' data-draft="true"' if getattr(t, "draft", False) else ""
+    att_count = getattr(t, "attachment_count", 0)
+    att_badge_html = (
+        f'<span class="attachment-count-badge" title="{att_count} attachment(s)">{att_count}</span>'
+        if att_count > 0
+        else ""
+    )
 
     # Kitchen badge (M1a). Latest run status takes precedence over mode-only states.
     # Visible classes: kb-idle (auto, no run yet), kb-held, kb-queued/preparing/running/needs-input/failed/cancelled,
@@ -12508,7 +12606,8 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'<span class="kitchen-badge {kb_class}" title="{escape(kb_title)}" '
         f'data-automation-mode="{escape(t.automation_mode)}" '
         f'data-run-status="{escape(t.latest_run_status or "")}"></span>'
-        if kb_class else ""
+        if kb_class
+        else ""
     )
 
     # Card play/pause icon — only on cards that have auto turned on. Click to
@@ -12543,41 +12642,49 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         crit_pill_html = f'<span class="card-crit-pill crit-empty" title="0/{crit_total} criteria done">0/{crit_total}</span>'
 
     # Container badge and child-progress pill (overrides criteria pill for containers)
-    is_container = getattr(t, 'is_container', False)
+    is_container = getattr(t, "is_container", False)
     container_badge_html = ""
     if is_container:
         container_badge_html = '<span class="card-container-badge">Container</span>'
         crit_pill_html = ""  # replaced by child progress pill below
 
     # Tags
-    tags_list = getattr(t, 'tags', [])
-    tags_attr = f' data-tags="{escape(" ".join(tags_list))}"' if tags_list else ''
+    tags_list = getattr(t, "tags", [])
+    tags_attr = f' data-tags="{escape(" ".join(tags_list))}"' if tags_list else ""
     tags_html = ""
     if tags_list:
-        pills = "".join(f'<span class="tag-pill">{escape(tg)}</span>' for tg in tags_list)
+        pills = "".join(
+            f'<span class="tag-pill">{escape(tg)}</span>' for tg in tags_list
+        )
         tags_html = f'        <div class="card-tags">{pills}</div>\n'
 
     # Branches
-    branches_list = getattr(t, 'branches', [])
+    branches_list = getattr(t, "branches", [])
     branches_html = ""
     pr_state = ""
     if branches_list:
         br_pills = []
         for br in branches_list:
             cls = "branch-pill"
-            if br.get("pr_status") == "merged": cls += " pr-merged"
-            elif br.get("pr_status") == "open": cls += " pr-open"
-            elif br.get("pr_status") == "draft": cls += " pr-draft"
-            elif br.get("pr_status") == "closed": cls += " pr-closed"
+            if br.get("pr_status") == "merged":
+                cls += " pr-merged"
+            elif br.get("pr_status") == "open":
+                cls += " pr-open"
+            elif br.get("pr_status") == "draft":
+                cls += " pr-draft"
+            elif br.get("pr_status") == "closed":
+                cls += " pr-closed"
             label = br["name"]
             if len(label) > 20:
                 label = label[:18] + "\u2026"
-            pr_str = f' #{br["pr_number"]}' if br.get("pr_number") else ""
+            pr_str = f" #{br['pr_number']}" if br.get("pr_number") else ""
             br_pills.append(
                 f'<span class="{cls}" title="{escape(br["name"])}">'
-                f'{_svg_icon("git-branch", 10)}{escape(label)}{pr_str}</span>'
+                f"{_svg_icon('git-branch', 10)}{escape(label)}{pr_str}</span>"
             )
-        branches_html = f'        <div class="card-branches">{"".join(br_pills)}</div>\n'
+        branches_html = (
+            f'        <div class="card-branches">{"".join(br_pills)}</div>\n'
+        )
         # Worst-state-wins for the data-pr-status attribute used by filter pills.
         states = {b.get("pr_status") or "" for b in branches_list}
         for s in ("open", "draft", "merged", "closed"):
@@ -12591,11 +12698,15 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
     container_attr = ' data-is-container="true"' if is_container else ""
 
     # Pane attention badge
-    pane_attn = getattr(t, 'pane_attention', 'none')
-    if pane_attn == 'question':
-        attn_html = '<span class="card-attn card-attn-q" title="pane needs input">?</span>'
-    elif pane_attn == 'exception':
-        attn_html = '<span class="card-attn card-attn-e" title="pane has an exception">!</span>'
+    pane_attn = getattr(t, "pane_attention", "none")
+    if pane_attn == "question":
+        attn_html = (
+            '<span class="card-attn card-attn-q" title="pane needs input">?</span>'
+        )
+    elif pane_attn == "exception":
+        attn_html = (
+            '<span class="card-attn card-attn-e" title="pane has an exception">!</span>'
+        )
     else:
         attn_html = ""
 
@@ -12603,32 +12714,32 @@ def _render_single_card(t, slug: str, card_class: str, dep_state: dict, child_ba
         f'      <div class="card {card_class}{blocked_class}{draft_class}" data-section="{slug}" '
         f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
         f'data-status="{status_class}" data-testid="ticket-card-{id_esc}"'
-        f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
-        f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}'
+        f"{'' if slug != 'bugs' and status_class not in ('bug', 'bug-fixed') else ' data-is-bug=' + chr(34) + 'true' + chr(34)}"
+        f"{' data-parent=' + chr(34) + escape(t.parent) + chr(34) if t.parent else ''}"
         f' data-automation-mode="{escape(t.automation_mode)}"'
-        f'{" data-eligible=" + chr(34) + "true" + chr(34) if t.automation_eligible else ""}'
-        f'{" data-run-status=" + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ""}'
-        f'{" data-automation-for-review=" + chr(34) + "1" + chr(34) if t.automation_for_review else ""}'
-        f'{draft_attr}{tags_attr}{branch_attr}{pr_attr}{container_attr}>\n'
+        f"{' data-eligible=' + chr(34) + 'true' + chr(34) if t.automation_eligible else ''}"
+        f"{' data-run-status=' + chr(34) + escape(t.latest_run_status) + chr(34) if t.latest_run_status else ''}"
+        f"{' data-automation-for-review=' + chr(34) + '1' + chr(34) if t.automation_for_review else ''}"
+        f"{draft_attr}{tags_attr}{branch_attr}{pr_attr}{container_attr}>\n"
         f'        <div class="card-top"><span class="priority-dot {t.priority}"></span>'
         f'<span class="card-id">{id_esc}</span>'
-        f'{container_badge_html}'
+        f"{container_badge_html}"
         f'<span class="card-title">{title_esc}</span>{crit_pill_html}{child_badge_html}{att_badge_html}</div>\n'
-        f'{tags_html}'
-        f'{branches_html}'
+        f"{tags_html}"
+        f"{branches_html}"
         f'        <div class="card-meta">'
         f'<span class="status-badge {status_class}">{status_class}</span>'
-        f'{attn_html}'
-        f'{kb_html}'
+        f"{attn_html}"
+        f"{kb_html}"
         f'<button type="button" class="star-toggle card-star" data-bookmark-toggle data-ticket-id="{id_esc}" data-testid="card-star-{id_esc}" title="Bookmark" aria-label="Bookmark {id_esc}" aria-pressed="false">{_svg_icon("star", 12)}</button>'
         f'<button class="card-record-btn" data-action="record" data-ticket-id="{id_esc}" style="display:none" title="Record feedback">{_svg_icon("mic", 12)}</button>'
         f'<button class="card-run-now-btn" data-testid="card-run-now-{id_esc}" data-ticket-id="{id_esc}" title="Run now" aria-label="Run now for {id_esc}">{_svg_icon("play", 12)}</button>'
         f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open full ticket page" aria-label="Open {id_esc}" data-open-full-page="true">{_svg_icon("arrow-up-right", 14)}</button></div>\n'
-        f'{readiness_html}'
-        f'{parent_link_html}{deps_html}{desc_html}{criteria_html}'
-        f'{git_html}'
-        f'{actions_html}'
-        f'      </div>'
+        f"{readiness_html}"
+        f"{parent_link_html}{deps_html}{desc_html}{criteria_html}"
+        f"{git_html}"
+        f"{actions_html}"
+        f"      </div>"
     )
 
 
@@ -12646,29 +12757,48 @@ def _render_readiness_row(t) -> str:
         cls = "filled" if filled else "empty"
         flag_name = flag_map[letter]
         icon = _svg_icon(icon_name_map[letter], size=12)
-        dots.append(f'<span class="readiness-dot {cls}" title="{title}" data-flag="{flag_name}" aria-label="{title}">{icon}</span>')
-    return '        <div class="readiness-row">' + "".join(dots) + '</div>\n'
+        dots.append(
+            f'<span class="readiness-dot {cls}" title="{title}" data-flag="{flag_name}" aria-label="{title}">{icon}</span>'
+        )
+    return '        <div class="readiness-row">' + "".join(dots) + "</div>\n"
 
 
 def _render_action_buttons(slug: str, ticket_id: str) -> str:
     """Render contextual action buttons for a card (only visible in edit mode when expanded)."""
     buttons = []
     if slug == "ideas":
-        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="Backlog">{_svg_icon("arrow-right", 12)} Backlog</button>')
+        buttons.append(
+            f'<button class="action-btn primary" data-action="move" data-section="Backlog">{_svg_icon("arrow-right", 12)} Backlog</button>'
+        )
     elif slug == "backlog":
-        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="WIP">{_svg_icon("play", 12)} Start</button>')
+        buttons.append(
+            f'<button class="action-btn primary" data-action="move" data-section="WIP">{_svg_icon("play", 12)} Start</button>'
+        )
     elif slug == "wip":
-        buttons.append(f'<button class="action-btn primary" data-action="move" data-section="For Review">{_svg_icon("check", 12)} Done</button>')
-        buttons.append(f'<button class="action-btn" data-action="move" data-section="Icebox">{_svg_icon("snowflake", 12)} Icebox</button>')
+        buttons.append(
+            f'<button class="action-btn primary" data-action="move" data-section="For Review">{_svg_icon("check", 12)} Done</button>'
+        )
+        buttons.append(
+            f'<button class="action-btn" data-action="move" data-section="Icebox">{_svg_icon("snowflake", 12)} Icebox</button>'
+        )
     elif slug == "review":
-        buttons.append(f'<button class="action-btn primary" data-action="accept">{_svg_icon("check", 12)} Accept</button>')
-        buttons.append(f'<button class="action-btn" data-action="move" data-section="WIP">{_svg_icon("arrow-left", 12)} Back to WIP</button>')
+        buttons.append(
+            f'<button class="action-btn primary" data-action="accept">{_svg_icon("check", 12)} Accept</button>'
+        )
+        buttons.append(
+            f'<button class="action-btn" data-action="move" data-section="WIP">{_svg_icon("arrow-left", 12)} Back to WIP</button>'
+        )
     if not buttons:
         return ""
-    return '        <div class="card-actions">' + "".join(buttons) + '</div>\n'
+    return '        <div class="card-actions">' + "".join(buttons) + "</div>\n"
 
 
-def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str, list] = None, dep_state: dict = None) -> str:
+def _render_list_rows(
+    tickets: list[Ticket],
+    slug: str,
+    child_tickets: dict[str, list] = None,
+    dep_state: dict = None,
+) -> str:
     """Render compact list rows for bottom sections (bugs, done, icebox, won't do)."""
     if child_tickets is None:
         child_tickets = {}
@@ -12696,18 +12826,30 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         # Expandable detail panel
         detail_parts = []
         if t.description:
-            detail_parts.append(f'          <div class="card-desc" style="display:block">{desc_esc}</div>')
+            detail_parts.append(
+                f'          <div class="card-desc" style="display:block">{desc_esc}</div>'
+            )
         if t.acceptance_criteria:
             criteria_items = []
             for checked, text in t.acceptance_criteria:
                 cls = ' class="criterion checked"' if checked else ' class="criterion"'
                 marker = "&#9745;" if checked else "&#9744;"
-                criteria_items.append(f'            <div{cls}>{marker} {escape(text)}</div>')
-            detail_parts.append('          <div class="card-criteria" style="display:block">\n' + "\n".join(criteria_items) + "\n          </div>")
+                criteria_items.append(
+                    f"            <div{cls}>{marker} {escape(text)}</div>"
+                )
+            detail_parts.append(
+                '          <div class="card-criteria" style="display:block">\n'
+                + "\n".join(criteria_items)
+                + "\n          </div>"
+            )
 
         detail_html = ""
         if detail_parts:
-            detail_html = '        <div class="list-row-detail">\n' + "\n".join(detail_parts) + "\n        </div>\n"
+            detail_html = (
+                '        <div class="list-row-detail">\n'
+                + "\n".join(detail_parts)
+                + "\n        </div>\n"
+            )
 
         # Git traceability badges
         commit_badge = ""
@@ -12715,7 +12857,9 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
             commit_badge = f'<span class="commit-badge">{escape(t.commit_hash)}</span>'
         release_badge = ""
         if t.release_tag:
-            release_badge = f'<span class="release-badge">{escape(t.release_tag)}</span>'
+            release_badge = (
+                f'<span class="release-badge">{escape(t.release_tag)}</span>'
+            )
 
         readiness_html = _render_readiness_row(t)
         open_btn = f'<button class="card-open-btn" data-testid="card-open-btn-{id_esc}" title="Open full ticket page" data-open-full-page="true">{_svg_icon("arrow-up-right", 12)}</button>'
@@ -12724,7 +12868,7 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         lr_crit_all = t.acceptance_criteria if t.acceptance_criteria else []
         lr_crit_total = len(lr_crit_all)
         lr_crit_done = sum(1 for (chk, _) in lr_crit_all if chk)
-        lr_is_container = getattr(t, 'is_container', False)
+        lr_is_container = getattr(t, "is_container", False)
         if lr_is_container:
             lr_crit_pill = '<span class="card-container-badge">Container</span>'
         elif lr_crit_total == 0:
@@ -12734,12 +12878,16 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
         elif lr_crit_done > 0:
             lr_crit_pill = f'<span class="card-crit-pill crit-progress">{lr_crit_done}/{lr_crit_total}</span>'
         else:
-            lr_crit_pill = f'<span class="card-crit-pill crit-empty">0/{lr_crit_total}</span>'
+            lr_crit_pill = (
+                f'<span class="card-crit-pill crit-empty">0/{lr_crit_total}</span>'
+            )
 
-        list_tags_list = getattr(t, 'tags', [])
-        list_tags_attr = f' data-tags="{escape(" ".join(list_tags_list))}"' if list_tags_list else ''
-        list_branches = getattr(t, 'branches', [])
-        list_branch_attr = ' data-has-branch="true"' if list_branches else ''
+        list_tags_list = getattr(t, "tags", [])
+        list_tags_attr = (
+            f' data-tags="{escape(" ".join(list_tags_list))}"' if list_tags_list else ""
+        )
+        list_branches = getattr(t, "branches", [])
+        list_branch_attr = ' data-has-branch="true"' if list_branches else ""
         list_pr_state = ""
         if list_branches:
             states = {b.get("pr_status") or "" for b in list_branches}
@@ -12747,29 +12895,33 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
                 if s in states:
                     list_pr_state = s
                     break
-        list_pr_attr = f' data-pr-status="{escape(list_pr_state)}"' if list_pr_state else ''
+        list_pr_attr = (
+            f' data-pr-status="{escape(list_pr_state)}"' if list_pr_state else ""
+        )
         lines.append(
             f'      <div class="list-row card" data-section="{slug}" '
             f'data-title="{title_esc}" data-item-id="{id_esc}" data-desc="{desc_esc}" '
             f'data-status="{status_class}" data-testid="ticket-card-{id_esc}"'
-            f'{"" if slug != "bugs" and status_class not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
-            f'{" data-parent=" + chr(34) + escape(t.parent) + chr(34) if t.parent else ""}{list_tags_attr}{list_branch_attr}{list_pr_attr}>\n'
+            f"{'' if slug != 'bugs' and status_class not in ('bug', 'bug-fixed') else ' data-is-bug=' + chr(34) + 'true' + chr(34)}"
+            f"{' data-parent=' + chr(34) + escape(t.parent) + chr(34) if t.parent else ''}{list_tags_attr}{list_branch_attr}{list_pr_attr}>\n"
             f'        <div class="list-row-main">'
             f'<span class="priority-dot {t.priority}"></span>'
             f'<span class="card-id">{id_esc}</span>'
             f'<span class="card-title">{title_esc}</span>'
-            f'{lr_crit_pill}'
+            f"{lr_crit_pill}"
             f'<span class="status-badge {status_class}">{status_class}</span>'
-            f'{commit_badge}{release_badge}'
-            f'{child_badge_html}{open_btn}</div>\n'
-            f'{readiness_html}'
-            f'{detail_html}'
-            f'      </div>'
+            f"{commit_badge}{release_badge}"
+            f"{child_badge_html}{open_btn}</div>\n"
+            f"{readiness_html}"
+            f"{detail_html}"
+            f"      </div>"
         )
 
         # Render children as list rows in a connected group
         if children:
-            lines.append(f'      <div class="child-group collapsed" data-parent="{id_esc}">')
+            lines.append(
+                f'      <div class="child-group collapsed" data-parent="{id_esc}">'
+            )
             for child in children:
                 child_title = escape(child.title)
                 child_id = escape(child.id)
@@ -12779,16 +12931,16 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
                     f'      <div class="list-row card" data-section="{slug}" '
                     f'data-title="{child_title}" data-item-id="{child_id}" data-desc="{child_desc}" '
                     f'data-status="{child_status}"'
-                    f'{"" if slug != "bugs" and child_status not in ("bug", "bug-fixed") else " data-is-bug=" + chr(34) + "true" + chr(34)}'
+                    f"{'' if slug != 'bugs' and child_status not in ('bug', 'bug-fixed') else ' data-is-bug=' + chr(34) + 'true' + chr(34)}"
                     f' data-parent="{id_esc}">\n'
                     f'        <div class="list-row-main">'
                     f'<span class="priority-dot {child.priority}"></span>'
                     f'<span class="card-id">{child_id}</span>'
                     f'<span class="card-title">{child_title}</span>'
                     f'<span class="status-badge {child_status}">{child_status}</span></div>\n'
-                    f'      </div>'
+                    f"      </div>"
                 )
-            lines.append(f'      </div>')
+            lines.append("      </div>")
 
     return "\n".join(lines)
 
@@ -12796,6 +12948,7 @@ def _render_list_rows(tickets: list[Ticket], slug: str, child_tickets: dict[str,
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def generate_json_output(projects: list[Project]) -> str:
     """Generate structured JSON output of all project/ticket data."""
@@ -12813,42 +12966,46 @@ def generate_json_output(projects: list[Project]) -> str:
         proj_tickets = []
         for t in proj.tickets:
             dep_info = dep_state.get(t.id, {"deps_resolved": True, "blocking_deps": []})
-            proj_tickets.append({
-                "id": t.id,
-                "title": t.title,
-                "priority": t.priority,
-                "status": t.status,
-                "section": t.section,
-                "description": t.description,
-                "acceptance_criteria": [
-                    {"checked": c, "text": txt} for c, txt in t.acceptance_criteria
-                ],
-                "parent": t.parent,
-                "depends": t.depends,
-                "summary": t.summary,
-                "archived": t.archived,
-                "commit_hash": t.commit_hash,
-                "release_tag": t.release_tag,
-                "deps_resolved": dep_info["deps_resolved"],
-                "blocking_deps": dep_info["blocking_deps"],
-            })
+            proj_tickets.append(
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "status": t.status,
+                    "section": t.section,
+                    "description": t.description,
+                    "acceptance_criteria": [
+                        {"checked": c, "text": txt} for c, txt in t.acceptance_criteria
+                    ],
+                    "parent": t.parent,
+                    "depends": t.depends,
+                    "summary": t.summary,
+                    "archived": t.archived,
+                    "commit_hash": t.commit_hash,
+                    "release_tag": t.release_tag,
+                    "deps_resolved": dep_info["deps_resolved"],
+                    "blocking_deps": dep_info["blocking_deps"],
+                }
+            )
 
         cs = proj.code_stats
-        output["projects"].append({
-            "id": proj.id,
-            "name": proj.name,
-            "path": proj.path,
-            "active": proj.active,
-            "code_stats": {
-                "files": cs.files,
-                "loc": cs.loc,
-                "deps": cs.deps,
-                "last_commit": cs.last_commit,
-                "releases": cs.releases,
-                "version": cs.version,
-            },
-            "tickets": proj_tickets,
-        })
+        output["projects"].append(
+            {
+                "id": proj.id,
+                "name": proj.name,
+                "path": proj.path,
+                "active": proj.active,
+                "code_stats": {
+                    "files": cs.files,
+                    "loc": cs.loc,
+                    "deps": cs.deps,
+                    "last_commit": cs.last_commit,
+                    "releases": cs.releases,
+                    "version": cs.version,
+                },
+                "tickets": proj_tickets,
+            }
+        )
 
     return json.dumps(output, indent=2)
 
@@ -12874,13 +13031,16 @@ def main():
 
     # Load registry
     if not REGISTRY_PATH.exists():
-        print(f"Registry not found at {REGISTRY_PATH}, creating empty dashboard.", file=sys.stderr)
+        print(
+            f"Registry not found at {REGISTRY_PATH}, creating empty dashboard.",
+            file=sys.stderr,
+        )
         projects_data = {"projects": []}
     else:
         try:
             with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
                 projects_data = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"Error reading registry: {e}", file=sys.stderr)
             projects_data = {"projects": []}
 
@@ -12926,7 +13086,10 @@ def main():
         if proj.path:
             for t in proj.tickets:
                 if t.commit_hash and not t.release_tag:
-                    tag = run_cmd(f"git tag --contains {t.commit_hash} --sort=-creatordate | head -1", cwd=proj.path)
+                    tag = run_cmd(
+                        f"git tag --contains {t.commit_hash} --sort=-creatordate | head -1",
+                        cwd=proj.path,
+                    )
                     if tag:
                         t.release_tag = tag
 
@@ -12971,7 +13134,9 @@ def main():
     icebox_n = counts.get("Icebox", 0)
     bugs_n = counts.get("Bugs", 0)
 
-    print(f"Dashboard updated: {backlog_n} backlog, {wip_n} WIP, {review_n} review, {done_n} done, {ideas_n} ideas, {icebox_n} icebox, {bugs_n} bugs")
+    print(
+        f"Dashboard updated: {backlog_n} backlog, {wip_n} WIP, {review_n} review, {done_n} done, {ideas_n} ideas, {icebox_n} icebox, {bugs_n} bugs"
+    )
     for p in output_paths:
         print(f"Output: {p}")
 
@@ -12981,9 +13146,17 @@ def main():
         system = platform.system()
         try:
             if system == "Darwin":
-                subprocess.Popen(["open", str(open_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(
+                    ["open", str(open_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             elif system == "Linux":
-                subprocess.Popen(["xdg-open", str(open_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(
+                    ["xdg-open", str(open_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             elif system == "Windows":
                 os.startfile(str(open_path))
         except Exception:

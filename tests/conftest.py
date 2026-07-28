@@ -132,6 +132,7 @@ def dashboard_server():
     for _ in range(40):
         try:
             import urllib.request
+
             urllib.request.urlopen(base_url, timeout=1)
             break
         except Exception:
@@ -157,6 +158,7 @@ def browser(request):
 
     if backend_type == "cdp":
         from scenario_backend import connect_cdp_backend
+
         endpoint = request.config.getoption(
             "--cdp-endpoint", default="http://localhost:9222"
         )
@@ -213,9 +215,7 @@ def page(browser, dashboard_server):
 @pytest.fixture()
 def ticket_id(page):
     """Return the first ticket ID found in the dashboard DOM."""
-    return page.evaluate(
-        "document.querySelector('.card[data-item-id]').dataset.itemId"
-    )
+    return page.evaluate("document.querySelector('.card[data-item-id]').dataset.itemId")
 
 
 @pytest.fixture()
@@ -233,9 +233,7 @@ def two_ticket_ids(page):
 
 def trigger_gate_check(page, ticket_id, target_section):
     """Programmatically trigger a gate check via the JS API."""
-    page.evaluate(
-        f"window.startGateCheck('{ticket_id}', '{target_section}')"
-    )
+    page.evaluate(f"window.startGateCheck('{ticket_id}', '{target_section}')")
 
 
 def wait_for_hash(page, expected_hash, timeout=5000):
@@ -256,9 +254,7 @@ def wait_for_empty_hash(page, timeout=5000):
 
 def wait_for_overlay_visible(page, timeout=5000):
     """Wait for the detail overlay to become visible."""
-    page.wait_for_selector(
-        "#ticket-detail-overlay:not(.hidden)", timeout=timeout
-    )
+    page.wait_for_selector("#ticket-detail-overlay:not(.hidden)", timeout=timeout)
 
 
 def wait_for_overlay_hidden(page, timeout=5000):
@@ -271,9 +267,7 @@ def wait_for_overlay_hidden(page, timeout=5000):
 
 def wait_for_gate_banner_visible(page, timeout=5000):
     """Wait for the gate banner to become visible."""
-    page.wait_for_selector(
-        "#detail-gate-banner:not(.hidden)", timeout=timeout
-    )
+    page.wait_for_selector("#detail-gate-banner:not(.hidden)", timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +294,7 @@ def live_page(browser, dashboard_server):
 def api_get(base_url: str, path: str) -> dict:
     """GET an API path, return parsed JSON."""
     import urllib.request
+
     url = f"{base_url}{path}"
     with urllib.request.urlopen(url, timeout=10) as resp:
         return json.loads(resp.read())
@@ -307,12 +302,14 @@ def api_get(base_url: str, path: str) -> dict:
 
 def api_post(base_url: str, path: str, body: dict) -> tuple[int, dict]:
     """POST JSON to an API path, return (status_code, parsed_json)."""
-    import urllib.request
     import urllib.error
+    import urllib.request
+
     url = f"{base_url}{path}"
     data = json.dumps(body).encode()
     req = urllib.request.Request(
-        url, data=data,
+        url,
+        data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -326,12 +323,14 @@ def api_post(base_url: str, path: str, body: dict) -> tuple[int, dict]:
 
 def api_put(base_url: str, path: str, body: dict) -> tuple[int, dict]:
     """PUT JSON to an API path, return (status_code, parsed_json)."""
-    import urllib.request
     import urllib.error
+    import urllib.request
+
     url = f"{base_url}{path}"
     data = json.dumps(body).encode()
     req = urllib.request.Request(
-        url, data=data,
+        url,
+        data=data,
         headers={"Content-Type": "application/json"},
         method="PUT",
     )
@@ -345,8 +344,9 @@ def api_put(base_url: str, path: str, body: dict) -> tuple[int, dict]:
 
 def api_delete(base_url: str, path: str) -> tuple[int, dict]:
     """DELETE an API path, return (status_code, parsed_json)."""
-    import urllib.request
     import urllib.error
+    import urllib.request
+
     url = f"{base_url}{path}"
     req = urllib.request.Request(url, method="DELETE")
     try:

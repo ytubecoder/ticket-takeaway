@@ -16,17 +16,16 @@ import urllib.error
 import urllib.request
 
 import pytest
-
-from conftest import api_delete, api_get, api_post, api_put
+from conftest import api_delete, api_get, api_post
 
 
 def _raw_put(base_url, path, body):
     """PUT JSON, return (status_code, dict). Safe even when body is empty on error."""
     url = f"{base_url}{path}"
     data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data,
-                                  headers={"Content-Type": "application/json"},
-                                  method="PUT")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}, method="PUT"
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read())
@@ -42,9 +41,9 @@ def _raw_post(base_url, path, body):
     """POST JSON, return (status_code, dict). Safe even when body is empty on error."""
     url = f"{base_url}{path}"
     data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data,
-                                  headers={"Content-Type": "application/json"},
-                                  method="POST")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read())
@@ -75,6 +74,7 @@ def _raw_delete(base_url, path):
 # A. Workflow CRUD — new fields + system workflow guard
 # ---------------------------------------------------------------------------
 
+
 def test_list_workflows_returns_new_fields(dashboard_server):
     """GET /api/workflow/workflows returns workflows with trigger_json etc."""
     data = api_get(dashboard_server, "/api/workflow/workflows")
@@ -84,24 +84,28 @@ def test_list_workflows_returns_new_fields(dashboard_server):
     for wf in data["workflows"]:
         assert "system" in wf
         assert "enabled" in wf
-        assert "trigger_json" in wf    # parsed or null
+        assert "trigger_json" in wf  # parsed or null
         assert "on_success_json" in wf  # parsed or null
         assert "subject_type" in wf
-        assert "steps" in wf           # parsed list
+        assert "steps" in wf  # parsed list
 
 
 def test_create_workflow_with_trigger_json(dashboard_server):
     """POST /api/workflow/workflows accepts trigger_json as object."""
     wid = f"p3a-smoke-{int(time.time())}"
     trigger = {"all_of": [{"kind": "section_equals", "value": "Backlog"}]}
-    status, data = api_post(dashboard_server, "/api/workflow/workflows", {
-        "id": wid,
-        "name": "Phase 3A smoke test workflow",
-        "trigger_json": trigger,
-        "enabled": True,
-        "subject_type": "ticket",
-        "steps": [],
-    })
+    status, data = api_post(
+        dashboard_server,
+        "/api/workflow/workflows",
+        {
+            "id": wid,
+            "name": "Phase 3A smoke test workflow",
+            "trigger_json": trigger,
+            "enabled": True,
+            "subject_type": "ticket",
+            "steps": [],
+        },
+    )
     assert status == 201, data
     assert data["id"] == wid
     # trigger_json should be returned as parsed object
@@ -121,12 +125,18 @@ def test_update_system_workflow_enabled_allowed(dashboard_server):
         pytest.skip("No system workflows seeded — nothing to test")
     wid = system_wfs[0]["id"]
     current_enabled = system_wfs[0].get("enabled", 1)
-    status, resp = _raw_put(dashboard_server, f"/api/workflow/workflows/{wid}", {
-        "enabled": 0 if current_enabled else 1,
-    })
+    status, resp = _raw_put(
+        dashboard_server,
+        f"/api/workflow/workflows/{wid}",
+        {
+            "enabled": 0 if current_enabled else 1,
+        },
+    )
     assert status == 200, resp
     # Restore
-    _raw_put(dashboard_server, f"/api/workflow/workflows/{wid}", {"enabled": current_enabled})
+    _raw_put(
+        dashboard_server, f"/api/workflow/workflows/{wid}", {"enabled": current_enabled}
+    )
 
 
 def test_update_system_workflow_other_fields_forbidden(dashboard_server):
@@ -136,9 +146,13 @@ def test_update_system_workflow_other_fields_forbidden(dashboard_server):
     if not system_wfs:
         pytest.skip("No system workflows seeded")
     wid = system_wfs[0]["id"]
-    status, resp = _raw_put(dashboard_server, f"/api/workflow/workflows/{wid}", {
-        "name": "hacked name",
-    })
+    status, resp = _raw_put(
+        dashboard_server,
+        f"/api/workflow/workflows/{wid}",
+        {
+            "name": "hacked name",
+        },
+    )
     assert status == 403, resp
     assert resp.get("error") == "system_workflow"
 
@@ -200,13 +214,17 @@ def test_duplicate_nonexistent_workflow_404(dashboard_server):
 # B. Condition catalog
 # ---------------------------------------------------------------------------
 
+
 def test_condition_catalog_returns_catalog(dashboard_server):
     """GET /api/workflow-conditions/catalog returns conditions list (project-agnostic)."""
     # Strip the project prefix — this is a global endpoint
     # dashboard_server is e.g. http://localhost:PORT/ticket-takeaway
     base = dashboard_server.rsplit("/", 1)[0]  # http://localhost:PORT
-    with urllib.request.urlopen(f"{base}/api/workflow-conditions/catalog", timeout=10) as resp:
+    with urllib.request.urlopen(
+        f"{base}/api/workflow-conditions/catalog", timeout=10
+    ) as resp:
         import json
+
         data = json.loads(resp.read())
     assert "conditions" in data
     assert isinstance(data["conditions"], list)
@@ -234,8 +252,10 @@ def test_condition_catalog_returns_catalog(dashboard_server):
 # C. Eligibility inspector
 # ---------------------------------------------------------------------------
 
+
 def _get_first_ticket_id_raw(base_url):
     import json as _json
+
     with urllib.request.urlopen(f"{base_url}/api/tickets", timeout=10) as r:
         data = _json.loads(r.read())
     if isinstance(data, list) and data:
@@ -250,7 +270,9 @@ def _get_first_ticket_id_raw(base_url):
 def test_inspect_returns_per_condition_results(dashboard_server):
     """POST /api/workflows/inspect returns workflow eligibility per condition."""
     tid = _get_first_ticket_id_raw(dashboard_server)
-    status, data = api_post(dashboard_server, "/api/workflows/inspect", {"ticket_id": tid})
+    status, data = api_post(
+        dashboard_server, "/api/workflows/inspect", {"ticket_id": tid}
+    )
     assert status == 200, data
     assert data.get("ticket_id") == tid
     assert "subject_context_summary" in data
@@ -268,13 +290,16 @@ def test_inspect_returns_per_condition_results(dashboard_server):
 
 def test_inspect_missing_ticket_returns_404(dashboard_server):
     """POST /api/workflows/inspect with non-existent ticket_id returns 404."""
-    status, data = _raw_post(dashboard_server, "/api/workflows/inspect", {"ticket_id": "NONEXISTENT-9999"})
+    status, data = _raw_post(
+        dashboard_server, "/api/workflows/inspect", {"ticket_id": "NONEXISTENT-9999"}
+    )
     assert status == 404, data
 
 
 # ---------------------------------------------------------------------------
 # D. Kitchen settings
 # ---------------------------------------------------------------------------
+
 
 def test_get_kitchen_settings(dashboard_server):
     """GET /api/settings/kitchen returns kitchen settings dict."""
@@ -293,9 +318,13 @@ def test_put_kitchen_settings_valid(dashboard_server):
     orig = api_get(dashboard_server, "/api/settings/kitchen")["settings"]
     orig_flag = orig.get("use_db_workflows", False)
 
-    status, data = _raw_put(dashboard_server, "/api/settings/kitchen", {
-        "use_db_workflows": not orig_flag,
-    })
+    status, data = _raw_put(
+        dashboard_server,
+        "/api/settings/kitchen",
+        {
+            "use_db_workflows": not orig_flag,
+        },
+    )
     assert status == 200, data
     assert "settings" in data
     assert data["settings"]["use_db_workflows"] is not orig_flag
@@ -306,9 +335,13 @@ def test_put_kitchen_settings_valid(dashboard_server):
 
 def test_put_kitchen_settings_invalid_type(dashboard_server):
     """PUT /api/settings/kitchen with wrong type for boolean returns 400."""
-    status, data = _raw_put(dashboard_server, "/api/settings/kitchen", {
-        "use_db_workflows": "not-a-bool",
-    })
+    status, data = _raw_put(
+        dashboard_server,
+        "/api/settings/kitchen",
+        {
+            "use_db_workflows": "not-a-bool",
+        },
+    )
     assert status == 400, data
     assert "error" in data
 
@@ -316,6 +349,7 @@ def test_put_kitchen_settings_invalid_type(dashboard_server):
 # ---------------------------------------------------------------------------
 # E. Run observability
 # ---------------------------------------------------------------------------
+
 
 def test_active_runs_returns_list(dashboard_server):
     """GET /api/runs/active returns runs list (may be empty)."""
@@ -350,7 +384,9 @@ def test_run_detail_not_found(dashboard_server):
 def test_run_evidence_not_found(dashboard_server):
     """GET /api/runs/99999999/evidence returns 404 for non-existent run."""
     try:
-        urllib.request.urlopen(f"{dashboard_server}/api/runs/99999999/evidence", timeout=10)
+        urllib.request.urlopen(
+            f"{dashboard_server}/api/runs/99999999/evidence", timeout=10
+        )
         pytest.fail("Expected 404")
     except urllib.error.HTTPError as e:
         assert e.code == 404

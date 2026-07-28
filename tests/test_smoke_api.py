@@ -4,15 +4,12 @@ Uses the live dashboard_server fixture. Each test verifies status code
 and basic response shape — no complex assertions on content.
 """
 
-import json
 import time
 import urllib.error
 import urllib.request
 
 import pytest
-
 from conftest import api_delete, api_get, api_post, api_put
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -157,9 +154,7 @@ def test_put_readiness_content(dashboard_server):
     assert status_code == 200
 
     # Restore
-    api_put(
-        dashboard_server, f"/api/tickets/{tid}/readiness/reviewed", {"content": ""}
-    )
+    api_put(dashboard_server, f"/api/tickets/{tid}/readiness/reviewed", {"content": ""})
 
 
 # ---------------------------------------------------------------------------
@@ -278,9 +273,7 @@ def test_attachment_crud(dashboard_server):
 def test_record_endpoint_returns_url(dashboard_server):
     """POST /api/tickets/{id}/record returns a feedbacks URL."""
     tid = _get_first_ticket_id(dashboard_server)
-    status_code, data = api_post(
-        dashboard_server, f"/api/tickets/{tid}/record", {}
-    )
+    status_code, data = api_post(dashboard_server, f"/api/tickets/{tid}/record", {})
     assert status_code == 200
     assert "url" in data
     assert tid in data["url"]

@@ -4,6 +4,7 @@ A Backend abstracts browser interaction so scenarios can run against either
 a Playwright-launched browser (PlaywrightBackend) or an already-running
 browser connected via CDP (CDPBackend).
 """
+
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
@@ -20,8 +21,12 @@ class Backend(Protocol):
     def fill(self, target: dict, value: str, seed_id_map: dict) -> None: ...
     def select(self, target: dict, value: str, seed_id_map: dict) -> None: ...
     def press(self, target: dict, key: str, seed_id_map: dict) -> None: ...
-    def wait_for_visible(self, target: dict, timeout: int, seed_id_map: dict) -> None: ...
-    def wait_for_hidden(self, target: dict, timeout: int, seed_id_map: dict) -> None: ...
+    def wait_for_visible(
+        self, target: dict, timeout: int, seed_id_map: dict
+    ) -> None: ...
+    def wait_for_hidden(
+        self, target: dict, timeout: int, seed_id_map: dict
+    ) -> None: ...
     def wait_for_text(self, text: str, timeout: int) -> None: ...
     def screenshot(self, path: str, full_page: bool = False) -> str: ...
     def wait_for_settled(self, timeout: int = 5000) -> None: ...
@@ -59,14 +64,11 @@ def resolve_target(page: Any, target: dict, seed_id_map: dict) -> Any:
         try:
             index = int(ref.split("-")[-1])
         except (ValueError, IndexError):
-            raise ValueError(
-                f"Invalid seed_ref format: {ref!r}. Expected 'ticket-N'."
-            )
+            raise ValueError(f"Invalid seed_ref format: {ref!r}. Expected 'ticket-N'.")
         ids = list(seed_id_map.values())
         if index >= len(ids):
             raise ValueError(
-                f"seed_ref index {index} out of range "
-                f"(have {len(ids)} seed tickets)"
+                f"seed_ref index {index} out of range (have {len(ids)} seed tickets)"
             )
         return page.get_by_test_id(f"ticket-card-{ids[index]}")
 
@@ -150,16 +152,12 @@ class PlaywrightBackend:
     def press(self, target: dict, key: str, seed_id_map: dict) -> None:
         resolve_target(self.page, target, seed_id_map).press(key)
 
-    def wait_for_visible(
-        self, target: dict, timeout: int, seed_id_map: dict
-    ) -> None:
+    def wait_for_visible(self, target: dict, timeout: int, seed_id_map: dict) -> None:
         resolve_target(self.page, target, seed_id_map).wait_for(
             state="visible", timeout=timeout
         )
 
-    def wait_for_hidden(
-        self, target: dict, timeout: int, seed_id_map: dict
-    ) -> None:
+    def wait_for_hidden(self, target: dict, timeout: int, seed_id_map: dict) -> None:
         resolve_target(self.page, target, seed_id_map).wait_for(
             state="hidden", timeout=timeout
         )
@@ -223,7 +221,6 @@ class CDPBackend(PlaywrightBackend):
     """
 
     # No behavioural override needed — inherits everything from PlaywrightBackend.
-    pass
 
 
 def connect_cdp_backend(
@@ -238,9 +235,10 @@ def connect_cdp_backend(
     Raises ConnectionError with a clear message if no browser is listening
     on the given endpoint.
     """
-    from playwright.sync_api import sync_playwright
     import urllib.error
     import urllib.request
+
+    from playwright.sync_api import sync_playwright
 
     # Preflight: verify the CDP endpoint is reachable before calling playwright,
     # which gives a less friendly error on connection failure.

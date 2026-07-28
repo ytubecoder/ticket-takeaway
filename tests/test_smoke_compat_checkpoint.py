@@ -8,7 +8,7 @@ wire that agent correctly.
 This is a GATE: if any test in this file fails, fix the migration
 before proceeding to UI work (Tasks 19-20).
 """
-import json
+
 import logging
 import sqlite3
 import sys
@@ -25,7 +25,6 @@ def migrated_db_with_system_agents(tmp_path):
     """Build a DB with migrations 1-18 + sample system agent rows,
     then run migration 19 to wire them to endpoints."""
     import db as ttdb
-    import workflows_seed as ws
 
     db_path = tmp_path / "checkpoint.db"
     conn = sqlite3.connect(str(db_path))
@@ -33,29 +32,39 @@ def migrated_db_with_system_agents(tmp_path):
     conn.row_factory = sqlite3.Row
 
     # Stub migration 20 during init so we can seed legacy rows first
-    with patch.object(ttdb, "_apply_migration_20", lambda c: None,
-                      create=True):
+    with patch.object(ttdb, "_apply_migration_20", lambda c: None, create=True):
         ttdb.init_db(conn)
 
     # Seed the 6 system agents as they exist pre-migration (no endpoint_id)
     legacy_agents = [
-        ("agent_planner",      "Planner",      "claude", "[]", "...", 1, 1),
-        ("agent_consultant",   "Consultant",   "codex",
-         '["exec", "-s", "read-only"]', "...", 1, 1),
+        ("agent_planner", "Planner", "claude", "[]", "...", 1, 1),
+        (
+            "agent_consultant",
+            "Consultant",
+            "codex",
+            '["exec", "-s", "read-only"]',
+            "...",
+            1,
+            1,
+        ),
         ("agent_orchestrator", "Orchestrator", "claude", "[]", "...", 1, 1),
-        ("agent_worker",       "Worker",       "claude", "[]", "...", 0, 1),
-        ("agent_summarizer",   "Summarizer",   "claude", "[]", "...", 0, 1),
-        ("agent_validator",    "Validator",    "claude", "[]", "...", 0, 1),
+        ("agent_worker", "Worker", "claude", "[]", "...", 0, 1),
+        ("agent_summarizer", "Summarizer", "claude", "[]", "...", 0, 1),
+        ("agent_validator", "Validator", "claude", "[]", "...", 0, 1),
     ]
-    conn.executemany("""
+    conn.executemany(
+        """
         INSERT INTO workflow_agents
             (id, name, command, args, system_prompt, persist_session, system)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, legacy_agents)
+    """,
+        legacy_agents,
+    )
     conn.commit()
 
     # Now run migration 20 for real
     from db import _apply_migration_20
+
     _apply_migration_20(conn)
     return conn
 
@@ -77,7 +86,8 @@ def test_system_agent_uses_endpoint_not_compat(
     """Every system agent must resolve via its endpoint, never via
     the compat path."""
     from runners import _resolve_argv_for_agent, _seen_compat_agents
-    _seen_compat_agents.clear()   # reset between parametrized runs
+
+    _seen_compat_agents.clear()  # reset between parametrized runs
 
     conn = migrated_db_with_system_agents
     row = conn.execute(
@@ -85,8 +95,9 @@ def test_system_agent_uses_endpoint_not_compat(
     ).fetchone()
     assert row is not None, f"agent {agent_id} not in DB"
     agent = dict(row)
-    assert agent["endpoint_id"] is not None, \
+    assert agent["endpoint_id"] is not None, (
         f"agent {agent_id} has NULL endpoint_id after migration"
+    )
 
     caplog.set_level(logging.WARNING, logger="runner")
     with caplog.at_level(logging.WARNING):
@@ -94,7 +105,8 @@ def test_system_agent_uses_endpoint_not_compat(
 
     # The KEY assertion: no compat-path warning for this agent
     compat_warnings = [
-        r for r in caplog.records
+        r
+        for r in caplog.records
         if "using compat command" in r.message and agent_id in r.message
     ]
     assert len(compat_warnings) == 0, (

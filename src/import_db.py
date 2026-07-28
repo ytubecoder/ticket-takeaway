@@ -26,6 +26,7 @@ Design:
       (parent auto-promote, etc.) re-trigger naturally on first edit.
     - Single transaction per project, rollback on failure.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -131,7 +132,8 @@ def import_bundle(
         )
 
     # Open + initialise schema (canonical pattern from tickets-cli.py).
-    import db as _db_module  # noqa
+    import db as _db_module
+
     target = _db_module.get_db(db_path)
     _db_module.init_db(target)
     target.commit()
@@ -161,7 +163,8 @@ def import_bundle(
     # Pre-flight: detect collisions for skip mode.
     if mode == "skip":
         collisions = [
-            pid for pid in projects
+            pid
+            for pid in projects
             if pid != "_global"
             and _project_has_tickets(target, pid)
             and projects[pid].get("tickets")
@@ -184,7 +187,9 @@ def import_bundle(
         for t in TICKET_FANOUT_TABLES
     }
     workflow_cols = (
-        _table_columns(target, "workflows") if _table_exists(target, "workflows") else set()
+        _table_columns(target, "workflows")
+        if _table_exists(target, "workflows")
+        else set()
     )
     workflow_agent_cols = (
         _table_columns(target, "workflow_agents")
@@ -192,7 +197,9 @@ def import_bundle(
         else set()
     )
     journey_cols = (
-        _table_columns(target, "journeys") if _table_exists(target, "journeys") else set()
+        _table_columns(target, "journeys")
+        if _table_exists(target, "journeys")
+        else set()
     )
     journey_step_cols = (
         _table_columns(target, "journey_steps")
@@ -231,22 +238,37 @@ def import_bundle(
             if mode == "replace":
                 _delete_project_data(target, pid)
 
-            counts = {k: 0 for k in (
-                "tickets", "criteria", "depends", "tags",
-                "branches", "readiness_flags", "attachments",
-            )}
+            counts = {
+                k: 0
+                for k in (
+                    "tickets",
+                    "criteria",
+                    "depends",
+                    "tags",
+                    "branches",
+                    "readiness_flags",
+                    "attachments",
+                )
+            }
             ticket_insert_mode = (
-                "merge" if mode == "merge"
+                "merge"
+                if mode == "merge"
                 else ("replace" if mode == "replace" else "skip")
             )
             warned_dropped: set[str] = set()  # warn once per dropped fieldset
 
             for t in p.get("tickets", []):
                 ticket_row = {
-                    k: v for k, v in t.items()
-                    if k not in {
-                        "acceptance_criteria", "depends_on", "tags",
-                        "branches", "readiness_flags", "attachments",
+                    k: v
+                    for k, v in t.items()
+                    if k
+                    not in {
+                        "acceptance_criteria",
+                        "depends_on",
+                        "tags",
+                        "branches",
+                        "readiness_flags",
+                        "attachments",
                     }
                 }
                 ticket_row["project_id"] = pid
@@ -265,7 +287,10 @@ def import_bundle(
                 # That way dry-run counts reflect what the actual run would write.
                 try:
                     wrote = _insert_row(
-                        target, "tickets", row_for_insert, ticket_insert_mode,
+                        target,
+                        "tickets",
+                        row_for_insert,
+                        ticket_insert_mode,
                     )
                     counts["tickets"] += wrote
                     ticket_was_inserted = wrote > 0
@@ -283,25 +308,59 @@ def import_bundle(
 
                 tid = t["id"]
                 pairs = [
-                    ("acceptance_criteria", "criteria",
-                     [{**c, "ticket_id": tid, "project_id": pid,
-                       "checked": int(bool(c.get("checked", 0)))}
-                      for c in (t.get("acceptance_criteria") or [])]),
-                    ("depends", "depends",
-                     [{"ticket_id": tid, "project_id": pid, "depends_on_id": d}
-                      for d in (t.get("depends_on") or [])]),
-                    ("ticket_tags", "tags",
-                     [{"ticket_id": tid, "project_id": pid, "tag": tg}
-                      for tg in (t.get("tags") or [])]),
-                    ("ticket_branches", "branches",
-                     [{**b, "ticket_id": tid, "project_id": pid}
-                      for b in (t.get("branches") or [])]),
-                    ("readiness_flags", "readiness_flags",
-                     [{**f, "ticket_id": tid, "project_id": pid}
-                      for f in (t.get("readiness_flags") or [])]),
-                    ("ticket_attachments", "attachments",
-                     [{**a, "ticket_id": tid, "project_id": pid}
-                      for a in (t.get("attachments") or [])]),
+                    (
+                        "acceptance_criteria",
+                        "criteria",
+                        [
+                            {
+                                **c,
+                                "ticket_id": tid,
+                                "project_id": pid,
+                                "checked": int(bool(c.get("checked", 0))),
+                            }
+                            for c in (t.get("acceptance_criteria") or [])
+                        ],
+                    ),
+                    (
+                        "depends",
+                        "depends",
+                        [
+                            {"ticket_id": tid, "project_id": pid, "depends_on_id": d}
+                            for d in (t.get("depends_on") or [])
+                        ],
+                    ),
+                    (
+                        "ticket_tags",
+                        "tags",
+                        [
+                            {"ticket_id": tid, "project_id": pid, "tag": tg}
+                            for tg in (t.get("tags") or [])
+                        ],
+                    ),
+                    (
+                        "ticket_branches",
+                        "branches",
+                        [
+                            {**b, "ticket_id": tid, "project_id": pid}
+                            for b in (t.get("branches") or [])
+                        ],
+                    ),
+                    (
+                        "readiness_flags",
+                        "readiness_flags",
+                        [
+                            {**f, "ticket_id": tid, "project_id": pid}
+                            for f in (t.get("readiness_flags") or [])
+                        ],
+                    ),
+                    (
+                        "ticket_attachments",
+                        "attachments",
+                        [
+                            {**a, "ticket_id": tid, "project_id": pid}
+                            for a in (t.get("attachments") or [])
+                        ],
+                    ),
                 ]
                 for table, key, items in pairs:
                     if not fanout_cols[table] or not items:
@@ -320,7 +379,8 @@ def import_bundle(
             inserted_attachments = counts["attachments"]
 
             child_mode = (
-                "merge" if mode == "merge"
+                "merge"
+                if mode == "merge"
                 else ("replace" if mode == "replace" else "skip")
             )
 
@@ -338,7 +398,11 @@ def import_bundle(
                 steps = j.get("steps", []) or []
                 linked = j.get("linked_ticket_ids", []) or []
                 jrow = _filter_to_schema(
-                    {k: v for k, v in j.items() if k not in {"steps", "linked_ticket_ids"}},
+                    {
+                        k: v
+                        for k, v in j.items()
+                        if k not in {"steps", "linked_ticket_ids"}
+                    },
                     journey_cols,
                 )
                 wrote_journey = _insert_row(target, "journeys", jrow, child_mode)
@@ -348,13 +412,20 @@ def import_bundle(
                     # to avoid step duplication (same fanout hazard as tickets).
                     continue
                 for s in steps:
-                    srow = _filter_to_schema({**s, "project_id": pid}, journey_step_cols)
+                    srow = _filter_to_schema(
+                        {**s, "project_id": pid}, journey_step_cols
+                    )
                     _insert_row(target, "journey_steps", srow, child_mode)
                 if _table_exists(target, "journey_tickets"):
                     for tid in linked:
                         _insert_row(
-                            target, "journey_tickets",
-                            {"journey_id": j["id"], "project_id": pid, "ticket_id": tid},
+                            target,
+                            "journey_tickets",
+                            {
+                                "journey_id": j["id"],
+                                "project_id": pid,
+                                "ticket_id": tid,
+                            },
                             "merge",
                         )
 
@@ -384,6 +455,7 @@ def import_bundle(
     if sync_markdown and not dry_run:
         try:
             import importlib.util
+
             cli_path = os.path.join(HERE, "tickets-cli.py")
             spec = importlib.util.spec_from_file_location("tickets_cli", cli_path)
             cli_mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
@@ -411,18 +483,35 @@ def import_bundle(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("export_json", help="Path to a tickets-export-*.json file")
-    parser.add_argument("--db", default=DEFAULT_DB, help=f"Target DB (default: {DEFAULT_DB})")
-    parser.add_argument("--project", default=None, help="Limit import to a single project_id")
-    parser.add_argument("--mode", choices=["skip", "merge", "replace"], default="skip",
-                        help="skip = abort if any target project has tickets (safe default); "
-                             "merge = INSERT OR IGNORE; replace = delete project rows then insert")
-    parser.add_argument("--yes", action="store_true", help="Confirm destructive --mode replace")
-    parser.add_argument("--dry-run", action="store_true", help="Compute counts without writing")
-    parser.add_argument("--sync-markdown", action="store_true",
-                        help="After import, run sync_to_markdown for any imported project that's "
-                             "registered locally. Off by default to avoid surprise filesystem writes.")
+    parser.add_argument(
+        "--db", default=DEFAULT_DB, help=f"Target DB (default: {DEFAULT_DB})"
+    )
+    parser.add_argument(
+        "--project", default=None, help="Limit import to a single project_id"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["skip", "merge", "replace"],
+        default="skip",
+        help="skip = abort if any target project has tickets (safe default); "
+        "merge = INSERT OR IGNORE; replace = delete project rows then insert",
+    )
+    parser.add_argument(
+        "--yes", action="store_true", help="Confirm destructive --mode replace"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Compute counts without writing"
+    )
+    parser.add_argument(
+        "--sync-markdown",
+        action="store_true",
+        help="After import, run sync_to_markdown for any imported project that's "
+        "registered locally. Off by default to avoid surprise filesystem writes.",
+    )
     args = parser.parse_args(argv)
 
     with open(args.export_json, encoding="utf-8") as f:
@@ -443,8 +532,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"User agents: {summary['user_agents_inserted']}")
     print("Per-project counts:")
     for pid, c in sorted(summary["projects"].items()):
-        bits = [f"{c['tickets']} tickets", f"{c['criteria']} criteria", f"{c['depends']} deps"]
-        for k in ("tags", "branches", "readiness_flags", "attachments", "user_workflows", "journeys"):
+        bits = [
+            f"{c['tickets']} tickets",
+            f"{c['criteria']} criteria",
+            f"{c['depends']} deps",
+        ]
+        for k in (
+            "tags",
+            "branches",
+            "readiness_flags",
+            "attachments",
+            "user_workflows",
+            "journeys",
+        ):
             if c.get(k):
                 bits.append(f"{c[k]} {k}")
         print(f"  {pid:<20} {', '.join(bits)}")

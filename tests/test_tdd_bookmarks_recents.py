@@ -4,14 +4,16 @@ Covers the actions.py contract: toggle/list bookmarks, touch/list recents,
 and the 20-row cap on recents per project.
 """
 
+import os
 import sqlite3
+import sys
+
 import pytest
 
-import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import init_db
 import actions
+from db import init_db
 
 
 @pytest.fixture
@@ -33,11 +35,15 @@ def conn():
 
 class TestSchema:
     def test_bookmarks_table_exists(self, conn):
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(ticket_bookmarks)").fetchall()]
+        cols = [
+            r[1] for r in conn.execute("PRAGMA table_info(ticket_bookmarks)").fetchall()
+        ]
         assert {"project_id", "ticket_id", "created_at"}.issubset(cols)
 
     def test_recents_table_exists(self, conn):
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(ticket_recents)").fetchall()]
+        cols = [
+            r[1] for r in conn.execute("PRAGMA table_info(ticket_recents)").fetchall()
+        ]
         assert {"project_id", "ticket_id", "last_seen_at"}.issubset(cols)
 
 

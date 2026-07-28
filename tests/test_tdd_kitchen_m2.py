@@ -6,7 +6,6 @@ assert bucket placement priority + project-summary counts.
 
 import importlib
 import importlib.util
-import json
 import os
 import sqlite3
 import sys
@@ -22,11 +21,15 @@ def serve_mod(tmp_path, monkeypatch):
     db_file = tmp_path / "tickets.db"
     monkeypatch.setenv("HOME", str(tmp_path))
     import constants
+
     monkeypatch.setattr(constants, "DB_PATH", db_file)
-    monkeypatch.setattr(constants, "DASHBOARD_DIR", tmp_path / ".claude" / "ticket-takeaway")
+    monkeypatch.setattr(
+        constants, "DASHBOARD_DIR", tmp_path / ".claude" / "ticket-takeaway"
+    )
     (tmp_path / ".claude" / "ticket-takeaway").mkdir(parents=True, exist_ok=True)
 
     import db
+
     importlib.reload(db)
 
     spec = importlib.util.spec_from_file_location("serve_under_test", "src/serve.py")
@@ -36,15 +39,29 @@ def serve_mod(tmp_path, monkeypatch):
 
     # Stub two projects in the in-memory cache.
     serve._PROJECTS_CACHE.clear()
-    serve._PROJECTS_CACHE["alpha"] = {"id": "alpha", "name": "Alpha", "path": "/tmp/alpha"}
-    serve._PROJECTS_CACHE["beta"]  = {"id": "beta",  "name": "Beta",  "path": "/tmp/beta"}
+    serve._PROJECTS_CACHE["alpha"] = {
+        "id": "alpha",
+        "name": "Alpha",
+        "path": "/tmp/alpha",
+    }
+    serve._PROJECTS_CACHE["beta"] = {"id": "beta", "name": "Beta", "path": "/tmp/beta"}
 
     # Initialise schema once.
-    c = serve.get_db(); serve.init_db(c); c.close()
+    c = serve.get_db()
+    serve.init_db(c)
+    c.close()
     return serve, db_file
 
 
-def _seed_ticket(db_file, pid, tid, section="Backlog", status="specified", description="d", with_crit=True):
+def _seed_ticket(
+    db_file,
+    pid,
+    tid,
+    section="Backlog",
+    status="specified",
+    description="d",
+    with_crit=True,
+):
     c = sqlite3.connect(db_file)
     c.execute(
         "INSERT INTO tickets (id, project_id, title, section, status, description) "
@@ -56,15 +73,20 @@ def _seed_ticket(db_file, pid, tid, section="Backlog", status="specified", descr
             "INSERT INTO acceptance_criteria (ticket_id, project_id, text) VALUES (?, ?, ?)",
             (tid, pid, "X"),
         )
-    c.commit(); c.close()
+    c.commit()
+    c.close()
 
 
 def _set_mode(db_file, pid, tid, mode, pause_reason=None):
-    from actions import set_automation_mode, ActorContext
-    c = sqlite3.connect(db_file); c.row_factory = sqlite3.Row
-    set_automation_mode(c, pid, "ticket", tid, mode, ActorContext.human(),
-                        pause_reason=pause_reason)
-    c.commit(); c.close()
+    from actions import ActorContext, set_automation_mode
+
+    c = sqlite3.connect(db_file)
+    c.row_factory = sqlite3.Row
+    set_automation_mode(
+        c, pid, "ticket", tid, mode, ActorContext.human(), pause_reason=pause_reason
+    )
+    c.commit()
+    c.close()
 
 
 def _seed_run(db_file, pid, tid, status, runner_kind="agent"):
@@ -74,7 +96,8 @@ def _seed_run(db_file, pid, tid, status, runner_kind="agent"):
         "VALUES (?, 'ticket', ?, ?, ?, 'human')",
         (pid, tid, runner_kind, status),
     )
-    c.commit(); c.close()
+    c.commit()
+    c.close()
 
 
 def _set_no_test_required(db_file, pid, tid, note="docs only"):
@@ -84,7 +107,8 @@ def _set_no_test_required(db_file, pid, tid, note="docs only"):
         "WHERE id = ? AND project_id = ?",
         (note, tid, pid),
     )
-    c.commit(); c.close()
+    c.commit()
+    c.close()
 
 
 def _declare_lane(db_file, pid, tid, lane="B"):
@@ -96,19 +120,25 @@ def _declare_lane(db_file, pid, tid, lane="B"):
         "VALUES (?, ?, 'spec', ?, 'test')",
         (tid, pid, f"{lane}:{tid.lower()}-test-change"),
     )
-    c.commit(); c.close()
+    c.commit()
+    c.close()
 
 
 # ---------------------------------------------------------------------------
 # Aggregator bucket assignment
 # ---------------------------------------------------------------------------
 
+
 class TestAggregatorBuckets:
     def test_empty_state_returns_empty_buckets(self, serve_mod):
         serve, _ = serve_mod
         state = serve._aggregate_kitchen_state()
         assert set(state["buckets"].keys()) == {
-            "needs_me", "running", "ready_to_delegate", "paused", "failed"
+            "needs_me",
+            "running",
+            "ready_to_delegate",
+            "paused",
+            "failed",
         }
         for k in state["buckets"]:
             assert state["buckets"][k] == []
@@ -192,15 +222,18 @@ class TestAggregatorBuckets:
         ticket_ids = [i["ticket_id"] for i in all_items]
         assert sorted(ticket_ids) == ["B-1", "B-2", "B-3", "B-4"]
         # Confirm bucket placement
-        assert {i["ticket_id"] for i in state["buckets"]["ready_to_delegate"]} == {"B-1"}
-        assert {i["ticket_id"] for i in state["buckets"]["paused"]}              == {"B-2"}
-        assert {i["ticket_id"] for i in state["buckets"]["running"]}           == {"B-3"}
-        assert {i["ticket_id"] for i in state["buckets"]["needs_me"]}          == {"B-4"}
+        assert {i["ticket_id"] for i in state["buckets"]["ready_to_delegate"]} == {
+            "B-1"
+        }
+        assert {i["ticket_id"] for i in state["buckets"]["paused"]} == {"B-2"}
+        assert {i["ticket_id"] for i in state["buckets"]["running"]} == {"B-3"}
+        assert {i["ticket_id"] for i in state["buckets"]["needs_me"]} == {"B-4"}
 
 
 # ---------------------------------------------------------------------------
 # Project summaries
 # ---------------------------------------------------------------------------
+
 
 class TestWatchedProjects:
     """M2-03: projects with watched=false are excluded from Kitchen aggregation."""
@@ -212,14 +245,17 @@ class TestWatchedProjects:
         _seed_ticket(db_file, "beta", "B-2")
         _set_mode(db_file, "beta", "B-2", "paused", pause_reason="y")
         state = serve._aggregate_kitchen_state()
-        assert {i["project_id"] for i in state["buckets"]["paused"]} == {"alpha", "beta"}
+        assert {i["project_id"] for i in state["buckets"]["paused"]} == {
+            "alpha",
+            "beta",
+        }
 
     def test_unwatched_project_dropped_from_buckets_and_summaries(self, serve_mod):
         serve, db_file = serve_mod
         _seed_ticket(db_file, "alpha", "B-1")
         _set_mode(db_file, "alpha", "B-1", "paused", pause_reason="x")
-        _seed_ticket(db_file, "beta",  "B-2")
-        _set_mode(db_file, "beta",  "B-2", "paused", pause_reason="y")
+        _seed_ticket(db_file, "beta", "B-2")
+        _set_mode(db_file, "beta", "B-2", "paused", pause_reason="y")
         # Mark beta unwatched in the cache (simulates the registry flag).
         serve._PROJECTS_CACHE["beta"]["watched"] = False
         state = serve._aggregate_kitchen_state()
@@ -233,7 +269,7 @@ class TestProjectSummaries:
         _seed_ticket(db_file, "alpha", "W-1", section="WIP", status="in-progress")
         _seed_ticket(db_file, "alpha", "W-2", section="WIP", status="blocked")
         _seed_ticket(db_file, "alpha", "R-1", section="For Review", status="for-review")
-        _seed_ticket(db_file, "beta",  "B-9", section="WIP", status="in-progress")
+        _seed_ticket(db_file, "beta", "B-9", section="WIP", status="in-progress")
         state = serve._aggregate_kitchen_state()
         by_id = {p["id"]: p for p in state["projects"]}
         assert by_id["alpha"]["counts"]["wip"] == 2

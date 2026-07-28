@@ -10,8 +10,9 @@ See docs/KITCHEN.md §11 for the full policy-file specification.
 from __future__ import annotations
 
 import copy
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 # ---------------------------------------------------------------------------
 # Defaults (mirrors KITCHEN.md §11 exactly)
@@ -55,6 +56,7 @@ DEFAULTS: dict = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """Return a new dict: override's leaves win; unknown keys are preserved."""
     result = copy.deepcopy(base)
@@ -69,6 +71,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def load_workflow_config(project_path: Path) -> dict:
     """Load WORKFLOW.toml from *project_path*, deep-merge over DEFAULTS.
@@ -93,9 +96,7 @@ def load_workflow_config(project_path: Path) -> dict:
     try:
         user_config = tomllib.loads(raw.decode("utf-8"))
     except tomllib.TOMLDecodeError as exc:
-        raise ValueError(
-            f"Invalid TOML in {toml_path}: {exc}"
-        ) from exc
+        raise ValueError(f"Invalid TOML in {toml_path}: {exc}") from exc
 
     return _deep_merge(DEFAULTS, user_config)
 

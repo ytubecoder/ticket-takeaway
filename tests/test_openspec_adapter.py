@@ -19,7 +19,7 @@ import pytest
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-import openspec_adapter as osa  # noqa: E402
+import openspec_adapter as osa
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "openspec"
 
@@ -39,6 +39,7 @@ def _result(fixture: str, exit_code: int) -> osa.Result:
 # ---------------------------------------------------------------------------
 # Naming — must round-trip, since there is no ticket<->change join table
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "ticket_id,title,expected",
@@ -72,6 +73,7 @@ def test_ticket_id_from_unrecognised_change_name_is_empty():
 # validate — the exit code is the contract; the payload explains a refusal
 # ---------------------------------------------------------------------------
 
+
 def test_validate_ok_fixture_has_no_errors():
     res = _result("validate-ok.json", 0)
     assert res.ok
@@ -91,6 +93,7 @@ def test_validate_fail_fixture_surfaces_only_error_level_issues():
 # ---------------------------------------------------------------------------
 # archive — refusal must be legible, success must report the spec merge
 # ---------------------------------------------------------------------------
+
 
 def test_archive_refused_fixture_yields_no_summary_and_a_reason():
     res = _result("archive-refused.json", 1)
@@ -112,6 +115,7 @@ def test_archive_ok_fixture_reports_the_spec_merge():
 # status — artifact ids the Orchestrator prompt and the gates depend on
 # ---------------------------------------------------------------------------
 
+
 def test_status_fixture_exposes_the_four_spec_driven_artifacts():
     res = _result("status.json", 0)
     states = osa.artifact_states(res)
@@ -128,6 +132,7 @@ def test_artifact_states_tolerates_a_non_dict_payload():
 # ---------------------------------------------------------------------------
 # Plumbing
 # ---------------------------------------------------------------------------
+
 
 def test_env_disables_telemetry_with_the_exact_string_the_cli_checks():
     env = osa._env()

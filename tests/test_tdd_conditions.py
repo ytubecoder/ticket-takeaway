@@ -6,26 +6,26 @@ Pure logic, no server, no Playwright.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
-import os
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from db import get_db, init_db
 from conditions import (
     CONDITION_CATALOG,
+    build_subject_context,
     evaluate_condition,
     evaluate_trigger,
-    build_subject_context,
 )
-
+from db import init_db
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def conn():
@@ -37,17 +37,37 @@ def conn():
     return c
 
 
-def _make_ticket(conn, tid="B-1", section="Backlog", status="specified",
-                  description="Has description", project_id="p",
-                  priority="medium", parent=None, no_test_required=0,
-                  no_test_required_note="", commit_hash=""):
+def _make_ticket(
+    conn,
+    tid="B-1",
+    section="Backlog",
+    status="specified",
+    description="Has description",
+    project_id="p",
+    priority="medium",
+    parent=None,
+    no_test_required=0,
+    no_test_required_note="",
+    commit_hash="",
+):
     conn.execute(
         "INSERT INTO tickets "
         "(id, project_id, title, section, status, description, priority, parent, "
         " no_test_required, no_test_required_note, commit_hash) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (tid, project_id, f"Title {tid}", section, status, description,
-         priority, parent, no_test_required, no_test_required_note, commit_hash),
+        (
+            tid,
+            project_id,
+            f"Title {tid}",
+            section,
+            status,
+            description,
+            priority,
+            parent,
+            no_test_required,
+            no_test_required_note,
+            commit_hash,
+        ),
     )
 
 
@@ -55,7 +75,7 @@ def _add_criteria(conn, tid="B-1", project_id="p", count=1):
     for i in range(count):
         conn.execute(
             "INSERT INTO acceptance_criteria (ticket_id, project_id, text) VALUES (?, ?, ?)",
-            (tid, project_id, f"criterion {i+1}"),
+            (tid, project_id, f"criterion {i + 1}"),
         )
 
 
@@ -94,16 +114,29 @@ def _set_automation_mode(conn, tid="B-1", project_id="p", mode="auto"):
 # Catalog completeness
 # ---------------------------------------------------------------------------
 
+
 class TestCatalogCompleteness:
     EXPECTED_KINDS = {
-        "section_equals", "section_in", "status_equals", "automation_mode",
-        "has_field", "criteria_count_gte", "flag_set", "deps_clear",
-        "tests_covered", "no_active_run", "tag_includes", "priority_at_least",
+        "section_equals",
+        "section_in",
+        "status_equals",
+        "automation_mode",
+        "has_field",
+        "criteria_count_gte",
+        "flag_set",
+        "deps_clear",
+        "tests_covered",
+        "no_active_run",
+        "tag_includes",
+        "priority_at_least",
         "parent_done",
         # Phase A — children + parent helpers for system workflows
-        "children_have_open_bugs", "children_no_open_bugs",
-        "children_all_status_in", "children_any_status_in",
-        "has_children", "parent_section_not_in",
+        "children_have_open_bugs",
+        "children_no_open_bugs",
+        "children_all_status_in",
+        "children_any_status_in",
+        "has_children",
+        "parent_section_not_in",
     }
 
     def test_all_expected_kinds_present(self):
@@ -122,18 +155,23 @@ class TestCatalogCompleteness:
 # Individual condition kinds
 # ---------------------------------------------------------------------------
 
+
 class TestSectionEquals:
     def test_pass(self, conn):
         _make_ticket(conn, section="Backlog")
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "section_equals", "value": "Backlog"}, ctx)
+        ok, reason = evaluate_condition(
+            {"kind": "section_equals", "value": "Backlog"}, ctx
+        )
         assert ok
         assert "Backlog" in reason
 
     def test_fail(self, conn):
         _make_ticket(conn, section="WIP")
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "section_equals", "value": "Backlog"}, ctx)
+        ok, reason = evaluate_condition(
+            {"kind": "section_equals", "value": "Backlog"}, ctx
+        )
         assert not ok
         assert "WIP" in reason
 
@@ -142,13 +180,17 @@ class TestSectionIn:
     def test_pass(self, conn):
         _make_ticket(conn, section="WIP")
         ctx = _make_ctx(conn)
-        ok, _ = evaluate_condition({"kind": "section_in", "values": ["Backlog", "WIP"]}, ctx)
+        ok, _ = evaluate_condition(
+            {"kind": "section_in", "values": ["Backlog", "WIP"]}, ctx
+        )
         assert ok
 
     def test_fail(self, conn):
         _make_ticket(conn, section="Ideas")
         ctx = _make_ctx(conn)
-        ok, _ = evaluate_condition({"kind": "section_in", "values": ["Backlog", "WIP"]}, ctx)
+        ok, _ = evaluate_condition(
+            {"kind": "section_in", "values": ["Backlog", "WIP"]}, ctx
+        )
         assert not ok
 
 
@@ -156,13 +198,17 @@ class TestStatusEquals:
     def test_pass(self, conn):
         _make_ticket(conn, status="in-progress")
         ctx = _make_ctx(conn)
-        ok, _ = evaluate_condition({"kind": "status_equals", "value": "in-progress"}, ctx)
+        ok, _ = evaluate_condition(
+            {"kind": "status_equals", "value": "in-progress"}, ctx
+        )
         assert ok
 
     def test_fail(self, conn):
         _make_ticket(conn, status="proposed")
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "status_equals", "value": "in-progress"}, ctx)
+        ok, reason = evaluate_condition(
+            {"kind": "status_equals", "value": "in-progress"}, ctx
+        )
         assert not ok
         assert "proposed" in reason
 
@@ -172,7 +218,9 @@ class TestAutomationMode:
         _make_ticket(conn)
         _set_automation_mode(conn, mode="auto")
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "automation_mode", "value": "auto"}, ctx)
+        ok, reason = evaluate_condition(
+            {"kind": "automation_mode", "value": "auto"}, ctx
+        )
         assert ok
         assert "auto" in reason
 
@@ -180,7 +228,9 @@ class TestAutomationMode:
         _make_ticket(conn)
         # No automation_subjects row → defaults to 'manual'
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "automation_mode", "value": "auto"}, ctx)
+        ok, reason = evaluate_condition(
+            {"kind": "automation_mode", "value": "auto"}, ctx
+        )
         assert not ok
         assert "manual" in reason
 
@@ -201,7 +251,9 @@ class TestHasField:
     def test_fail_when_description_empty(self, conn):
         _make_ticket(conn, description="")
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "has_field", "field": "description"}, ctx)
+        ok, reason = evaluate_condition(
+            {"kind": "has_field", "field": "description"}, ctx
+        )
         assert not ok
         assert "empty" in reason
 
@@ -382,7 +434,9 @@ class TestPriorityAtLeast:
     def test_fail_below(self, conn):
         _make_ticket(conn, priority="low")
         ctx = _make_ctx(conn)
-        ok, reason = evaluate_condition({"kind": "priority_at_least", "value": "high"}, ctx)
+        ok, reason = evaluate_condition(
+            {"kind": "priority_at_least", "value": "high"}, ctx
+        )
         assert not ok
         assert "low" in reason
 
@@ -465,7 +519,8 @@ class TestChildrenAllStatusIn:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         ok, reason = evaluate_condition(
-            {"kind": "children_all_status_in", "value": ["done"]}, ctx,
+            {"kind": "children_all_status_in", "value": ["done"]},
+            ctx,
         )
         assert ok
         assert "no children" in reason
@@ -476,7 +531,10 @@ class TestChildrenAllStatusIn:
         _make_ticket(conn, tid="B-3", parent="B-1", status="for-review")
         ctx = _make_ctx(conn)
         ok, _ = evaluate_condition(
-            {"kind": "children_all_status_in", "value": ["done", "for-review", "bug-fixed"]},
+            {
+                "kind": "children_all_status_in",
+                "value": ["done", "for-review", "bug-fixed"],
+            },
             ctx,
         )
         assert ok
@@ -499,7 +557,8 @@ class TestChildrenAnyStatusIn:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         ok, reason = evaluate_condition(
-            {"kind": "children_any_status_in", "value": ["done"]}, ctx,
+            {"kind": "children_any_status_in", "value": ["done"]},
+            ctx,
         )
         assert not ok
         assert "no children" in reason
@@ -510,7 +569,8 @@ class TestChildrenAnyStatusIn:
         _make_ticket(conn, tid="B-3", parent="B-1", status="in-progress")
         ctx = _make_ctx(conn)
         ok, _ = evaluate_condition(
-            {"kind": "children_any_status_in", "value": ["done"]}, ctx,
+            {"kind": "children_any_status_in", "value": ["done"]},
+            ctx,
         )
         assert ok
 
@@ -545,7 +605,8 @@ class TestParentSectionNotIn:
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         ok, _ = evaluate_condition(
-            {"kind": "parent_section_not_in", "value": ["Done"]}, ctx,
+            {"kind": "parent_section_not_in", "value": ["Done"]},
+            ctx,
         )
         assert ok
 
@@ -554,7 +615,10 @@ class TestParentSectionNotIn:
         _make_ticket(conn, tid="B-2", section="Backlog")
         ctx = _make_ctx(conn)
         ok, _ = evaluate_condition(
-            {"kind": "parent_section_not_in", "value": ["Done", "Won't Do", "For Review"]},
+            {
+                "kind": "parent_section_not_in",
+                "value": ["Done", "Won't Do", "For Review"],
+            },
             ctx,
         )
         assert ok
@@ -590,6 +654,7 @@ class TestUnknownCondition:
 # ---------------------------------------------------------------------------
 # evaluate_trigger
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluateTrigger:
     def test_none_trigger_passes(self, conn):
@@ -701,7 +766,9 @@ class TestEvaluateTrigger:
     def test_json_string_trigger(self, conn):
         _make_ticket(conn, section="Backlog")
         ctx = _make_ctx(conn)
-        trigger_str = json.dumps({"all_of": [{"kind": "section_equals", "value": "Backlog"}]})
+        trigger_str = json.dumps(
+            {"all_of": [{"kind": "section_equals", "value": "Backlog"}]}
+        )
         ok, _ = evaluate_trigger(trigger_str, ctx)
         assert ok
 
@@ -717,11 +784,13 @@ class TestEvaluateTrigger:
 # Parity tests: conditions produce same results as actions._deps_clear / _tests_covered
 # ---------------------------------------------------------------------------
 
+
 class TestParityWithActions:
     """deps_clear and tests_covered evaluators must match actions.py exactly."""
 
     def test_deps_clear_parity_no_deps(self, conn):
         from actions import _deps_clear
+
         _make_ticket(conn)
         ctx = _make_ctx(conn)
         cond_ok, _ = evaluate_condition({"kind": "deps_clear"}, ctx)
@@ -730,6 +799,7 @@ class TestParityWithActions:
 
     def test_deps_clear_parity_with_blocking_dep(self, conn):
         from actions import _deps_clear
+
         _make_ticket(conn, tid="B-1")
         _make_ticket(conn, tid="B-2", section="WIP", status="in-progress")
         conn.execute(
@@ -743,6 +813,7 @@ class TestParityWithActions:
 
     def test_deps_clear_parity_dep_done(self, conn):
         from actions import _deps_clear
+
         _make_ticket(conn, tid="B-1")
         _make_ticket(conn, tid="B-2", section="Done", status="done")
         conn.execute(
@@ -756,6 +827,7 @@ class TestParityWithActions:
 
     def test_tests_covered_parity_no_coverage(self, conn):
         from actions import _tests_covered
+
         _make_ticket(conn)
         ticket_row = conn.execute(
             "SELECT * FROM tickets WHERE id = 'B-1' AND project_id = 'p'"
@@ -767,6 +839,7 @@ class TestParityWithActions:
 
     def test_tests_covered_parity_with_flag(self, conn):
         from actions import _tests_covered
+
         _make_ticket(conn)
         conn.execute(
             "INSERT INTO readiness_flags (ticket_id, project_id, flag, content) VALUES (?, ?, ?, ?)",
@@ -782,6 +855,7 @@ class TestParityWithActions:
 
     def test_tests_covered_parity_no_test_required(self, conn):
         from actions import _tests_covered
+
         _make_ticket(conn, no_test_required=1, no_test_required_note="CLI-only")
         ticket_row = conn.execute(
             "SELECT * FROM tickets WHERE id = 'B-1' AND project_id = 'p'"
@@ -795,6 +869,7 @@ class TestParityWithActions:
 # ---------------------------------------------------------------------------
 # build_subject_context
 # ---------------------------------------------------------------------------
+
 
 class TestBuildSubjectContext:
     def test_returns_expected_keys(self, conn):

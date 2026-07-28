@@ -18,7 +18,6 @@ Covers:
 
 import json
 import sqlite3
-import time
 import uuid
 
 import pytest
@@ -34,18 +33,24 @@ def _db_path():
     """Return the deployed DB path used by serve.py."""
     import os
     import sys
+
     # Make sure src is on path
     src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
-    from constants import DB_PATH  # noqa
+    from constants import DB_PATH
+
     return DB_PATH
 
 
-def _seed_workflow_run(ticket_id: str, project_id: str = "ticket-takeaway", *,
-                       status: str = "succeeded",
-                       conversation: list | None = None,
-                       run_id: str | None = None) -> str:
+def _seed_workflow_run(
+    ticket_id: str,
+    project_id: str = "ticket-takeaway",
+    *,
+    status: str = "succeeded",
+    conversation: list | None = None,
+    run_id: str | None = None,
+) -> str:
     """Insert a workflow_run row directly into the DB and return the run id."""
     if run_id is None:
         run_id = "test-wf-" + uuid.uuid4().hex[:8]
@@ -132,7 +137,9 @@ def test_feed_visible_after_run_seeded(live_page):
 
     run_id = _seed_workflow_run(
         tid,
-        conversation=[{"role": "system", "step": 0, "content": "Starting run.", "ts": None}],
+        conversation=[
+            {"role": "system", "step": 0, "content": "Starting run.", "ts": None}
+        ],
     )
     try:
         _open_overlay(p, tid)
@@ -157,7 +164,13 @@ def test_feed_renders_turns(live_page):
         tid,
         conversation=[
             {"role": "system", "step": 0, "content": "Workflow started.", "ts": None},
-            {"role": "agent", "step": 0, "agent": "TestAgent", "content": "Analysing ticket.", "ts": None},
+            {
+                "role": "agent",
+                "step": 0,
+                "agent": "TestAgent",
+                "content": "Analysing ticket.",
+                "ts": None,
+            },
         ],
     )
     try:
@@ -177,9 +190,9 @@ def test_toggle_buttons_exist(live_page):
     if not tid:
         pytest.skip("No tickets on board")
 
-    run_id = _seed_workflow_run(tid, conversation=[
-        {"role": "agent", "content": "hello", "ts": None, "step": 0}
-    ])
+    run_id = _seed_workflow_run(
+        tid, conversation=[{"role": "agent", "content": "hello", "ts": None, "step": 0}]
+    )
     try:
         _open_overlay(p, tid)
         p.wait_for_timeout(800)
@@ -199,9 +212,9 @@ def test_full_toggle_activates(live_page):
     if not tid:
         pytest.skip("No tickets on board")
 
-    run_id = _seed_workflow_run(tid, conversation=[
-        {"role": "agent", "content": "hello", "ts": None, "step": 0}
-    ])
+    run_id = _seed_workflow_run(
+        tid, conversation=[{"role": "agent", "content": "hello", "ts": None, "step": 0}]
+    )
     try:
         _open_overlay(p, tid)
         p.wait_for_timeout(800)
@@ -214,10 +227,16 @@ def test_full_toggle_activates(live_page):
         p.click("#wfFeedToggleFull")
         p.wait_for_timeout(200)
 
-        btn_full_cls = p.query_selector("#wfFeedToggleFull").get_attribute("class") or ""
-        btn_compact_cls = p.query_selector("#wfFeedToggleCompact").get_attribute("class") or ""
+        btn_full_cls = (
+            p.query_selector("#wfFeedToggleFull").get_attribute("class") or ""
+        )
+        btn_compact_cls = (
+            p.query_selector("#wfFeedToggleCompact").get_attribute("class") or ""
+        )
         assert "active" in btn_full_cls, "Full button should have 'active' class"
-        assert "active" not in btn_compact_cls, "Compact button should NOT have 'active' class"
+        assert "active" not in btn_compact_cls, (
+            "Compact button should NOT have 'active' class"
+        )
     finally:
         _delete_workflow_run(run_id)
 
@@ -230,9 +249,12 @@ def test_compact_hides_tool_call_lines(live_page):
         pytest.skip("No tickets on board")
 
     tool_content = "Here is my analysis.\n<function_calls>\n<invoke>some_tool</invoke>\n</function_calls>\nDone."
-    run_id = _seed_workflow_run(tid, conversation=[
-        {"role": "agent", "content": tool_content, "step": 0, "ts": None}
-    ])
+    run_id = _seed_workflow_run(
+        tid,
+        conversation=[
+            {"role": "agent", "content": tool_content, "step": 0, "ts": None}
+        ],
+    )
     try:
         # Reset localStorage to compact before opening to ensure compact mode
         p.evaluate("localStorage.setItem('tt-workflow-feed-mode', 'compact')")
@@ -258,11 +280,14 @@ def test_role_badge_classes(live_page):
     if not tid:
         pytest.skip("No tickets on board")
 
-    run_id = _seed_workflow_run(tid, conversation=[
-        {"role": "agent",  "content": "Agent response.", "step": 0, "ts": None},
-        {"role": "user",   "content": "User reply.",     "step": 0, "ts": None},
-        {"role": "system", "content": "System note.",    "step": 0, "ts": None},
-    ])
+    run_id = _seed_workflow_run(
+        tid,
+        conversation=[
+            {"role": "agent", "content": "Agent response.", "step": 0, "ts": None},
+            {"role": "user", "content": "User reply.", "step": 0, "ts": None},
+            {"role": "system", "content": "System note.", "step": 0, "ts": None},
+        ],
+    )
     try:
         _open_overlay(p, tid)
         p.wait_for_timeout(800)
@@ -277,7 +302,9 @@ def test_role_badge_classes(live_page):
 
         assert "role-agent" in role_classes, f"role-agent missing from: {role_classes}"
         assert "role-user" in role_classes, f"role-user missing from: {role_classes}"
-        assert "role-system" in role_classes, f"role-system missing from: {role_classes}"
+        assert "role-system" in role_classes, (
+            f"role-system missing from: {role_classes}"
+        )
     finally:
         _delete_workflow_run(run_id)
 
@@ -294,8 +321,11 @@ def test_streaming_dot_shown(live_page):
         status="running",
         conversation=[
             {
-                "role": "agent", "content": "Still processing...", "step": 0,
-                "streaming": True, "ts": None,
+                "role": "agent",
+                "content": "Still processing...",
+                "step": 0,
+                "streaming": True,
+                "ts": None,
             }
         ],
     )
@@ -320,7 +350,12 @@ def test_needs_input_panel_appears(live_page):
         tid,
         status="needs_input",
         conversation=[
-            {"role": "agent", "content": "Please provide the branch name.", "step": 0, "ts": None}
+            {
+                "role": "agent",
+                "content": "Please provide the branch name.",
+                "step": 0,
+                "ts": None,
+            }
         ],
     )
     try:
@@ -372,9 +407,9 @@ def test_localstorage_persists_mode(live_page, dashboard_server):
     if not tid:
         pytest.skip("No tickets on board")
 
-    run_id = _seed_workflow_run(tid, conversation=[
-        {"role": "agent", "content": "hello", "step": 0, "ts": None}
-    ])
+    run_id = _seed_workflow_run(
+        tid, conversation=[{"role": "agent", "content": "hello", "step": 0, "ts": None}]
+    )
     try:
         _open_overlay(p, tid)
         p.wait_for_timeout(600)
@@ -393,7 +428,9 @@ def test_localstorage_persists_mode(live_page, dashboard_server):
         _open_overlay(p, tid)
         p.wait_for_timeout(600)
 
-        btn_full_cls = p.query_selector("#wfFeedToggleFull").get_attribute("class") or ""
+        btn_full_cls = (
+            p.query_selector("#wfFeedToggleFull").get_attribute("class") or ""
+        )
         assert "active" in btn_full_cls, "Full button should be active after reload"
 
         # Cleanup: reset to compact

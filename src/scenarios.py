@@ -79,7 +79,9 @@ class ScenarioValidationError(ValueError):
 # ---------------------------------------------------------------------------
 
 
-def _check_required(data: dict[str, Any], field: str, expected_type: type, filepath: str) -> Any:
+def _check_required(
+    data: dict[str, Any], field: str, expected_type: type, filepath: str
+) -> Any:
     """Assert *field* is present in *data* and is an instance of *expected_type*.
 
     Returns the field value on success; raises :exc:`ScenarioValidationError`
@@ -149,7 +151,15 @@ def _validate_step(step: Any, index: int, actors: set[str], filepath: str) -> No
                 _field("target"),
                 f"'target' must be a dict, got {type(target).__name__}",
             )
-        known_target_keys = {"testid", "title", "seed_ref", "css", "text", "role", "open"}
+        known_target_keys = {
+            "testid",
+            "title",
+            "seed_ref",
+            "css",
+            "text",
+            "role",
+            "open",
+        }
         present_keys = set(target.keys())
         unknown_keys = present_keys - known_target_keys
         if unknown_keys:
@@ -249,7 +259,9 @@ def validate_manifest(data: dict[str, Any], filepath: str = "") -> dict[str, Any
     # --- actors must be a non-empty dict of dicts ---
     actors_dict: dict[str, Any] = data["actors"]
     if not actors_dict:
-        raise ScenarioValidationError(filepath, "actors", "'actors' dict must not be empty")
+        raise ScenarioValidationError(
+            filepath, "actors", "'actors' dict must not be empty"
+        )
     for actor_name, actor_def in actors_dict.items():
         if not isinstance(actor_def, dict):
             raise ScenarioValidationError(
@@ -313,7 +325,9 @@ def discover_scenarios(path: str = "tests/scenarios/") -> list[dict[str, Any]]:
     """
     root = Path(path)
     if not root.is_dir():
-        print(f"[scenarios] discovery path does not exist or is not a directory: {root}")
+        print(
+            f"[scenarios] discovery path does not exist or is not a directory: {root}"
+        )
         return []
 
     manifests: list[dict[str, Any]] = []
@@ -383,7 +397,9 @@ def publish_gallery(
     # Load existing index so we can merge without losing other slots.
     if index_path.exists():
         try:
-            existing: dict[str, Any] = json.loads(index_path.read_text(encoding="utf-8"))
+            existing: dict[str, Any] = json.loads(
+                index_path.read_text(encoding="utf-8")
+            )
         except (json.JSONDecodeError, OSError):
             existing = {}
     else:
@@ -394,7 +410,9 @@ def publish_gallery(
     for slot, src_path_str in screenshots.items():
         src = Path(src_path_str)
         if not src.exists():
-            print(f"[scenarios] WARNING: screenshot source not found for slot {slot!r}: {src}")
+            print(
+                f"[scenarios] WARNING: screenshot source not found for slot {slot!r}: {src}"
+            )
             continue
 
         # Preserve original extension (.png, .jpg, …).

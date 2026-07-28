@@ -11,12 +11,11 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Prompt template helpers
 # ---------------------------------------------------------------------------
+
 
 def _ticket_prompt(action: str) -> str:
     return (
@@ -30,6 +29,7 @@ def _ticket_prompt(action: str) -> str:
 # Endpoint dataclass + seed data
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Endpoint:
     """Seed-time representation of an endpoints table row.
@@ -38,16 +38,17 @@ class Endpoint:
     capabilities, session_config) are held as Python types here and
     json.dumps()'d at upsert time.
     """
+
     id: str
     name: str
     endpoint_type: str = "cli"
-    command: Optional[str] = None
+    command: str | None = None
     args: list = field(default_factory=list)
     prompt_mode: str = "template"
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    base_url: Optional[str] = None
-    api_key_env: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    api_key_env: str | None = None
     timeout_s: int = 120
     capabilities: dict = field(default_factory=dict)
     session_config: dict = field(default_factory=dict)
@@ -65,8 +66,14 @@ DEFAULT_ENDPOINTS: list[Endpoint] = [
         prompt_mode="template",
         capabilities={"sessions": True},
         session_config={
-            "resume_args": ["-p", "{prompt}", "--output-format", "json",
-                            "--resume", "{session_id}"],
+            "resume_args": [
+                "-p",
+                "{prompt}",
+                "--output-format",
+                "json",
+                "--resume",
+                "{session_id}",
+            ],
             "session_id_regex": r'"session_id"\s*:\s*"([0-9a-f-]+)"',
         },
     ),
@@ -135,7 +142,7 @@ DEFAULT_AGENTS: list[dict] = [
         "endpoint_id": "claude-cli",
         "command": "claude",
         "args": "-p",
-        "system_prompt": "",   # /plan-check sets none — templates carry the instructions
+        "system_prompt": "",  # /plan-check sets none — templates carry the instructions
         "persist_session": 1,
         "system": 1,
     },
@@ -395,7 +402,7 @@ DEFAULT_WORKFLOWS: list[dict] = [
                     "from the diff at close if observable behaviour changed.\n\n"
                     "STEP 2 — record it:\n"
                     "  python3 ~/.claude/ticket-takeaway/tickets-cli.py spec {{project.id}} {{ticket.id}} --lane <A|B|C>\n"
-                    "For lane C where nothing observable will change, add --no-change --reason \"<why>\".\n\n"
+                    'For lane C where nothing observable will change, add --no-change --reason "<why>".\n\n'
                     "STEP 3 — write the artifacts. Do NOT invent a document shape; ask OpenSpec "
                     "for the template and the project's config.yaml context:\n"
                     "  openspec instructions proposal --change <change-name>\n"
@@ -516,8 +523,10 @@ DEFAULT_WORKFLOWS: list[dict] = [
                 # Don't move parents that are already terminal.
                 {"kind": "section_in", "values": ["Ideas", "Backlog", "WIP"]},
                 # Every child must be done / for-review / bug-fixed.
-                {"kind": "children_all_status_in",
-                 "value": ["done", "for-review", "bug-fixed"]},
+                {
+                    "kind": "children_all_status_in",
+                    "value": ["done", "for-review", "bug-fixed"],
+                },
                 # Honour the per-ticket automation toggle uniformly.
                 {"kind": "automation_mode", "value": "auto"},
             ]
@@ -564,7 +573,7 @@ DEFAULT_WORKFLOWS: list[dict] = [
         "trigger_json": {
             "all_of": [
                 {"kind": "section_equals", "value": "Bugs"},
-                {"kind": "parent_done"},   # parent_done passes when parent IS NULL
+                {"kind": "parent_done"},  # parent_done passes when parent IS NULL
                 {"kind": "automation_mode", "value": "auto"},
                 {"kind": "no_active_run"},
             ]
@@ -752,6 +761,7 @@ DEFAULT_WORKFLOWS: list[dict] = [
 # Seeder — endpoints (global, run once at startup)
 # ---------------------------------------------------------------------------
 
+
 def seed_default_endpoints(db: sqlite3.Connection) -> dict[str, int]:
     """Upsert DEFAULT_ENDPOINTS into the endpoints table.
 
@@ -766,11 +776,14 @@ def seed_default_endpoints(db: sqlite3.Connection) -> dict[str, int]:
             "SELECT system FROM endpoints WHERE id = ?", (ep.id,)
         ).fetchone()
         if existing is not None and existing[0] == 0:
-            print(f"WARN seed: skipping system endpoint {ep.id} — "
-                  f"user row with same id exists, please rename")
+            print(
+                f"WARN seed: skipping system endpoint {ep.id} — "
+                f"user row with same id exists, please rename"
+            )
             skipped += 1
             continue
-        db.execute("""
+        db.execute(
+            """
             INSERT INTO endpoints (id, name, endpoint_type, provider, model,
                 base_url, api_key_env, command, args, prompt_mode,
                 timeout_s, capabilities, session_config, system)
@@ -790,22 +803,36 @@ def seed_default_endpoints(db: sqlite3.Connection) -> dict[str, int]:
                 session_config=excluded.session_config,
                 system=excluded.system
             WHERE endpoints.system = 1
-        """, (
-            ep.id, ep.name, ep.endpoint_type, ep.provider, ep.model,
-            ep.base_url, ep.api_key_env, ep.command,
-            json.dumps(ep.args), ep.prompt_mode, ep.timeout_s,
-            json.dumps(ep.capabilities), json.dumps(ep.session_config),
-            ep.system,
-        ))
+        """,
+            (
+                ep.id,
+                ep.name,
+                ep.endpoint_type,
+                ep.provider,
+                ep.model,
+                ep.base_url,
+                ep.api_key_env,
+                ep.command,
+                json.dumps(ep.args),
+                ep.prompt_mode,
+                ep.timeout_s,
+                json.dumps(ep.capabilities),
+                json.dumps(ep.session_config),
+                ep.system,
+            ),
+        )
         upserted += 1
     db.commit()
-    print(f"INFO seed: endpoints_upserted={upserted} endpoints_skipped_collision={skipped}")
+    print(
+        f"INFO seed: endpoints_upserted={upserted} endpoints_skipped_collision={skipped}"
+    )
     return {"upserted": upserted, "skipped_collision": skipped}
 
 
 # ---------------------------------------------------------------------------
 # Seeder — agents (global, run once at startup)
 # ---------------------------------------------------------------------------
+
 
 def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
     """Insert or migrate default global agents.  Idempotent.
@@ -1005,6 +1032,7 @@ def seed_default_agents(db: sqlite3.Connection) -> dict[str, int]:
 # Seeder — workflows (per-project)
 # ---------------------------------------------------------------------------
 
+
 def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str, int]:
     """Link *project_id* to every default system workflow. Idempotent.
 
@@ -1048,7 +1076,13 @@ def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str,
                 row[4] if not hasattr(row, "keys") else row["on_success_json"],
                 row[5] if not hasattr(row, "keys") else row["subject_type"],
             )
-            target = (wf["description"], steps_json, trigger_json, on_success_json, wf["subject_type"])
+            target = (
+                wf["description"],
+                steps_json,
+                trigger_json,
+                on_success_json,
+                wf["subject_type"],
+            )
             if cur != target:
                 db.execute(
                     "UPDATE workflows SET description=?, steps=?, trigger_json=?, "
@@ -1096,4 +1130,8 @@ def seed_default_workflows(db: sqlite3.Connection, project_id: str) -> dict[str,
             already_linked += 1
 
     db.commit()
-    return {"linked": linked, "updated_body": updated_body, "already_linked": already_linked}
+    return {
+        "linked": linked,
+        "updated_body": updated_body,
+        "already_linked": already_linked,
+    }

@@ -1,4 +1,5 @@
 """TDD tests for scenario Backend protocol (no live browser required)."""
+
 from __future__ import annotations
 
 import pytest
@@ -9,9 +10,21 @@ def test_backend_protocol_defines_required_methods():
     from scenario_backend import Backend
 
     required = [
-        "navigate", "reload", "click", "dblclick", "fill", "select", "press",
-        "wait_for_visible", "wait_for_hidden", "wait_for_text",
-        "screenshot", "wait_for_settled", "evaluate", "get_text", "close",
+        "navigate",
+        "reload",
+        "click",
+        "dblclick",
+        "fill",
+        "select",
+        "press",
+        "wait_for_visible",
+        "wait_for_hidden",
+        "wait_for_text",
+        "screenshot",
+        "wait_for_settled",
+        "evaluate",
+        "get_text",
+        "close",
     ]
     for name in required:
         assert hasattr(Backend, name), f"Backend missing method: {name}"
@@ -64,9 +77,7 @@ def test_resolve_target_title_with_open_flag():
             return ("testid", tid)
 
     seed_map = {"My Ticket": "B-42"}
-    result = resolve_target(
-        FakePage(), {"title": "My Ticket", "open": True}, seed_map
-    )
+    result = resolve_target(FakePage(), {"title": "My Ticket", "open": True}, seed_map)
     assert result == ("testid", "card-open-btn-B-42")
 
 
@@ -103,9 +114,7 @@ def test_resolve_target_role():
         def get_by_role(self, role, name):
             return ("role", role, name)
 
-    result = resolve_target(
-        FakePage(), {"role": "button", "name": "Cancel"}, {}
-    )
+    result = resolve_target(FakePage(), {"role": "button", "name": "Cancel"}, {})
     assert result == ("role", "button", "Cancel")
 
 
@@ -131,14 +140,24 @@ def test_playwright_backend_satisfies_protocol():
 
     # Create a minimal fake page/context to instantiate
     class FakePage:
-        def goto(self, url): pass
-        def reload(self): pass
-        def screenshot(self, path, full_page=False): pass
-        def wait_for_function(self, *a, **kw): pass
-        def wait_for_timeout(self, ms): pass
+        def goto(self, url):
+            pass
+
+        def reload(self):
+            pass
+
+        def screenshot(self, path, full_page=False):
+            pass
+
+        def wait_for_function(self, *a, **kw):
+            pass
+
+        def wait_for_timeout(self, ms):
+            pass
 
     class FakeCtx:
-        def close(self): pass
+        def close(self):
+            pass
 
     backend = PlaywrightBackend(page=FakePage(), context=FakeCtx())
     assert isinstance(backend, Backend)
@@ -149,12 +168,18 @@ def test_cdp_backend_satisfies_protocol():
     from scenario_backend import Backend, CDPBackend
 
     class FakePage:
-        def goto(self, url): pass
-        def reload(self): pass
-        def screenshot(self, path, full_page=False): pass
+        def goto(self, url):
+            pass
+
+        def reload(self):
+            pass
+
+        def screenshot(self, path, full_page=False):
+            pass
 
     class FakeCtx:
-        def close(self): pass
+        def close(self):
+            pass
 
     backend = CDPBackend(page=FakePage(), context=FakeCtx())
     assert isinstance(backend, Backend)
@@ -179,6 +204,7 @@ def test_scenario_context_creates_playwright_backend():
     class FakeBrowserCtx:
         def new_page(self):
             return FakePage()
+
         def close(self):
             pass
 
@@ -214,6 +240,7 @@ def test_scenario_context_close_all_closes_backends():
     class FakeBrowserCtx:
         def new_page(self):
             return FakePage()
+
         def close(self):
             closed.append(True)
 

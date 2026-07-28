@@ -35,9 +35,14 @@ def _humanize_field(s: str) -> str:
 
 
 def _humanize_flag(s: str) -> str:
-    mapping = {"D": "Description", "C": "Criteria", "L": "Learnings",
-               "description": "Description", "criteria": "Criteria",
-               "reviewed": "Learnings"}
+    mapping = {
+        "D": "Description",
+        "C": "Criteria",
+        "L": "Learnings",
+        "description": "Description",
+        "criteria": "Criteria",
+        "reviewed": "Learnings",
+    }
     return mapping.get(s, str(s))
 
 
@@ -73,7 +78,9 @@ def _describe_predicate(p: dict) -> str:
         return f"it has {_humanize_field(p.get('field', '?'))}"
     if kind == "criteria_count_gte":
         n = p.get("value", 1)
-        return f"it has at least {n} acceptance criterion" + ("s" if isinstance(n, int) and n != 1 else "")
+        return f"it has at least {n} acceptance criterion" + (
+            "s" if isinstance(n, int) and n != 1 else ""
+        )
     if kind == "flag_set":
         return f"the {_humanize_flag(p.get('flag', '?'))} flag is set"
     if kind == "deps_clear":
@@ -128,7 +135,7 @@ def _describe_predicate(p: dict) -> str:
     return f"({kind})"
 
 
-def describe_trigger(trigger_json: "dict | str | None") -> str:
+def describe_trigger(trigger_json: dict | str | None) -> str:
     """Convert a trigger_json into a plain-English sentence.
 
     Empty / None / 'null' → 'Manual run only — does not auto-fire.'
@@ -158,10 +165,8 @@ def describe_trigger(trigger_json: "dict | str | None") -> str:
     for p in parts:
         if isinstance(p, dict) and ("all_of" in p or "any_of" in p):
             inner = describe_trigger(p)
-            if inner.startswith("When "):
-                inner = inner[len("When "):]
-            if inner.endswith("."):
-                inner = inner[:-1]
+            inner = inner.removeprefix("When ")
+            inner = inner.removesuffix(".")
             clauses.append(f"({inner})")
         else:
             clauses.append(_describe_predicate(p))
@@ -209,9 +214,19 @@ def _predicate_value(p: dict) -> str:
     Empty string when the predicate is parameter-less ('All dependencies are done').
     """
     kind = p.get("kind")
-    if kind in ("deps_clear", "tests_covered", "no_active_run", "parent_done",
-                "children_have_open_bugs", "children_no_open_bugs", "has_children",
-                "summary_stale", "spec_linked", "spec_validates", "verify_passed"):
+    if kind in (
+        "deps_clear",
+        "tests_covered",
+        "no_active_run",
+        "parent_done",
+        "children_have_open_bugs",
+        "children_no_open_bugs",
+        "has_children",
+        "summary_stale",
+        "spec_linked",
+        "spec_validates",
+        "verify_passed",
+    ):
         return ""
     if kind == "automation_mode":
         v = p.get("value")
@@ -232,12 +247,16 @@ def _predicate_value(p: dict) -> str:
         return ""
     if isinstance(vals, list):
         if all(isinstance(v, str) for v in vals):
-            return ", ".join(vals) if len(vals) <= 6 else ", ".join(vals[:6]) + f", +{len(vals) - 6} more"
+            return (
+                ", ".join(vals)
+                if len(vals) <= 6
+                else ", ".join(vals[:6]) + f", +{len(vals) - 6} more"
+            )
         return str(vals)
     return str(vals)
 
 
-def predicate_rows(trigger_json: "dict | str | None") -> list[tuple[str, str, bool]]:
+def predicate_rows(trigger_json: dict | str | None) -> list[tuple[str, str, bool]]:
     """Return [(label, value, is_negation_or_special), …] for the Edit panel.
 
     Used to render the trigger structure as a read-only list inside the Edit
@@ -280,7 +299,7 @@ def predicate_rows(trigger_json: "dict | str | None") -> list[tuple[str, str, bo
     return rows
 
 
-def effect_rows(on_success_json: "dict | str | None") -> list[tuple[str, str]]:
+def effect_rows(on_success_json: dict | str | None) -> list[tuple[str, str]]:
     """Return [(label, value), …] for the on_success effects section.
 
     Empty list when the workflow has no effects (the agent's run output is
@@ -307,10 +326,14 @@ def effect_rows(on_success_json: "dict | str | None") -> list[tuple[str, str]]:
         rows.append(("Set status to", on_success_json["set_status"]))
     if on_success_json.get("add_tags"):
         tags = on_success_json["add_tags"]
-        rows.append(("Add tag(s)", ", ".join(tags) if isinstance(tags, list) else str(tags)))
+        rows.append(
+            ("Add tag(s)", ", ".join(tags) if isinstance(tags, list) else str(tags))
+        )
     if on_success_json.get("remove_tags"):
         tags = on_success_json["remove_tags"]
-        rows.append(("Remove tag(s)", ", ".join(tags) if isinstance(tags, list) else str(tags)))
+        rows.append(
+            ("Remove tag(s)", ", ".join(tags) if isinstance(tags, list) else str(tags))
+        )
     if on_success_json.get("accept_ticket"):
         rows.append((f"Accept {target_label}", ""))
     sr = on_success_json.get("set_readiness_content")
@@ -322,7 +345,7 @@ def effect_rows(on_success_json: "dict | str | None") -> list[tuple[str, str]]:
     return rows
 
 
-def describe_on_success(on_success_json: "dict | str | None") -> str:
+def describe_on_success(on_success_json: dict | str | None) -> str:
     """Render on_success effects as a short sentence ('Then …').
 
     Returns '' if there are no effects.
@@ -349,7 +372,9 @@ def describe_on_success(on_success_json: "dict | str | None") -> str:
     if on_success_json.get("add_tags"):
         parts.append(f"add tag(s) {_join_quoted(on_success_json['add_tags'], ' and ')}")
     if on_success_json.get("remove_tags"):
-        parts.append(f"remove tag(s) {_join_quoted(on_success_json['remove_tags'], ' and ')}")
+        parts.append(
+            f"remove tag(s) {_join_quoted(on_success_json['remove_tags'], ' and ')}"
+        )
     if on_success_json.get("accept_ticket"):
         parts.append(f"accept {target}")
     sr = on_success_json.get("set_readiness_content")

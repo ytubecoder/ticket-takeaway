@@ -13,12 +13,10 @@ Safety invariants (§10.5) enforced before launching anything:
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from constants import DASHBOARD_DIR
 
@@ -30,6 +28,7 @@ BOOTSTRAP_MARKER = ".kitchen-bootstrap-complete"
 # Path helpers
 # ---------------------------------------------------------------------------
 
+
 def _sanitize_key(key: str) -> str:
     """Inv3: only [A-Za-z0-9._-] allowed in path components."""
     return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in key)
@@ -37,7 +36,12 @@ def _sanitize_key(key: str) -> str:
 
 def workspace_path_for(project_id: str, subject_type: str, subject_id: str) -> Path:
     """Return the deterministic workspace path for a subject. Does not create it."""
-    return WORKSPACE_ROOT / _sanitize_key(project_id) / _sanitize_key(subject_type) / _sanitize_key(subject_id)
+    return (
+        WORKSPACE_ROOT
+        / _sanitize_key(project_id)
+        / _sanitize_key(subject_type)
+        / _sanitize_key(subject_id)
+    )
 
 
 def _branch_name(subject_type: str, subject_id: str) -> str:
@@ -69,29 +73,36 @@ def _assert_inside_root(path: Path) -> None:
         resolved = path.resolve()
         resolved.relative_to(root)
     except (ValueError, OSError):
-        raise ValueError(f"workspace path {path!r} is not inside workspace_root {root!r}")
+        raise ValueError(
+            f"workspace path {path!r} is not inside workspace_root {root!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class WorkspaceInfo:
     """Returned by create_or_reuse — the workspace and how it was provisioned."""
+
     path: Path
-    branch: str               # kitchen/{type}/{id}
-    base_ref: str             # fully-qualified, e.g. origin/main
-    is_git_worktree: bool     # False if project isn't a git repo (clone fallback skipped in M3)
-    created_now: bool         # True iff this call created the dir (gates after_create)
-    bootstrapped: bool        # True iff the marker file exists post-call
+    branch: str  # kitchen/{type}/{id}
+    base_ref: str  # fully-qualified, e.g. origin/main
+    is_git_worktree: (
+        bool  # False if project isn't a git repo (clone fallback skipped in M3)
+    )
+    created_now: bool  # True iff this call created the dir (gates after_create)
+    bootstrapped: bool  # True iff the marker file exists post-call
 
 
 @dataclass(frozen=True)
 class HookResult:
     """Outcome of one hook invocation. Captured streams live in stdout/stderr."""
-    hook: str                 # 'after_create' | 'before_run' | 'after_run' | 'before_remove'
-    exit_code: int            # 0 = success
+
+    hook: str  # 'after_create' | 'before_run' | 'after_run' | 'before_remove'
+    exit_code: int  # 0 = success
     stdout: str
     stderr: str
     duration_ms: int
@@ -106,25 +117,34 @@ class HookResult:
 # Git helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_git_repo(path: Path) -> bool:
     if not path.exists():
         return False
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
-            cwd=str(path), capture_output=True, text=True, timeout=5,
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def _git_fetch(repo_path: Path, remote: str = "origin", timeout: int = 60) -> tuple[bool, str]:
+def _git_fetch(
+    repo_path: Path, remote: str = "origin", timeout: int = 60
+) -> tuple[bool, str]:
     """Best-effort fetch. Returns (ok, stderr-or-empty)."""
     try:
         r = subprocess.run(
             ["git", "fetch", remote],
-            cwd=str(repo_path), capture_output=True, text=True, timeout=timeout,
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         return (r.returncode == 0, r.stderr or "")
     except (OSError, subprocess.SubprocessError) as e:
@@ -135,14 +155,19 @@ def _branch_exists(repo_path: Path, branch: str) -> bool:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
-            cwd=str(repo_path), capture_output=True, text=True, timeout=5,
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def _git_worktree_add(repo_path: Path, target: Path, branch: str, base_ref: str) -> tuple[bool, str]:
+def _git_worktree_add(
+    repo_path: Path, target: Path, branch: str, base_ref: str
+) -> tuple[bool, str]:
     """Create a worktree at *target* on *branch*, branched from *base_ref*.
 
     Reuses *branch* if it already exists (no -b); otherwise creates it.
@@ -153,7 +178,9 @@ def _git_worktree_add(repo_path: Path, target: Path, branch: str, base_ref: str)
     else:
         cmd = ["git", "worktree", "add", "-b", branch, str(target), base_ref]
     try:
-        r = subprocess.run(cmd, cwd=str(repo_path), capture_output=True, text=True, timeout=120)
+        r = subprocess.run(
+            cmd, cwd=str(repo_path), capture_output=True, text=True, timeout=120
+        )
         if r.returncode == 0:
             return (True, "")
         return (False, (r.stderr or r.stdout or "").strip())
@@ -161,13 +188,17 @@ def _git_worktree_add(repo_path: Path, target: Path, branch: str, base_ref: str)
         return (False, str(e))
 
 
-def _git_worktree_remove(repo_path: Path, target: Path, force: bool = False) -> tuple[bool, str]:
+def _git_worktree_remove(
+    repo_path: Path, target: Path, force: bool = False
+) -> tuple[bool, str]:
     cmd = ["git", "worktree", "remove"]
     if force:
         cmd.append("--force")
     cmd.append(str(target))
     try:
-        r = subprocess.run(cmd, cwd=str(repo_path), capture_output=True, text=True, timeout=30)
+        r = subprocess.run(
+            cmd, cwd=str(repo_path), capture_output=True, text=True, timeout=30
+        )
         return (r.returncode == 0, (r.stderr or r.stdout or "").strip())
     except (OSError, subprocess.SubprocessError) as e:
         return (False, str(e))
@@ -178,13 +209,19 @@ def _git_reset_clean(target: Path, base_ref: str) -> tuple[bool, str]:
     try:
         r1 = subprocess.run(
             ["git", "reset", "--hard", base_ref],
-            cwd=str(target), capture_output=True, text=True, timeout=30,
+            cwd=str(target),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if r1.returncode != 0:
             return (False, (r1.stderr or r1.stdout or "").strip())
         r2 = subprocess.run(
             ["git", "clean", "-fdx"],
-            cwd=str(target), capture_output=True, text=True, timeout=30,
+            cwd=str(target),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if r2.returncode != 0:
             return (False, (r2.stderr or r2.stdout or "").strip())
@@ -196,6 +233,7 @@ def _git_reset_clean(target: Path, base_ref: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def create_or_reuse(
     repo_path: Path,
@@ -229,7 +267,9 @@ def create_or_reuse(
     if already_existed:
         # Reuse path. Don't touch git — caller is responsible for any sync hooks.
         return WorkspaceInfo(
-            path=target, branch=branch, base_ref=fq_base,
+            path=target,
+            branch=branch,
+            base_ref=fq_base,
             is_git_worktree=_is_git_repo(target),
             created_now=False,
             bootstrapped=bootstrapped,
@@ -239,8 +279,11 @@ def create_or_reuse(
     if not is_git:
         target.mkdir(parents=True, exist_ok=True)
         return WorkspaceInfo(
-            path=target, branch=branch, base_ref=fq_base,
-            is_git_worktree=False, created_now=True,
+            path=target,
+            branch=branch,
+            base_ref=fq_base,
+            is_git_worktree=False,
+            created_now=True,
             bootstrapped=False,
         )
 
@@ -257,8 +300,11 @@ def create_or_reuse(
         raise ValueError(f"git worktree add failed: {err}")
 
     return WorkspaceInfo(
-        path=target, branch=branch, base_ref=fq_base,
-        is_git_worktree=True, created_now=True,
+        path=target,
+        branch=branch,
+        base_ref=fq_base,
+        is_git_worktree=True,
+        created_now=True,
         bootstrapped=False,
     )
 
@@ -269,8 +315,13 @@ def mark_bootstrapped(workspace_path: Path) -> None:
     (workspace_path / BOOTSTRAP_MARKER).touch()
 
 
-def remove(repo_path: Path, project_id: str, subject_type: str, subject_id: str,
-           force: bool = False) -> bool:
+def remove(
+    repo_path: Path,
+    project_id: str,
+    subject_type: str,
+    subject_id: str,
+    force: bool = False,
+) -> bool:
     """Remove the worktree (or plain directory) for a subject. Best-effort.
 
     Returns True iff the path no longer exists after the call.
@@ -288,8 +339,13 @@ def remove(repo_path: Path, project_id: str, subject_type: str, subject_id: str,
     return not target.exists()
 
 
-def wipe_for_retry_fresh(repo_path: Path, project_id: str, subject_type: str,
-                         subject_id: str, base_ref: str = "origin/main") -> bool:
+def wipe_for_retry_fresh(
+    repo_path: Path,
+    project_id: str,
+    subject_type: str,
+    subject_id: str,
+    base_ref: str = "origin/main",
+) -> bool:
     """Reset a worktree to base_ref + clean — used for "retry fresh".
 
     Removes the bootstrap marker so after_create runs again on next attempt.
@@ -317,12 +373,13 @@ def wipe_for_retry_fresh(repo_path: Path, project_id: str, subject_type: str,
 # Hook execution
 # ---------------------------------------------------------------------------
 
+
 def run_hook(
     workspace_path: Path,
     hook_name: str,
     script: str,
     timeout_ms: int = 60000,
-    env: Optional[dict] = None,
+    env: dict | None = None,
 ) -> HookResult:
     """Execute a hook script with `bash -lc` from the workspace.
 
@@ -339,13 +396,20 @@ def run_hook(
     the HookResult.
     """
     import time as _time
+
     _assert_inside_root(workspace_path)
     if not workspace_path.exists():
         raise ValueError(f"workspace_path does not exist: {workspace_path}")
     body = (script or "").strip()
     if not body:
-        return HookResult(hook=hook_name, exit_code=0, stdout="", stderr="",
-                          duration_ms=0, timed_out=False)
+        return HookResult(
+            hook=hook_name,
+            exit_code=0,
+            stdout="",
+            stderr="",
+            duration_ms=0,
+            timed_out=False,
+        )
 
     timeout_s = max(0.001, timeout_ms / 1000.0)
     started = _time.monotonic()
@@ -353,20 +417,35 @@ def run_hook(
         r = subprocess.run(
             ["bash", "-lc", body],
             cwd=str(workspace_path),
-            capture_output=True, text=True, timeout=timeout_s,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
             env=env,  # None = inherit
         )
         elapsed = int((_time.monotonic() - started) * 1000)
         return HookResult(
-            hook=hook_name, exit_code=r.returncode,
-            stdout=r.stdout or "", stderr=r.stderr or "",
-            duration_ms=elapsed, timed_out=False,
+            hook=hook_name,
+            exit_code=r.returncode,
+            stdout=r.stdout or "",
+            stderr=r.stderr or "",
+            duration_ms=elapsed,
+            timed_out=False,
         )
     except subprocess.TimeoutExpired as e:
         elapsed = int((_time.monotonic() - started) * 1000)
         return HookResult(
-            hook=hook_name, exit_code=-1,
-            stdout=(e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")),
-            stderr=(e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")),
-            duration_ms=elapsed, timed_out=True,
+            hook=hook_name,
+            exit_code=-1,
+            stdout=(
+                e.stdout.decode("utf-8", "replace")
+                if isinstance(e.stdout, bytes)
+                else (e.stdout or "")
+            ),
+            stderr=(
+                e.stderr.decode("utf-8", "replace")
+                if isinstance(e.stderr, bytes)
+                else (e.stderr or "")
+            ),
+            duration_ms=elapsed,
+            timed_out=True,
         )

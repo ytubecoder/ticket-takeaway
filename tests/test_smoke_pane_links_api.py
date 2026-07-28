@@ -1,6 +1,12 @@
 """Smoke tests for pane_links API endpoints — exercises serve.py via fixture."""
+
 from __future__ import annotations
-import pytest, requests, urllib.request, json
+
+import json
+import urllib.request
+
+import pytest
+import requests
 
 
 def _get_first_ticket_id(base_url):
@@ -22,9 +28,12 @@ def cleanup_test_panes(dashboard_server):
     base = dashboard_server
     # List all pane addresses that look like test rows by pattern
     test_addresses = [
-        "%9001", "%9002", "%9003",
-        "%9011", "%9012",
-        "%23",      # created by the double-unquote regression test
+        "%9001",
+        "%9002",
+        "%9003",
+        "%9011",
+        "%9012",
+        "%23",  # created by the double-unquote regression test
     ]
     for addr in test_addresses:
         try:
@@ -116,7 +125,11 @@ def test_pane_address_with_percent_not_double_decoded(dashboard_server):
     # Create a link with pane_address = "%23" (the literal string used by tmux for pane 23)
     r = requests.post(
         f"{base}/api/tickets/{tid}/pane-links",
-        json={"pane_address": "%23", "host": "test-host", "pane_descriptor": "vibe:0.0"},
+        json={
+            "pane_address": "%23",
+            "host": "test-host",
+            "pane_descriptor": "vibe:0.0",
+        },
         timeout=5,
     )
     assert r.status_code in (200, 201), f"create failed: {r.text}"
@@ -149,4 +162,6 @@ def test_pane_address_with_percent_not_double_decoded(dashboard_server):
     # Confirm gone
     r = requests.get(f"{base}/api/tickets/{tid}/pane-links", timeout=5)
     links = r.json().get("pane_links", [])
-    assert not any(p["pane_address"] == "%23" for p in links), "row still present after delete"
+    assert not any(p["pane_address"] == "%23" for p in links), (
+        "row still present after delete"
+    )

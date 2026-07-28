@@ -27,8 +27,11 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-from workflows_seed import DEFAULT_AGENTS, DEFAULT_ENDPOINTS, DEFAULT_WORKFLOWS  # noqa: E402
-
+from workflows_seed import (
+    DEFAULT_AGENTS,
+    DEFAULT_ENDPOINTS,
+    DEFAULT_WORKFLOWS,
+)
 
 _DEFAULT_DB = Path.home() / ".claude" / "ticket-takeaway" / "tickets.db"
 
@@ -106,9 +109,11 @@ def _audit_workflows(conn: sqlite3.Connection) -> int:
         if seed_enabled != db_enabled:
             # Note: enabled is per-project for system workflows now
             # (workflow_projects); the workflows.enabled field is the seed default.
-            print(_drift(
-                f"{name:40s} seed.enabled={seed_enabled} DB.enabled={db_enabled}"
-            ))
+            print(
+                _drift(
+                    f"{name:40s} seed.enabled={seed_enabled} DB.enabled={db_enabled}"
+                )
+            )
             issues += 1
         else:
             print(_ok(f"{name:40s} enabled={db_enabled}"))
@@ -150,16 +155,14 @@ def _audit_endpoints(conn: sqlite3.Connection) -> int:
             continue
         db_cmd = db.get("command") or ""
         if db_cmd != (ep.command or ""):
-            print(_drift(
-                f"{eid:40s} command drift (seed={ep.command!r}, db={db_cmd!r})"
-            ))
+            print(
+                _drift(f"{eid:40s} command drift (seed={ep.command!r}, db={db_cmd!r})")
+            )
             issues += 1
             continue
         db_args = json.loads(db.get("args") or "[]")
         if db_args != ep.args:
-            print(_drift(
-                f"{eid:40s} args drift (seed={ep.args!r}, db={db_args!r})"
-            ))
+            print(_drift(f"{eid:40s} args drift (seed={ep.args!r}, db={db_args!r})"))
             issues += 1
             continue
         print(_ok(f"{eid:40s} system={db_sys}"))

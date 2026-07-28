@@ -1,9 +1,10 @@
 """E2E tests for the Seek feature — API endpoint and idempotency."""
-import json
+
 import os
 import time
+
 import pytest
-from conftest import api_post, api_get, api_delete
+from conftest import api_delete, api_post
 
 
 def test_seek_api_returns_results(dashboard_server):
@@ -28,7 +29,9 @@ def test_seek_api_idempotent(dashboard_server):
 
 def test_seek_api_with_source_filter(dashboard_server):
     """POST with sources filter only scans specified types."""
-    status_code, data = api_post(dashboard_server, "/api/seek", {"sources": ["md_task"]})
+    status_code, data = api_post(
+        dashboard_server, "/api/seek", {"sources": ["md_task"]}
+    )
     assert status_code == 200
     assert "discovered" in data
 
@@ -36,11 +39,15 @@ def test_seek_api_with_source_filter(dashboard_server):
 def test_drafts_excluded_from_markdown(dashboard_server):
     """Draft tickets should NOT appear in PRODUCT_BACKLOG.md after sync."""
     # Create a draft ticket via API
-    status, ticket = api_post(dashboard_server, "/api/tickets", {
-        "title": f"e2e-draft-test-{int(time.time())}",
-        "section": "Ideas",
-        "draft": True
-    })
+    status, ticket = api_post(
+        dashboard_server,
+        "/api/tickets",
+        {
+            "title": f"e2e-draft-test-{int(time.time())}",
+            "section": "Ideas",
+            "draft": True,
+        },
+    )
     if status != 201:
         pytest.skip("Could not create draft ticket")
 
@@ -50,8 +57,9 @@ def test_drafts_excluded_from_markdown(dashboard_server):
     if os.path.exists(backlog_path):
         with open(backlog_path, "r") as f:
             content = f.read()
-        assert ticket.get("title", "e2e-draft-test") not in content, \
+        assert ticket.get("title", "e2e-draft-test") not in content, (
             "Draft ticket should not appear in PRODUCT_BACKLOG.md"
+        )
 
     # Cleanup
     tid = ticket.get("id", "")

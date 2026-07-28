@@ -22,7 +22,6 @@ Usage::
 from __future__ import annotations
 
 import re
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -222,14 +221,18 @@ def _steps_open_board(actor: str) -> list[dict]:
     ]
 
 
-def _steps_capture(actor: str, name: str, publish_slot: str | None = None) -> list[dict]:
+def _steps_capture(
+    actor: str, name: str, publish_slot: str | None = None
+) -> list[dict]:
     cap: dict[str, Any] = {"name": name}
     if publish_slot:
         cap["publish_slot"] = publish_slot
     return [{"actor": actor, "action": "capture", "capture": cap}]
 
 
-def _steps_create_ticket(actor: str, title: str, section: str = "Backlog") -> list[dict]:
+def _steps_create_ticket(
+    actor: str, title: str, section: str = "Backlog"
+) -> list[dict]:
     return [
         {"actor": actor, "action": "click", "target": {"testid": "new-ticket-btn"}},
         {
@@ -291,14 +294,35 @@ def _steps_assert_card(actor: str, title: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _UNAUTOMATABLE_KEYWORDS = [
-    (r"sign.?up", "User sign-up requires a real auth flow — not automatable with current testids"),
-    (r"log.{0,3}in\b|login\b", "Login requires auth credentials — not automatable with current testids"),
-    (r"payment", "Payment flows require a real billing integration — stub or skip in scenarios"),
-    (r"captcha", "CAPTCHA cannot be automated — tests must disable it in the test environment"),
+    (
+        r"sign.?up",
+        "User sign-up requires a real auth flow — not automatable with current testids",
+    ),
+    (
+        r"log.{0,3}in\b|login\b",
+        "Login requires auth credentials — not automatable with current testids",
+    ),
+    (
+        r"payment",
+        "Payment flows require a real billing integration — stub or skip in scenarios",
+    ),
+    (
+        r"captcha",
+        "CAPTCHA cannot be automated — tests must disable it in the test environment",
+    ),
     (r"\botp\b", "OTP/2FA flows require out-of-band input — not automatable"),
-    (r"email.{0,20}verif|verif.{0,20}email", "Email verification requires inbox access — use a stubbed transport in tests"),
-    (r"file.{0,10}upload|upload.{0,10}file", "File upload requires a real file handle — use fixture files and verify via API"),
-    (r"\boauth\b", "OAuth redirect flows cannot be automated without mocking the provider"),
+    (
+        r"email.{0,20}verif|verif.{0,20}email",
+        "Email verification requires inbox access — use a stubbed transport in tests",
+    ),
+    (
+        r"file.{0,10}upload|upload.{0,10}file",
+        "File upload requires a real file handle — use fixture files and verify via API",
+    ),
+    (
+        r"\boauth\b",
+        "OAuth redirect flows cannot be automated without mocking the provider",
+    ),
 ]
 
 
@@ -328,9 +352,8 @@ def _build_overview_candidates(
     scenario_id = _slugify(title)
     prerequisites = _detect_prerequisites(request.goal, ctx)
 
-    steps = (
-        _steps_open_board(actor)
-        + _steps_capture(actor, "board-overview", "gallery-board")
+    steps = _steps_open_board(actor) + _steps_capture(
+        actor, "board-overview", "gallery-board"
     )
 
     manifest = {
@@ -402,7 +425,7 @@ def _build_create_candidates(
     )
     standard = DraftCandidate(
         title=f"Create ticket in {target_section}",
-        summary=f"Creates a ticket, opens it in the detail overlay, and captures both board and overlay states.",
+        summary="Creates a ticket, opens it in the detail overlay, and captures both board and overlay states.",
         manifest={
             "id": standard_id,
             "title": f"Create ticket in {target_section}",
@@ -436,7 +459,13 @@ def _build_edit_candidates(
     steps = (
         _steps_open_board(actor)
         + _steps_open_detail(actor, ticket_title)
-        + [{"actor": actor, "action": "assert_visible", "target": {"testid": "detail-title"}}]
+        + [
+            {
+                "actor": actor,
+                "action": "assert_visible",
+                "target": {"testid": "detail-title"},
+            }
+        ]
         + _steps_capture(actor, "overlay-before-edit")
         + _steps_edit_description(actor, "Updated description via scenario runner")
         + _steps_capture(actor, "overlay-after-edit", "showcase-detail-edit")
@@ -494,7 +523,9 @@ def _build_move_candidates(
     if mentioned and mentioned not in ("Backlog",):
         to_section = mentioned
 
-    scenario_id = _slugify(f"move-ticket-{from_section.lower()}-to-{to_section.lower()}")
+    scenario_id = _slugify(
+        f"move-ticket-{from_section.lower()}-to-{to_section.lower()}"
+    )
 
     # Move via drag is not directly supported as a step action; use the
     # column API / status dropdown instead.  We assert visible in target column.
@@ -558,7 +589,11 @@ def _build_review_candidates(
     tags: list[str],
 ) -> list[DraftCandidate]:
     # Reviewers look at a ticket in the Review section
-    actors_dict = actors if len(actors) >= 2 else {"agent": {"label": "Agent"}, "reviewer": {"label": "Reviewer"}}
+    actors_dict = (
+        actors
+        if len(actors) >= 2
+        else {"agent": {"label": "Agent"}, "reviewer": {"label": "Reviewer"}}
+    )
     agent = list(actors_dict.keys())[0]
     reviewer = list(actors_dict.keys())[-1]
     ticket_title = "Feature ready for review"
@@ -611,11 +646,15 @@ def _build_lifecycle_candidates(
     actors: dict,
     tags: list[str],
 ) -> list[DraftCandidate]:
-    actors_dict = actors if len(actors) >= 2 else {
-        "scheduler": {"label": "Scheduler"},
-        "agent": {"label": "Agent"},
-        "reviewer": {"label": "Reviewer"},
-    }
+    actors_dict = (
+        actors
+        if len(actors) >= 2
+        else {
+            "scheduler": {"label": "Scheduler"},
+            "agent": {"label": "Agent"},
+            "reviewer": {"label": "Reviewer"},
+        }
+    )
     scheduler = list(actors_dict.keys())[0]
     agent = list(actors_dict.keys())[1] if len(actors_dict) > 1 else scheduler
     reviewer = list(actors_dict.keys())[2] if len(actors_dict) > 2 else agent
@@ -781,7 +820,9 @@ def generate_drafts(
     warnings: list[str] = []
 
     # Warn if goal mentions testids that don't exist in the context
-    unknown_testids = _find_unknown_testid_mentions(request.goal, context.available_testids)
+    unknown_testids = _find_unknown_testid_mentions(
+        request.goal, context.available_testids
+    )
     for tid in unknown_testids:
         warnings.append(
             f"Goal mentions '{tid}' but it is not in the known testid list — "
@@ -799,7 +840,9 @@ def generate_drafts(
         if secondary_intent != primary_intent:
             secondary_builder = _BUILDERS.get(secondary_intent)
             if secondary_builder:
-                secondary_candidates = secondary_builder(request, context, actors, base_tags)
+                secondary_candidates = secondary_builder(
+                    request, context, actors, base_tags
+                )
                 # De-duplicate against already-generated candidates
                 existing_ids = {c.manifest["id"] for c in candidates}
                 for c in secondary_candidates:
@@ -819,7 +862,9 @@ def generate_drafts(
     # If no candidates produced, fall back to overview
     if not candidates:
         candidates = _build_overview_candidates(request, context, actors, base_tags)
-        warnings.append("No specific template matched the goal — falling back to board overview.")
+        warnings.append(
+            "No specific template matched the goal — falling back to board overview."
+        )
 
     return DraftResult(
         intent_summary=intent_summary,

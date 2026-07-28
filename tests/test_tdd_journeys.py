@@ -4,37 +4,38 @@ Tests run against an in-memory SQLite DB with no server required.
 """
 
 import json
+import os
 import sqlite3
+import sys
 
 import pytest
 
-import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from db import init_db
 from journeys import (
-    add_journey,
-    update_journey,
-    delete_journey,
-    list_journeys,
-    get_journey,
-    add_step,
-    update_step,
-    delete_step,
-    reorder_steps,
-    compile_to_manifest,
-    store_run_results,
-    link_ticket,
-    unlink_ticket,
-    infer_journeys,
     JOURNEY_STATUSES,
+    add_journey,
+    add_step,
+    compile_to_manifest,
+    delete_journey,
+    delete_step,
+    get_journey,
+    infer_journeys,
+    link_ticket,
+    list_journeys,
+    reorder_steps,
+    store_run_results,
+    unlink_ticket,
+    update_journey,
+    update_step,
 )
 from scenarios import validate_manifest
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def conn():
@@ -53,41 +54,58 @@ PID = "test-project"
 # Schema tests
 # ===========================================================================
 
+
 class TestJourneysTable:
     def test_journeys_table_exists(self, conn):
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        ]
         assert "journeys" in tables
 
     def test_journey_steps_table_exists(self, conn):
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        ]
         assert "journey_steps" in tables
 
     def test_journey_runs_table_exists(self, conn):
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        ]
         assert "journey_runs" in tables
 
     def test_journey_step_results_table_exists(self, conn):
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        ]
         assert "journey_step_results" in tables
 
     def test_journey_tickets_table_exists(self, conn):
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        ]
         assert "journey_tickets" in tables
 
 
 # ===========================================================================
 # Journey CRUD
 # ===========================================================================
+
 
 class TestAddJourney:
     def test_add_journey_returns_row(self, conn):
@@ -162,8 +180,9 @@ class TestListJourneys:
     def test_list_returns_step_count(self, conn):
         j = add_journey(conn, PID, "With Steps", "", "")
         add_step(conn, j["id"], PID, action="open", label="Step 1")
-        add_step(conn, j["id"], PID, action="click", label="Step 2",
-                 target={"testid": "btn"})
+        add_step(
+            conn, j["id"], PID, action="click", label="Step 2", target={"testid": "btn"}
+        )
         result = list_journeys(conn, PID)
         assert len(result) == 1
         assert result[0]["step_count"] == 2
@@ -193,11 +212,18 @@ class TestGetJourney:
 # Step CRUD
 # ===========================================================================
 
+
 class TestAddStep:
     def test_add_step_returns_row(self, conn):
         j = add_journey(conn, PID, "Test", "", "")
-        s = add_step(conn, j["id"], PID, action="click", label="Click button",
-                     target={"testid": "submit-btn"})
+        s = add_step(
+            conn,
+            j["id"],
+            PID,
+            action="click",
+            label="Click button",
+            target={"testid": "submit-btn"},
+        )
         assert s["id"] is not None
         assert s["action"] == "click"
         assert s["label"] == "Click button"
@@ -206,22 +232,35 @@ class TestAddStep:
     def test_add_step_auto_increments_sort_order(self, conn):
         j = add_journey(conn, PID, "Test", "", "")
         s1 = add_step(conn, j["id"], PID, action="open", label="Step 1")
-        s2 = add_step(conn, j["id"], PID, action="click", label="Step 2",
-                      target={"testid": "btn"})
+        s2 = add_step(
+            conn, j["id"], PID, action="click", label="Step 2", target={"testid": "btn"}
+        )
         assert s1["sort_order"] == 0
         assert s2["sort_order"] == 1
 
     def test_add_step_with_capture(self, conn):
         j = add_journey(conn, PID, "Test", "", "")
-        s = add_step(conn, j["id"], PID, action="capture", label="Screenshot",
-                     capture={"name": "board-overview"})
+        s = add_step(
+            conn,
+            j["id"],
+            PID,
+            action="capture",
+            label="Screenshot",
+            capture={"name": "board-overview"},
+        )
         assert json.loads(s["capture_json"]) == {"name": "board-overview"}
 
     def test_add_step_with_assert(self, conn):
         j = add_journey(conn, PID, "Test", "", "")
-        s = add_step(conn, j["id"], PID, action="click", label="Click",
-                     target={"testid": "btn"},
-                     assertion={"text_visible": "Success"})
+        s = add_step(
+            conn,
+            j["id"],
+            PID,
+            action="click",
+            label="Click",
+            target={"testid": "btn"},
+            assertion={"text_visible": "Success"},
+        )
         assert json.loads(s["assert_json"]) == {"text_visible": "Success"}
 
     def test_add_step_invalid_action_raises(self, conn):
@@ -239,8 +278,9 @@ class TestUpdateStep:
 
     def test_update_step_target(self, conn):
         j = add_journey(conn, PID, "Test", "", "")
-        s = add_step(conn, j["id"], PID, action="click", label="Click",
-                     target={"testid": "old"})
+        s = add_step(
+            conn, j["id"], PID, action="click", label="Click", target={"testid": "old"}
+        )
         updated = update_step(conn, s["id"], target={"testid": "new"})
         assert json.loads(updated["target_json"]) == {"testid": "new"}
 
@@ -260,15 +300,17 @@ class TestReorderSteps:
     def test_reorder_changes_sort_order(self, conn):
         j = add_journey(conn, PID, "Test", "", "")
         s1 = add_step(conn, j["id"], PID, action="open", label="A")
-        s2 = add_step(conn, j["id"], PID, action="click", label="B",
-                      target={"testid": "x"})
-        s3 = add_step(conn, j["id"], PID, action="capture", label="C",
-                      capture={"name": "cap"})
+        s2 = add_step(
+            conn, j["id"], PID, action="click", label="B", target={"testid": "x"}
+        )
+        s3 = add_step(
+            conn, j["id"], PID, action="capture", label="C", capture={"name": "cap"}
+        )
         # Reverse order
         reorder_steps(conn, j["id"], PID, [s3["id"], s1["id"], s2["id"]])
         steps = conn.execute(
             "SELECT id, sort_order FROM journey_steps WHERE journey_id = ? ORDER BY sort_order",
-            (j["id"],)
+            (j["id"],),
         ).fetchall()
         assert [s["id"] for s in steps] == [s3["id"], s1["id"], s2["id"]]
 
@@ -277,15 +319,29 @@ class TestReorderSteps:
 # Compilation to scenario manifest
 # ===========================================================================
 
+
 class TestCompileToManifest:
     def test_compile_produces_valid_manifest(self, conn):
         j = add_journey(conn, PID, "Compile Test", "desc", "User")
-        add_step(conn, j["id"], PID, action="open", label="Open board",
-                 actor="user")
-        add_step(conn, j["id"], PID, action="click", label="Click card",
-                 target={"testid": "ticket-card-B-01"}, actor="user")
-        add_step(conn, j["id"], PID, action="capture", label="Screenshot",
-                 capture={"name": "board-state"}, actor="user")
+        add_step(conn, j["id"], PID, action="open", label="Open board", actor="user")
+        add_step(
+            conn,
+            j["id"],
+            PID,
+            action="click",
+            label="Click card",
+            target={"testid": "ticket-card-B-01"},
+            actor="user",
+        )
+        add_step(
+            conn,
+            j["id"],
+            PID,
+            action="capture",
+            label="Screenshot",
+            capture={"name": "board-state"},
+            actor="user",
+        )
 
         manifest = compile_to_manifest(conn, PID, j["id"])
 
@@ -298,10 +354,12 @@ class TestCompileToManifest:
     def test_compile_preserves_step_order(self, conn):
         j = add_journey(conn, PID, "Order Test", "", "")
         add_step(conn, j["id"], PID, action="open", label="First")
-        add_step(conn, j["id"], PID, action="click", label="Second",
-                 target={"testid": "btn"})
-        add_step(conn, j["id"], PID, action="capture", label="Third",
-                 capture={"name": "cap"})
+        add_step(
+            conn, j["id"], PID, action="click", label="Second", target={"testid": "btn"}
+        )
+        add_step(
+            conn, j["id"], PID, action="capture", label="Third", capture={"name": "cap"}
+        )
 
         manifest = compile_to_manifest(conn, PID, j["id"])
         actions = [s["action"] for s in manifest["steps"]]
@@ -309,8 +367,15 @@ class TestCompileToManifest:
 
     def test_compile_includes_target_and_capture(self, conn):
         j = add_journey(conn, PID, "Fields Test", "", "")
-        add_step(conn, j["id"], PID, action="click", label="Click",
-                 target={"testid": "btn"}, capture={"name": "after-click"})
+        add_step(
+            conn,
+            j["id"],
+            PID,
+            action="click",
+            label="Click",
+            target={"testid": "btn"},
+            capture={"name": "after-click"},
+        )
 
         manifest = compile_to_manifest(conn, PID, j["id"])
         step = manifest["steps"][0]
@@ -321,9 +386,13 @@ class TestCompileToManifest:
         j = add_journey(conn, PID, "Seed Test", "", "")
         seed = {"tickets": [{"title": "Test ticket", "section": "Backlog"}]}
         actors = {"admin": {"label": "Admin"}, "user": {"label": "User"}}
-        update_journey(conn, PID, j["id"],
-                       seed_json=json.dumps(seed),
-                       actors_json=json.dumps(actors))
+        update_journey(
+            conn,
+            PID,
+            j["id"],
+            seed_json=json.dumps(seed),
+            actors_json=json.dumps(actors),
+        )
         add_step(conn, j["id"], PID, action="open", label="Open", actor="admin")
 
         manifest = compile_to_manifest(conn, PID, j["id"])
@@ -337,8 +406,15 @@ class TestCompileToManifest:
 
     def test_compile_includes_fill_value(self, conn):
         j = add_journey(conn, PID, "Fill Test", "", "")
-        add_step(conn, j["id"], PID, action="fill", label="Fill input",
-                 target={"testid": "name-input"}, value="Hello World")
+        add_step(
+            conn,
+            j["id"],
+            PID,
+            action="fill",
+            label="Fill input",
+            target={"testid": "name-input"},
+            value="Hello World",
+        )
 
         manifest = compile_to_manifest(conn, PID, j["id"])
         step = manifest["steps"][0]
@@ -346,8 +422,15 @@ class TestCompileToManifest:
 
     def test_compile_includes_press_key(self, conn):
         j = add_journey(conn, PID, "Press Test", "", "")
-        add_step(conn, j["id"], PID, action="press", label="Press Enter",
-                 target={"testid": "input"}, key="Enter")
+        add_step(
+            conn,
+            j["id"],
+            PID,
+            action="press",
+            label="Press Enter",
+            target={"testid": "input"},
+            key="Enter",
+        )
 
         manifest = compile_to_manifest(conn, PID, j["id"])
         step = manifest["steps"][0]
@@ -366,15 +449,18 @@ class TestCompileToManifest:
 # Run result storage
 # ===========================================================================
 
+
 class TestStoreRunResults:
     def _setup_journey_with_steps(self, conn):
         """Helper: create a journey with 3 steps, return (journey, [step_ids])."""
         j = add_journey(conn, PID, "Run Test", "", "")
         s1 = add_step(conn, j["id"], PID, action="open", label="Open")
-        s2 = add_step(conn, j["id"], PID, action="click", label="Click",
-                      target={"testid": "btn"})
-        s3 = add_step(conn, j["id"], PID, action="capture", label="Cap",
-                      capture={"name": "cap"})
+        s2 = add_step(
+            conn, j["id"], PID, action="click", label="Click", target={"testid": "btn"}
+        )
+        s3 = add_step(
+            conn, j["id"], PID, action="capture", label="Cap", capture={"name": "cap"}
+        )
         return j, [s1["id"], s2["id"], s3["id"]]
 
     def test_store_passing_run(self, conn):
@@ -388,13 +474,15 @@ class TestStoreRunResults:
         }
         run_id = store_run_results(conn, PID, j["id"], run_result, step_ids)
 
-        run = conn.execute("SELECT * FROM journey_runs WHERE id = ?", (run_id,)).fetchone()
+        run = conn.execute(
+            "SELECT * FROM journey_runs WHERE id = ?", (run_id,)
+        ).fetchone()
         assert run["status"] == "passed"
         assert run["duration_ms"] == 1500
 
         results = conn.execute(
             "SELECT * FROM journey_step_results WHERE run_id = ? ORDER BY sort_order",
-            (run_id,)
+            (run_id,),
         ).fetchall()
         assert len(results) == 3
         assert all(r["status"] == "passed" for r in results)
@@ -412,7 +500,7 @@ class TestStoreRunResults:
 
         results = conn.execute(
             "SELECT * FROM journey_step_results WHERE run_id = ? ORDER BY sort_order",
-            (run_id,)
+            (run_id,),
         ).fetchall()
         assert results[0]["status"] == "passed"
         assert results[1]["status"] == "failed"
@@ -423,6 +511,7 @@ class TestStoreRunResults:
 # ===========================================================================
 # Ticket linking
 # ===========================================================================
+
 
 class TestTicketLinking:
     def _create_ticket(self, conn, ticket_id="B-01"):
@@ -480,13 +569,14 @@ class TestTicketLinking:
 # Constants
 # ===========================================================================
 
+
 class TestInferJourneys:
     def _seed_tickets(self, conn, sections):
         """Create tickets in the given sections. Returns count."""
         for i, section in enumerate(sections):
             conn.execute(
                 "INSERT INTO tickets (id, project_id, title, section) VALUES (?, ?, ?, ?)",
-                (f"T-{i+1:02d}", PID, f"Ticket in {section}", section),
+                (f"T-{i + 1:02d}", PID, f"Ticket in {section}", section),
             )
         return len(sections)
 

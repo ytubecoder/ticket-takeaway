@@ -1,17 +1,12 @@
 """TDD tests for the Seek discovery engine: scanners, dedup, and run_seek."""
 
-import os
 import sqlite3
-import subprocess
 from unittest.mock import patch
 
-import pytest
 from db import init_db
 from seek import (
     DiscoveredItem,
     deduplicate,
-    discover,
-    ingest,
     run_seek,
     scan_changelog_unreleased,
     scan_code_todos,
@@ -20,18 +15,28 @@ from seek import (
     scan_readme_todos,
 )
 
-
 # ===========================================================================
 # Helpers
 # ===========================================================================
 
 
-def _make_item(title="Test item", source_type="md_task", source_file="test.md",
-               source_line=1, raw_text="", priority="medium", section="Ideas"):
+def _make_item(
+    title="Test item",
+    source_type="md_task",
+    source_file="test.md",
+    source_line=1,
+    raw_text="",
+    priority="medium",
+    section="Ideas",
+):
     return DiscoveredItem(
-        title=title, source_type=source_type, source_file=source_file,
-        source_line=source_line, raw_text=raw_text or title,
-        priority=priority, section=section,
+        title=title,
+        source_type=source_type,
+        source_file=source_file,
+        source_line=source_line,
+        raw_text=raw_text or title,
+        priority=priority,
+        section=section,
     )
 
 
@@ -126,9 +131,7 @@ def test_scan_code_todos_python(tmp_path):
 
 def test_scan_code_todos_fixme_high_priority(tmp_path):
     """FIXME comments get high priority."""
-    (tmp_path / "lib.js").write_text(
-        "// FIXME: memory leak here\n", encoding="utf-8"
-    )
+    (tmp_path / "lib.js").write_text("// FIXME: memory leak here\n", encoding="utf-8")
     items = scan_code_todos(str(tmp_path))
     assert len(items) == 1
     assert items[0].priority == "high"
@@ -193,22 +196,32 @@ def test_scan_github_issues_no_gh(tmp_path):
 def test_deduplicate_exact_match():
     """Existing ticket title blocks duplicate discovery."""
     items = [_make_item("Add Auth")]
-    result = deduplicate(items, existing_titles=["Add Auth"], existing_draft_descriptions=[])
+    result = deduplicate(
+        items, existing_titles=["Add Auth"], existing_draft_descriptions=[]
+    )
     assert len(result) == 0
 
 
 def test_deduplicate_case_insensitive():
     """Title matching is case-insensitive."""
     items = [_make_item("add auth")]
-    result = deduplicate(items, existing_titles=["Add Auth"], existing_draft_descriptions=[])
+    result = deduplicate(
+        items, existing_titles=["Add Auth"], existing_draft_descriptions=[]
+    )
     assert len(result) == 0
 
 
 def test_deduplicate_source_key():
     """Same file:line in existing draft description blocks re-discovery."""
-    items = [_make_item("New title", source_type="code_todo", source_file="app.py", source_line=10)]
+    items = [
+        _make_item(
+            "New title", source_type="code_todo", source_file="app.py", source_line=10
+        )
+    ]
     existing_descs = ["Source: code_todo @ app.py:10\n\nold text"]
-    result = deduplicate(items, existing_titles=[], existing_draft_descriptions=existing_descs)
+    result = deduplicate(
+        items, existing_titles=[], existing_draft_descriptions=existing_descs
+    )
     assert len(result) == 0
 
 
@@ -232,7 +245,9 @@ def test_run_seek_creates_drafts(tmp_path):
     """run_seek creates draft tickets in the database."""
     conn = _make_db()
     # Create a markdown file with tasks
-    (tmp_path / "TODO.md").write_text("- [ ] Build dashboard\n- [ ] Add tests\n", encoding="utf-8")
+    (tmp_path / "TODO.md").write_text(
+        "- [ ] Build dashboard\n- [ ] Add tests\n", encoding="utf-8"
+    )
 
     result = run_seek(conn, "test-proj", str(tmp_path), sources=["md_task"])
     assert result["created"] == 2
@@ -265,7 +280,8 @@ def test_run_seek_source_in_description(tmp_path):
     run_seek(conn, "test-proj", str(tmp_path), sources=["md_task"])
 
     row = conn.execute(
-        "SELECT description FROM tickets WHERE project_id = ? AND draft = 1", ("test-proj",)
+        "SELECT description FROM tickets WHERE project_id = ? AND draft = 1",
+        ("test-proj",),
     ).fetchone()
     assert row is not None
     assert row["description"].startswith("Source: md_task @ TODO.md:")

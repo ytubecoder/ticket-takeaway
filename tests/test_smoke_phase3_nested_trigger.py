@@ -223,4 +223,6 @@ def test_remove_tag_chip(new_workflow_detail):
     x_btn.click()
     p.wait_for_timeout(200)
     chips_after = first_input_container.query_selector_all(".kw-tag-chip")
-    assert len(chips_after) < len(chips_before), "Chip count did not decrease after remove"
+    assert len(chips_after) < len(chips_before), (
+        "Chip count did not decrease after remove"
+    )

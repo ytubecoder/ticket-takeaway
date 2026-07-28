@@ -22,20 +22,40 @@ def repo(tmp_path):
     """
     upstream = tmp_path / "upstream.git"
     work = tmp_path / "project"
-    subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(upstream)],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "init", "--initial-branch=main", str(work)],
-                   check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(upstream)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", str(work)],
+        check=True,
+        capture_output=True,
+    )
     # Configure committer so commit doesn't fail in CI-like environments.
     for k, v in [("user.email", "test@example.invalid"), ("user.name", "Test")]:
-        subprocess.run(["git", "-C", str(work), "config", k, v], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(work), "config", k, v], check=True, capture_output=True
+        )
     (work / "README.md").write_text("# project\n")
-    subprocess.run(["git", "-C", str(work), "add", "."], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-m", "init"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(upstream)],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "push", "-u", "origin", "main"],
-                   check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(work), "add", "."], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "remote", "add", "origin", str(upstream)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
     return work
 
 
@@ -43,9 +63,14 @@ def repo(tmp_path):
 def workspaces_mod(tmp_path, monkeypatch):
     """Reload workspaces with WORKSPACE_ROOT pointed at tmp_path."""
     import constants
-    monkeypatch.setattr(constants, "DASHBOARD_DIR", tmp_path / ".claude" / "ticket-takeaway")
-    import workspaces
+
+    monkeypatch.setattr(
+        constants, "DASHBOARD_DIR", tmp_path / ".claude" / "ticket-takeaway"
+    )
     import importlib
+
+    import workspaces
+
     importlib.reload(workspaces)
     return workspaces
 
@@ -54,10 +79,13 @@ def workspaces_mod(tmp_path, monkeypatch):
 # Pure helpers — sanitization, paths, branch names
 # ---------------------------------------------------------------------------
 
+
 class TestPureHelpers:
     def test_sanitize_strips_dangerous_chars(self, workspaces_mod):
         assert workspaces_mod._sanitize_key("a/b") == "a_b"
-        assert workspaces_mod._sanitize_key("..") == ".."  # dots are allowed; path-escape blocked elsewhere
+        assert (
+            workspaces_mod._sanitize_key("..") == ".."
+        )  # dots are allowed; path-escape blocked elsewhere
         assert workspaces_mod._sanitize_key("B-42") == "B-42"
         assert workspaces_mod._sanitize_key("sub id") == "sub_id"
 
@@ -74,7 +102,9 @@ class TestPureHelpers:
     def test_normalize_base_ref_prefixes_origin(self, workspaces_mod):
         assert workspaces_mod._normalize_base_ref("main") == "origin/main"
         assert workspaces_mod._normalize_base_ref("origin/main") == "origin/main"
-        assert workspaces_mod._normalize_base_ref("upstream/dev") == "upstream/dev"  # has '/' — used as-is
+        assert (
+            workspaces_mod._normalize_base_ref("upstream/dev") == "upstream/dev"
+        )  # has '/' — used as-is
         assert workspaces_mod._normalize_base_ref("") == "origin/main"
 
     def test_path_outside_root_is_rejected(self, workspaces_mod, tmp_path):
@@ -87,9 +117,12 @@ class TestPureHelpers:
 # create_or_reuse — real git worktree creation
 # ---------------------------------------------------------------------------
 
+
 class TestCreateOrReuse:
     def test_creates_worktree_for_git_repo(self, workspaces_mod, repo):
-        info = workspaces_mod.create_or_reuse(repo, "proj", "ticket", "B-1", base_ref="origin/main")
+        info = workspaces_mod.create_or_reuse(
+            repo, "proj", "ticket", "B-1", base_ref="origin/main"
+        )
         assert info.is_git_worktree is True
         assert info.created_now is True
         assert info.bootstrapped is False
@@ -127,10 +160,26 @@ class TestCreateOrReuse:
         info1 = workspaces_mod.create_or_reuse(repo, "proj", "ticket", "B-1")
         # Make a commit on the worktree's branch.
         (info1.path / "wip.txt").write_text("wip")
-        subprocess.run(["git", "-C", str(info1.path), "add", "wip.txt"], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(info1.path), "config", "user.email", "x@x"], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(info1.path), "config", "user.name", "x"], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(info1.path), "commit", "-m", "wip"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(info1.path), "add", "wip.txt"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(info1.path), "config", "user.email", "x@x"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(info1.path), "config", "user.name", "x"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(info1.path), "commit", "-m", "wip"],
+            check=True,
+            capture_output=True,
+        )
 
         # Remove the worktree dir but leave the branch behind.
         workspaces_mod.remove(repo, "proj", "ticket", "B-1", force=True)
@@ -146,6 +195,7 @@ class TestCreateOrReuse:
 # wipe_for_retry_fresh
 # ---------------------------------------------------------------------------
 
+
 class TestWipeForRetryFresh:
     def test_resets_to_base_and_clears_marker(self, workspaces_mod, repo):
         info = workspaces_mod.create_or_reuse(repo, "proj", "ticket", "B-1")
@@ -159,12 +209,15 @@ class TestWipeForRetryFresh:
         assert not (info.path / workspaces_mod.BOOTSTRAP_MARKER).exists()
 
     def test_returns_false_when_workspace_missing(self, workspaces_mod, repo):
-        assert workspaces_mod.wipe_for_retry_fresh(repo, "proj", "ticket", "nope") is False
+        assert (
+            workspaces_mod.wipe_for_retry_fresh(repo, "proj", "ticket", "nope") is False
+        )
 
 
 # ---------------------------------------------------------------------------
 # remove
 # ---------------------------------------------------------------------------
+
 
 class TestRemove:
     def test_removes_existing_worktree(self, workspaces_mod, repo):
@@ -188,6 +241,7 @@ class TestRemove:
 # Hook execution
 # ---------------------------------------------------------------------------
 
+
 class TestHookExecution:
     def test_empty_script_is_noop_and_succeeds(self, workspaces_mod, repo):
         info = workspaces_mod.create_or_reuse(repo, "proj", "ticket", "B-1")
@@ -198,7 +252,9 @@ class TestHookExecution:
 
     def test_success_captures_stdout(self, workspaces_mod, repo):
         info = workspaces_mod.create_or_reuse(repo, "proj", "ticket", "B-1")
-        result = workspaces_mod.run_hook(info.path, "before_run", "echo hello-from-hook")
+        result = workspaces_mod.run_hook(
+            info.path, "before_run", "echo hello-from-hook"
+        )
         assert result.succeeded
         assert "hello-from-hook" in result.stdout
 
@@ -211,7 +267,9 @@ class TestHookExecution:
 
     def test_timeout_sets_timed_out_flag(self, workspaces_mod, repo):
         info = workspaces_mod.create_or_reuse(repo, "proj", "ticket", "B-1")
-        result = workspaces_mod.run_hook(info.path, "after_create", "sleep 5", timeout_ms=200)
+        result = workspaces_mod.run_hook(
+            info.path, "after_create", "sleep 5", timeout_ms=200
+        )
         assert result.timed_out is True
         assert not result.succeeded
 
@@ -233,5 +291,7 @@ class TestHookExecution:
     def test_hook_env_inherits_by_default(self, workspaces_mod, repo, monkeypatch):
         info = workspaces_mod.create_or_reuse(repo, "proj", "ticket", "B-1")
         monkeypatch.setenv("KITCHEN_HOOK_TEST", "yes-i-am-here")
-        result = workspaces_mod.run_hook(info.path, "before_run", "echo $KITCHEN_HOOK_TEST")
+        result = workspaces_mod.run_hook(
+            info.path, "before_run", "echo $KITCHEN_HOOK_TEST"
+        )
         assert "yes-i-am-here" in result.stdout

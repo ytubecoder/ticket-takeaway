@@ -7,7 +7,6 @@ and that commit hash capture is only triggered for Done moves.
 import pytest
 from conftest import cli_mod
 
-
 # ---------------------------------------------------------------------------
 # Status mapping: each section → expected default status
 # ---------------------------------------------------------------------------

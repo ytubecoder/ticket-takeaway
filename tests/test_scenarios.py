@@ -44,8 +44,11 @@ _scenarios_spec.loader.exec_module(_scenarios_mod)  # type: ignore[union-attr]
 discover_scenarios = _scenarios_mod.discover_scenarios  # type: ignore[attr-defined]
 ScenarioValidationError = _scenarios_mod.ScenarioValidationError  # type: ignore[attr-defined]
 
-from scenario_runner import ScenarioContext, execute_scenario  # noqa: E402  (after sys.path setup)
-from scenario_seed import seed_tickets, cleanup_tickets  # noqa: E402
+from scenario_runner import (
+    ScenarioContext,
+    execute_scenario,
+)
+from scenario_seed import cleanup_tickets, seed_tickets
 
 publish_gallery = _scenarios_mod.publish_gallery  # type: ignore[attr-defined]
 
@@ -62,7 +65,9 @@ _MANIFESTS: list[dict] = (
 # Parametrized test
 # ---------------------------------------------------------------------------
 
-_NO_SCENARIOS_MARK = pytest.mark.skip(reason="No scenario manifests found in tests/scenarios/")
+_NO_SCENARIOS_MARK = pytest.mark.skip(
+    reason="No scenario manifests found in tests/scenarios/"
+)
 
 
 @pytest.mark.parametrize(
@@ -90,7 +95,6 @@ def test_scenario(manifest, dashboard_server, browser, tmp_path, request):
         pytest.skip(f"Filtered: only running scenario '{scenario_id_filter}'")
 
     import json as _json
-    import shutil
     import time as _time
 
     # Build artifact output directory
@@ -167,9 +171,7 @@ def test_scenario(manifest, dashboard_server, browser, tmp_path, request):
 
     # Surface screenshot paths in the pytest report for easy inspection.
     if result.screenshots:
-        request.node.user_properties.append(
-            ("screenshots", result.screenshots)
-        )
+        request.node.user_properties.append(("screenshots", result.screenshots))
     request.node.user_properties.append(("artifact_dir", artifact_dir))
 
     assert result.status == "passed", (
@@ -177,5 +179,3 @@ def test_scenario(manifest, dashboard_server, browser, tmp_path, request):
         f"{result.failed_step_index}: {result.failed_step!r}\n"
         f"Error: {result.error_message}"
     )
-
-

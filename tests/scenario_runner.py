@@ -13,7 +13,6 @@ from scenario_backend import (
     PlaywrightBackend,
 )
 
-
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -98,13 +97,15 @@ def _run_inline_assert(
 
     if "element_visible" in assert_spec:
         backend.wait_for_visible(
-            assert_spec["element_visible"], timeout=timeout,
+            assert_spec["element_visible"],
+            timeout=timeout,
             seed_id_map=ctx.seed_id_map,
         )
 
     if "element_hidden" in assert_spec:
         backend.wait_for_hidden(
-            assert_spec["element_hidden"], timeout=timeout,
+            assert_spec["element_hidden"],
+            timeout=timeout,
             seed_id_map=ctx.seed_id_map,
         )
 

@@ -12,12 +12,10 @@ Tests the full onboarding flow:
 
 import json
 import os
-import tempfile
 import time
 
 import pytest
-
-from conftest import api_delete, api_get, api_post
+from conftest import api_delete, api_post
 
 
 @pytest.fixture()
@@ -31,6 +29,7 @@ def temp_project_dir():
     yield project_path, dir_name
     # Cleanup: remove the temp directory
     import shutil
+
     shutil.rmtree(project_path, ignore_errors=True)
 
 
@@ -50,8 +49,9 @@ def test_add_project_via_api(dashboard_server, temp_project_dir):
 
     # 1. Register via API
     status_code, data = api_post(
-        root, "/api/projects",
-        {"id": slug, "name": dir_name, "path": project_path, "description": ""}
+        root,
+        "/api/projects",
+        {"id": slug, "name": dir_name, "path": project_path, "description": ""},
     )
     assert status_code == 201, f"Registration failed: {data}"
     assert data["id"] == slug
@@ -71,8 +71,9 @@ def test_add_project_via_api(dashboard_server, temp_project_dir):
     assert os.path.exists(dashboard), "Dashboard HTML not generated"
 
     # 5. Verify the dashboard is accessible via HTTP (no error)
-    import urllib.request
     import urllib.error
+    import urllib.request
+
     try:
         url = f"{root}/{slug}/"
         with urllib.request.urlopen(url, timeout=10) as resp:
@@ -84,6 +85,7 @@ def test_add_project_via_api(dashboard_server, temp_project_dir):
 
     # 6. Verify managed files API works
     import urllib.request
+
     url = f"{root}/{slug}/api/managed-files"
     with urllib.request.urlopen(url, timeout=10) as resp:
         files = json.loads(resp.read())
@@ -118,14 +120,16 @@ def test_add_project_with_existing_backlog(dashboard_server, temp_project_dir):
 
     # Register — should auto-seed
     status_code, data = api_post(
-        root, "/api/projects",
-        {"id": slug, "name": dir_name, "path": project_path, "description": ""}
+        root,
+        "/api/projects",
+        {"id": slug, "name": dir_name, "path": project_path, "description": ""},
     )
     assert status_code == 201, f"Registration failed: {data}"
     assert data.get("seeded") == 1, f"Expected 1 seeded ticket, got: {data}"
 
     # Verify ticket is accessible via API
     import urllib.request
+
     url = f"{root}/{slug}/api/tickets"
     with urllib.request.urlopen(url, timeout=10) as resp:
         result = json.loads(resp.read())
@@ -144,10 +148,13 @@ def test_add_project_browser_flow(dashboard_server, browser, temp_project_dir):
 
     # Verify browse API works first
     import urllib.request
+
     browse_url = f"{root}/api/browse?path=~/projects"
     with urllib.request.urlopen(browse_url, timeout=10) as resp:
         browse_data = json.loads(resp.read())
-    assert dir_name in browse_data["dirs"], f"{dir_name} not in browse results: {browse_data['dirs'][:10]}"
+    assert dir_name in browse_data["dirs"], (
+        f"{dir_name} not in browse results: {browse_data['dirs'][:10]}"
+    )
 
     page = browser.new_page()
     try:
@@ -157,7 +164,9 @@ def test_add_project_browser_flow(dashboard_server, browser, temp_project_dir):
 
         # 2. Click Add Project to show form
         page.click("[data-testid='add-project-card']")
-        page.wait_for_selector("[data-testid='add-project-browse']", state="visible", timeout=3000)
+        page.wait_for_selector(
+            "[data-testid='add-project-browse']", state="visible", timeout=3000
+        )
 
         # 3. Click Browse to open picker
         page.click("[data-testid='add-project-browse']")
@@ -166,7 +175,9 @@ def test_add_project_browser_flow(dashboard_server, browser, temp_project_dir):
         page.wait_for_selector(".picker-item", timeout=10000)
 
         # 4. Our dir is in ~/projects — find and click it
-        dir_item = page.wait_for_selector(f"[data-testid='picker-dir-{dir_name}']", timeout=5000)
+        dir_item = page.wait_for_selector(
+            f"[data-testid='picker-dir-{dir_name}']", timeout=5000
+        )
         dir_item.click()
 
         # 5. Click "Select This Folder"

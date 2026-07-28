@@ -19,19 +19,18 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from constants import (
     DEFAULT_STATUS_BY_SECTION,
-    SECTION_ORDER,
     SECTION_PREFIX,
     compute_status_on_move,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
 
 def capture_commit_hash(project_path: str) -> str:
     """Return the short commit hash of HEAD for *project_path*, or '' on failure."""
@@ -40,7 +39,10 @@ def capture_commit_hash(project_path: str) -> str:
     try:
         result = subprocess.run(
             ["git", "log", "-1", "--format=%h"],
-            cwd=project_path, capture_output=True, text=True, timeout=5,
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
     except Exception:
@@ -55,8 +57,10 @@ def capture_commit_hash(project_path: str) -> str:
 # handlers can use DashboardHandler._send_typed_error() to emit a uniform
 # {"code", "error"} body with the matching status code.
 
+
 class AppError(ValueError):
     """Base class for application errors with an HTTP status mapping."""
+
     http_status: int = 500
     code: str = "internal_error"
 
@@ -84,14 +88,18 @@ class ConflictError(AppError):
     code = "conflict"
 
 
-def _find_ticket(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> sqlite3.Row:
+def _find_ticket(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str
+) -> sqlite3.Row:
     """Locate a ticket by ID (case-insensitive). Raises TicketNotFoundError if not found."""
     ticket = conn.execute(
         "SELECT * FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
         (ticket_id, project_id),
     ).fetchone()
     if not ticket:
-        raise TicketNotFoundError(f"Ticket '{ticket_id}' not found in project '{project_id}'.")
+        raise TicketNotFoundError(
+            f"Ticket '{ticket_id}' not found in project '{project_id}'."
+        )
     return ticket
 
 
@@ -106,7 +114,10 @@ def _find_ticket(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> s
 # child being closed). Tags / priority / sort order are deliberately
 # excluded so re-prioritising or tagging doesn't churn the summary.
 
-def compute_summary_hash(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> str:
+
+def compute_summary_hash(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str
+) -> str:
     """Return a stable short hex hash of the ticket fields that drive the summary.
 
     Returns '' if the ticket is not found.
@@ -167,11 +178,10 @@ def auto_generate_id(conn: sqlite3.Connection, project_id: str, section: str) ->
     max_num = 0
     for row in rows:
         tid = row["id"]
-        suffix = tid[len(prefix) + len(sep):]
+        suffix = tid[len(prefix) + len(sep) :]
         try:
             num = int(suffix)
-            if num > max_num:
-                max_num = num
+            max_num = max(max_num, num)
         except ValueError:
             pass
 
@@ -201,19 +211,20 @@ class ActorContext:
     actor_type ∈ {'human', 'agent', 'system'}.
     actor_id is run_id (as str) for agent, user identifier for human, None for system.
     """
+
     actor_type: str
-    actor_id: Optional[str] = None
+    actor_id: str | None = None
 
     @classmethod
-    def human(cls, user_id: Optional[str] = None) -> "ActorContext":
+    def human(cls, user_id: str | None = None) -> ActorContext:
         return cls(actor_type="human", actor_id=user_id)
 
     @classmethod
-    def agent(cls, run_id: int | str) -> "ActorContext":
+    def agent(cls, run_id: int | str) -> ActorContext:
         return cls(actor_type="agent", actor_id=str(run_id))
 
     @classmethod
-    def system(cls) -> "ActorContext":
+    def system(cls) -> ActorContext:
         return cls(actor_type="system", actor_id=None)
 
 
@@ -239,9 +250,13 @@ def emit_event(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            project_id, subject_type, subject_id,
-            actor.actor_type, actor.actor_id,
-            event_kind, json.dumps(payload, ensure_ascii=False),
+            project_id,
+            subject_type,
+            subject_id,
+            actor.actor_type,
+            actor.actor_id,
+            event_kind,
+            json.dumps(payload, ensure_ascii=False),
             utcnow_iso(),
         ),
     )
@@ -250,9 +265,11 @@ def emit_event(
 
 # ---- Eligibility -----------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class EligibilityResult:
     """Outcome of an eligibility check. Always carries reasons (for UI tooltips)."""
+
     eligible: bool
     reasons: tuple[str, ...]
 
@@ -272,7 +289,9 @@ def _has_active_run(
     return row is not None
 
 
-def _automation_mode(conn: sqlite3.Connection, project_id: str, subject_type: str, subject_id: str) -> str:
+def _automation_mode(
+    conn: sqlite3.Connection, project_id: str, subject_type: str, subject_id: str
+) -> str:
     """Return automation_mode for a subject; 'manual' if no row exists."""
     row = conn.execute(
         "SELECT automation_mode FROM automation_subjects "
@@ -282,7 +301,9 @@ def _automation_mode(conn: sqlite3.Connection, project_id: str, subject_type: st
     return row[0] if row else "manual"
 
 
-def _deps_clear(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> tuple[bool, list[str]]:
+def _deps_clear(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str
+) -> tuple[bool, list[str]]:
     """Return (clear, blocking_reasons). See docs/KITCHEN.md §7 'Deps clear means'."""
     deps = conn.execute(
         "SELECT depends_on_id FROM depends WHERE ticket_id = ? AND project_id = ?",
@@ -302,11 +323,15 @@ def _deps_clear(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> tu
             blocking.append(f"dep {row['id']} is archived")
             continue
         if row["section"] != "Done" and row["status"] not in CLEARED_DEP_STATUSES:
-            blocking.append(f"dep {row['id']} not done (section={row['section']}, status={row['status']})")
+            blocking.append(
+                f"dep {row['id']} not done (section={row['section']}, status={row['status']})"
+            )
     return (len(blocking) == 0, blocking)
 
 
-def _journey_compiles_and_validates(conn: sqlite3.Connection, project_id: str, journey_id: str) -> bool:
+def _journey_compiles_and_validates(
+    conn: sqlite3.Connection, project_id: str, journey_id: str
+) -> bool:
     """True if the journey can be compiled to a manifest and that manifest validates."""
     try:
         from journeys import compile_to_manifest
@@ -344,6 +369,7 @@ def project_path_for(project_id: str) -> str:
     """Resolve a project's filesystem path from the registry, or '' if unknown."""
     try:
         from db import REGISTRY_PATH
+
         registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
     except Exception:
         return ""
@@ -353,7 +379,9 @@ def project_path_for(project_id: str) -> str:
     return ""
 
 
-def read_readiness_flag(conn: sqlite3.Connection, project_id: str, ticket_id: str, flag: str) -> str:
+def read_readiness_flag(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str, flag: str
+) -> str:
     """Return a readiness flag's content, or '' when unset."""
     row = conn.execute(
         "SELECT content FROM readiness_flags WHERE ticket_id = ? AND project_id = ? AND flag = ?",
@@ -420,7 +448,11 @@ def parse_spec_link(content: str) -> SpecLink:
     m = re.match(r"^\s*([ABCabc])\s*:\s*([A-Za-z0-9._-]*)\s*(?:[-—]\s*(.*))?$", first)
     if not m:
         return SpecLink()
-    return SpecLink(lane=m.group(1).upper(), change=(m.group(2) or "").strip(), note=(m.group(3) or "").strip())
+    return SpecLink(
+        lane=m.group(1).upper(),
+        change=(m.group(2) or "").strip(),
+        note=(m.group(3) or "").strip(),
+    )
 
 
 def spec_link(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> SpecLink:
@@ -470,8 +502,12 @@ def parse_verify_record(content: str) -> VerifyRecord:
     )
 
 
-def verify_record(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> VerifyRecord:
-    return parse_verify_record(read_readiness_flag(conn, project_id, ticket_id, "verified"))
+def verify_record(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str
+) -> VerifyRecord:
+    return parse_verify_record(
+        read_readiness_flag(conn, project_id, ticket_id, "verified")
+    )
 
 
 # --- Verify command resolution --------------------------------------------
@@ -496,6 +532,7 @@ def resolve_verify_command(project_path: str) -> tuple[str, int, str]:
 
     try:
         from workflow_config import load_workflow_config
+
         cfg = load_workflow_config(root).get("verify") or {}
         cmd = str(cfg.get("command", "") or "").strip()
         if cmd:
@@ -516,7 +553,11 @@ def resolve_verify_command(project_path: str) -> tuple[str, int, str]:
         if scripts.get("test"):
             return ("npm test", VERIFY_TIMEOUT_MS_DEFAULT, "package.json test script")
 
-    if (root / "pytest.ini").is_file() or (root / "tests").is_dir() or (root / "pyproject.toml").is_file():
+    if (
+        (root / "pytest.ini").is_file()
+        or (root / "tests").is_dir()
+        or (root / "pyproject.toml").is_file()
+    ):
         return ("python3 -m pytest", VERIFY_TIMEOUT_MS_DEFAULT, "pytest")
 
     return ("", VERIFY_TIMEOUT_MS_DEFAULT, "")
@@ -530,7 +571,7 @@ def run_verify(
     project_id: str,
     ticket_id: str,
     project_path: str,
-    actor: "ActorContext | None" = None,
+    actor: ActorContext | None = None,
 ) -> VerifyRecord:
     """Run the project's verify command and record the real result on the ticket.
 
@@ -568,7 +609,9 @@ def run_verify(
         exit_code = 124
         combined = f"verify timed out after {timeout_ms}ms"
 
-    tail_lines = [ln for ln in combined.strip().splitlines() if ln.strip()][-VERIFY_OUTPUT_TAIL_LINES:]
+    tail_lines = [ln for ln in combined.strip().splitlines() if ln.strip()][
+        -VERIFY_OUTPUT_TAIL_LINES:
+    ]
     # 4-space indent so the tail survives the PRODUCT_BACKLOG.md round-trip as
     # continuation lines of the `Verified:` entry.
     tail = "\n".join(f"    {ln}" for ln in tail_lines)
@@ -581,7 +624,11 @@ def run_verify(
         output_tail=tail,
     )
     write_readiness_flag(
-        conn, project_id, ticket_id, "verified", record.render(),
+        conn,
+        project_id,
+        ticket_id,
+        "verified",
+        record.render(),
         set_by=f"verify:{source or 'fallback'}",
     )
     return record
@@ -593,13 +640,26 @@ def run_verify(
 # engine; accept_ticket() calls them directly. One implementation, two callers —
 # the engine and the gate can never disagree.
 
-def _spec_linked(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+
+def _spec_linked(
+    conn: sqlite3.Connection, ticket: sqlite3.Row
+) -> tuple[bool, list[str]]:
     """A lane has been declared: an OpenSpec change, or an explicit lane-C choice."""
     link = spec_link(conn, ticket["project_id"], ticket["id"])
     if not link.declared:
-        return (False, ["no spec lane declared (run `tickets-cli.py spec <project> <id> --lane A|B|C`)"])
+        return (
+            False,
+            [
+                "no spec lane declared (run `tickets-cli.py spec <project> <id> --lane A|B|C`)"
+            ],
+        )
     if link.lane in ("A", "B") and (not link.change or link.claims_no_change):
-        return (False, [f"lane {link.lane} requires an OpenSpec change name, got {link.change or '(empty)'!r}"])
+        return (
+            False,
+            [
+                f"lane {link.lane} requires an OpenSpec change name, got {link.change or '(empty)'!r}"
+            ],
+        )
     if link.claims_no_change and not link.note:
         return (False, ["lane C claims no spec delta but records no reason"])
     if link.change and not link.claims_no_change:
@@ -607,7 +667,9 @@ def _spec_linked(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, l
     return (True, [f"lane {link.lane}, no delta: {link.note}"])
 
 
-def _spec_validates(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+def _spec_validates(
+    conn: sqlite3.Connection, ticket: sqlite3.Row
+) -> tuple[bool, list[str]]:
     """`openspec validate <change> --strict` exits 0 for the ticket's change.
 
     A lane-C ticket that legitimately has no delta passes vacuously — there is
@@ -636,7 +698,12 @@ def _spec_validates(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool
         return (False, ["openspec_adapter is not installed"])
 
     if not osa.is_initialised(project_path):
-        return (False, [f"{project_path} has no openspec/ root (run `openspec init --tools claude`)"])
+        return (
+            False,
+            [
+                f"{project_path} has no openspec/ root (run `openspec init --tools claude`)"
+            ],
+        )
 
     # Already archived by a previous accept — the delta is canon now, so
     # re-validating the (moved) change directory would fail spuriously.
@@ -656,7 +723,9 @@ def _spec_validates(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool
     return (False, [f"openspec validate {link.change} --strict failed"] + errors)
 
 
-def _verify_passed(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+def _verify_passed(
+    conn: sqlite3.Connection, ticket: sqlite3.Row
+) -> tuple[bool, list[str]]:
     """A `verified` flag exists, exited 0, and was recorded against current HEAD.
 
     The commit check is what stops a stale green from being reused: verify output
@@ -665,21 +734,35 @@ def _verify_passed(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool,
     project_id = ticket["project_id"]
     rec = verify_record(conn, project_id, ticket["id"])
     if not rec.command:
-        return (False, ["no verify run recorded (run `tickets-cli.py verify <project> <id>`)"])
+        return (
+            False,
+            ["no verify run recorded (run `tickets-cli.py verify <project> <id>`)"],
+        )
     if not rec.passed:
         tail = rec.output_tail.strip().splitlines()
         detail = tail[-1].strip() if tail else ""
-        return (False, [f"verify `{rec.command}` exited {rec.exit_code}"] + ([detail] if detail else []))
+        return (
+            False,
+            [f"verify `{rec.command}` exited {rec.exit_code}"]
+            + ([detail] if detail else []),
+        )
 
     head = capture_commit_hash(project_path_for(project_id))
     if head and rec.commit and rec.commit != head:
-        return (False, [
-            f"verify passed at commit {rec.commit} but HEAD is {head} — re-run verify"
-        ])
-    return (True, [f"verify `{rec.command}` passed at commit {rec.commit or 'unknown'}"])
+        return (
+            False,
+            [
+                f"verify passed at commit {rec.commit} but HEAD is {head} — re-run verify"
+            ],
+        )
+    return (
+        True,
+        [f"verify `{rec.command}` passed at commit {rec.commit or 'unknown'}"],
+    )
 
 
 # --- The accept gate -------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class AcceptGate:
@@ -696,7 +779,7 @@ class AcceptGate:
         lines += [
             "",
             "Fix the above, or override deliberately and on the record:",
-            f"  tickets-cli.py accept {project_id} {ticket_id} --force \"<reason>\"",
+            f'  tickets-cli.py accept {project_id} {ticket_id} --force "<reason>"',
         ]
         return "\n".join(lines)
 
@@ -737,7 +820,9 @@ def _forced_spec_flag_content(
     link = spec_link(conn, project_id, ticket_id)
     lane = link.lane or "C"
     change = link.change or NO_CHANGE_SENTINEL
-    return SpecLink(lane=lane, change=change, note=f"accepted with --force: {reason}").render()
+    return SpecLink(
+        lane=lane, change=change, note=f"accepted with --force: {reason}"
+    ).render()
 
 
 def _archive_change_for(
@@ -773,13 +858,16 @@ def _archive_change_for(
         )
     summary = osa.archive_summary(res)
     totals = summary.get("totals") or {}
-    counts = ", ".join(
-        f"{n} {k}" for k, n in totals.items() if isinstance(n, int) and n
-    ) or "no requirement changes"
+    counts = (
+        ", ".join(f"{n} {k}" for k, n in totals.items() if isinstance(n, int) and n)
+        or "no requirement changes"
+    )
     return f"Spec: `{link.change}` archived to openspec/specs/ ({counts})"
 
 
-def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool, list[str]]:
+def _tests_covered(
+    conn: sqlite3.Connection, ticket: sqlite3.Row
+) -> tuple[bool, list[str]]:
     """Return (covered, reasons). Opt-in predicate for stricter user gates.
 
     Migration 15 collapsed the tests/smoke readiness flags into acceptance
@@ -807,8 +895,7 @@ def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool,
 
     # Path 2: any linked journey that compiles + validates.
     journey_rows = conn.execute(
-        "SELECT journey_id FROM journey_tickets "
-        "WHERE ticket_id = ? AND project_id = ?",
+        "SELECT journey_id FROM journey_tickets WHERE ticket_id = ? AND project_id = ?",
         (ticket_id, project_id),
     ).fetchall()
     for (journey_id,) in journey_rows:
@@ -816,14 +903,18 @@ def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool,
             return (True, [f"linked journey {journey_id} compiles+validates"])
 
     # Path 3: explicit no_test_required with non-empty note.
-    if ticket["no_test_required"] == 1 and (ticket["no_test_required_note"] or "").strip():
+    if (
+        ticket["no_test_required"] == 1
+        and (ticket["no_test_required_note"] or "").strip()
+    ):
         return (True, ["no_test_required (explicit)"])
 
     # No path satisfied — explain. Verify comes first because it is the route
     # most tickets should take.
     reasons.extend(why)
     if journey_rows and not any(
-        _journey_compiles_and_validates(conn, project_id, jid) for (jid,) in journey_rows
+        _journey_compiles_and_validates(conn, project_id, jid)
+        for (jid,) in journey_rows
     ):
         reasons.append("linked journeys do not compile/validate")
     elif not journey_rows:
@@ -835,7 +926,9 @@ def _tests_covered(conn: sqlite3.Connection, ticket: sqlite3.Row) -> tuple[bool,
     return (False, reasons)
 
 
-def _ticket_eligibility(conn: sqlite3.Connection, ticket: sqlite3.Row) -> EligibilityResult:
+def _ticket_eligibility(
+    conn: sqlite3.Connection, ticket: sqlite3.Row
+) -> EligibilityResult:
     """Eligibility for a ticket subject. See docs/KITCHEN.md §7."""
     reasons: list[str] = []
     project_id = ticket["project_id"]
@@ -896,7 +989,9 @@ def _ticket_eligibility(conn: sqlite3.Connection, ticket: sqlite3.Row) -> Eligib
     return EligibilityResult(eligible=bool(eligible), reasons=tuple(reasons))
 
 
-def _journey_eligibility(conn: sqlite3.Connection, project_id: str, journey_id: str) -> EligibilityResult:
+def _journey_eligibility(
+    conn: sqlite3.Connection, project_id: str, journey_id: str
+) -> EligibilityResult:
     """Eligibility for a journey subject. See docs/KITCHEN.md §7."""
     reasons: list[str] = []
     mode = _automation_mode(conn, project_id, "journey", journey_id)
@@ -914,7 +1009,9 @@ def _journey_eligibility(conn: sqlite3.Connection, project_id: str, journey_id: 
     return EligibilityResult(eligible=bool(eligible), reasons=tuple(reasons))
 
 
-def eligibility(conn: sqlite3.Connection, project_id: str, subject_type: str, subject_id: str) -> EligibilityResult:
+def eligibility(
+    conn: sqlite3.Connection, project_id: str, subject_type: str, subject_id: str
+) -> EligibilityResult:
     """Compute Kitchen eligibility for any subject. See docs/KITCHEN.md §7.
 
     Always returns reasons, even when eligible=True (for UI tooltips).
@@ -934,6 +1031,7 @@ def eligibility(conn: sqlite3.Connection, project_id: str, subject_type: str, su
 
 # ---- Mode actions ----------------------------------------------------------
 
+
 def _upsert_subject(
     conn: sqlite3.Connection,
     project_id: str,
@@ -943,7 +1041,9 @@ def _upsert_subject(
 ) -> None:
     """Lazy-create the automation_subjects row at default 'manual' if missing."""
     now = utcnow_iso()
-    actor_str = f"{actor.actor_type}:{actor.actor_id}" if actor.actor_id else actor.actor_type
+    actor_str = (
+        f"{actor.actor_type}:{actor.actor_id}" if actor.actor_id else actor.actor_type
+    )
     conn.execute(
         """
         INSERT INTO automation_subjects
@@ -991,34 +1091,52 @@ def set_automation_mode(
         return  # no-op
 
     now = utcnow_iso()
-    actor_str = f"{actor.actor_type}:{actor.actor_id}" if actor.actor_id else actor.actor_type
+    actor_str = (
+        f"{actor.actor_type}:{actor.actor_id}" if actor.actor_id else actor.actor_type
+    )
     conn.execute(
         """
         UPDATE automation_subjects
         SET automation_mode = ?, pause_reason = ?, updated_at = ?, updated_by = ?
         WHERE project_id = ? AND subject_type = ? AND subject_id = ?
         """,
-        (mode, pause_reason if mode == "paused" else None, now, actor_str,
-         project_id, subject_type, subject_id),
+        (
+            mode,
+            pause_reason if mode == "paused" else None,
+            now,
+            actor_str,
+            project_id,
+            subject_type,
+            subject_id,
+        ),
     )
 
     if mode == "paused":
         emit_event(
-            conn, project_id, subject_type, subject_id,
+            conn,
+            project_id,
+            subject_type,
+            subject_id,
             "pause_set",
             {"before": prior_mode, "after": "paused", "reason": pause_reason},
             actor,
         )
     elif prior_mode == "paused":
         emit_event(
-            conn, project_id, subject_type, subject_id,
+            conn,
+            project_id,
+            subject_type,
+            subject_id,
             "pause_cleared",
             {"before": "paused", "after": mode, "prior_reason": prior_reason},
             actor,
         )
     else:
         emit_event(
-            conn, project_id, subject_type, subject_id,
+            conn,
+            project_id,
+            subject_type,
+            subject_id,
             "mode_changed",
             {"before": prior_mode, "after": mode},
             actor,
@@ -1045,7 +1163,10 @@ def set_no_test_required(
     ticket = _find_ticket(conn, project_id, ticket_id)
     flag = 1 if enabled else 0
     note_text = note.strip() if enabled else ""
-    if ticket["no_test_required"] == flag and (ticket["no_test_required_note"] or "") == note_text:
+    if (
+        ticket["no_test_required"] == flag
+        and (ticket["no_test_required_note"] or "") == note_text
+    ):
         return  # no-op
 
     conn.execute(
@@ -1058,6 +1179,7 @@ def set_no_test_required(
 # ---------------------------------------------------------------------------
 # Core ticket operations
 # ---------------------------------------------------------------------------
+
 
 def move_ticket(
     conn: sqlite3.Connection,
@@ -1096,7 +1218,15 @@ def move_ticket(
             "UPDATE tickets SET section = ?, status = ?, sort_order = ?, "
             "updated_at = ?, commit_hash = ? "
             "WHERE id = ? AND project_id = ?",
-            (target_section, new_status, sort_order, now, commit_hash_val, tid, project_id),
+            (
+                target_section,
+                new_status,
+                sort_order,
+                now,
+                commit_hash_val,
+                tid,
+                project_id,
+            ),
         )
     else:
         conn.execute(
@@ -1108,11 +1238,25 @@ def move_ticket(
 
     # M1a spine events — emit BEFORE side-effect hooks so they appear first in history.
     if old_section != target_section:
-        emit_event(conn, project_id, "ticket", tid, "section_change",
-                   {"before": old_section, "after": target_section}, actor)
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "section_change",
+            {"before": old_section, "after": target_section},
+            actor,
+        )
     if old_status != new_status:
-        emit_event(conn, project_id, "ticket", tid, "status_change",
-                   {"before": old_status, "after": new_status}, actor)
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "status_change",
+            {"before": old_status, "after": new_status},
+            actor,
+        )
 
     # Post-change hooks. Phase A migration (tidy-newt) moved parent-promote
     # and auto-accept into system workflows; what remains here is the journey
@@ -1167,10 +1311,20 @@ def accept_ticket(
 
     archive_note = ""
     if force:
-        emit_event(conn, project_id, "ticket", tid, "gate_override",
-                   {"reason": force, "blocked_by": list(gate.failures)}, actor)
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "gate_override",
+            {"reason": force, "blocked_by": list(gate.failures)},
+            actor,
+        )
         write_readiness_flag(
-            conn, project_id, tid, "spec",
+            conn,
+            project_id,
+            tid,
+            "spec",
             _forced_spec_flag_content(conn, project_id, tid, force),
             set_by="accept:--force",
         )
@@ -1189,11 +1343,25 @@ def accept_ticket(
     )
 
     if old_section != "Done":
-        emit_event(conn, project_id, "ticket", tid, "section_change",
-                   {"before": old_section, "after": "Done"}, actor)
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "section_change",
+            {"before": old_section, "after": "Done"},
+            actor,
+        )
     if old_status != "done":
-        emit_event(conn, project_id, "ticket", tid, "status_change",
-                   {"before": old_status, "after": "done"}, actor)
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "status_change",
+            {"before": old_status, "after": "done"},
+            actor,
+        )
 
     # Append to PRODUCT_SPECIFICATION.md
     spec_path = Path(project_path) / "PRODUCT_SPECIFICATION.md"
@@ -1242,10 +1410,10 @@ def add_ticket(
     section: str = "Backlog",
     priority: str = "medium",
     description: str = "",
-    parent: Optional[str] = None,
+    parent: str | None = None,
     draft: bool = False,
-    source_attachment_id: Optional[int] = None,
-    tags: Optional[list[str]] = None,
+    source_attachment_id: int | None = None,
+    tags: list[str] | None = None,
     is_container: int = 0,
     actor: ActorContext = ActorContext.human(),
     emit_created_event: bool = True,
@@ -1266,9 +1434,20 @@ def add_ticket(
         "INSERT INTO tickets (id, project_id, title, priority, status, "
         "section, description, parent, sort_order, draft, source_attachment_id, is_container) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (ticket_id, project_id, title, priority, status,
-         section, description, parent, sort_order, int(draft), source_attachment_id,
-         1 if is_container else 0),
+        (
+            ticket_id,
+            project_id,
+            title,
+            priority,
+            status,
+            section,
+            description,
+            parent,
+            sort_order,
+            int(draft),
+            source_attachment_id,
+            1 if is_container else 0,
+        ),
     )
 
     if tags:
@@ -1286,7 +1465,11 @@ def add_ticket(
         # agent-actor calls in (e.g. workflow run that spawns a sub-ticket).
         origin = "agent" if actor.actor_type == "agent" else "human"
         emit_event(
-            conn, project_id, "ticket", ticket_id, "ticket_created",
+            conn,
+            project_id,
+            "ticket",
+            ticket_id,
+            "ticket_created",
             {
                 "id": ticket_id,
                 "title": title,
@@ -1305,23 +1488,23 @@ def update_ticket(
     project_id: str,
     ticket_id: str,
     *,
-    title: Optional[str] = None,
-    priority: Optional[str] = None,
-    status: Optional[str] = None,
-    description: Optional[str] = None,
-    parent: Optional[str] = ...,  # sentinel — None means "clear parent"
-    summary: Optional[str] = None,
-    add_criteria: Optional[list[str]] = None,
-    check_criteria: Optional[int] = None,
-    uncheck_criteria: Optional[int] = None,
-    remove_criteria: Optional[int] = None,
-    add_depends: Optional[list[str]] = None,
-    remove_depends: Optional[list[str]] = None,
-    add_tags: Optional[list[str]] = None,
-    remove_tags: Optional[list[str]] = None,
-    add_branches: Optional[list[str]] = None,
-    remove_branches: Optional[list[str]] = None,
-    is_container: Optional[int] = None,
+    title: str | None = None,
+    priority: str | None = None,
+    status: str | None = None,
+    description: str | None = None,
+    parent: str | None = ...,  # sentinel — None means "clear parent"
+    summary: str | None = None,
+    add_criteria: list[str] | None = None,
+    check_criteria: int | None = None,
+    uncheck_criteria: int | None = None,
+    remove_criteria: int | None = None,
+    add_depends: list[str] | None = None,
+    remove_depends: list[str] | None = None,
+    add_tags: list[str] | None = None,
+    remove_tags: list[str] | None = None,
+    add_branches: list[str] | None = None,
+    remove_branches: list[str] | None = None,
+    is_container: int | None = None,
     actor: ActorContext = ActorContext.human(),
 ) -> str:
     """Partial update of a ticket.  Only fields that are not None/sentinel are changed.
@@ -1382,7 +1565,9 @@ def update_ticket(
         _update_criterion(conn, tid, project_id, check_criteria, checked=1, actor=actor)
 
     if uncheck_criteria is not None:
-        _update_criterion(conn, tid, project_id, uncheck_criteria, checked=0, actor=actor)
+        _update_criterion(
+            conn, tid, project_id, uncheck_criteria, checked=0, actor=actor
+        )
 
     if remove_criteria is not None:
         _remove_criterion(conn, tid, project_id, remove_criteria)
@@ -1452,8 +1637,15 @@ def update_ticket(
     # / `criteria_changed` / `dependency_changed` vocabulary.
     new_status = updates.get("status", old_status)
     if new_status != old_status:
-        emit_event(conn, project_id, "ticket", tid, "status_change",
-                   {"before": old_status, "after": new_status}, actor)
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "status_change",
+            {"before": old_status, "after": new_status},
+            actor,
+        )
         _after_status_change(conn, project_id, tid, old_status, new_status)
 
     return tid
@@ -1475,8 +1667,13 @@ def confirm_ticket(conn: sqlite3.Connection, project_id: str, ticket_id: str) ->
 # Criteria helpers (internal)
 # ---------------------------------------------------------------------------
 
+
 def _update_criterion(
-    conn: sqlite3.Connection, tid: str, project_id: str, index: int, checked: int,
+    conn: sqlite3.Connection,
+    tid: str,
+    project_id: str,
+    index: int,
+    checked: int,
     actor: ActorContext = ActorContext.human(),
 ):
     """Update the checked state of the Nth criterion (1-indexed). Emits `criteria_check`."""
@@ -1495,17 +1692,20 @@ def _update_criterion(
             "UPDATE acceptance_criteria SET checked = ? WHERE id = ?",
             (checked, criterion["id"]),
         )
-        emit_event(conn, project_id, "ticket", tid, "criteria_check",
-                   {"criterion_id": criterion["id"], "before": before, "after": after}, actor)
-    else:
-        raise IndexError(
-            f"Criterion index {index} out of range (1-{len(criteria)})"
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "criteria_check",
+            {"criterion_id": criterion["id"], "before": before, "after": after},
+            actor,
         )
+    else:
+        raise IndexError(f"Criterion index {index} out of range (1-{len(criteria)})")
 
 
-def _remove_criterion(
-    conn: sqlite3.Connection, tid: str, project_id: str, index: int
-):
+def _remove_criterion(conn: sqlite3.Connection, tid: str, project_id: str, index: int):
     """Remove the Nth criterion (1-indexed)."""
     criteria = conn.execute(
         "SELECT id FROM acceptance_criteria "
@@ -1518,14 +1718,13 @@ def _remove_criterion(
             (criteria[index - 1]["id"],),
         )
     else:
-        raise IndexError(
-            f"Criterion index {index} out of range (1-{len(criteria)})"
-        )
+        raise IndexError(f"Criterion index {index} out of range (1-{len(criteria)})")
 
 
 # ---------------------------------------------------------------------------
 # Post-change hooks
 # ---------------------------------------------------------------------------
+
 
 def _has_open_bugs(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> bool:
     """Return True if *ticket_id* has any child bugs not in a terminal status."""
@@ -1551,7 +1750,7 @@ def _after_status_change(
     dispatcher's next tick picks up parents whose children all reached
     terminal status and applies the move via the workflow engine.
     """
-    return  # noqa: F811 — explicit: no synchronous side effects
+    return
 
 
 def _after_section_change(
@@ -1583,8 +1782,10 @@ def _after_section_change(
         if ticket and not ticket["commit_hash"]:
             # Try to find project path from registry for commit hash capture
             try:
-                from db import REGISTRY_PATH
                 import json as _json
+
+                from db import REGISTRY_PATH
+
                 registry = _json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
                 for p in registry.get("projects", []):
                     if p["id"] == project_id:
@@ -1636,17 +1837,21 @@ def _cascade_to_linked_journeys(
         # opens its own connection — passes get_db so it can.
         try:
             _kitchen.trigger_run(
-                get_db, project_id, "journey", jid, {},
+                get_db,
+                project_id,
+                "journey",
+                jid,
+                {},
                 triggered_by="journey-cascade",
             )
         except Exception:
             pass  # don't break the section move on a cascade failure
 
 
-
 # ---------------------------------------------------------------------------
 # Branch operations
 # ---------------------------------------------------------------------------
+
 
 def link_branch(
     conn: sqlite3.Connection,
@@ -1708,7 +1913,7 @@ def get_project_branches(
     return [dict(r) for r in rows]
 
 
-def _match_branch_to_ticket(branch_name: str, ticket_ids: list[str]) -> Optional[str]:
+def _match_branch_to_ticket(branch_name: str, ticket_ids: list[str]) -> str | None:
     """Check if branch_name starts with a ticket ID (case-insensitive).
 
     Handles both direct names (B-01-feature) and path prefixes (feature/B-01-thing).
@@ -1730,7 +1935,11 @@ def _match_branch_to_ticket(branch_name: str, ticket_ids: list[str]) -> Optional
         tid_lower = tid.lower()
         for cand in lower_name_candidates:
             # Must start with ticket ID followed by end-of-string, dash, or slash
-            if cand == tid_lower or cand.startswith(tid_lower + "-") or cand.startswith(tid_lower + "/"):
+            if (
+                cand == tid_lower
+                or cand.startswith(tid_lower + "-")
+                or cand.startswith(tid_lower + "/")
+            ):
                 return tid
     return None
 
@@ -1751,7 +1960,10 @@ def scan_branches(
     try:
         result = subprocess.run(
             ["git", "branch", "-r", "--list", "origin/*"],
-            cwd=project_path, capture_output=True, text=True, timeout=10,
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return {"error": "git branch failed", "linked": 0, "total_remote": 0}
@@ -1775,7 +1987,9 @@ def scan_branches(
     linked = 0
     for branch in branches:
         # Strip "origin/" for matching but store the short name
-        short_name = branch.replace("origin/", "", 1) if branch.startswith("origin/") else branch
+        short_name = (
+            branch.replace("origin/", "", 1) if branch.startswith("origin/") else branch
+        )
         matched_tid = _match_branch_to_ticket(short_name, ticket_ids)
         if matched_tid:
             cur = conn.execute(
@@ -1796,18 +2010,31 @@ def scan_branches(
     for row in all_linked:
         try:
             res = subprocess.run(
-                ["git", "rev-list", "--count", "--left-right",
-                 f"origin/main...origin/{row['branch_name']}"],
-                cwd=project_path, capture_output=True, text=True, timeout=5,
+                [
+                    "git",
+                    "rev-list",
+                    "--count",
+                    "--left-right",
+                    f"origin/main...origin/{row['branch_name']}",
+                ],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if res.returncode == 0 and "\t" in res.stdout.strip():
                 behind_str, ahead_str = res.stdout.strip().split("\t")
                 conn.execute(
                     "UPDATE ticket_branches SET ahead = ?, behind = ?, last_synced = ? "
                     "WHERE ticket_id = ? AND project_id = ? AND branch_name = ?",
-                    (int(ahead_str), int(behind_str),
-                     datetime.now().isoformat(),
-                     row["ticket_id"], project_id, row["branch_name"]),
+                    (
+                        int(ahead_str),
+                        int(behind_str),
+                        datetime.now().isoformat(),
+                        row["ticket_id"],
+                        project_id,
+                        row["branch_name"],
+                    ),
                 )
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
             pass  # best-effort
@@ -1829,16 +2056,32 @@ def scan_prs(
 
     try:
         result = subprocess.run(
-            ["gh", "pr", "list", "--json",
-             "number,title,headRefName,state,url,isDraft",
-             "--limit", "100", "--state", "all"],
-            cwd=project_path, capture_output=True, text=True, timeout=15,
+            [
+                "gh",
+                "pr",
+                "list",
+                "--json",
+                "number,title,headRefName,state,url,isDraft",
+                "--limit",
+                "100",
+                "--state",
+                "all",
+            ],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         if result.returncode != 0:
             return {"error": "gh pr list failed", "updated": 0}
         prs = json.loads(result.stdout)
-    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError,
-            OSError, ValueError):
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+        OSError,
+        ValueError,
+    ):
         return {"error": "gh not available", "updated": 0}
 
     # Load ticket IDs for auto-linking unlinked PR branches
@@ -1872,8 +2115,14 @@ def scan_prs(
             "UPDATE ticket_branches SET pr_number = ?, pr_status = ?, pr_url = ?, "
             "last_synced = ? "
             "WHERE project_id = ? AND branch_name = ?",
-            (pr_number, pr_status, pr_url,
-             datetime.now().isoformat(), project_id, head_ref),
+            (
+                pr_number,
+                pr_status,
+                pr_url,
+                datetime.now().isoformat(),
+                project_id,
+                head_ref,
+            ),
         )
         if cur.rowcount > 0:
             updated += cur.rowcount
@@ -1887,9 +2136,15 @@ def scan_prs(
                 "(ticket_id, project_id, branch_name, remote, auto_linked, "
                 "pr_number, pr_status, pr_url, last_synced) "
                 "VALUES (?, ?, ?, 'origin', 1, ?, ?, ?, ?)",
-                (matched_tid, project_id, head_ref,
-                 pr_number, pr_status, pr_url,
-                 datetime.now().isoformat()),
+                (
+                    matched_tid,
+                    project_id,
+                    head_ref,
+                    pr_number,
+                    pr_status,
+                    pr_url,
+                    datetime.now().isoformat(),
+                ),
             )
             updated += 1
 
@@ -1901,12 +2156,13 @@ def scan_prs(
 # These are pure DB reads; no mutations, no commits.
 # ---------------------------------------------------------------------------
 
+
 def get_ticket_activity(
     conn: sqlite3.Connection,
     project_id: str,
     ticket_id: str,
     limit: int = 50,
-    before: Optional[str] = None,
+    before: str | None = None,
 ) -> list[dict]:
     """Return activity_events for a ticket, newest-first, with optional cursor.
 
@@ -1950,8 +2206,7 @@ def get_ticket_activity(
     # is a run_id. Kitchen runs (integer ids) carry workflow_name in metadata_json;
     # workflow_bounce runs (uuid string ids) link to workflows.name.
     agent_run_ids: set[str] = {
-        r["actor_id"] for r in rows
-        if r["actor_type"] == "agent" and r["actor_id"]
+        r["actor_id"] for r in rows if r["actor_type"] == "agent" and r["actor_id"]
     }
     actor_name_by_run: dict[str, str] = {}
     if agent_run_ids:
@@ -1998,17 +2253,19 @@ def get_ticket_activity(
         actor_name = None
         if r["actor_type"] == "agent" and r["actor_id"]:
             actor_name = actor_name_by_run.get(r["actor_id"])
-        events.append({
-            "id": r["id"],
-            "occurred_at": r["occurred_at"],
-            "actor_type": r["actor_type"],
-            "actor_id": r["actor_id"],
-            "actor_name": actor_name,
-            "event_kind": r["event_kind"],
-            "payload": payload,
-            "run_id": payload.get("run_id"),
-            "discarded_run_id": r["discarded_run_id"],
-        })
+        events.append(
+            {
+                "id": r["id"],
+                "occurred_at": r["occurred_at"],
+                "actor_type": r["actor_type"],
+                "actor_id": r["actor_id"],
+                "actor_name": actor_name,
+                "event_kind": r["event_kind"],
+                "payload": payload,
+                "run_id": payload.get("run_id"),
+                "discarded_run_id": r["discarded_run_id"],
+            }
+        )
     return events
 
 
@@ -2088,7 +2345,9 @@ def toggle_bookmark(conn: sqlite3.Connection, project_id: str, ticket_id: str) -
     return True
 
 
-def _touch_recent_row(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> None:
+def _touch_recent_row(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str
+) -> None:
     """Inner upsert + trim — no separate commit, callers commit as part of
     their own transaction."""
     conn.execute(
@@ -2146,7 +2405,9 @@ def touch_recent(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> N
     conn.commit()
 
 
-def list_recents(conn: sqlite3.Connection, project_id: str, limit: int = RECENTS_CAP) -> list[dict]:
+def list_recents(
+    conn: sqlite3.Connection, project_id: str, limit: int = RECENTS_CAP
+) -> list[dict]:
     """List recently-opened tickets, newest first. Excludes tickets that
     are currently bookmarked — a ticket is in exactly one of Bookmarks or
     Recents at any time."""
@@ -2166,5 +2427,3 @@ def list_recents(conn: sqlite3.Connection, project_id: str, limit: int = RECENTS
         (project_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]
-
-

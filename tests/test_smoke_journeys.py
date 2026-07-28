@@ -6,8 +6,9 @@ Requires serve.py to be running (via dashboard_server fixture).
 import json
 import urllib.error
 import urllib.request
+
 import pytest
-from conftest import api_get, api_put, api_delete
+from conftest import api_delete, api_get, api_put
 
 
 def safe_api_get(base_url, path):
@@ -26,7 +27,8 @@ def safe_api_post(base_url, path, body_data):
     url = f"{base_url}{path}"
     data = json.dumps(body_data).encode()
     req = urllib.request.Request(
-        url, data=data,
+        url,
+        data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -46,13 +48,18 @@ api_post = safe_api_post
 # Journey CRUD
 # ===========================================================================
 
+
 class TestJourneyCreate:
     def test_create_journey(self, dashboard_server):
-        status, data = api_post(dashboard_server, "/api/journeys", {
-            "title": "Smoke Test Journey",
-            "description": "Test description",
-            "persona": "Tester",
-        })
+        status, data = api_post(
+            dashboard_server,
+            "/api/journeys",
+            {
+                "title": "Smoke Test Journey",
+                "description": "Test description",
+                "persona": "Tester",
+            },
+        )
         assert status == 201
         assert data["title"] == "Smoke Test Journey"
         assert data["id"] == "smoke-test-journey"
@@ -95,18 +102,26 @@ class TestJourneyGet:
 class TestJourneyUpdate:
     def test_update_title(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Before"})
-        status, data = api_put(dashboard_server, f"/api/journeys/{j['id']}", {
-            "title": "After",
-        })
+        status, data = api_put(
+            dashboard_server,
+            f"/api/journeys/{j['id']}",
+            {
+                "title": "After",
+            },
+        )
         assert status == 200
         assert data["title"] == "After"
         api_delete(dashboard_server, f"/api/journeys/{j['id']}")
 
     def test_update_status(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Status Test"})
-        status, data = api_put(dashboard_server, f"/api/journeys/{j['id']}", {
-            "status": "active",
-        })
+        status, data = api_put(
+            dashboard_server,
+            f"/api/journeys/{j['id']}",
+            {
+                "status": "active",
+            },
+        )
         assert status == 200
         assert data["status"] == "active"
         api_delete(dashboard_server, f"/api/journeys/{j['id']}")
@@ -126,13 +141,18 @@ class TestJourneyDelete:
 # Step CRUD
 # ===========================================================================
 
+
 class TestStepCreate:
     def test_add_step(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Step Test"})
-        status, step = api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "open",
-            "label": "Open board",
-        })
+        status, step = api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "open",
+                "label": "Open board",
+            },
+        )
         assert status == 201
         assert step["action"] == "open"
         assert step["label"] == "Open board"
@@ -140,11 +160,15 @@ class TestStepCreate:
 
     def test_add_step_with_target(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Target Test"})
-        status, step = api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "click",
-            "label": "Click button",
-            "target": {"testid": "submit-btn"},
-        })
+        status, step = api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "click",
+                "label": "Click button",
+                "target": {"testid": "submit-btn"},
+            },
+        )
         assert status == 201
         target = json.loads(step["target_json"])
         assert target == {"testid": "submit-btn"}
@@ -152,9 +176,13 @@ class TestStepCreate:
 
     def test_add_step_invalid_action(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Invalid Step"})
-        status, data = api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "bogus",
-        })
+        status, data = api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "bogus",
+            },
+        )
         assert status == 400
         api_delete(dashboard_server, f"/api/journeys/{j['id']}")
 
@@ -162,11 +190,17 @@ class TestStepCreate:
 class TestStepUpdate:
     def test_update_step_label(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Step Update"})
-        _, step = api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "open", "label": "Old",
-        })
+        _, step = api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "open",
+                "label": "Old",
+            },
+        )
         status, updated = api_put(
-            dashboard_server, f"/api/journeys/{j['id']}/steps/{step['id']}",
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps/{step['id']}",
             {"label": "New"},
         )
         assert status == 200
@@ -177,11 +211,17 @@ class TestStepUpdate:
 class TestStepDelete:
     def test_delete_step(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Step Delete"})
-        _, step = api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "open", "label": "To remove",
-        })
+        _, step = api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "open",
+                "label": "To remove",
+            },
+        )
         status, _ = api_delete(
-            dashboard_server, f"/api/journeys/{j['id']}/steps/{step['id']}",
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps/{step['id']}",
         )
         assert status == 200
         # Verify step is gone
@@ -193,15 +233,27 @@ class TestStepDelete:
 class TestStepReorder:
     def test_reorder_steps(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Reorder Test"})
-        _, s1 = api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "open", "label": "A",
-        })
-        _, s2 = api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "click", "label": "B", "target": {"testid": "x"},
-        })
+        _, s1 = api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "open",
+                "label": "A",
+            },
+        )
+        _, s2 = api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "click",
+                "label": "B",
+                "target": {"testid": "x"},
+            },
+        )
         # Reverse
         status, _ = api_post(
-            dashboard_server, f"/api/journeys/{j['id']}/steps/reorder",
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps/reorder",
             {"step_ids": [s2["id"], s1["id"]]},
         )
         assert status == 200
@@ -215,14 +267,22 @@ class TestStepReorder:
 # Validation
 # ===========================================================================
 
+
 class TestJourneyValidate:
     def test_validate_valid_journey(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Valid Journey"})
-        api_post(dashboard_server, f"/api/journeys/{j['id']}/steps", {
-            "action": "open", "label": "Open",
-        })
+        api_post(
+            dashboard_server,
+            f"/api/journeys/{j['id']}/steps",
+            {
+                "action": "open",
+                "label": "Open",
+            },
+        )
         status, data = api_post(
-            dashboard_server, f"/api/journeys/{j['id']}/validate", {},
+            dashboard_server,
+            f"/api/journeys/{j['id']}/validate",
+            {},
         )
         assert status == 200
         assert data["ok"] is True
@@ -232,7 +292,9 @@ class TestJourneyValidate:
     def test_validate_empty_journey_fails(self, dashboard_server):
         _, j = api_post(dashboard_server, "/api/journeys", {"title": "Empty Journey"})
         status, data = api_post(
-            dashboard_server, f"/api/journeys/{j['id']}/validate", {},
+            dashboard_server,
+            f"/api/journeys/{j['id']}/validate",
+            {},
         )
         assert status == 400
         assert "no steps" in data.get("error", "").lower()
@@ -243,15 +305,21 @@ class TestJourneyValidate:
 # Ticket Linking
 # ===========================================================================
 
+
 class TestTicketLinking:
     def _create_ticket(self, dashboard_server):
         """Create a test ticket and return its ID."""
         import time
+
         ts = int(time.time())
-        status, data = api_post(dashboard_server, "/api/tickets", {
-            "title": f"Link test ticket {ts}",
-            "section": "Backlog",
-        })
+        status, data = api_post(
+            dashboard_server,
+            "/api/tickets",
+            {
+                "title": f"Link test ticket {ts}",
+                "section": "Backlog",
+            },
+        )
         return data.get("id", data.get("ticket", {}).get("id"))
 
     def test_link_and_unlink(self, dashboard_server):
@@ -262,7 +330,8 @@ class TestTicketLinking:
 
         # Link
         status, _ = api_post(
-            dashboard_server, f"/api/journeys/{j['id']}/link",
+            dashboard_server,
+            f"/api/journeys/{j['id']}/link",
             {"ticket_id": ticket_id},
         )
         assert status == 200
@@ -274,7 +343,8 @@ class TestTicketLinking:
 
         # Unlink
         status, _ = api_delete(
-            dashboard_server, f"/api/journeys/{j['id']}/link/{ticket_id}",
+            dashboard_server,
+            f"/api/journeys/{j['id']}/link/{ticket_id}",
         )
         assert status == 200
 

@@ -1,4 +1,5 @@
 """TDD tests for src/pane_links.py — no server, no tmux."""
+
 from __future__ import annotations
 
 import sys
@@ -31,7 +32,9 @@ def test_strip_ansi_handles_empty():
 
 
 import sqlite3
+
 import pytest
+
 import db as _db
 
 
@@ -41,8 +44,10 @@ def conn():
     c.row_factory = sqlite3.Row
     _db.init_db(c)
     # Seed a minimal project + ticket so foreign-keyish constraints (if any) pass
-    c.execute("INSERT INTO tickets (id, project_id, title, section, status) "
-              "VALUES ('B-1', 'p', 'demo', 'backlog', 'proposed')")
+    c.execute(
+        "INSERT INTO tickets (id, project_id, title, section, status) "
+        "VALUES ('B-1', 'p', 'demo', 'backlog', 'proposed')"
+    )
     c.commit()
     return c
 
@@ -64,12 +69,16 @@ def test_link_pane_replaces_existing(conn):
     pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
     conn.commit()
     # Add a second ticket and re-link
-    conn.execute("INSERT INTO tickets (id, project_id, title, section, status) "
-                 "VALUES ('B-2', 'p', 'other', 'backlog', 'proposed')")
+    conn.execute(
+        "INSERT INTO tickets (id, project_id, title, section, status) "
+        "VALUES ('B-2', 'p', 'other', 'backlog', 'proposed')"
+    )
     conn.commit()
     pane_links.link_pane(conn, "B-2", "p", "%23", "llm-node", "vibe:0.1")
     conn.commit()
-    rows = conn.execute("SELECT ticket_id FROM pane_links WHERE pane_address = '%23'").fetchall()
+    rows = conn.execute(
+        "SELECT ticket_id FROM pane_links WHERE pane_address = '%23'"
+    ).fetchall()
     assert len(rows) == 1
     assert rows[0]["ticket_id"] == "B-2"
 
@@ -150,6 +159,7 @@ def test_trim_tail_bounds():
 # Without this fix the idle/question classifier sees ~2s elapsed every cycle and never
 # reaches the 30s PANE_IDLE_THRESHOLD_S, so the 'quiet' branch never fires.
 
+
 def test_last_captured_at_stable_when_tail_unchanged(conn):
     """Calling update_pane_capture twice with identical tail must not advance last_captured_at."""
     pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
@@ -163,6 +173,7 @@ def test_last_captured_at_stable_when_tail_unchanged(conn):
     ).fetchone()["last_captured_at"]
 
     import time as _time
+
     _time.sleep(1)  # ensure wall-clock advances
 
     pane_links.update_pane_capture(conn, "%23", tail_text=tail, attention_state="none")
@@ -182,16 +193,21 @@ def test_last_captured_at_advances_when_tail_changes(conn):
     pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
     conn.commit()
 
-    pane_links.update_pane_capture(conn, "%23", tail_text="step 1\n$ ", attention_state="none")
+    pane_links.update_pane_capture(
+        conn, "%23", tail_text="step 1\n$ ", attention_state="none"
+    )
     conn.commit()
     first_ts = conn.execute(
         "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
     ).fetchone()["last_captured_at"]
 
     import time as _time
+
     _time.sleep(1)
 
-    pane_links.update_pane_capture(conn, "%23", tail_text="step 2\n$ ", attention_state="none")
+    pane_links.update_pane_capture(
+        conn, "%23", tail_text="step 2\n$ ", attention_state="none"
+    )
     conn.commit()
     second_ts = conn.execute(
         "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
@@ -206,6 +222,7 @@ def test_last_captured_at_advances_when_tail_changes(conn):
 def test_idle_classifier_fires_after_stable_tail(conn):
     """Simulate the capture loop: write same tail twice, verify classify_attention sees idle."""
     import time as _time
+
     from constants import PANE_IDLE_THRESHOLD_S
 
     pane_links.link_pane(conn, "B-1", "p", "%23", "llm-node", "vibe:0.1")
@@ -235,7 +252,9 @@ def test_idle_classifier_fires_after_stable_tail(conn):
     row2 = conn.execute(
         "SELECT last_captured_at FROM pane_links WHERE pane_address = '%23'"
     ).fetchone()
-    assert row2["last_captured_at"] == stale_ts, "last_captured_at should not have advanced"
+    assert row2["last_captured_at"] == stale_ts, (
+        "last_captured_at should not have advanced"
+    )
 
     # Now the classifier should see the elapsed time and return idle
     state = pane_links.classify_attention(tail, prev_tail=tail, prev_time=stale_ts)

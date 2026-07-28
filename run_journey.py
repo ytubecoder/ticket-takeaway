@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Execute a journey and copy screenshots to /pics."""
-import json
+
 import os
 import shutil
 import sys
@@ -9,12 +9,13 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "tests"))
 
+from playwright.sync_api import sync_playwright
+from scenario_runner import ScenarioContext, execute_scenario
+from scenario_seed import cleanup_tickets, seed_tickets
+
 from db import get_db, init_db
 from journeys import compile_to_manifest, store_run_results
 from scenarios import validate_manifest
-from scenario_runner import ScenarioContext, execute_scenario
-from scenario_seed import seed_tickets, cleanup_tickets
-from playwright.sync_api import sync_playwright
 
 JOURNEY_ID = "dashboard-screenshot-tour"
 PROJECT_ID = "ticket-takeaway"
@@ -57,8 +58,11 @@ with sync_playwright() as p:
 
     # Build context
     artifact_dir = os.path.join(
-        os.path.dirname(__file__), ".artifacts", "journeys", JOURNEY_ID,
-        f"{JOURNEY_ID}-{int(time.time())}"
+        os.path.dirname(__file__),
+        ".artifacts",
+        "journeys",
+        JOURNEY_ID,
+        f"{JOURNEY_ID}-{int(time.time())}",
     )
     os.makedirs(artifact_dir, exist_ok=True)
 
@@ -91,14 +95,16 @@ with sync_playwright() as p:
             "failed_step_index": result.failed_step_index,
             "error_message": result.error_message or "",
         }
-        run_id = store_run_results(conn, PROJECT_ID, JOURNEY_ID, run_result, step_ids, artifact_dir)
+        run_id = store_run_results(
+            conn, PROJECT_ID, JOURNEY_ID, run_result, step_ids, artifact_dir
+        )
         conn.commit()
         print(f"\nRun stored: {run_id}")
 
     except Exception as e:
         print(f"\nFailed: {e}")
         # Try to get the run result from the exception
-        rr = getattr(e, '__run_result__', None)
+        rr = getattr(e, "__run_result__", None)
         if rr:
             run_result = {
                 "status": rr.status,
@@ -107,7 +113,9 @@ with sync_playwright() as p:
                 "failed_step_index": rr.failed_step_index,
                 "error_message": rr.error_message or str(e),
             }
-            run_id = store_run_results(conn, PROJECT_ID, JOURNEY_ID, run_result, step_ids, artifact_dir)
+            run_id = store_run_results(
+                conn, PROJECT_ID, JOURNEY_ID, run_result, step_ids, artifact_dir
+            )
             conn.commit()
             # Still copy any screenshots taken before failure
             for ss_path in rr.screenshots:

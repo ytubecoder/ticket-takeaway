@@ -13,7 +13,9 @@ auto_promote_parents = gen_mod.auto_promote_parents
 
 def _make_ticket(id, status="in-progress", section="WIP", parent=None):
     """Helper to create a minimal Ticket for testing."""
-    return Ticket(id=id, title=f"Test {id}", status=status, section=section, parent=parent)
+    return Ticket(
+        id=id, title=f"Test {id}", status=status, section=section, parent=parent
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +46,10 @@ def test_returns_promoted_ids():
     p1 = _make_ticket("P-01", section="WIP")
     p2 = _make_ticket("P-02", section="Backlog")
     by_section = {
-        "WIP": [p1], "Backlog": [p2], "Bugs": [], "For Review": [],
+        "WIP": [p1],
+        "Backlog": [p2],
+        "Bugs": [],
+        "For Review": [],
     }
     child_map = {
         "P-01": [_make_ticket("C-01", status="done", parent="P-01")],
@@ -113,7 +118,13 @@ def test_parent_in_done_not_promoted():
     """Parent in Done is not checked for promotion."""
     parent = _make_ticket("P-01", status="done", section="Done")
     children = [_make_ticket("C-01", status="done", parent="P-01")]
-    by_section = {"WIP": [], "Backlog": [], "Bugs": [], "For Review": [], "Done": [parent]}
+    by_section = {
+        "WIP": [],
+        "Backlog": [],
+        "Bugs": [],
+        "For Review": [],
+        "Done": [parent],
+    }
     child_map = {"P-01": children}
 
     promoted = auto_promote_parents(by_section, child_map)

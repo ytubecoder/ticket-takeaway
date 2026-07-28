@@ -7,7 +7,6 @@ and verifies the parent auto-promotes to For Review on the dashboard.
 import time
 
 import pytest
-
 from conftest import api_delete, api_get, api_post
 
 

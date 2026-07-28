@@ -79,6 +79,7 @@ class Result:
 # Process plumbing
 # ---------------------------------------------------------------------------
 
+
 def _binary() -> list[str]:
     """Return argv[0:] for invoking OpenSpec, preferring an installed binary."""
     found = shutil.which("openspec")
@@ -100,7 +101,9 @@ def _env() -> dict[str, str]:
     return env
 
 
-def _run(project_path: str | Path, args: list[str], timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Result:
+def _run(
+    project_path: str | Path, args: list[str], timeout_ms: int = DEFAULT_TIMEOUT_MS
+) -> Result:
     """Run `openspec <args>` inside *project_path* and parse JSON when present."""
     argv = _binary() + list(args)
     try:
@@ -180,6 +183,7 @@ def _status_messages(data: Any) -> list[str]:
 # Naming — deterministic, so ticket <-> change maps both ways with no join table
 # ---------------------------------------------------------------------------
 
+
 def change_name(ticket_id: str, title: str) -> str:
     """Build the canonical change directory name for a ticket.
 
@@ -205,6 +209,7 @@ def ticket_id_from_change_name(name: str) -> str:
 # Project-level probes (cheap, no subprocess)
 # ---------------------------------------------------------------------------
 
+
 def is_initialised(project_path: str | Path) -> bool:
     """True when *project_path* has an `openspec/` root with a config."""
     return (Path(project_path) / "openspec" / "config.yaml").is_file()
@@ -223,7 +228,9 @@ def archived_change_dirs(project_path: str | Path, name: str) -> list[Path]:
     root = Path(project_path) / "openspec" / "changes" / "archive"
     if not root.is_dir():
         return []
-    return sorted(p for p in root.iterdir() if p.is_dir() and p.name.endswith(f"-{name}"))
+    return sorted(
+        p for p in root.iterdir() if p.is_dir() and p.name.endswith(f"-{name}")
+    )
 
 
 def has_spec_delta(project_path: str | Path, name: str) -> bool:
@@ -231,12 +238,16 @@ def has_spec_delta(project_path: str | Path, name: str) -> bool:
     specs = change_dir(project_path, name) / "specs"
     if not specs.is_dir():
         return False
-    return any(p.is_file() and p.read_text(encoding="utf-8").strip() for p in specs.rglob("*.md"))
+    return any(
+        p.is_file() and p.read_text(encoding="utf-8").strip()
+        for p in specs.rglob("*.md")
+    )
 
 
 # ---------------------------------------------------------------------------
 # CLI operations
 # ---------------------------------------------------------------------------
+
 
 def version(project_path: str | Path = ".") -> str:
     """Return the installed OpenSpec version string (may be empty)."""
@@ -276,8 +287,13 @@ def init(project_path: str | Path, tools: str = "claude") -> Result:
 def new_change(project_path: str | Path, name: str) -> Result:
     """Create `openspec/changes/<name>/` via the CLI (not by hand)."""
     if change_exists(project_path, name):
-        return Result(ok=True, exit_code=0, data=None,
-                      stdout=f"change {name} already exists", argv=[])
+        return Result(
+            ok=True,
+            exit_code=0,
+            data=None,
+            stdout=f"change {name} already exists",
+            argv=[],
+        )
     return _run(project_path, ["new", "change", name])
 
 
@@ -311,7 +327,9 @@ def instructions(project_path: str | Path, artifact: str, name: str) -> Result:
     return _run(project_path, ["instructions", artifact, "--change", name, "--json"])
 
 
-def validate(project_path: str | Path, name: str | None = None, strict: bool = True) -> Result:
+def validate(
+    project_path: str | Path, name: str | None = None, strict: bool = True
+) -> Result:
     """Validate one change, or everything when *name* is None.
 
     Exit code is the contract: 0 = valid, non-zero = at least one ERROR. Verified

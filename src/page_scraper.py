@@ -5,36 +5,37 @@ Pure functions (classify_element, derive_screen_name, derive_element_name,
 infer_is_navigation, scans_to_json) are TDD-tested. Playwright functions
 (scrape_page, scan_all_screens) require a running server for integration testing.
 """
+
 from __future__ import annotations
 
 import base64
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PageElement:
-    tag: str              # button, a, input, select, etc.
-    testid: str           # data-testid value if present
-    text: str             # visible text / label
-    role: str             # aria role or inferred role
-    element_type: str     # "button", "link", "text-input", "select", "checkbox"
-    name: str             # human-readable name
-    css_selector: str     # fallback selector
-    is_navigation: bool   # True if clicking likely changes screen
+    tag: str  # button, a, input, select, etc.
+    testid: str  # data-testid value if present
+    text: str  # visible text / label
+    role: str  # aria role or inferred role
+    element_type: str  # "button", "link", "text-input", "select", "checkbox"
+    name: str  # human-readable name
+    css_selector: str  # fallback selector
+    is_navigation: bool  # True if clicking likely changes screen
 
 
 @dataclass
 class PageScan:
     url: str
     title: str
-    screen_name: str      # derived from URL path
+    screen_name: str  # derived from URL path
     elements: list[PageElement]
     screenshot_base64: str
     scanned_at: str
@@ -45,24 +46,41 @@ class PageScan:
 # ---------------------------------------------------------------------------
 
 # Input types that map to text-input
-_TEXT_INPUT_TYPES = frozenset({
-    "text", "search", "email", "password", "url", "tel", "number", "date",
-    "datetime-local", "month", "week", "time", "color", "",
-})
+_TEXT_INPUT_TYPES = frozenset(
+    {
+        "text",
+        "search",
+        "email",
+        "password",
+        "url",
+        "tel",
+        "number",
+        "date",
+        "datetime-local",
+        "month",
+        "week",
+        "time",
+        "color",
+        "",
+    }
+)
 
 # Input types that map to checkbox
 _CHECK_INPUT_TYPES = frozenset({"checkbox", "radio"})
 
 # Navigation testids
-_NAV_TESTIDS = frozenset({
-    "settings-toggle", "journeys-btn", "journeys-back",
-    "settings-back", "detail-close",
-})
+_NAV_TESTIDS = frozenset(
+    {
+        "settings-toggle",
+        "journeys-btn",
+        "journeys-back",
+        "settings-back",
+        "detail-close",
+    }
+)
 
 # Navigation text patterns (case-insensitive)
-_NAV_TEXT_PATTERNS = re.compile(
-    r"^(back|board|settings|journeys|home)$", re.IGNORECASE
-)
+_NAV_TEXT_PATTERNS = re.compile(r"^(back|board|settings|journeys|home)$", re.IGNORECASE)
 
 
 def classify_element(tag: str, input_type: str, role: str, href: str) -> str:
@@ -181,7 +199,8 @@ _INTERACTIVE_SELECTOR = (
     "[role='button'], [onclick], [data-testid]"
 )
 
-_EXTRACT_JS = """
+_EXTRACT_JS = (
+    """
 () => {
     const sel = `%s`;
     const els = document.querySelectorAll(sel);
@@ -218,7 +237,9 @@ _EXTRACT_JS = """
     }
     return results;
 }
-""" % _INTERACTIVE_SELECTOR
+"""
+    % _INTERACTIVE_SELECTOR
+)
 
 
 async def scrape_page(page, url: str) -> PageScan:
@@ -236,21 +257,28 @@ async def scrape_page(page, url: str) -> PageScan:
     for raw in raw_elements:
         etype = classify_element(raw["tag"], raw["inputType"], raw["role"], raw["href"])
         ename = derive_element_name(
-            raw["testid"], raw["text"], raw["placeholder"],
-            raw["title"], raw["ariaLabel"]
+            raw["testid"],
+            raw["text"],
+            raw["placeholder"],
+            raw["title"],
+            raw["ariaLabel"],
         )
-        is_nav = infer_is_navigation(raw["tag"], raw["href"], raw["text"], raw["testid"])
+        is_nav = infer_is_navigation(
+            raw["tag"], raw["href"], raw["text"], raw["testid"]
+        )
 
-        elements.append(PageElement(
-            tag=raw["tag"],
-            testid=raw["testid"],
-            text=raw["text"],
-            role=raw["role"],
-            element_type=etype,
-            name=ename,
-            css_selector=raw["css"],
-            is_navigation=is_nav,
-        ))
+        elements.append(
+            PageElement(
+                tag=raw["tag"],
+                testid=raw["testid"],
+                text=raw["text"],
+                role=raw["role"],
+                element_type=etype,
+                name=ename,
+                css_selector=raw["css"],
+                is_navigation=is_nav,
+            )
+        )
 
     # Screenshot
     screenshot_bytes = await page.screenshot(full_page=True)

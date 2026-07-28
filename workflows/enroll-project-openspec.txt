@@ -56,6 +56,7 @@
    - Stage openspec/, WORKFLOW.toml, PRODUCT_BACKLOG.md, PRODUCT_SPECIFICATION.md (+ .claude/skills/openspec-* if --tools claude)
    - Expected outcome: One commit; push if the repo has a remote
    - If fails: If the archived change files are untracked and something deletes them, they are GONE — commit promptly (learned the hard way in loops)
+   - Check `git check-ignore -v openspec/changes/archive/` — a broad `archive/` pattern in the project's .gitignore silently swallows OpenSpec archives (bit maguyva-marketing 2026-07-28). If matched, `git add -f` the archive files or scope the ignore pattern
 
 ## Verification
 - `openspec list --specs` shows the backfilled capability

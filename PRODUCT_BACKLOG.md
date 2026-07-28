@@ -186,7 +186,7 @@ Five lanes shipped from the Factory.ai missions talk. **A**: migration 17 (ticke
 Priority: medium | Status: for-review
 Tags: cleanup, tech-debt
 Spec: C:b-70-lint-wall-cleanup-style-debt-cleared-lint-bar-pinned-in-ruff-toml
-Verified: exit=0 commit=9ea20ca at=2026-07-29T05:00:27 cmd=python3 -m pytest tests/test_tdd_*.py -q
+Verified: exit=0 commit=4cfaf3f at=2026-07-29T05:06:22 cmd=python3 -m pytest tests/test_tdd_*.py -q
         ........................................................................ [  7%]
         ........................................................................ [ 15%]
         ........................................................................ [ 23%]
@@ -200,7 +200,7 @@ Verified: exit=0 commit=9ea20ca at=2026-07-29T05:00:27 cmd=python3 -m pytest tes
         ........................................................................ [ 84%]
         ........................................................................ [ 92%]
         .............sssssssssssssssssssssssssssss.............................. [100%]
-        907 passed, 29 skipped in 23.59s
+        907 passed, 29 skipped in 22.64s
 
 ## Backlog
 

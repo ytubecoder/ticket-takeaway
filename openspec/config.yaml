@@ -1,0 +1,24 @@
+schema: spec-driven
+
+context: |
+  Ticket Takeaway — SQLite-backed project board (kanban + markdown mirror)
+  with an agentic execution layer (Kitchen) and a spec-gated accept flow.
+
+  Read these before authoring artifacts (canonical — do not copy them here):
+    - CLAUDE.md                agent-facing index + operational gotchas
+    - docs/LIFECYCLE.md (§4c)  the OpenSpec spec lifecycle + accept gate
+    - docs/KITCHEN.md          Kitchen orchestrator spec
+    - INSTALL.md               deployment map
+
+  Hard constraints an agent must not violate:
+    - src/ is canonical; ~/.claude/ticket-takeaway/ is the runtime copy that
+      actually executes — deploy + restart serve.py after src changes.
+    - All `openspec` shell-outs go through src/openspec_adapter.py, pinned to
+      @fission-ai/openspec@1.6.0 with OPENSPEC_TELEMETRY=0.
+    - The accept gate lives in actions.accept_ticket() only; never restate
+      gate rules in SKILL.md prose or dashboard JS.
+    - Every DB mutation emits its audit event inside the same transaction.
+    - Verify = WORKFLOW.toml [verify] (TDD suite only; smoke/e2e suites write
+      to the real tickets.db and can spawn billed agent sessions).
+    - Before adding a DB migration: fetch origin/main and check
+      `grep "_migrations.*VALUES" src/db.py | tail` — numbers race.

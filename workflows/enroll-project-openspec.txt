@@ -11,8 +11,9 @@
 
 ## Steps
 
-1. Snapshot the target's state
-   - Run: cd <project> && git status --porcelain | sort > /tmp/enroll-before.txt; md5 -q CLAUDE.md AGENTS.md 2>/dev/null > /tmp/enroll-md5.txt; find .claude -type f | sort > /tmp/enroll-claude.txt
+1. Snapshot the target's state — into a UNIQUE directory, never fixed /tmp names
+   - Concurrent enrollments clobber shared paths (bit us on 2026-07-28: a parallel run overwrote /tmp/enroll-before.txt mid-enrollment and poisoned the footprint diff)
+   - Run: B=$(mktemp -d /tmp/enroll-<projectname>.XXXXXX) && cd <project> && git status --porcelain | sort > $B/before.txt; md5 -q CLAUDE.md AGENTS.md 2>/dev/null > $B/md5.txt; find .claude -type f | sort > $B/claude.txt
    - Expected outcome: Baselines recorded (empty files are fine for repos without those paths)
    - If fails: Not a git repo — record `ls -a` instead, and note there is NO undo; consider `git init` first
 

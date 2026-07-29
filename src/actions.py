@@ -2198,47 +2198,7 @@ def get_ticket_activity(
             (project_id, tid, limit),
         ).fetchall()
 
-    # Resolve agent display names in one batch — for actor_type='agent', actor_id
-    # is a run_id. Kitchen runs (integer ids) carry workflow_name in metadata_json;
-    # workflow_bounce runs (uuid string ids) link to workflows.name.
-    agent_run_ids: set[str] = {
-        r["actor_id"] for r in rows if r["actor_type"] == "agent" and r["actor_id"]
-    }
-    actor_name_by_run: dict[str, str] = {}
-    if agent_run_ids:
-        # Try kitchen runs (numeric ids)
-        numeric_ids = [rid for rid in agent_run_ids if rid.isdigit()]
-        if numeric_ids:
-            placeholders = ",".join("?" * len(numeric_ids))
-            kitchen_rows = conn.execute(
-                f"SELECT id, metadata_json FROM runs WHERE id IN ({placeholders})",
-                numeric_ids,
-            ).fetchall()
-            for kr in kitchen_rows:
-                try:
-                    meta = json.loads(kr["metadata_json"] or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    meta = {}
-                name = meta.get("workflow_name") or meta.get("agent_name")
-                if name:
-                    actor_name_by_run[str(kr["id"])] = name
-        # Try workflow_bounce runs (uuid ids)
-        uuid_ids = [rid for rid in agent_run_ids if not rid.isdigit()]
-        if uuid_ids:
-            placeholders = ",".join("?" * len(uuid_ids))
-            try:
-                wf_rows = conn.execute(
-                    f"SELECT wr.id AS id, w.name AS name "
-                    f"FROM workflow_runs wr LEFT JOIN workflows w ON w.id = wr.workflow_id "
-                    f"WHERE wr.id IN ({placeholders})",
-                    uuid_ids,
-                ).fetchall()
-                for wr in wf_rows:
-                    if wr["name"]:
-                        actor_name_by_run[wr["id"]] = wr["name"]
-            except sqlite3.OperationalError:
-                # workflow_runs table may not exist on minimal schemas
-                pass
+    actor_name_by_run = _resolve_agent_actor_names(conn, rows)
 
     events = []
     for r in rows:
@@ -2263,6 +2223,135 @@ def get_ticket_activity(
             }
         )
     return events
+
+
+def _resolve_agent_actor_names(conn: sqlite3.Connection, rows) -> dict[str, str]:
+    """Map agent actor_ids (run ids) -> display names.
+
+    Kitchen runs (numeric ids) carry workflow_name/agent_name in metadata_json;
+    workflow_bounce runs (uuid ids) join workflow_runs -> workflows.name.
+    """
+    agent_run_ids: set[str] = {
+        r["actor_id"] for r in rows if r["actor_type"] == "agent" and r["actor_id"]
+    }
+    actor_name_by_run: dict[str, str] = {}
+    if not agent_run_ids:
+        return actor_name_by_run
+    numeric_ids = [rid for rid in agent_run_ids if rid.isdigit()]
+    if numeric_ids:
+        placeholders = ",".join("?" * len(numeric_ids))
+        kitchen_rows = conn.execute(
+            f"SELECT id, metadata_json FROM runs WHERE id IN ({placeholders})",
+            numeric_ids,
+        ).fetchall()
+        for kr in kitchen_rows:
+            try:
+                meta = json.loads(kr["metadata_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            name = meta.get("workflow_name") or meta.get("agent_name")
+            if name:
+                actor_name_by_run[str(kr["id"])] = name
+    uuid_ids = [rid for rid in agent_run_ids if not rid.isdigit()]
+    if uuid_ids:
+        placeholders = ",".join("?" * len(uuid_ids))
+        try:
+            wf_rows = conn.execute(
+                f"SELECT wr.id AS id, w.name AS name "
+                f"FROM workflow_runs wr LEFT JOIN workflows w ON w.id = wr.workflow_id "
+                f"WHERE wr.id IN ({placeholders})",
+                uuid_ids,
+            ).fetchall()
+            for wr in wf_rows:
+                if wr["name"]:
+                    actor_name_by_run[wr["id"]] = wr["name"]
+        except sqlite3.OperationalError:
+            pass
+    return actor_name_by_run
+
+
+def get_activity_feed(
+    conn: sqlite3.Connection,
+    since_id: int | None = None,
+    limit: int = 100,
+    projects: list[dict] | None = None,
+) -> dict:
+    """Cross-project forward feed over activity_events for Follow mode.
+
+    `projects` is a list of registry dicts ({id, name, watched}). Events from
+    unwatched projects are excluded; the `_kitchen` sentinel always passes.
+    latest_id is the global unfiltered MAX(id) — filters only remove rows, so
+    a cursor initialized here is always a correct "now".
+
+    No since_id -> cursor-init shape: {"latest_id": N, "events": []}.
+    """
+    limit = max(1, min(int(limit or 100), 500))
+    latest_id = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) AS m FROM activity_events"
+    ).fetchone()["m"]
+    if since_id is None:
+        return {"latest_id": latest_id, "events": []}
+
+    projects = projects or []
+    name_by_id = {p["id"]: p.get("name", p["id"]) for p in projects}
+    name_by_id["_kitchen"] = "Kitchen"
+    allowed = [p["id"] for p in projects if p.get("watched", True)]
+    allowed.append("_kitchen")
+
+    placeholders = ",".join("?" * len(allowed))
+    rows = conn.execute(
+        f"SELECT id, project_id, subject_type, subject_id, actor_type, "
+        f"       actor_id, event_kind, payload_json, occurred_at "
+        f"FROM activity_events "
+        f"WHERE id > ? AND discarded_run_id IS NULL "
+        f"  AND project_id IN ({placeholders}) "
+        f"ORDER BY id ASC LIMIT ?",
+        [since_id, *allowed, limit],
+    ).fetchall()
+
+    ticket_meta: dict[tuple[str, str], sqlite3.Row] = {}
+    ticket_keys = {
+        (r["project_id"], r["subject_id"])
+        for r in rows
+        if r["subject_type"] == "ticket"
+    }
+    for pid, tid in ticket_keys:
+        t = conn.execute(
+            "SELECT title, section FROM tickets WHERE project_id = ? AND id = ?",
+            (pid, tid),
+        ).fetchone()
+        if t:
+            ticket_meta[(pid, tid)] = t
+
+    actor_name_by_run = _resolve_agent_actor_names(conn, rows)
+
+    events = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        tmeta = ticket_meta.get((r["project_id"], r["subject_id"]))
+        actor_name = None
+        if r["actor_type"] == "agent" and r["actor_id"]:
+            actor_name = actor_name_by_run.get(r["actor_id"])
+        events.append(
+            {
+                "id": r["id"],
+                "project_id": r["project_id"],
+                "project_name": name_by_id.get(r["project_id"], r["project_id"]),
+                "subject_type": r["subject_type"],
+                "subject_id": r["subject_id"],
+                "ticket_title": tmeta["title"] if tmeta else None,
+                "section": tmeta["section"] if tmeta else None,
+                "event_kind": r["event_kind"],
+                "payload": payload,
+                "actor_type": r["actor_type"],
+                "actor_name": actor_name,
+                "occurred_at": r["occurred_at"],
+            }
+        )
+    return {"latest_id": latest_id, "events": events}
 
 
 def get_children_summary(

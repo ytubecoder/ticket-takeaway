@@ -845,6 +845,9 @@ def build_follow_mode_css() -> str:
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   background: #22c55e; margin-left: 5px; animation: kitchen-pulse 1.6s ease-in-out infinite;
 }
+.filter-btn.follow-on {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
 #followTicker {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
   display: flex; align-items: center; gap: 10px; padding: 7px 14px;
@@ -853,6 +856,7 @@ def build_follow_mode_css() -> str:
   color: var(--text-primary);
 }
 #followTicker .follow-queue { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; }
+body.follow-ticker-on { padding-bottom: 44px; }
 #followDepart {
   position: fixed; inset: 0; z-index: 2000; display: flex;
   align-items: center; justify-content: center; text-align: center;
@@ -915,6 +919,10 @@ def build_follow_mode_js() -> str:
 
   var enabled = lsGet(ENABLED_KEY) === '1';
   var cursor = parseInt(lsGet(CURSOR_KEY) || '0', 10) || 0;
+  // lastSeenId = fetch watermark (advanced on poll). cursor = played position only.
+  var lastSeenId = cursor;
+  var pollInFlight = false;
+  var ready = false;
   var queue = [];       // [{events: [ev, ...]}] coalesced steps
   var playing = false;
   var failCount = 0;
@@ -935,9 +943,12 @@ def build_follow_mode_js() -> str:
   }
 
   function setChipState() {
-    chip.classList.toggle('active', enabled);
+    // Dedicated class — never .active (applyFilters / diff-poll own that).
+    chip.classList.toggle('follow-on', enabled);
     chip.querySelector('.follow-dot').style.display = enabled ? '' : 'none';
     ticker.style.display = enabled ? '' : 'none';
+    if (enabled) document.body.classList.add('follow-ticker-on');
+    else document.body.classList.remove('follow-ticker-on');
     window.__ttFollowActive = enabled;
   }
 
@@ -952,8 +963,10 @@ def build_follow_mode_js() -> str:
   function initCursor(cb) {
     apiFetch(null).then(function (d) {
       cursor = d.latest_id || 0;
+      lastSeenId = cursor;
       lsSet(CURSOR_KEY, String(cursor));
       failCount = 0;
+      ready = true;
       if (cb) cb();
     }).catch(function () { failCount++; updateIdleTicker(); });
   }
@@ -983,21 +996,37 @@ def build_follow_mode_js() -> str:
   }
 
   function poll() {
-    if (!enabled || document.hidden) return;
-    apiFetch(cursor).then(function (d) {
+    if (!enabled || !ready || document.hidden || pollInFlight) return;
+    pollInFlight = true;
+    apiFetch(lastSeenId).then(function (d) {
       failCount = 0;
       var evs = d.events || [];
-      if (evs.length) enqueue(evs);
+      if (evs.length) {
+        var maxRecv = 0;
+        for (var i = 0; i < evs.length; i++) {
+          if (evs[i].id > maxRecv) maxRecv = evs[i].id;
+        }
+        lastSeenId = Math.max(lastSeenId, maxRecv);
+        enqueue(evs);
+      }
       if (queuedEventCount() > OVERFLOW_LIMIT) {
         var skipped = queuedEventCount();
         queue = [];
         cursor = Math.max(cursor, d.latest_id || 0);
+        lastSeenId = Math.max(lastSeenId, d.latest_id || 0);
         lsSet(CURSOR_KEY, String(cursor));
         showTicker('skipped ' + skipped + ' actions (burst)', '#94a3b8', '');
+        // Skip playNext/updateIdleTicker this tick so the message survives ~2s.
+        return;
       }
       playNext();
       updateIdleTicker();
-    }).catch(function () { failCount++; updateIdleTicker(); });
+    }).catch(function () {
+      failCount++;
+      updateIdleTicker();
+    }).then(function () {
+      pollInFlight = false;
+    });
   }
 
   function actorLabel(ev) {
@@ -1014,17 +1043,39 @@ def build_follow_mode_js() -> str:
 
   function captionFor(ev, extra) {
     var p = ev.payload || {};
+    var x = subjectLabel(ev);
     var text;
     switch (ev.event_kind) {
-      case 'section_change': text = 'moved ' + subjectLabel(ev) + ' ' + (p.before || '?') + ' → ' + (p.after || '?'); break;
-      case 'ticket_created': text = 'created ' + subjectLabel(ev) + ' in ' + (p.section || '?'); break;
-      case 'status_change': text = 'set ' + subjectLabel(ev) + ' ' + (p.before || '?') + ' → ' + (p.after || '?'); break;
-      case 'run_started': text = 'started a run on ' + subjectLabel(ev); break;
-      case 'run_succeeded': text = 'run succeeded on ' + subjectLabel(ev); break;
-      case 'run_failed': text = 'run FAILED on ' + subjectLabel(ev); break;
+      case 'section_change': text = 'moved ' + x + ' ' + (p.before || '?') + ' → ' + (p.after || '?'); break;
+      case 'ticket_created': text = 'created ' + x + ' in ' + (p.section || '?'); break;
+      case 'status_change': text = 'set ' + x + ' ' + (p.before || '?') + ' → ' + (p.after || '?'); break;
+      case 'run_started': text = 'started a run on ' + x; break;
+      case 'run_succeeded': text = 'run succeeded on ' + x; break;
+      case 'run_failed': text = 'run FAILED on ' + x; break;
+      case 'run_cancelled': text = 'run cancelled on ' + x; break;
+      case 'run_stalled': text = 'run stalled on ' + x; break;
+      case 'run_discarded': text = 'run discarded on ' + x; break;
+      case 'gate_override': text = 'gate OVERRIDDEN on ' + x + ': ' + (p.reason || ''); break;
+      case 'pause_set': text = 'paused automation on ' + x; break;
+      case 'pause_cleared': text = 'resumed automation on ' + x; break;
+      case 'mode_changed': text = 'automation mode ' + (p.before || '?') + ' → ' + (p.after || '?') + ' on ' + x; break;
+      case 'criteria_check': text = 'checked a criterion on ' + x; break;
+      case 'criteria_added': text = 'criteria added on ' + x; break;
+      case 'criteria_removed': text = 'criteria removed on ' + x; break;
+      case 'criteria_changed': text = 'criteria updated on ' + x; break;
+      case 'hook_started': text = 'hook ' + (p.hook || '') + ' started on ' + x; break;
+      case 'hook_succeeded': text = 'hook ' + (p.hook || '') + ' succeeded on ' + x; break;
+      case 'hook_failed': text = 'hook ' + (p.hook || '') + ' FAILED on ' + x; break;
+      case 'workspace_created': text = 'workspace created for ' + x; break;
+      case 'agent_output': text = 'agent output on ' + x; break;
+      case 'handoff_recorded': text = 'handoff recorded on ' + x; break;
+      case 'input_provided': text = 'input provided to ' + x; break;
+      case 'field_changed': text = 'edited ' + (p.field || 'field') + ' on ' + x; break;
+      case 'pane_linked': text = 'pane linked on ' + x; break;
+      case 'pane_unlinked': text = 'pane unlinked on ' + x; break;
       case 'kitchen_paused': text = 'Kitchen paused'; break;
       case 'kitchen_resumed': text = 'Kitchen resumed'; break;
-      default: text = ev.event_kind.replace(/_/g, ' ') + ' · ' + subjectLabel(ev);
+      default: text = ev.event_kind.replace(/_/g, ' ') + ' · ' + x;
     }
     return actorLabel(ev) + ' ' + text + (extra ? ' (+' + extra + ' more)' : '');
   }
@@ -1059,9 +1110,10 @@ def build_follow_mode_js() -> str:
   }
 
   function finishStep(maxId) {
-    cursor = Math.max(cursor, maxId);
-    lsSet(CURSOR_KEY, String(cursor));
+    // Cursor advances only after playback completes (spec invariant).
     setTimeout(function () {
+      cursor = Math.max(cursor, maxId);
+      lsSet(CURSOR_KEY, String(cursor));
       playing = false;
       updateIdleTicker();
       playNext();
@@ -1070,8 +1122,10 @@ def build_follow_mode_js() -> str:
 
   function playLocal(step, ev, maxId) {
     var extra = step.events.length - 1;
-    showTicker(captionFor(ev, extra), colorFor(ev), ev.subject_type === 'ticket' ? ev.subject_id : '');
-    if (ev.subject_type === 'ticket') spotlight(ev.subject_id);
+    // Ticket ids repeat across projects — only spotlight same-board cards.
+    var sameProjTicket = ev.project_id === pid && ev.subject_type === 'ticket';
+    showTicker(captionFor(ev, extra), colorFor(ev), sameProjTicket ? ev.subject_id : '');
+    if (sameProjTicket) spotlight(ev.subject_id);
     finishStep(maxId);
   }
 
@@ -1135,6 +1189,8 @@ def build_follow_mode_js() -> str:
     playing = true;
     showTicker(a.caption, a.color, a.subjectType === 'ticket' ? a.subjectId : '');
     if (a.subjectType === 'ticket') spotlight(a.subjectId);
+    // Avoid re-fetching the arrived step while finishStep waits to advance cursor.
+    if (a.maxId) lastSeenId = Math.max(lastSeenId, a.maxId);
     finishStep(a.maxId || cursor);
     return true;
   }
@@ -1145,25 +1201,47 @@ def build_follow_mode_js() -> str:
     setChipState();
     if (enabled) {
       queue = [];
+      ready = false;
       initCursor(function () { updateIdleTicker(); });  // enable ALWAYS resets to now
     } else {
       queue = [];
       playing = false;
+      ready = false;
     }
   });
 
   ticker.addEventListener('click', function () {
     var tid = tickerText.dataset.tid;
-    if (tid) location.hash = '#ticket/' + tid;
+    if (!tid) return;
+    // Same path a card click uses (openOverlay), not bare hash assignment.
+    if (typeof window.__ttOpenTicket === 'function') {
+      window.__ttOpenTicket(tid);
+    } else {
+      location.hash = '#ticket/' + tid;
+    }
   });
 
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && enabled) { queue = []; initCursor(null); }  // jump to now
+    if (!document.hidden && enabled) {
+      queue = [];
+      ready = false;
+      initCursor(function () { updateIdleTicker(); });  // jump to now
+    }
   });
 
   setChipState();
   if (enabled) {
-    if (!checkArrival() && !cursor) initCursor(null);
+    var hadArrival = checkArrival();
+    if (hadArrival) {
+      // Continuity after follow navigation: trust stored cursor once ready.
+      if (cursor) { ready = true; lastSeenId = Math.max(lastSeenId, cursor); }
+      else initCursor(function () { updateIdleTicker(); });
+    } else if (cursor) {
+      ready = true;
+      lastSeenId = cursor;
+    } else {
+      initCursor(function () { updateIdleTicker(); });
+    }
     updateIdleTicker();
   }
   setInterval(poll, POLL_MS);
@@ -8391,6 +8469,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       _paneLinksInterval = setInterval(function() {{ refreshPaneLinks(currentTicketId); }}, 3000);
     }});
   }}
+  // Exposed for Follow-mode ticker clicks (same path as a card click).
+  window.__ttOpenTicket = openOverlay;
 
   function closeOverlay() {{
     closeStatusDropdown();

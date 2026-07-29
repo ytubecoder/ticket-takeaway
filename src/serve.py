@@ -9084,7 +9084,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             # Global activity feed — drives kanban Follow mode. Polled ~2s by
             # boards with Follow enabled. since_id absent -> cursor init only.
-            if remainder.startswith("/api/activity/feed"):
+            if remainder.split("?", 1)[0] == "/api/activity/feed":
                 query = urlparse(self.path).query
                 params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
                 try:

@@ -96,7 +96,32 @@
 2. E2E (Task 7): throwaway server on 8790 + Chrome DevTools MCP walkthrough.
 3. Smoke: run `tests/test_smoke_activity_feed.py` deliberately against a live server.
 4. Reconcile peon commits into the main worktree gitdir if the sandbox isolation left objects only in `.git-local`.
-5. Optional polish: more caption cases in `captionFor` for kinds that only hit the default branch today (still colored via taxonomy).
+
+## Round 2 — review fixes (must-fix consolidation)
+
+One commit for engine/CSS/serve/openOverlay (`fix: follow-mode review round 1`), one for CLI format (`fix: wrap feed --since argparse for line length`), plus this report update.
+
+| # | Severity | Fix |
+|---|----------|-----|
+| 1 | CRITICAL | Chip uses `.follow-on` instead of `.active`; CSS for `.filter-btn.follow-on`. Confirmed `applyFilters` and diff-poll save/restore only query `.active` / `classList.contains('active')`. |
+| 2 | CRITICAL | `lastSeenId` fetch watermark + `pollInFlight` guard. Poll fetches `since_id=lastSeenId`, advances watermark on receive before enqueue. localStorage `cursor` remains played-position only. |
+| 3 | CRITICAL | `finishStep`: `cursor`/`lsSet` moved **inside** the `setTimeout` callback (after STEP_MS), before `playing=false`. Arrival path shares `finishStep`. |
+| 4 | Overflow | On burst skip: also `lastSeenId = max(..., d.latest_id)`; **return** immediately (no `playNext`/`updateIdleTicker` that tick). |
+| 5 | ready gate | `ready` flag; poll no-ops unless ready. Boot continuity when `cursor>0`; enable/visibility re-init sets `ready=false` until `initCursor` succeeds (sets `ready` + `lastSeenId`). |
+| 6 | Spotlight | `playLocal` spotlights only when `ev.project_id === pid && subject_type === 'ticket'` (caption-only otherwise — ticket ids collide across projects). |
+| 7 | Ticker click | Exposed `window.__ttOpenTicket = openOverlay` in board IIFE; ticker uses that (hash fallback). |
+| 8 | serve.py | Exact path match: `remainder.split("?", 1)[0] == "/api/activity/feed"`. |
+| 9 | Captions | Full vocabulary cases in `captionFor` (run_*/gate/pause/mode/criteria/hook/workspace/agent/handoff/input/field/pane + kitchen). |
+| 10 | Ticker layout | `body.follow-ticker-on { padding-bottom: 44px }` toggled in `setChipState`. |
+| 11 | CLI format | Split `p_feed.add_argument("--since", ...)` across lines under 88 cols. |
+
+### Round 2 verification
+
+| Check | Result |
+|-------|--------|
+| `python3 -m pytest tests/test_tdd_*.py -q` | 918 passed, 29 skipped (1 home-temp sandbox test deselected, pre-existing) |
+| `node --check` on `build_follow_mode_js()` | clean |
+| `python3 -m py_compile` on generate/serve/tickets-cli | OK |
 
 ## Files touched (canonical `src/` + tests only)
 

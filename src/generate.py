@@ -21,7 +21,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from constants import (
     CARD_CLASS_BY_SLUG,
     DEFAULT_STATUS_BY_SECTION,
+    EVENT_GROUP_COLORS,
+    EVENT_KIND_GROUPS,
     FEEDBACKS_REPO_URL,
+    FOLLOW_KIND_PRECEDENCE,
     SECTION_ORDER,
     SECTION_SLUGS,
     STATUSES,
@@ -827,6 +830,441 @@ def build_nav_rail_js() -> str:
   }
 })();
 """
+    )
+
+
+# ---------------------------------------------------------------------------
+# Follow mode (board pages only) — chip, ticker, departure overlay, spotlight
+# ---------------------------------------------------------------------------
+
+
+def build_follow_mode_css() -> str:
+    """CSS for Follow mode: chip dot, ticker bar, departure overlay, spotlight."""
+    return """
+#followChip .follow-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: #22c55e; margin-left: 5px; animation: kitchen-pulse 1.6s ease-in-out infinite;
+}
+.filter-btn.follow-on {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+#followTicker {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
+  display: flex; align-items: center; gap: 10px; padding: 7px 14px;
+  background: var(--bg-secondary); border-top: 1px solid var(--border);
+  border-left: 4px solid #64748b; font-size: 12.5px; cursor: pointer;
+  color: var(--text-primary);
+}
+#followTicker .follow-queue { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; }
+body.follow-ticker-on { padding-bottom: 44px; }
+#followDepart {
+  position: fixed; inset: 0; z-index: 2000; display: flex;
+  align-items: center; justify-content: center; text-align: center;
+  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  backdrop-filter: blur(2px); opacity: 0; pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+#followDepart.visible { opacity: 1; pointer-events: auto; }
+#followDepart .follow-depart-caption {
+  font-size: 17px; font-weight: 600; max-width: 640px; padding: 18px 26px;
+  background: var(--bg-secondary); border: 1px solid var(--border-strong);
+  border-radius: 10px; animation: panelSlide 0.25s ease;
+}
+@keyframes follow-spotlight-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.65); }
+  40%  { box-shadow: 0 0 0 9px rgba(59, 130, 246, 0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+.card.follow-spotlight { animation: follow-spotlight-ring 1.2s ease 2; }
+.follow-section-pulse { animation: tt-pulse 1s ease 2; }
+@media (prefers-reduced-motion: reduce) {
+  #followChip .follow-dot, .card.follow-spotlight, .follow-section-pulse { animation: none; }
+  #followDepart { transition: none; }
+}
+"""
+
+
+def build_follow_mode_js() -> str:
+    """Follow-mode engine. Plain-string template with json token injection —
+    deliberately NOT an f-string (brace/quote gotchas per CLAUDE.md)."""
+    template = r"""
+(function () {
+  var ENABLED_KEY = 'tt-follow-enabled';
+  var CURSOR_KEY = 'tt-follow-cursor';
+  var ARRIVAL_KEY = 'tt-follow-arrival';
+  var POLL_MS = 2000, STEP_MS = 1600, OVERFLOW_LIMIT = 40;
+  var ARRIVAL_TTL_MS = 30000, DEPART_MS = 1000;
+  var KIND_GROUPS = __KIND_GROUPS__;
+  var GROUP_COLORS = __GROUP_COLORS__;
+  var PRECEDENCE = __PRECEDENCE__;
+
+  function meta(n) { var m = document.querySelector('meta[name="' + n + '"]'); return m ? m.getAttribute('content') : null; }
+  var pid = meta('current-project');
+  var projectsRaw = meta('projects-list');
+  if (!pid || !projectsRaw || location.protocol === 'file:') return;
+  var projects = [];
+  try { projects = JSON.parse(projectsRaw) || []; } catch (e) { return; }
+  var nameByPid = {};
+  projects.forEach(function (p) { nameByPid[p.id] = p.name || p.id; });
+
+  var chip = document.getElementById('followChip');
+  var ticker = document.getElementById('followTicker');
+  var tickerText = document.getElementById('followTickerText');
+  var tickerQueue = document.getElementById('followTickerQueue');
+  var departOverlay = document.getElementById('followDepart');
+  if (!chip || !ticker || !departOverlay) return;
+
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  var enabled = lsGet(ENABLED_KEY) === '1';
+  var cursor = parseInt(lsGet(CURSOR_KEY) || '0', 10) || 0;
+  // lastSeenId = fetch watermark (advanced on poll). cursor = played position only.
+  var lastSeenId = cursor;
+  var pollInFlight = false;
+  var ready = false;
+  var queue = [];       // [{events: [ev, ...]}] coalesced steps
+  var playing = false;
+  var failCount = 0;
+  var reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var dragging = false;
+  document.addEventListener('dragstart', function () { dragging = true; });
+  document.addEventListener('dragend', function () { dragging = false; });
+
+  function interactionBlocked() {
+    var ov = document.getElementById('ticket-detail-overlay');
+    if (ov && !ov.classList.contains('hidden')) return true;
+    if (document.body.classList.contains('bounce-open')) return true;
+    if (dragging) return true;
+    var ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return true;
+    return false;
+  }
+
+  function setChipState() {
+    // Dedicated class — never .active (applyFilters / diff-poll own that).
+    chip.classList.toggle('follow-on', enabled);
+    chip.querySelector('.follow-dot').style.display = enabled ? '' : 'none';
+    ticker.style.display = enabled ? '' : 'none';
+    if (enabled) document.body.classList.add('follow-ticker-on');
+    else document.body.classList.remove('follow-ticker-on');
+    window.__ttFollowActive = enabled;
+  }
+
+  function apiFetch(sinceId) {
+    var u = '/api/activity/feed' + (sinceId != null ? '?since_id=' + sinceId + '&limit=100' : '');
+    return fetch(u).then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    });
+  }
+
+  function initCursor(cb) {
+    // Reuse pollInFlight so poll/init cannot race concurrent fetches.
+    if (pollInFlight) return;
+    pollInFlight = true;
+    apiFetch(null).then(function (d) {
+      cursor = d.latest_id || 0;
+      lastSeenId = cursor;
+      lsSet(CURSOR_KEY, String(cursor));
+      failCount = 0;
+      ready = true;
+      if (cb) cb();
+    }).catch(function () {
+      failCount++;
+      updateIdleTicker();
+    }).then(function () {
+      pollInFlight = false;
+    });
+  }
+
+  function groupKey(ev) { return ev.project_id + '|' + ev.subject_type + '|' + ev.subject_id; }
+
+  function headline(events) {
+    var best = events[0], bestRank = 9999;
+    events.forEach(function (ev) {
+      var r = PRECEDENCE.indexOf(ev.event_kind);
+      if (r === -1) r = 5000;
+      if (r < bestRank) { bestRank = r; best = ev; }
+    });
+    return best;
+  }
+
+  function enqueue(events) {
+    events.forEach(function (ev) {
+      var last = queue[queue.length - 1];
+      if (last && groupKey(last.events[0]) === groupKey(ev)) last.events.push(ev);
+      else queue.push({ events: [ev] });
+    });
+  }
+
+  function queuedEventCount() {
+    return queue.reduce(function (n, s) { return n + s.events.length; }, 0);
+  }
+
+  function poll() {
+    if (!enabled || document.hidden || pollInFlight) return;
+    // 2s interval doubles as init retry when the first initCursor failed
+    // (e.g. server restart mid-enable) so ready cannot stick false forever.
+    if (!ready) {
+      initCursor(function () { updateIdleTicker(); });
+      return;
+    }
+    pollInFlight = true;
+    apiFetch(lastSeenId).then(function (d) {
+      failCount = 0;
+      var evs = d.events || [];
+      if (evs.length) {
+        var maxRecv = 0;
+        for (var i = 0; i < evs.length; i++) {
+          if (evs[i].id > maxRecv) maxRecv = evs[i].id;
+        }
+        lastSeenId = Math.max(lastSeenId, maxRecv);
+        enqueue(evs);
+      }
+      if (queuedEventCount() > OVERFLOW_LIMIT) {
+        var skipped = queuedEventCount();
+        queue = [];
+        cursor = Math.max(cursor, d.latest_id || 0);
+        lastSeenId = Math.max(lastSeenId, d.latest_id || 0);
+        lsSet(CURSOR_KEY, String(cursor));
+        showTicker('skipped ' + skipped + ' actions (burst)', '#94a3b8', '');
+        // Skip playNext/updateIdleTicker this tick so the message survives ~2s.
+        return;
+      }
+      playNext();
+      updateIdleTicker();
+    }).catch(function () {
+      failCount++;
+      updateIdleTicker();
+    }).then(function () {
+      pollInFlight = false;
+    });
+  }
+
+  function actorLabel(ev) {
+    if (ev.actor_type === 'agent') return '🤖 ' + (ev.actor_name || 'agent');
+    if (ev.actor_type === 'system') return '⚙️ system';
+    return '👤 human';
+  }
+
+  function subjectLabel(ev) {
+    var t = ev.subject_id;
+    if (ev.ticket_title) t += ' “' + ev.ticket_title + '”';
+    return t;
+  }
+
+  function captionFor(ev, extra) {
+    var p = ev.payload || {};
+    var x = subjectLabel(ev);
+    var text;
+    switch (ev.event_kind) {
+      case 'section_change': text = 'moved ' + x + ' ' + (p.before || '?') + ' → ' + (p.after || '?'); break;
+      case 'ticket_created': text = 'created ' + x + ' in ' + (p.section || '?'); break;
+      case 'status_change': text = 'set ' + x + ' ' + (p.before || '?') + ' → ' + (p.after || '?'); break;
+      case 'run_started': text = 'started a run on ' + x; break;
+      case 'run_succeeded': text = 'run succeeded on ' + x; break;
+      case 'run_failed': text = 'run FAILED on ' + x; break;
+      case 'run_cancelled': text = 'run cancelled on ' + x; break;
+      case 'run_stalled': text = 'run stalled on ' + x; break;
+      case 'run_discarded': text = 'run discarded on ' + x; break;
+      case 'gate_override': text = 'gate OVERRIDDEN on ' + x + ': ' + (p.reason || ''); break;
+      case 'pause_set': text = 'paused automation on ' + x; break;
+      case 'pause_cleared': text = 'resumed automation on ' + x; break;
+      case 'mode_changed': text = 'automation mode ' + (p.before || '?') + ' → ' + (p.after || '?') + ' on ' + x; break;
+      case 'criteria_check': text = 'checked a criterion on ' + x; break;
+      case 'criteria_added': text = 'criteria added on ' + x; break;
+      case 'criteria_removed': text = 'criteria removed on ' + x; break;
+      case 'criteria_changed': text = 'criteria updated on ' + x; break;
+      case 'hook_started': text = 'hook ' + (p.hook || '') + ' started on ' + x; break;
+      case 'hook_succeeded': text = 'hook ' + (p.hook || '') + ' succeeded on ' + x; break;
+      case 'hook_failed': text = 'hook ' + (p.hook || '') + ' FAILED on ' + x; break;
+      case 'workspace_created': text = 'workspace created for ' + x; break;
+      case 'agent_output': text = 'agent output on ' + x; break;
+      case 'handoff_recorded': text = 'handoff recorded on ' + x; break;
+      case 'input_provided': text = 'input provided to ' + x; break;
+      case 'field_changed': text = 'edited ' + (p.field || 'field') + ' on ' + x; break;
+      case 'pane_linked': text = 'pane linked on ' + x; break;
+      case 'pane_unlinked': text = 'pane unlinked on ' + x; break;
+      case 'kitchen_paused': text = 'Kitchen paused'; break;
+      case 'kitchen_resumed': text = 'Kitchen resumed'; break;
+      default: text = ev.event_kind.replace(/_/g, ' ') + ' · ' + x;
+    }
+    return actorLabel(ev) + ' ' + text + (extra ? ' (+' + extra + ' more)' : '');
+  }
+
+  function colorFor(ev) { return GROUP_COLORS[KIND_GROUPS[ev.event_kind]] || '#64748b'; }
+
+  function showTicker(text, color, ticketId) {
+    tickerText.textContent = text;
+    ticker.style.borderLeftColor = color || '#64748b';
+    tickerText.dataset.tid = ticketId || '';
+    tickerQueue.textContent = queue.length > 0 ? '· ' + queue.length + ' queued' : '';
+  }
+
+  function updateIdleTicker() {
+    if (!enabled || playing) return;
+    if (failCount >= 5) { showTicker('feed offline — retrying', '#ef4444', ''); return; }
+    if (!queue.length) showTicker('following · live', '#22c55e', '');
+  }
+
+  function playNext() {
+    if (playing || !enabled || !queue.length) return;
+    if (interactionBlocked()) { setTimeout(playNext, 1000); return; }
+    var step = queue.shift();
+    var ev = headline(step.events);
+    var maxId = step.events.reduce(function (m, e) { return Math.max(m, e.id); }, 0);
+    playing = true;
+    if (ev.project_id !== pid && ev.project_id !== '_kitchen' && nameByPid[ev.project_id]) {
+      depart(step, ev, maxId);
+      return;
+    }
+    playLocal(step, ev, maxId);
+  }
+
+  function finishStep(maxId) {
+    // Cursor advances only after playback completes (spec invariant).
+    setTimeout(function () {
+      cursor = Math.max(cursor, maxId);
+      lsSet(CURSOR_KEY, String(cursor));
+      playing = false;
+      updateIdleTicker();
+      playNext();
+    }, STEP_MS);
+  }
+
+  function playLocal(step, ev, maxId) {
+    var extra = step.events.length - 1;
+    // Ticket ids repeat across projects — only spotlight same-board cards.
+    var sameProjTicket = ev.project_id === pid && ev.subject_type === 'ticket';
+    showTicker(captionFor(ev, extra), colorFor(ev), sameProjTicket ? ev.subject_id : '');
+    if (sameProjTicket) spotlight(ev.subject_id);
+    finishStep(maxId);
+  }
+
+  function spotlight(ticketId) {
+    var card = null;
+    document.querySelectorAll('[data-item-id]').forEach(function (el) {
+      if (!card && el.dataset.itemId === ticketId && !el.closest('.child-group')) card = el;
+    });
+    if (!card || card.offsetParent === null) {
+      // absent, filtered out, or in a collapsed section — never touch the
+      // user's filters/sections; pulse the section header if we can find it
+      var sec = card ? card.closest('.bottom-section') : null;
+      if (sec) {
+        var h = sec.querySelector('h2, .bottom-section-header, summary');
+        if (h) {
+          h.classList.add('follow-section-pulse');
+          setTimeout(function () { h.classList.remove('follow-section-pulse'); }, 2200);
+        }
+      }
+      return;
+    }
+    card.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+    card.classList.remove('follow-spotlight');
+    void card.offsetWidth;
+    card.classList.add('follow-spotlight');
+    setTimeout(function () { card.classList.remove('follow-spotlight'); }, 2600);
+  }
+
+  function depart(step, ev, maxId) {
+    var target = ev.project_id;
+    var cap = '→ ' + (nameByPid[target] || target) + ' · ' + captionFor(ev, step.events.length - 1);
+    departOverlay.querySelector('.follow-depart-caption').textContent = cap;
+    departOverlay.classList.add('visible');
+    try {
+      sessionStorage.setItem(ARRIVAL_KEY, JSON.stringify({
+        pid: target,
+        subjectType: ev.subject_type,
+        subjectId: ev.subject_id,
+        caption: captionFor(ev, step.events.length - 1),
+        color: colorFor(ev),
+        maxId: maxId,
+        ts: Date.now()
+      }));
+    } catch (e) {}
+    // Cursor invariant: cursor stays at its pre-step value here; the arrival
+    // playback on the next page advances it. Lost handoff => replay, not loss.
+    setTimeout(function () { location.href = '/' + encodeURIComponent(target) + '/kanban'; },
+               reducedMotion ? 0 : DEPART_MS);
+  }
+
+  function checkArrival() {
+    var raw = null;
+    try {
+      raw = sessionStorage.getItem(ARRIVAL_KEY);
+      if (raw) sessionStorage.removeItem(ARRIVAL_KEY);
+    } catch (e) {}
+    if (!raw) return false;
+    var a = null;
+    try { a = JSON.parse(raw); } catch (e) { return false; }
+    if (!a || a.pid !== pid || (Date.now() - (a.ts || 0)) > ARRIVAL_TTL_MS) return false;
+    playing = true;
+    showTicker(a.caption, a.color, a.subjectType === 'ticket' ? a.subjectId : '');
+    if (a.subjectType === 'ticket') spotlight(a.subjectId);
+    // Avoid re-fetching the arrived step while finishStep waits to advance cursor.
+    if (a.maxId) lastSeenId = Math.max(lastSeenId, a.maxId);
+    finishStep(a.maxId || cursor);
+    return true;
+  }
+
+  chip.addEventListener('click', function () {
+    enabled = !enabled;
+    lsSet(ENABLED_KEY, enabled ? '1' : '0');
+    setChipState();
+    if (enabled) {
+      queue = [];
+      ready = false;
+      initCursor(function () { updateIdleTicker(); });  // enable ALWAYS resets to now
+    } else {
+      queue = [];
+      playing = false;
+      ready = false;
+    }
+  });
+
+  ticker.addEventListener('click', function () {
+    var tid = tickerText.dataset.tid;
+    if (!tid) return;
+    // Same path a card click uses (openOverlay), not bare hash assignment.
+    if (typeof window.__ttOpenTicket === 'function') {
+      window.__ttOpenTicket(tid);
+    } else {
+      location.hash = '#ticket/' + tid;
+    }
+  });
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && enabled) {
+      queue = [];
+      ready = false;
+      initCursor(function () { updateIdleTicker(); });  // jump to now
+    }
+  });
+
+  setChipState();
+  if (enabled) {
+    var hadArrival = checkArrival();
+    if (hadArrival) {
+      // Continuity after follow navigation: trust stored cursor once ready.
+      if (cursor) { ready = true; lastSeenId = Math.max(lastSeenId, cursor); }
+      else initCursor(function () { updateIdleTicker(); });
+    } else if (cursor) {
+      ready = true;
+      lastSeenId = cursor;
+    } else {
+      initCursor(function () { updateIdleTicker(); });
+    }
+    updateIdleTicker();
+  }
+  setInterval(poll, POLL_MS);
+})();
+"""
+    return (
+        template.replace("__KIND_GROUPS__", json.dumps(EVENT_KIND_GROUPS))
+        .replace("__GROUP_COLORS__", json.dumps(EVENT_GROUP_COLORS))
+        .replace("__PRECEDENCE__", json.dumps(FOLLOW_KIND_PRECEDENCE))
     )
 
 
@@ -1856,6 +2294,8 @@ def generate_html(project: Project) -> str:
     _rail_css = build_nav_rail_css()
     _rail_html = build_nav_rail_html()
     _rail_js = build_nav_rail_js()
+    _follow_css = build_follow_mode_css()
+    _follow_js = build_follow_mode_js()
 
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
@@ -4092,6 +4532,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       </div>
     </span>
     <button class="filter-btn" data-filter="for-review-auto"  data-group="kitchen" data-testid="for-review-auto-chip" title="Latest run succeeded and at least one acceptance criterion present">For Review (auto) <span class="count">{count_for_review_auto}</span></button>
+    <button class="filter-btn" id="followChip" data-testid="follow-chip"
+            title="Follow the action: auto-navigate to tickets as agents act on them (all projects)">Follow<span class="follow-dot" style="display:none;"></span></button>
   </span>
   <span class="filter-divider"></span>
 {_tag_filter_html}  <span class="filter-divider"></span>
@@ -4870,7 +5312,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
         applyFilters();
         expandedIds.forEach(function(sid) {{ var sec = document.getElementById(sid); if (sec && !sec.classList.contains('expanded')) sec.classList.add('expanded'); }});
         rebindCardListeners();
-        if (firstChanged) setTimeout(function() {{ firstChanged.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); }}, 100);
+        if (firstChanged && !window.__ttFollowActive) setTimeout(function() {{ firstChanged.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); }}, 100);
       }}).catch(function() {{}});
     }}, 2000);
 
@@ -8041,6 +8483,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       _paneLinksInterval = setInterval(function() {{ refreshPaneLinks(currentTicketId); }}, 3000);
     }});
   }}
+  // Exposed for Follow-mode ticker clicks (same path as a card click).
+  window.__ttOpenTicket = openOverlay;
 
   function closeOverlay() {{
     closeStatusDropdown();
@@ -12394,6 +12838,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 }})();
 </script>
 <div id="app-toast" role="status" aria-live="polite"><span id="app-toast-msg"></span></div>
+<div id="followTicker" style="display:none;">
+  <span id="followTickerText"></span>
+  <span class="follow-queue" id="followTickerQueue"></span>
+</div>
+<div id="followDepart"><div class="follow-depart-caption"></div></div>
 <div id="confirm-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;" role="dialog" aria-modal="true">
   <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
     <h3 id="confirm-modal-title" style="font-size:14px;font-weight:600;margin-bottom:8px;"></h3>
@@ -12422,8 +12871,13 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
     # Inject rail CSS and JS outside the f-string (they contain literal { }
     # that would break f-string parsing if placed inline).
-    html = html.replace("</head>", "<style>" + _rail_css + "</style>\n</head>", 1)
+    html = html.replace(
+        "</head>",
+        "<style>" + _rail_css + "</style>\n<style>" + _follow_css + "</style>\n</head>",
+        1,
+    )
     html += "<script>" + _rail_js + "</script>"
+    html += "<script>" + _follow_js + "</script>"
 
     return html
 

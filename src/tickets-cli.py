@@ -32,6 +32,7 @@ from actions import (
     accept_ticket,
     add_ticket,
     emit_event,
+    get_activity_feed,
     get_project_branches,
     get_ticket_branches,
     link_branch,
@@ -2525,6 +2526,32 @@ def cmd_panes(args):
         )
 
 
+def cmd_feed(args):
+    """Cross-project activity feed (read-only)."""
+    registry_path = DASHBOARD_DIR / "registry.json"
+    try:
+        projects = json.loads(registry_path.read_text()).get("projects", [])
+    except (OSError, json.JSONDecodeError):
+        projects = []
+    conn = get_db()
+    init_db(conn)
+    feed = get_activity_feed(
+        conn, since_id=args.since, limit=args.limit, projects=projects
+    )
+    conn.close()
+    if args.as_json:
+        print(json.dumps(feed, indent=2))
+    else:
+        for ev in feed["events"]:
+            title = ev.get("ticket_title") or ""
+            print(
+                f"{ev['id']:>6}  {ev['occurred_at']}  {ev['project_id']:<16} "
+                f"{ev['actor_type']:<6} {ev['event_kind']:<18} "
+                f"{ev['subject_id']} {title}"
+            )
+        print(f"latest_id: {feed['latest_id']}")
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -2909,6 +2936,16 @@ def main():
     p_panes = sub.add_parser("panes", help="List all pane links (debug)")
     p_panes.add_argument("--project", default=None)
 
+    p_feed = sub.add_parser("feed", help="Cross-project activity feed (read-only)")
+    p_feed.add_argument(
+        "--since",
+        type=int,
+        default=None,
+        help="events with id > SINCE",
+    )
+    p_feed.add_argument("--limit", type=int, default=50)
+    p_feed.add_argument("--json", action="store_true", dest="as_json")
+
     args = parser.parse_args()
 
     commands = {
@@ -2937,6 +2974,7 @@ def main():
         "current": cmd_current,
         "unlink": cmd_unlink,
         "panes": cmd_panes,
+        "feed": cmd_feed,
     }
 
     commands[args.command](args)

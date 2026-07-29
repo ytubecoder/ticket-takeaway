@@ -280,20 +280,29 @@ EVENT_KIND_GROUPS: dict[str, str] = {
     "status_change": "Status",
     "criteria_check": "Criteria",
     "criteria_added": "Criteria",
+    "criteria_removed": "Criteria",
+    "criteria_changed": "Criteria",
     "field_changed": "Field",
     "input_provided": "Input",
     "run_started": "Run",
     "run_succeeded": "Run",
     "run_failed": "Run",
     "run_cancelled": "Run",
+    "run_stalled": "Run",
+    "run_discarded": "Run",
     "agent_output": "Run",
     "handoff_recorded": "Run",
     "hook_started": "Hook",
     "hook_succeeded": "Hook",
     "hook_failed": "Hook",
     "workspace_created": "Workspace",
+    "pane_linked": "Workspace",
+    "pane_unlinked": "Workspace",
     "pause_set": "Pause",
     "pause_cleared": "Pause",
+    "mode_changed": "Pause",
+    "kitchen_paused": "Pause",
+    "kitchen_resumed": "Pause",
     "gate_override": "Gate",
 }
 
@@ -329,6 +338,42 @@ EVENT_GROUP_COLORS: dict[str, str] = {
     "Pause": "#ef4444",  # red — interruptions
     "Gate": "#dc2626",  # deep red — a gate was bypassed on purpose
 }
+
+# Headline pick order for Follow-mode coalesced steps: when several events on
+# one ticket collapse into a single animated step, the earliest kind in this
+# list becomes the caption; the rest render as "+N more". Unknown kinds rank
+# below everything listed.
+FOLLOW_KIND_PRECEDENCE: list[str] = [
+    "section_change",
+    "ticket_created",
+    "status_change",
+    "gate_override",
+    "run_failed",
+    "run_stalled",
+    "run_succeeded",
+    "run_cancelled",
+    "run_discarded",
+    "run_started",
+    "input_provided",
+    "kitchen_paused",
+    "kitchen_resumed",
+    "pause_set",
+    "pause_cleared",
+    "mode_changed",
+    "handoff_recorded",
+    "agent_output",
+    "hook_failed",
+    "hook_started",
+    "hook_succeeded",
+    "workspace_created",
+    "criteria_check",
+    "criteria_added",
+    "criteria_removed",
+    "criteria_changed",
+    "field_changed",
+    "pane_linked",
+    "pane_unlinked",
+]
 
 # ---------------------------------------------------------------------------
 # Feedbacks integration

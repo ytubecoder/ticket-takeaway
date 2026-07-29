@@ -961,6 +961,9 @@ def build_follow_mode_js() -> str:
   }
 
   function initCursor(cb) {
+    // Reuse pollInFlight so poll/init cannot race concurrent fetches.
+    if (pollInFlight) return;
+    pollInFlight = true;
     apiFetch(null).then(function (d) {
       cursor = d.latest_id || 0;
       lastSeenId = cursor;
@@ -968,7 +971,12 @@ def build_follow_mode_js() -> str:
       failCount = 0;
       ready = true;
       if (cb) cb();
-    }).catch(function () { failCount++; updateIdleTicker(); });
+    }).catch(function () {
+      failCount++;
+      updateIdleTicker();
+    }).then(function () {
+      pollInFlight = false;
+    });
   }
 
   function groupKey(ev) { return ev.project_id + '|' + ev.subject_type + '|' + ev.subject_id; }
@@ -996,7 +1004,13 @@ def build_follow_mode_js() -> str:
   }
 
   function poll() {
-    if (!enabled || !ready || document.hidden || pollInFlight) return;
+    if (!enabled || document.hidden || pollInFlight) return;
+    // 2s interval doubles as init retry when the first initCursor failed
+    // (e.g. server restart mid-enable) so ready cannot stick false forever.
+    if (!ready) {
+      initCursor(function () { updateIdleTicker(); });
+      return;
+    }
     pollInFlight = true;
     apiFetch(lastSeenId).then(function (d) {
       failCount = 0;

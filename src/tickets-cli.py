@@ -2937,7 +2937,12 @@ def main():
     p_panes.add_argument("--project", default=None)
 
     p_feed = sub.add_parser("feed", help="Cross-project activity feed (read-only)")
-    p_feed.add_argument("--since", type=int, default=None, help="events with id > SINCE")
+    p_feed.add_argument(
+        "--since",
+        type=int,
+        default=None,
+        help="events with id > SINCE",
+    )
     p_feed.add_argument("--limit", type=int, default=50)
     p_feed.add_argument("--json", action="store_true", dest="as_json")
 

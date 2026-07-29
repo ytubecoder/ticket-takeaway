@@ -831,6 +831,53 @@ def build_nav_rail_js() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Follow mode (board pages only) — chip, ticker, departure overlay, spotlight
+# ---------------------------------------------------------------------------
+
+
+def build_follow_mode_css() -> str:
+    """CSS for Follow mode: chip dot, ticker bar, departure overlay, spotlight."""
+    return """
+#followChip .follow-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: #22c55e; margin-left: 5px; animation: kitchen-pulse 1.6s ease-in-out infinite;
+}
+#followTicker {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
+  display: flex; align-items: center; gap: 10px; padding: 7px 14px;
+  background: var(--bg-secondary); border-top: 1px solid var(--border);
+  border-left: 4px solid #64748b; font-size: 12.5px; cursor: pointer;
+  color: var(--text-primary);
+}
+#followTicker .follow-queue { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; }
+#followDepart {
+  position: fixed; inset: 0; z-index: 2000; display: flex;
+  align-items: center; justify-content: center; text-align: center;
+  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  backdrop-filter: blur(2px); opacity: 0; pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+#followDepart.visible { opacity: 1; pointer-events: auto; }
+#followDepart .follow-depart-caption {
+  font-size: 17px; font-weight: 600; max-width: 640px; padding: 18px 26px;
+  background: var(--bg-secondary); border: 1px solid var(--border-strong);
+  border-radius: 10px; animation: panelSlide 0.25s ease;
+}
+@keyframes follow-spotlight-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.65); }
+  40%  { box-shadow: 0 0 0 9px rgba(59, 130, 246, 0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+.card.follow-spotlight { animation: follow-spotlight-ring 1.2s ease 2; }
+.follow-section-pulse { animation: tt-pulse 1s ease 2; }
+@media (prefers-reduced-motion: reduce) {
+  #followChip .follow-dot, .card.follow-spotlight, .follow-section-pulse { animation: none; }
+  #followDepart { transition: none; }
+}
+"""
+
+
+# ---------------------------------------------------------------------------
 # Settings drawer (rail-anchored, global) — used by non-kanban pages.
 # The kanban view embeds its own inline drawer that adds scenario sections
 # on top of the global theme + feedbacks shell; keep the markup/JS in sync.
@@ -1856,6 +1903,7 @@ def generate_html(project: Project) -> str:
     _rail_css = build_nav_rail_css()
     _rail_html = build_nav_rail_html()
     _rail_js = build_nav_rail_js()
+    _follow_css = build_follow_mode_css()
 
     # Pre-computed SVG icons for use inside the HTML f-string
     _icon_settings = _svg_icon("settings", 14)
@@ -4092,6 +4140,8 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       </div>
     </span>
     <button class="filter-btn" data-filter="for-review-auto"  data-group="kitchen" data-testid="for-review-auto-chip" title="Latest run succeeded and at least one acceptance criterion present">For Review (auto) <span class="count">{count_for_review_auto}</span></button>
+    <button class="filter-btn" id="followChip" data-testid="follow-chip"
+            title="Follow the action: auto-navigate to tickets as agents act on them (all projects)">Follow<span class="follow-dot" style="display:none;"></span></button>
   </span>
   <span class="filter-divider"></span>
 {_tag_filter_html}  <span class="filter-divider"></span>
@@ -12394,6 +12444,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 }})();
 </script>
 <div id="app-toast" role="status" aria-live="polite"><span id="app-toast-msg"></span></div>
+<div id="followTicker" style="display:none;">
+  <span id="followTickerText"></span>
+  <span class="follow-queue" id="followTickerQueue"></span>
+</div>
+<div id="followDepart"><div class="follow-depart-caption"></div></div>
 <div id="confirm-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;" role="dialog" aria-modal="true">
   <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
     <h3 id="confirm-modal-title" style="font-size:14px;font-weight:600;margin-bottom:8px;"></h3>
@@ -12422,7 +12477,11 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
 
     # Inject rail CSS and JS outside the f-string (they contain literal { }
     # that would break f-string parsing if placed inline).
-    html = html.replace("</head>", "<style>" + _rail_css + "</style>\n</head>", 1)
+    html = html.replace(
+        "</head>",
+        "<style>" + _rail_css + "</style>\n<style>" + _follow_css + "</style>\n</head>",
+        1,
+    )
     html += "<script>" + _rail_js + "</script>"
 
     return html

@@ -123,6 +123,12 @@ One commit for engine/CSS/serve/openOverlay (`fix: follow-mode review round 1`),
 | `node --check` on `build_follow_mode_js()` | clean |
 | `python3 -m py_compile` on generate/serve/tickets-cli | OK |
 
+## Round 3 — init-retry liveness
+
+**Bug:** If the first `initCursor()` failed (e.g. Follow enabled during a server restart), `ready` stayed `false` forever: `poll()` early-returned on `!ready` and never retried init, so the mode sat dead until a manual toggle.
+
+**Fix:** When `enabled && !ready && !document.hidden && !pollInFlight`, `poll()` calls `initCursor(...)` and returns — the 2s interval is the init retry loop. `initCursor` reuses `pollInFlight` so poll/init cannot race concurrent fetches.
+
 ## Files touched (canonical `src/` + tests only)
 
 - `src/constants.py`

@@ -83,6 +83,9 @@ from actions import (
     emit_event as _kitchen_emit_event,
 )
 from actions import (
+    get_activity_feed as _actions_get_activity_feed,
+)
+from actions import (
     get_project_branches as _actions_get_project_branches,
 )
 from actions import (
@@ -9074,6 +9077,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         conn,
                         projects,
                         is_paused=_kitchen.is_paused(),
+                    )
+                    conn.close()
+                self._send_json(feed)
+                return
+
+            # Global activity feed — drives kanban Follow mode. Polled ~2s by
+            # boards with Follow enabled. since_id absent -> cursor init only.
+            if remainder.startswith("/api/activity/feed"):
+                query = urlparse(self.path).query
+                params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+                try:
+                    since_id = int(params["since_id"]) if "since_id" in params else None
+                except ValueError:
+                    since_id = None
+                try:
+                    limit = int(params.get("limit", "100"))
+                except ValueError:
+                    limit = 100
+                with _PROJECTS_CACHE_LOCK:
+                    projects = list(_PROJECTS_CACHE.values())
+                with _db_lock:
+                    conn = get_db()
+                    init_db(conn)
+                    feed = _actions_get_activity_feed(
+                        conn, since_id=since_id, limit=limit, projects=projects
                     )
                     conn.close()
                 self._send_json(feed)

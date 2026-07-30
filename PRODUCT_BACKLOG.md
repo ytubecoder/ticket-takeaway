@@ -261,12 +261,6 @@ Add feedbacks.autostart boolean setting so Record button opens widget with ?auto
 - [ ] When disabled (default), widget opens with Start Recording button as before
 - [ ] Setting persists across page reloads
 
-### B-50: Sample ticket from journey tour
-Priority: medium | Status: proposed
-
-### B-51: Sample ticket from journey tour
-Priority: medium | Status: proposed
-
 ### B-52: Sample ticket from journey tour
 Priority: medium | Status: proposed
 
@@ -323,6 +317,12 @@ Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
 
 ### B-49: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-50: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-51: Sample ticket from journey tour
 Priority: medium | Status: proposed
 
 ## Ideas

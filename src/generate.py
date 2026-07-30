@@ -13566,8 +13566,10 @@ def main():
     for p in output_paths:
         print(f"Output: {p}")
 
-    # Open first project's dashboard in browser (skip if --no-open)
-    if output_paths and "--no-open" not in sys.argv:
+    # Open first project's dashboard in browser only when explicitly requested
+    # via --open (the user is often remote; never auto-open). --no-open is
+    # still accepted from older callers and simply does nothing extra.
+    if output_paths and "--open" in sys.argv:
         open_path = output_paths[0]
         system = platform.system()
         try:

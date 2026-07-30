@@ -857,19 +857,31 @@ def build_follow_mode_css() -> str:
 }
 #followTicker .follow-queue { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; }
 body.follow-ticker-on { padding-bottom: 44px; }
-#followDepart {
-  position: fixed; inset: 0; z-index: 2000; display: flex;
-  align-items: center; justify-content: center; text-align: center;
-  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
-  backdrop-filter: blur(2px); opacity: 0; pointer-events: none;
-  transition: opacity 0.3s ease;
+/* Notes for activity on other boards. Deliberately a separate channel from
+   the singleton #app-toast, which displaces by priority — a burst of follow
+   notes must not eat the user's Saved!/Undo toast, or each other. */
+#followNotes {
+  position: fixed; right: 16px; bottom: 56px; z-index: 950;
+  display: flex; flex-direction: column; gap: 8px;
+  align-items: flex-end; pointer-events: none; max-width: 340px;
 }
-#followDepart.visible { opacity: 1; pointer-events: auto; }
-#followDepart .follow-depart-caption {
-  font-size: 17px; font-weight: 600; max-width: 640px; padding: 18px 26px;
-  background: var(--bg-secondary); border: 1px solid var(--border-strong);
-  border-radius: 10px; animation: panelSlide 0.25s ease;
+.follow-note {
+  pointer-events: auto; cursor: pointer; width: 100%;
+  background: var(--bg-card); border: 1px solid var(--border-default);
+  border-left: 3px solid #64748b; border-radius: 8px; padding: 8px 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5); font-size: 12px;
+  color: var(--text-secondary);
+  opacity: 0; transform: translateX(12px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
+.follow-note.visible { opacity: 1; transform: translateX(0); }
+.follow-note:hover { border-color: var(--accent); }
+.follow-note-project {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-secondary); opacity: 0.75;
+  margin-bottom: 2px;
+}
+.follow-note-body { color: var(--text-primary); line-height: 1.35; }
 @keyframes follow-spotlight-ring {
   0%   { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.65); }
   40%  { box-shadow: 0 0 0 9px rgba(59, 130, 246, 0.18); }
@@ -879,7 +891,7 @@ body.follow-ticker-on { padding-bottom: 44px; }
 .follow-section-pulse { animation: tt-pulse 1s ease 2; }
 @media (prefers-reduced-motion: reduce) {
   #followChip .follow-dot, .card.follow-spotlight, .follow-section-pulse { animation: none; }
-  #followDepart { transition: none; }
+  .follow-note { transition: none; opacity: 1; transform: none; }
 }
 """
 
@@ -891,9 +903,11 @@ def build_follow_mode_js() -> str:
 (function () {
   var ENABLED_KEY = 'tt-follow-enabled';
   var CURSOR_KEY = 'tt-follow-cursor';
-  var ARRIVAL_KEY = 'tt-follow-arrival';
   var POLL_MS = 2000, STEP_MS = 1600, OVERFLOW_LIMIT = 40;
-  var ARRIVAL_TTL_MS = 30000, DEPART_MS = 1000;
+  // Other-project events surface as stacked notes instead of navigating the
+  // browser away. NOTE_MS outlives the spotlight so the text stays readable
+  // after the ring has faded.
+  var NOTE_MS = 6000, NOTE_MAX = 4;
   var KIND_GROUPS = __KIND_GROUPS__;
   var GROUP_COLORS = __GROUP_COLORS__;
   var PRECEDENCE = __PRECEDENCE__;
@@ -911,8 +925,8 @@ def build_follow_mode_js() -> str:
   var ticker = document.getElementById('followTicker');
   var tickerText = document.getElementById('followTickerText');
   var tickerQueue = document.getElementById('followTickerQueue');
-  var departOverlay = document.getElementById('followDepart');
-  if (!chip || !ticker || !departOverlay) return;
+  var noteStack = document.getElementById('followNotes');
+  if (!chip || !ticker || !noteStack) return;
 
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
@@ -1117,7 +1131,7 @@ def build_follow_mode_js() -> str:
     var maxId = step.events.reduce(function (m, e) { return Math.max(m, e.id); }, 0);
     playing = true;
     if (ev.project_id !== pid && ev.project_id !== '_kitchen' && nameByPid[ev.project_id]) {
-      depart(step, ev, maxId);
+      playRemote(step, ev, maxId);
       return;
     }
     playLocal(step, ev, maxId);
@@ -1162,51 +1176,59 @@ def build_follow_mode_js() -> str:
       return;
     }
     card.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+    // Mark the card as follow-driven so the diff-poll's className rewrite
+    // re-applies the ring instead of stripping it mid-animation (BUG-03).
+    card.dataset.followLit = '1';
     card.classList.remove('follow-spotlight');
     void card.offsetWidth;
     card.classList.add('follow-spotlight');
-    setTimeout(function () { card.classList.remove('follow-spotlight'); }, 2600);
+    setTimeout(function () {
+      card.classList.remove('follow-spotlight');
+      delete card.dataset.followLit;
+    }, 2600);
   }
 
-  function depart(step, ev, maxId) {
-    var target = ev.project_id;
-    var cap = '→ ' + (nameByPid[target] || target) + ' · ' + captionFor(ev, step.events.length - 1);
-    departOverlay.querySelector('.follow-depart-caption').textContent = cap;
-    departOverlay.classList.add('visible');
-    try {
-      sessionStorage.setItem(ARRIVAL_KEY, JSON.stringify({
-        pid: target,
-        subjectType: ev.subject_type,
-        subjectId: ev.subject_id,
-        caption: captionFor(ev, step.events.length - 1),
-        color: colorFor(ev),
-        maxId: maxId,
-        ts: Date.now()
-      }));
-    } catch (e) {}
-    // Cursor invariant: cursor stays at its pre-step value here; the arrival
-    // playback on the next page advances it. Lost handoff => replay, not loss.
-    setTimeout(function () { location.href = '/' + encodeURIComponent(target) + '/kanban'; },
-               reducedMotion ? 0 : DEPART_MS);
+  // Other-project activity never navigates the browser. It stacks as a note
+  // the user can read at leisure and click through to if they care.
+  function pushNote(ev, extra) {
+    var note = document.createElement('div');
+    note.className = 'follow-note';
+    note.style.borderLeftColor = colorFor(ev);
+
+    var head = document.createElement('div');
+    head.className = 'follow-note-project';
+    head.textContent = nameByPid[ev.project_id] || ev.project_id;
+    note.appendChild(head);
+
+    var body = document.createElement('div');
+    body.className = 'follow-note-body';
+    body.textContent = captionFor(ev, extra);
+    note.appendChild(body);
+
+    note.addEventListener('click', function () {
+      location.href = '/' + encodeURIComponent(ev.project_id) + '/kanban';
+    });
+
+    noteStack.appendChild(note);
+    void note.offsetWidth;
+    note.classList.add('visible');
+
+    while (noteStack.children.length > NOTE_MAX) noteStack.removeChild(noteStack.firstChild);
+
+    setTimeout(function () {
+      note.classList.remove('visible');
+      setTimeout(function () { if (note.parentNode) note.remove(); }, 300);
+    }, NOTE_MS);
   }
 
-  function checkArrival() {
-    var raw = null;
-    try {
-      raw = sessionStorage.getItem(ARRIVAL_KEY);
-      if (raw) sessionStorage.removeItem(ARRIVAL_KEY);
-    } catch (e) {}
-    if (!raw) return false;
-    var a = null;
-    try { a = JSON.parse(raw); } catch (e) { return false; }
-    if (!a || a.pid !== pid || (Date.now() - (a.ts || 0)) > ARRIVAL_TTL_MS) return false;
-    playing = true;
-    showTicker(a.caption, a.color, a.subjectType === 'ticket' ? a.subjectId : '');
-    if (a.subjectType === 'ticket') spotlight(a.subjectId);
-    // Avoid re-fetching the arrived step while finishStep waits to advance cursor.
-    if (a.maxId) lastSeenId = Math.max(lastSeenId, a.maxId);
-    finishStep(a.maxId || cursor);
-    return true;
+  function playRemote(step, ev, maxId) {
+    var extra = step.events.length - 1;
+    pushNote(ev, extra);
+    // Ticker mirrors the step but carries no ticket id — the id belongs to
+    // another board and would open the wrong ticket here.
+    showTicker((nameByPid[ev.project_id] || ev.project_id) + ' · ' + captionFor(ev, extra),
+               colorFor(ev), '');
+    finishStep(maxId);
   }
 
   chip.addEventListener('click', function () {
@@ -1245,12 +1267,9 @@ def build_follow_mode_js() -> str:
 
   setChipState();
   if (enabled) {
-    var hadArrival = checkArrival();
-    if (hadArrival) {
-      // Continuity after follow navigation: trust stored cursor once ready.
-      if (cursor) { ready = true; lastSeenId = Math.max(lastSeenId, cursor); }
-      else initCursor(function () { updateIdleTicker(); });
-    } else if (cursor) {
+    // No cross-board handoff to resume any more — a stored cursor is simply
+    // trusted, otherwise start from now.
+    if (cursor) {
       ready = true;
       lastSeenId = cursor;
     } else {
@@ -5174,6 +5193,9 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
               oldEl.dataset.desc = newEl.dataset.desc || '';
               oldEl.className = newEl.className;
               if (wasExpanded) oldEl.classList.add('expanded');
+              // Follow mode lit this card; the className rewrite above would
+              // otherwise strip the ring partway through (BUG-03).
+              if (oldEl.dataset.followLit === '1') oldEl.classList.add('follow-spotlight');
               while (oldEl.firstChild) oldEl.removeChild(oldEl.firstChild);
               Array.from(newEl.childNodes).forEach(function(n) {{ oldEl.appendChild(n.cloneNode(true)); }});
               target.appendChild(oldEl);
@@ -5187,6 +5209,9 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
           oldEl.dataset.desc = newEl.dataset.desc || '';
           oldEl.className = newEl.className;
           if (wasExpanded) oldEl.classList.add('expanded');
+          // Same BUG-03 wipe on the in-place-update path (e.g. status badge
+          // changes) — the card never moves but its className is still reset.
+          if (oldEl.dataset.followLit === '1') oldEl.classList.add('follow-spotlight');
           while (oldEl.firstChild) oldEl.removeChild(oldEl.firstChild);
           Array.from(newEl.childNodes).forEach(function(n) {{ oldEl.appendChild(n.cloneNode(true)); }});
           oldEl.classList.add('content-changed');
@@ -12842,7 +12867,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
   <span id="followTickerText"></span>
   <span class="follow-queue" id="followTickerQueue"></span>
 </div>
-<div id="followDepart"><div class="follow-depart-caption"></div></div>
+<div id="followNotes"></div>
 <div id="confirm-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;" role="dialog" aria-modal="true">
   <div style="background:var(--bg-card);border:1px solid var(--border-default);border-radius:12px;padding:24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
     <h3 id="confirm-modal-title" style="font-size:14px;font-weight:600;margin-bottom:8px;"></h3>

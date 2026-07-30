@@ -223,6 +223,12 @@ Verified: exit=0 commit=59ce781 at=2026-07-30T22:07:34 cmd=python3 -m pytest tes
     ............                                                             [100%]
     919 passed, 29 skipped in 22.91s
 
+### BUG-03: Follow spotlight is cut short on move events by the diff-poll card swap
+Priority: low | Status: for-review
+Parent: B-71
+Tags: dashboard, ux
+On a section_change step the follow engine applies .follow-spotlight to the card's current DOM node, but the 2s HTML diff-poll then removes and re-adds that node in its new column ~2000ms later — stripping the class ~400ms before the 2.4s follow-spotlight-ring animation completes. Measured with a MutationObserver on 2026-07-30: SPOTLIGHT+ at t=0, 'B-49 card REMOVED from DOM' / 'B-49 card ADDED to DOM' at t=2000. Cosmetic only: the caption, cursor advance, and coalescing are all correct, and the card jump is arguably the desired signal — but the ring on the landing card is lost. Fix would be to re-apply the spotlight to the replacement node in patchCards() when follow is active.
+
 ## Backlog
 
 ### B-45: Show eligibility reasons in ticket detail overlay when not ready
@@ -316,13 +322,13 @@ Priority: medium | Status: proposed
 Parent: B-17
 Make assess/re-assess button permanently visible (not just on hover). Set loading text dynamically per field name. Force-refresh param bypasses cache.
 
-### B-49: Sample ticket from journey tour
-Priority: medium | Status: proposed
-
 ### B-50: Sample ticket from journey tour
 Priority: medium | Status: proposed
 
 ### B-51: Sample ticket from journey tour
+Priority: medium | Status: proposed
+
+### B-49: Sample ticket from journey tour
 Priority: medium | Status: proposed
 
 ## Ideas
@@ -420,12 +426,6 @@ registry.json contains two entries for the same path (~/projects/reworkingorder)
 - [x] Migrate tickets, readiness_flags, workflow_projects and automation_subjects rows from the duplicate id to the canonical one
 - [x] Remove the duplicate entry from registry.json
 - [x] Registry has no two entries sharing a path
-
-### BUG-03: Follow spotlight is cut short on move events by the diff-poll card swap
-Priority: low | Status: bug
-Parent: B-71
-Tags: dashboard, ux
-On a section_change step the follow engine applies .follow-spotlight to the card's current DOM node, but the 2s HTML diff-poll then removes and re-adds that node in its new column ~2000ms later — stripping the class ~400ms before the 2.4s follow-spotlight-ring animation completes. Measured with a MutationObserver on 2026-07-30: SPOTLIGHT+ at t=0, 'B-49 card REMOVED from DOM' / 'B-49 card ADDED to DOM' at t=2000. Cosmetic only: the caption, cursor advance, and coalescing are all correct, and the card jump is arguably the desired signal — but the ring on the landing card is lost. Fix would be to re-apply the spotlight to the replacement node in patchCards() when follow is active.
 
 ## Icebox
 

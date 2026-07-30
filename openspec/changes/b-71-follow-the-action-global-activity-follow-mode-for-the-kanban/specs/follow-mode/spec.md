@@ -29,22 +29,20 @@ does without the feature.
 ### Requirement: The cursor advances only after a step finishes playing
 
 The stored cursor SHALL advance to the maximum event id of a coalesced group only once
-that group's playback completes, or when the overflow guard skips it. Before a
-cross-project navigation the cursor SHALL be persisted at its pre-step value, with the
-pending step handed off in `sessionStorage`. A lost or stale handoff SHALL therefore
-cause at most one duplicate replay, never a lost event.
+that group's playback completes, or when the overflow guard skips it. Because playback
+never navigates the browser, a step is always played to completion on the page that
+started it.
 
 #### Scenario: Cursor holds until playback completes
 
 - **WHEN** a step begins playing
 - **THEN** the stored cursor still reflects the previous step until playback finishes
 
-#### Scenario: Lost handoff replays rather than loses
+#### Scenario: A stored cursor is resumed on load
 
-- **GIVEN** a cross-project navigation whose arrival payload is missing or older than
-  the staleness window
-- **WHEN** the destination board initialises
-- **THEN** the engine refetches from the stored cursor and replays that one step
+- **GIVEN** Follow is enabled and a cursor is stored
+- **WHEN** a board page loads
+- **THEN** the engine resumes from that cursor rather than re-initialising to now
 
 ### Requirement: Bursts coalesce into a single captioned step
 
@@ -98,6 +96,26 @@ its event group. While Follow is enabled, the board's own diff-poll SHALL suppre
 - **WHEN** the diff-poll applies a card change
 - **THEN** the diff-poll does not scroll the viewport itself
 
+### Requirement: The spotlight survives the diff-poll's card rewrite
+
+The diff-poll rewrites a patched card's `className` wholesale, both when relocating a
+card between columns and when updating one in place. A card the engine has lit SHALL be
+marked, and the diff-poll SHALL re-apply the spotlight class to a marked card after that
+rewrite, so the ring always runs its full duration rather than being cut short by a poll
+that lands mid-animation.
+
+#### Scenario: Ring survives a column move
+
+- **GIVEN** a lit card whose move is patched by the diff-poll mid-animation
+- **WHEN** the card is relocated to its new column
+- **THEN** the spotlight ring is still applied and runs to completion
+
+#### Scenario: Ring survives an in-place update
+
+- **GIVEN** a lit card whose status badge is patched in place mid-animation
+- **WHEN** the card content is rewritten
+- **THEN** the spotlight ring is still applied and runs to completion
+
 ### Requirement: Follow mode never alters the user's view state
 
 When the target card is absent, filtered out, or inside a collapsed section, the step
@@ -118,32 +136,47 @@ drafts in order to reveal a card. Non-ticket subjects SHALL likewise play captio
 - **WHEN** the step plays
 - **THEN** the ticker captions it and no card is spotlighted
 
-### Requirement: Cross-project steps navigate through a departure overlay
+### Requirement: Cross-project steps notify rather than navigate
 
-For an event in another watched project, the engine SHALL validate the target project id
-against the page's projects-list metadata, show a departure overlay naming the target,
-hand off the pending step, and navigate to that project's board, where the arrival step
-plays before the loop resumes. An unknown target SHALL degrade to a caption-only step
-with no navigation. `_kitchen` sentinel events SHALL never navigate.
+For an event in another watched project, the engine SHALL surface a stacked note naming
+the project and the action, and SHALL NOT navigate the browser. Clicking a note SHALL
+navigate to that project's board, so leaving the current board is always the user's
+choice. Notes SHALL live in a channel separate from the singleton application toast, so
+a burst of follow notes can neither displace nor be displaced by save and undo toasts.
+The note stack SHALL be bounded, dropping the oldest note beyond the limit, and each
+note SHALL auto-dismiss after an interval longer than the spotlight so its text outlives
+the ring.
 
-#### Scenario: Action elsewhere brings the board to it
+#### Scenario: Action elsewhere raises a note, not a jump
 
 - **GIVEN** Follow is enabled and an event occurs in another watched project
 - **WHEN** the step plays
-- **THEN** a departure overlay names the target project and the browser navigates to that
-  board, where the step is spotlighted on arrival
+- **THEN** a note naming that project and action appears
+- **AND** the browser stays on the current board
 
-#### Scenario: Unknown project does not navigate
+#### Scenario: Note is a click-through
 
-- **GIVEN** an event whose project is absent from the page's projects list
-- **WHEN** the step plays
-- **THEN** the caption shows and no navigation occurs
+- **GIVEN** a note for another project
+- **WHEN** the user clicks it
+- **THEN** the browser navigates to that project's board
 
-#### Scenario: Kitchen events never navigate
+#### Scenario: Follow notes do not fight application toasts
+
+- **GIVEN** a save or undo toast is showing
+- **WHEN** follow notes arrive
+- **THEN** both remain visible and neither displaces the other
+
+#### Scenario: Stack is bounded
+
+- **GIVEN** more notes arrive than the stack limit
+- **WHEN** each is added
+- **THEN** the oldest notes are removed so the visible count stays within the limit
+
+#### Scenario: Kitchen events stay on the ticker
 
 - **GIVEN** a `_kitchen` pause or resume event
 - **WHEN** the step plays
-- **THEN** the ticker shows a banner and the board does not navigate
+- **THEN** the ticker shows a banner and no note or navigation occurs
 
 ### Requirement: Playback yields to human interaction
 

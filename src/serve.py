@@ -9692,7 +9692,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             ]
                         projects_json = json.dumps(proj_list)
                         injection = (
-                            f'<meta name="edit-api" content="http://localhost:{SERVER_PORT}/{_safe_attr(proj["id"])}/api">\n'
+                            f'<meta name="edit-api" content="/{_safe_attr(proj["id"])}/api">\n'
                             f'<meta name="current-project" content="{_safe_attr(proj["id"])}">\n'
                             f"<meta name=\"projects-list\" content='{_safe_attr(projects_json)}'>\n"
                         )

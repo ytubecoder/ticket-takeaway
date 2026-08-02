@@ -24,6 +24,7 @@ from typing import Any
 from constants import (
     DEFAULT_STATUS_BY_SECTION,
     SECTION_PREFIX,
+    SPEC_STATUSES,
     compute_status_on_move,
 )
 
@@ -453,6 +454,119 @@ def parse_spec_link(content: str) -> SpecLink:
         change=(m.group(2) or "").strip(),
         note=(m.group(3) or "").strip(),
     )
+
+
+def derive_spec_status(
+    flag_content: str,
+    set_by: str,
+    change_exists_live: bool,
+    change_has_archive: bool,
+    discovered: list[str],
+) -> str:
+    """Derive a SPEC_STATUSES value from flag content + disk probes.
+
+    Pure — takes values, touches nothing. Precedence is top-down; first match wins.
+    """
+    link = parse_spec_link(flag_content)
+    # forced beats everything (including a live linked dir).
+    if set_by == "accept:--force" or (
+        link.note and link.note.startswith("accepted with --force:")
+    ):
+        return "forced"
+    if not (flag_content or "").strip():
+        return "unrecorded_change" if discovered else "undeclared"
+    if not link.declared or (link.declared and not link.change):
+        return "declared_invalid"
+    if link.claims_no_change:
+        return "no_delta"
+    if change_exists_live:
+        return "linked"
+    if change_has_archive:
+        return "archived"
+    return "linked_missing"
+
+
+def _spec_status_detail(status: str, link: SpecLink, unrecorded: list[str]) -> str:
+    """One human-readable line explaining the derived status."""
+    if status == "forced":
+        note = link.note or "accepted with --force"
+        return f"Accepted with --force ({note})"
+    if status == "undeclared":
+        return "No OpenSpec change declared or found on disk"
+    if status == "unrecorded_change":
+        names = ", ".join(unrecorded) if unrecorded else "?"
+        return f"OpenSpec change(s) on disk not linked to ticket: {names}"
+    if status == "declared_invalid":
+        return "Spec flag is set but unparseable or missing a change name"
+    if status == "no_delta":
+        reason = link.note or "no reason recorded"
+        return f"Lane C — no spec delta: {reason}"
+    if status == "linked":
+        return f"Linked to live change {link.change}"
+    if status == "archived":
+        return f"Change {link.change} is archived (read-only)"
+    if status == "linked_missing":
+        return f"Flag names {link.change} but no directory on disk"
+    return status
+
+
+def spec_status(
+    conn: sqlite3.Connection, project_id: str, ticket_id: str
+) -> dict[str, Any]:
+    """Compute derived OpenSpec status for a ticket (filesystem-only probes)."""
+    row = conn.execute(
+        "SELECT content, set_by FROM readiness_flags "
+        "WHERE ticket_id = ? AND project_id = ? AND flag = ?",
+        (ticket_id, project_id, "spec"),
+    ).fetchone()
+    flag_content = (row["content"] or "") if row else ""
+    set_by = (row["set_by"] or "") if row else ""
+
+    project_path = project_path_for(project_id)
+    discovered: list[str] = []
+    change_exists_live = False
+    change_has_archive = False
+
+    if project_path:
+        try:
+            import openspec_adapter as osa
+
+            discovered = osa.matching_change_dirs(project_path, ticket_id)
+            link_probe = parse_spec_link(flag_content)
+            if link_probe.change and not link_probe.claims_no_change:
+                change_exists_live = osa.change_exists(
+                    project_path, link_probe.change
+                )
+                change_has_archive = bool(
+                    osa.archived_change_dirs(project_path, link_probe.change)
+                )
+        except ImportError:
+            pass
+
+    status = derive_spec_status(
+        flag_content,
+        set_by,
+        change_exists_live,
+        change_has_archive,
+        discovered,
+    )
+    # Assert membership so a drift from SPEC_STATUSES is loud in tests.
+    if status not in SPEC_STATUSES:
+        status = "undeclared"
+
+    link = parse_spec_link(flag_content)
+    link_dict: dict[str, str] | None = None
+    if link.declared:
+        link_dict = {"lane": link.lane, "change": link.change, "note": link.note}
+
+    unrecorded = [n for n in discovered if not link.change or n != link.change]
+    return {
+        "status": status,
+        "link": link_dict,
+        "set_by": set_by,
+        "unrecorded": unrecorded,
+        "detail": _spec_status_detail(status, link, unrecorded),
+    }
 
 
 def spec_link(conn: sqlite3.Connection, project_id: str, ticket_id: str) -> SpecLink:

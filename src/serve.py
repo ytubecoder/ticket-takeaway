@@ -3685,6 +3685,168 @@ def _update_readiness_content(
     return True
 
 
+def _spec_tab_payload(proj: dict, ticket_id: str) -> dict | None:
+    """Build the Spec tab JSON payload for a ticket. None when ticket missing."""
+    import openspec_adapter as osa
+    from actions import project_path_for, spec_status
+
+    project_id = proj["id"]
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return None
+        tid = row["id"]
+        info = spec_status(conn, project_id, tid)
+        conn.close()
+
+    unrecorded = [
+        {"name": name, "suggested_content": f"B:{name}"}
+        for name in info.get("unrecorded") or []
+    ]
+
+    change_payload = None
+    link = info.get("link") or {}
+    change_name = (link.get("change") or "").strip()
+    if change_name and change_name != "none":
+        project_path = project_path_for(project_id) or os.path.expanduser(
+            proj.get("path", "") or ""
+        )
+        if project_path:
+            resolved = osa.resolve_change_dir(project_path, change_name)
+            if resolved is not None:
+                change_path, archived = resolved
+                change_payload = {
+                    "name": change_name,
+                    "archived": archived,
+                    "docs": osa.change_docs(change_path),
+                }
+
+    return {
+        "status": info["status"],
+        "link": info.get("link"),
+        "set_by": info.get("set_by") or "",
+        "detail": info.get("detail") or "",
+        "unrecorded": unrecorded,
+        "change": change_payload,
+    }
+
+
+def _spec_doc_read(
+    proj: dict, ticket_id: str, rel_path: str
+) -> tuple[dict | None, int]:
+    """Read a change doc. Returns (payload, http_status)."""
+    import openspec_adapter as osa
+    from actions import project_path_for, spec_status
+
+    project_id = proj["id"]
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return ({"error": "Ticket not found"}, 404)
+        tid = row["id"]
+        info = spec_status(conn, project_id, tid)
+        conn.close()
+
+    link = info.get("link") or {}
+    change_name = (link.get("change") or "").strip()
+    if not change_name or change_name == "none":
+        return ({"error": "No linked OpenSpec change"}, 400)
+
+    project_path = project_path_for(project_id) or os.path.expanduser(
+        proj.get("path", "") or ""
+    )
+    if not project_path:
+        return ({"error": "Unknown project path"}, 400)
+
+    try:
+        resolved = osa.resolve_change_dir(project_path, change_name)
+        if resolved is None:
+            return ({"error": f"change not found: {change_name}"}, 400)
+        _path, archived = resolved
+        content = osa.read_change_doc(project_path, change_name, rel_path)
+    except FileNotFoundError as exc:
+        return ({"error": str(exc)}, 400)
+    except ValueError as exc:
+        return ({"error": str(exc)}, 400)
+
+    return (
+        {"path": rel_path, "content": content, "readonly": archived},
+        200,
+    )
+
+
+def _spec_doc_write(
+    proj: dict, ticket_id: str, rel_path: str, content: str
+) -> tuple[dict, int]:
+    """Write a change doc and emit spec_doc_edited. Returns (payload, http_status)."""
+    import openspec_adapter as osa
+    from actions import ActorContext, emit_event, project_path_for, spec_status
+
+    project_id = proj["id"]
+    with _db_lock:
+        conn = get_db()
+        init_db(conn)
+        row = conn.execute(
+            "SELECT id FROM tickets WHERE UPPER(id) = UPPER(?) AND project_id = ?",
+            (ticket_id, project_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return ({"error": "Ticket not found"}, 404)
+        tid = row["id"]
+        info = spec_status(conn, project_id, tid)
+
+        link = info.get("link") or {}
+        change_name = (link.get("change") or "").strip()
+        if not change_name or change_name == "none":
+            conn.close()
+            return ({"error": "No linked OpenSpec change"}, 400)
+
+        project_path = project_path_for(project_id) or os.path.expanduser(
+            proj.get("path", "") or ""
+        )
+        if not project_path:
+            conn.close()
+            return ({"error": "Unknown project path"}, 400)
+
+        try:
+            osa.write_change_doc(project_path, change_name, rel_path, content)
+        except osa.ArchivedChangeError:
+            conn.close()
+            return ({"error": "archived change is read-only"}, 409)
+        except FileNotFoundError as exc:
+            conn.close()
+            return ({"error": str(exc)}, 400)
+        except ValueError as exc:
+            conn.close()
+            return ({"error": str(exc)}, 400)
+
+        emit_event(
+            conn,
+            project_id,
+            "ticket",
+            tid,
+            "spec_doc_edited",
+            {"change": change_name, "path": rel_path},
+            ActorContext.human(),
+        )
+        conn.commit()
+        conn.close()
+    return ({"ok": True}, 200)
+
+
 def _get_ticket_json(project_id: str, ticket_id: str) -> dict | None:
     """Get a single ticket as a JSON-serializable dict. Thread-safe."""
     with _db_lock:
@@ -5452,6 +5614,189 @@ def _render_ticket_tab_graph(ticket: dict, proj: dict, port: int) -> str:
 """
 
 
+def _render_ticket_tab_spec(ticket: dict, proj: dict, port: int) -> str:
+    """Render the Spec tab — OpenSpec status, unrecorded changes, editable docs."""
+    import html as _h
+
+    pid = _safe_attr(proj["id"])
+    tid = _h.escape(ticket["id"])
+    api_base = f"/{pid}/api"
+
+    return f'''
+<div class="tp-section" id="tp-section-spec" data-ticket-id="{tid}" data-api-base="{_safe_attr(api_base)}">
+  <div class="tp-section-header"><h3>OpenSpec</h3></div>
+  <div id="tp-spec-status-strip" class="tp-spec-status-strip">
+    <span class="tp-empty">Loading spec status…</span>
+  </div>
+  <div id="tp-spec-unrecorded" class="tp-spec-unrecorded" style="display:none"></div>
+  <div id="tp-spec-edge" class="tp-spec-edge" style="display:none"></div>
+  <div id="tp-spec-docs" class="tp-spec-docs"></div>
+</div>
+<script>
+(function() {{
+  var root = document.getElementById('tp-section-spec');
+  if (!root) return;
+  var API = root.getAttribute('data-api-base') || TP_API_BASE;
+  var TID = root.getAttribute('data-ticket-id') || TP_TICKET_ID;
+  var strip = document.getElementById('tp-spec-status-strip');
+  var unrecEl = document.getElementById('tp-spec-unrecorded');
+  var edgeEl = document.getElementById('tp-spec-edge');
+  var docsEl = document.getElementById('tp-spec-docs');
+
+  function esc(s) {{
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }}
+
+  function wireDocEditor(details, path, readonly) {{
+    var ta = details.querySelector('textarea');
+    var status = details.querySelector('.tp-spec-doc-status');
+    if (!ta) return;
+    if (readonly) {{
+      ta.disabled = true;
+      if (status) status.textContent = 'read-only (archived)';
+      return;
+    }}
+    var loaded = false;
+    var timer = null;
+    details.addEventListener('toggle', function() {{
+      if (!details.open || loaded) return;
+      if (status) status.textContent = 'loading…';
+      fetch(API + '/tickets/' + encodeURIComponent(TID) + '/spec/doc?path=' + encodeURIComponent(path))
+        .then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, j: j}}; }}); }})
+        .then(function(res) {{
+          if (!res.ok) {{
+            if (status) status.textContent = (res.j && res.j.error) || 'load failed';
+            return;
+          }}
+          ta.value = res.j.content || '';
+          loaded = true;
+          if (res.j.readonly) {{
+            ta.disabled = true;
+            if (status) status.textContent = 'read-only (archived)';
+            return;
+          }}
+          if (status) status.textContent = 'loaded';
+          ta.addEventListener('input', function() {{
+            clearTimeout(timer);
+            if (status) status.textContent = 'saving…';
+            timer = setTimeout(function() {{
+              fetch(API + '/tickets/' + encodeURIComponent(TID) + '/spec/doc', {{
+                method: 'PUT',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{path: path, content: ta.value}}),
+              }}).then(function(r) {{
+                if (status) status.textContent = r.ok ? 'saved' : 'save failed';
+              }}).catch(function() {{
+                if (status) status.textContent = 'save failed';
+              }});
+            }}, 1000);
+          }});
+        }})
+        .catch(function() {{
+          if (status) status.textContent = 'load failed';
+        }});
+    }});
+  }}
+
+  function renderPayload(data) {{
+    var link = data.link || null;
+    var lane = link ? (link.lane || '') : '';
+    var change = link ? (link.change || '') : '';
+    strip.innerHTML =
+      '<span class="tp-spec-badge" data-status="' + esc(data.status) + '">' + esc(data.status) + '</span>' +
+      (lane ? ' <span class="tp-spec-lane">lane ' + esc(lane) + '</span>' : '') +
+      (change ? ' <code class="tp-spec-change">' + esc(change) + '</code>' : '') +
+      '<div class="tp-spec-detail">' + esc(data.detail || '') + '</div>';
+
+    // Unrecorded banner
+    var unrec = data.unrecorded || [];
+    if (unrec.length) {{
+      unrecEl.style.display = '';
+      var html = '<div class="tp-spec-unrecorded-title">Unrecorded OpenSpec change(s) on disk</div>';
+      unrec.forEach(function(u, idx) {{
+        html +=
+          '<div class="tp-spec-unrecorded-row" data-name="' + esc(u.name) + '">' +
+          '<code>' + esc(u.name) + '</code> ' +
+          '<label>lane <select class="tp-spec-lane-sel" data-idx="' + idx + '">' +
+          '<option value="A">A</option><option value="B" selected>B</option><option value="C">C</option>' +
+          '</select></label> ' +
+          '<button type="button" class="btn btn-primary btn-sm tp-spec-record-btn" data-idx="' + idx + '">' +
+          'Record link on ticket</button></div>';
+      }});
+      unrecEl.innerHTML = html;
+      unrecEl.querySelectorAll('.tp-spec-record-btn').forEach(function(btn) {{
+        btn.addEventListener('click', function() {{
+          var i = parseInt(btn.getAttribute('data-idx'), 10);
+          var row = unrec[i];
+          if (!row) return;
+          var sel = unrecEl.querySelector('.tp-spec-lane-sel[data-idx="' + i + '"]');
+          var L = sel ? sel.value : 'B';
+          var content = L + ':' + row.name;
+          fetch(API + '/tickets/' + encodeURIComponent(TID) + '/readiness/spec', {{
+            method: 'PUT',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{content: content}}),
+          }}).then(function() {{ window.location.reload(); }}).catch(console.error);
+        }});
+      }});
+    }} else {{
+      unrecEl.style.display = 'none';
+      unrecEl.innerHTML = '';
+    }}
+
+    // Edge-state hints
+    edgeEl.style.display = 'none';
+    edgeEl.innerHTML = '';
+    if (data.status === 'undeclared') {{
+      edgeEl.style.display = '';
+      edgeEl.innerHTML = '<p class="tp-empty">No OpenSpec change yet. Declare one with ' +
+        '<code>tickets-cli.py spec &lt;project&gt; ' + esc(TID) + ' --lane A|B|C</code>.</p>';
+    }} else if (data.status === 'linked_missing') {{
+      edgeEl.style.display = '';
+      edgeEl.innerHTML = '<p class="tp-spec-warn">The flag names a change with no directory on disk.</p>';
+    }} else if (data.status === 'no_delta') {{
+      edgeEl.style.display = '';
+      var reason = (link && link.note) ? link.note : '(no reason recorded)';
+      edgeEl.innerHTML = '<p class="tp-empty">Lane C — no spec delta. Reason: ' + esc(reason) + '</p>';
+    }} else if (data.status === 'declared_invalid') {{
+      edgeEl.style.display = '';
+      edgeEl.innerHTML = '<p class="tp-spec-warn">Spec flag is unparseable. Raw content is shown in the status strip.</p>';
+    }}
+
+    // Documents
+    docsEl.innerHTML = '';
+    var ch = data.change;
+    if (ch && ch.docs && ch.docs.length) {{
+      ch.docs.forEach(function(path) {{
+        var details = document.createElement('details');
+        details.className = 'tp-spec-doc';
+        details.setAttribute('data-path', path);
+        details.innerHTML =
+          '<summary><code>' + esc(path) + '</code> ' +
+          '<span class="tp-spec-doc-status"></span></summary>' +
+          '<textarea class="tp-editor tp-spec-doc-editor" rows="16" ' +
+          'style="font-family:var(--font-mono);width:100%;" ' +
+          'placeholder="Expand to load…"></textarea>';
+        docsEl.appendChild(details);
+        wireDocEditor(details, path, !!ch.archived);
+      }});
+    }}
+  }}
+
+  fetch(API + '/tickets/' + encodeURIComponent(TID) + '/spec')
+    .then(function(r) {{ return r.json(); }})
+    .then(renderPayload)
+    .catch(function(err) {{
+      strip.innerHTML = '<span class="tp-empty">Failed to load spec status.</span>';
+      console.error(err);
+    }});
+}})();
+</script>
+'''
+
+
 def _render_ticket_page(
     proj: dict, port: int, ticket_id: str, tab: str = "overview"
 ) -> str | None:
@@ -5480,13 +5825,15 @@ def _render_ticket_page(
     priority = _h.escape(ticket.get("priority", "medium"))
     is_container = ticket.get("is_container", False)
 
-    valid_tabs = ("overview", "activity", "runs", "files", "graph")
+    valid_tabs = ("overview", "spec", "activity", "runs", "files", "graph")
     if tab not in valid_tabs:
         tab = "overview"
 
     # Render the active tab body.
     if tab == "overview":
         tab_body = _render_ticket_tab_overview(ticket, proj, port)
+    elif tab == "spec":
+        tab_body = _render_ticket_tab_spec(ticket, proj, port)
     elif tab == "activity":
         tab_body = _render_ticket_tab_activity(ticket, proj, port)
     elif tab == "runs":
@@ -5506,6 +5853,7 @@ def _render_ticket_page(
 
     tabs_html = (
         _tab_link("overview", "Overview")
+        + _tab_link("spec", "Spec")
         + _tab_link("activity", "Activity")
         + _tab_link("runs", "Runs")
         + _tab_link("files", "Files")
@@ -7485,6 +7833,14 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       }});
       var vs = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
       Array.from(el.options).forEach(function(o) {{ o.selected = vs.indexOf(o.value) !== -1; }});
+    }} else if (controlKind === 'spec_status_multi_select') {{
+      el = document.createElement('select');
+      el.multiple = true; el.size = 4;
+      (opt.spec_statuses || []).forEach(function(s) {{
+        var o = document.createElement('option'); o.value = s; o.textContent = s; el.appendChild(o);
+      }});
+      var vs = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
+      Array.from(el.options).forEach(function(o) {{ o.selected = vs.indexOf(o.value) !== -1; }});
     }} else if (controlKind === 'automation_mode_select') {{
       el = document.createElement('select');
       (opt.automation_modes || []).forEach(function(s) {{
@@ -7536,7 +7892,7 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
 
   function readValueControl(controlKind, el) {{
     if (controlKind === 'none') return null;
-    if (controlKind === 'section_multi_select' || controlKind === 'status_multi_select') {{
+    if (controlKind === 'section_multi_select' || controlKind === 'status_multi_select' || controlKind === 'spec_status_multi_select') {{
       return Array.from(el.selectedOptions).map(function(o) {{ return o.value; }});
     }}
     if (controlKind === 'tag_input' || controlKind === 'tag_multi_input') {{
@@ -7764,7 +8120,8 @@ body {{ margin: 0; background: var(--bg-page); color: var(--text-primary); font:
       var pred = {{kind: op.predicate_kind}};
       // Map value back to predicate's value field shape based on kind
       if (op.predicate_kind === 'section_in' || op.predicate_kind === 'parent_section_not_in' ||
-          op.predicate_kind === 'children_all_status_in' || op.predicate_kind === 'children_any_status_in') {{
+          op.predicate_kind === 'children_all_status_in' || op.predicate_kind === 'children_any_status_in' ||
+          op.predicate_kind === 'spec_status_in') {{
         pred.values = Array.isArray(val) ? val : (val ? [val] : []);
       }} else if (op.predicate_kind === 'has_field') {{
         pred.field = val;
@@ -9386,6 +9743,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Ticket not found"}, 404)
             return
 
+        # Spec tab payload
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/spec$", remainder)
+        if m:
+            payload = _spec_tab_payload(proj, m.group(1))
+            if payload is None:
+                self._send_json({"error": "Ticket not found"}, 404)
+            else:
+                self._send_json(payload)
+            return
+
+        # Spec document read
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/spec/doc$", remainder)
+        if m:
+            query = urlparse(self.path).query
+            params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+            rel_path = unquote(params.get("path", "") or "")
+            if not rel_path:
+                self._send_json({"error": "path query parameter required"}, 400)
+                return
+            body, status = _spec_doc_read(proj, m.group(1), rel_path)
+            self._send_json(body, status)
+            return
+
         # Bookmarks + Recents (I-43)
         if remainder == "/api/bookmarks":
             with _db_lock:
@@ -10243,6 +10623,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(t or {"ok": True})
             else:
                 self._send_json({"error": "Invalid flag or ticket"}, 400)
+            return
+
+        # Spec document write
+        m = re.match(r"^/api/tickets/([A-Za-z0-9_-]+)/spec/doc$", remainder)
+        if m:
+            ticket_id = m.group(1)
+            try:
+                body = self._read_body()
+            except (json.JSONDecodeError, ValueError):
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
+            if not isinstance(body, dict):
+                self._send_json({"error": "Body must be a JSON object"}, 400)
+                return
+            rel_path = body.get("path", "") or ""
+            content = body.get("content", "")
+            if content is None:
+                content = ""
+            if not rel_path:
+                self._send_json({"error": "path is required"}, 400)
+                return
+            result, status = _spec_doc_write(proj, ticket_id, rel_path, content)
+            self._send_json(result, status)
             return
 
         # ── Journey PUT routes ───────────────────────────────────────

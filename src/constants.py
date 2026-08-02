@@ -181,6 +181,21 @@ SPEC_LANES: dict[str, str] = {
 
 DEFAULT_SPEC_LANE = "B"
 
+# Derived spec status — computed from the `spec` readiness flag + the target
+# project's openspec/changes/ directory. Filesystem-only: deriving this NEVER
+# shells out to the openspec CLI (validation is separately covered by the
+# subprocess-priced `spec_validates` predicate).
+SPEC_STATUSES: tuple[str, ...] = (
+    "undeclared",        # no spec flag, no matching change dir on disk
+    "unrecorded_change", # no/empty spec flag, but >=1 matching live change dir exists
+    "declared_invalid",  # spec flag set but unparseable (or lane with empty change name)
+    "no_delta",          # lane C sentinel: change == "none" with a reason
+    "linked",            # flag names a change and its live dir exists
+    "linked_missing",    # flag names a change but no live dir and no archive copy
+    "archived",          # flag names a change; no live dir, but an archive copy exists
+    "forced",            # ticket was accepted with --force (override recorded on the flag)
+)
+
 # ---------------------------------------------------------------------------
 # Workflow bounce
 # ---------------------------------------------------------------------------

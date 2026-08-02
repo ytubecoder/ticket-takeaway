@@ -6203,6 +6203,7 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
       <button class="detail-close" aria-label="Close ticket detail" data-testid="detail-close">{_icon_close}</button>
     </div>
     <div class="detail-summary-line is-pending" id="detail-summary-line" data-testid="detail-summary-line">Summary pending…</div>
+    <a id="detail-spec-link" class="detail-spec-link" href="#" style="display:none;font-size:12px;margin:0 20px 8px;color:var(--accent);">Open spec →</a>
     <div class="detail-meta-strip">
       <span class="meta-chip meta-chip--priority" title="Click to change priority"><span class="chip-dot"></span><span class="chip-text"></span></span>
       <span class="meta-chip meta-chip--status" title="Click to change status" data-testid="detail-status"><span class="chip-text"></span></span>
@@ -8105,6 +8106,17 @@ select optgroup {{ background: var(--bg-card); color: var(--text-secondary); }}
     populateTags(data);
     populateBranches(data);
     populateSummaryLine(data);
+    var specLink = document.getElementById('detail-spec-link');
+    if (specLink) {{
+      var projMeta = document.querySelector('meta[name="current-project"]');
+      var pid = projMeta ? projMeta.content : '';
+      if (pid && data.id) {{
+        specLink.href = '/' + encodeURIComponent(pid) + '/tickets/' + encodeURIComponent(data.id) + '?tab=spec';
+        specLink.style.display = '';
+      }} else {{
+        specLink.style.display = 'none';
+      }}
+    }}
   }}
 
   function populateSummaryLine(data) {{
@@ -13196,12 +13208,13 @@ def _render_single_card(
 
 def _render_readiness_row(t) -> str:
     """Render readiness indicator dots for a ticket."""
-    flag_map = {"D": "description", "C": "criteria", "L": "reviewed"}
-    icon_name_map = {"D": "file-text", "C": "check-square", "L": "eye"}
+    flag_map = {"D": "description", "C": "criteria", "L": "reviewed", "S": "spec"}
+    icon_name_map = {"D": "file-text", "C": "check-square", "L": "eye", "S": "file-text"}
     indicators = [
         ("D", "Description", bool(t.description)),
         ("C", "Criteria", len(t.acceptance_criteria) > 0),
         ("L", "Learnings", "reviewed" in t.readiness_flags),
+        ("S", "Spec", "spec" in t.readiness_flags),
     ]
     dots = []
     for letter, title, filled in indicators:

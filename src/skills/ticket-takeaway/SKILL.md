@@ -274,6 +274,26 @@ python3 $CLI watch --project goodform &
 # Polls PRODUCT_BACKLOG.md every 2s, absorbs direct edits, regenerates dashboard
 ```
 
+**OpenSpec / Spec tab:**
+```bash
+# Read-only derived status (linked / unrecorded_change / archived / …)
+python3 $CLI spec goodform B-13 --status
+
+# Declare lane + create change, OR record an existing on-disk change (backfill)
+python3 $CLI spec goodform B-13 --lane B
+python3 $CLI spec goodform B-13 --lane B --change b-13-dashboard-run-now-2026-08-02
+```
+
+Full-page ticket view has a **Spec** tab (`/{project}/tickets/{id}?tab=spec`) that shows derived OpenSpec status, lists unrecorded on-disk change dirs with a one-click "Record link on ticket" backfill, and offers monospace inline editors (debounced autosave) for proposal/design/tasks/specs.
+
+Workflow rules can filter on derived status via the Spec attribute → "status is one of" (`spec_status_in` predicate). Options: `undeclared`, `unrecorded_change`, `declared_invalid`, `no_delta`, `linked`, `linked_missing`, `archived`, `forced`.
+
+**Spec APIs** (origin-relative):
+- `GET /{pid}/api/tickets/{tid}/spec` — status, link, unrecorded dirs, change docs list
+- `GET /{pid}/api/tickets/{tid}/spec/doc?path=proposal.md` — document content (`readonly` when archived)
+- `PUT /{pid}/api/tickets/{tid}/spec/doc` body `{"path","content"}` — write live change (409 if archived)
+- Backfill reuses `PUT /{pid}/api/tickets/{tid}/readiness/spec` with `{"content":"B:<dir-name>"}`
+
 ### Valid section targets for `move`
 
 | Target | Section | Default status |

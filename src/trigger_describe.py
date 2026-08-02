@@ -91,6 +91,9 @@ def _describe_predicate(p: dict) -> str:
         return "a spec lane has been declared for it"
     if kind == "spec_validates":
         return "its OpenSpec change validates in strict mode"
+    if kind == "spec_status_in":
+        vals = p.get("values") or p.get("value") or []
+        return f"Spec status is {_join_quoted(vals, ' or ')}"
     if kind == "verify_passed":
         return "its verify command passed at the current commit"
     if kind == "no_active_run":
@@ -190,6 +193,7 @@ _PREDICATE_LABELS = {
     "tests_covered": "Tests are covered",
     "spec_linked": "Spec lane is declared",
     "spec_validates": "OpenSpec change validates (--strict)",
+    "spec_status_in": "Spec status is one of",
     "verify_passed": "Verify command passed at HEAD",
     "no_active_run": "No run already in flight",
     "tag_includes": "Has tag",

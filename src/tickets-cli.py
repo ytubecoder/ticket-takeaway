@@ -1378,6 +1378,30 @@ def cmd_spec(args):
     project_id = proj["id"]
     project_path = os.path.expanduser(proj.get("path", ""))
 
+    # Read-only status probe — no writes.
+    if getattr(args, "status", False):
+        from actions import spec_status as _spec_status
+
+        conn = get_db()
+        init_db(conn)
+        ticket = _resolve_ticket(conn, project_id, args.id)
+        tid = ticket["id"]
+        info = _spec_status(conn, project_id, tid)
+        conn.close()
+        link = info.get("link") or {}
+        print(f"{tid}: status={info['status']}")
+        if link:
+            print(f"  lane={link.get('lane') or '-'} change={link.get('change') or '-'}")
+            if link.get("note"):
+                print(f"  note={link['note']}")
+        else:
+            print("  lane=- change=-")
+        print(f"  detail={info.get('detail') or ''}")
+        unrec = info.get("unrecorded") or []
+        if unrec:
+            print(f"  unrecorded: {', '.join(unrec)}")
+        return
+
     lane = (args.lane or DEFAULT_SPEC_LANE).upper()
     if lane not in SPEC_LANES:
         print(
@@ -1428,11 +1452,19 @@ def cmd_spec(args):
         sys.exit(1)
 
     change = args.change or osa.change_name(tid, ticket["title"] or "")
-    res = osa.new_change(project_path, change)
-    if not res.ok:
-        print(f"openspec new change {change} failed: {res.message}", file=sys.stderr)
-        conn.close()
-        sys.exit(1)
+    already = osa.change_exists(project_path, change)
+    if already:
+        # Record-only backfill: change dir already on disk (e.g. authored via
+        # OpenSpec skills without going through this CLI). Skip scaffolding.
+        print(f"{tid}: recording existing change openspec/changes/{change}/")
+    else:
+        res = osa.new_change(project_path, change)
+        if not res.ok:
+            print(
+                f"openspec new change {change} failed: {res.message}", file=sys.stderr
+            )
+            conn.close()
+            sys.exit(1)
 
     link = SpecLink(lane=lane, change=change)
     write_readiness_flag(
@@ -1443,13 +1475,17 @@ def cmd_spec(args):
     regenerate_dashboard(proj)
     conn.close()
 
-    print(f"{tid}: lane {lane} \u2192 openspec/changes/{change}/")
+    if already:
+        print(f"{tid}: lane {lane} \u2192 recorded openspec/changes/{change}/")
+    else:
+        print(f"{tid}: lane {lane} \u2192 openspec/changes/{change}/")
     print(f"  {SPEC_LANES[lane]}")
-    wanted = ["proposal", "specs"] + (["design", "tasks"] if lane == "A" else [])
-    print(
-        "  Next: "
-        + "; ".join(f"openspec instructions {a} --change {change}" for a in wanted)
-    )
+    if not already:
+        wanted = ["proposal", "specs"] + (["design", "tasks"] if lane == "A" else [])
+        print(
+            "  Next: "
+            + "; ".join(f"openspec instructions {a} --change {change}" for a in wanted)
+        )
 
 
 def cmd_verify(args):
@@ -2686,6 +2722,11 @@ def main():
     )
     p_spec.add_argument(
         "--reason", default="", help="Why no spec delta is needed (with --no-change)"
+    )
+    p_spec.add_argument(
+        "--status",
+        action="store_true",
+        help="Read-only: print derived OpenSpec status (status, lane, change, unrecorded) and exit",
     )
 
     # verify — run the declared verify command and record real evidence

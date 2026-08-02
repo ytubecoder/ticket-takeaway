@@ -157,6 +157,21 @@ def _eval_spec_validates(ctx: dict, p: dict) -> tuple[bool, str]:
     return _delegate("_spec_validates", ctx, "spec validates", "spec does not validate")
 
 
+def _eval_spec_status_in(ctx: dict, p: dict) -> tuple[bool, str]:
+    """True when the ticket's derived spec status is one of the listed values."""
+    import actions
+
+    t = ctx.get("ticket_row") or ctx["ticket"]
+    project_id, ticket_id = t["project_id"], t["id"]
+    status = actions.spec_status(ctx["db"], project_id, ticket_id)["status"]
+    values = p.get("values") or []
+    ok = status in values
+    return (
+        ok,
+        f"spec status is {status}" if ok else f"spec status {status} not in {values}",
+    )
+
+
 def _eval_verify_passed(ctx: dict, p: dict) -> tuple[bool, str]:
     """Delegate to actions._verify_passed — verify exited 0 against current HEAD."""
     return _delegate("_verify_passed", ctx, "verify passed", "verify has not passed")
@@ -428,8 +443,19 @@ _AUTOMATION_MODE_OPTIONS = ["manual", "auto", "paused"]
 # Imported lazily inside the dict so test runs that don't have constants on path
 # still load the catalog without raising. The UI uses options to render dropdowns.
 try:
+    from constants import SPEC_STATUSES as _SPEC_STATUSES  # type: ignore
     from constants import STATUSES as _STATUS_OPTIONS  # type: ignore
 except Exception:  # pragma: no cover
+    _SPEC_STATUSES = (
+        "undeclared",
+        "unrecorded_change",
+        "declared_invalid",
+        "no_delta",
+        "linked",
+        "linked_missing",
+        "archived",
+        "forced",
+    )
     _STATUS_OPTIONS = [
         "proposed",
         "specified",
@@ -550,6 +576,11 @@ CONDITION_CATALOG: dict[str, dict[str, Any]] = {
         "label": "OpenSpec change validates (--strict)",
         "params": [],
         "evaluator": _eval_spec_validates,
+    },
+    "spec_status_in": {
+        "label": "Spec status is one of",
+        "params": [{"name": "values", "type": "status_list"}],
+        "evaluator": _eval_spec_status_in,
     },
     "verify_passed": {
         "label": "Verify command passed at HEAD",
@@ -860,6 +891,7 @@ def ui_catalog() -> dict:
                 {"key": "C", "label": "Criteria"},
                 {"key": "L", "label": "Learnings"},
             ],
+            "spec_statuses": list(_SPEC_STATUSES),
         },
         "attributes": [
             {
@@ -1112,6 +1144,12 @@ def ui_catalog() -> dict:
                         "predicate_kind": "spec_validates",
                         "value_control": "none",
                     },
+                    {
+                        "key": "status_is_one_of",
+                        "label": "status is one of",
+                        "predicate_kind": "spec_status_in",
+                        "value_control": "spec_status_multi_select",
+                    },
                 ],
                 "action_ops": [],
                 "hint": "Spec state is intrinsic — set by `tickets-cli.py spec` and by OpenSpec itself.",
@@ -1260,6 +1298,7 @@ def ui_catalog() -> dict:
             "tests_covered": "tests",
             "spec_linked": "spec",
             "spec_validates": "spec",
+            "spec_status_in": "spec",
             "verify_passed": "verify",
             "no_active_run": "run",
             "parent_done": "parent",

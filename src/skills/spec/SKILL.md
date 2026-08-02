@@ -144,7 +144,7 @@ python3 $CLI spec <project> <ID> --lane A|B|C
 python3 $CLI spec <project> <ID> --lane C --no-change --reason "<why>"
 ```
 
-The CLI owns the rules (valid lanes, change naming, the `openspec/` precondition). Do not hand-create change directories or hand-edit the `spec` readiness flag — if the CLI refuses, report the refusal rather than working around it.
+The CLI owns the rules (valid lanes, change naming, the `openspec/` precondition). Do not hand-create change directories or hand-edit the `spec` readiness flag — if the CLI refuses, report the refusal rather than working around it. Existing on-disk changes (authored via OpenSpec skills without `tickets-cli.py spec`) can be recorded onto a ticket as a backfill instead of being scaffolded — the CLI skips `new_change` when the dir already exists.
 
 #### 4b-ii. Write the OpenSpec Artifacts (lanes A and B)
 

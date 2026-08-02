@@ -244,6 +244,115 @@ def has_spec_delta(project_path: str | Path, name: str) -> bool:
     )
 
 
+class ArchivedChangeError(Exception):
+    """Raised when a write is attempted against an archived (read-only) change."""
+
+
+def matching_change_dirs(project_path: str | Path, ticket_id: str) -> list[str]:
+    """Live change-dir names under openspec/changes/ that map to *ticket_id*.
+
+    Excludes the ``archive`` subdir. Matching uses
+    :func:`ticket_id_from_change_name` so B-1 / B-13 / B-130 never cross-match.
+    Sorted. Empty list when the changes root does not exist.
+    """
+    root = Path(project_path) / "openspec" / "changes"
+    if not root.is_dir():
+        return []
+    tid = (ticket_id or "").upper()
+    names: list[str] = []
+    for p in root.iterdir():
+        if not p.is_dir() or p.name == "archive":
+            continue
+        if ticket_id_from_change_name(p.name) == tid:
+            names.append(p.name)
+    return sorted(names)
+
+
+def resolve_change_dir(
+    project_path: str | Path, name: str
+) -> tuple[Path, bool] | None:
+    """Resolve a change to a live dir or the newest archive copy.
+
+    Returns ``(path, archived)`` where *archived* is False for a live dir and
+    True for an archive copy. Returns None when neither exists.
+    """
+    live = change_dir(project_path, name)
+    if live.is_dir():
+        return (live, False)
+    archived = archived_change_dirs(project_path, name)
+    if archived:
+        return (archived[-1], True)  # newest by date-prefix sort
+    return None
+
+
+def change_docs(change_path: Path) -> list[str]:
+    """Relative doc paths for a change dir, ordered for display.
+
+    Order: proposal.md, design.md, tasks.md (each only if present), then all
+    specs/**/*.md sorted. Paths are POSIX-style relative to the change dir.
+    """
+    root = Path(change_path)
+    docs: list[str] = []
+    for name in ("proposal.md", "design.md", "tasks.md"):
+        if (root / name).is_file():
+            docs.append(name)
+    specs = root / "specs"
+    if specs.is_dir():
+        for p in sorted(specs.rglob("*.md")):
+            if p.is_file():
+                docs.append(p.relative_to(root).as_posix())
+    return docs
+
+
+def _containment_check(change_dir_path: Path, rel_path: str) -> Path:
+    """Resolve *rel_path* under *change_dir_path* with containment guards.
+
+    Raises ValueError for absolute paths, non-.md suffix, or path escape.
+    Raises FileNotFoundError when the target file does not already exist.
+    """
+    if not rel_path or rel_path.startswith("/") or Path(rel_path).is_absolute():
+        raise ValueError("absolute paths are not allowed")
+    if not str(rel_path).endswith(".md"):
+        raise ValueError("only .md documents may be read or written")
+    target = change_dir_path / rel_path
+    real_target = os.path.realpath(target)
+    real_root = os.path.realpath(change_dir_path)
+    try:
+        Path(real_target).relative_to(Path(real_root))
+    except ValueError as exc:
+        raise ValueError("path escapes change directory") from exc
+    if not os.path.isfile(real_target):
+        raise FileNotFoundError(f"document not found: {rel_path}")
+    return Path(real_target)
+
+
+def read_change_doc(project_path: str | Path, name: str, rel_path: str) -> str:
+    """Read a document from a live or archived change. Containment-checked."""
+    resolved = resolve_change_dir(project_path, name)
+    if resolved is None:
+        raise FileNotFoundError(f"change not found: {name}")
+    change_path, _archived = resolved
+    target = _containment_check(change_path, rel_path)
+    return target.read_text(encoding="utf-8")
+
+
+def write_change_doc(
+    project_path: str | Path, name: str, rel_path: str, content: str
+) -> None:
+    """Write a document in a *live* change. Containment-checked; no create.
+
+    Raises :class:`ArchivedChangeError` when only an archive copy exists.
+    """
+    resolved = resolve_change_dir(project_path, name)
+    if resolved is None:
+        raise FileNotFoundError(f"change not found: {name}")
+    change_path, archived = resolved
+    if archived:
+        raise ArchivedChangeError("archived change is read-only")
+    target = _containment_check(change_path, rel_path)
+    target.write_text(content, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # CLI operations
 # ---------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 """TDD for the cross-project activity feed (Follow the Action mode)."""
 
-import json
 import os
 import sqlite3
 import sys

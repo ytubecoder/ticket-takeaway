@@ -1,5 +1,24 @@
 # Session Log
 
+## 2026-08-02 — OpenSpec surfacing shipped via Grok peon; black-box acceptance codified
+
+### Summary
+- Shipped OpenSpec surfacing (merge `70eaea4`): ticket-page Spec tab with inline doc editing (1s-debounce autosave, archived read-only w/ 409), 8-value derived `SPEC_STATUSES` (filesystem-only), `spec_status_in` trigger filter with full rules-editor round-trip, unrecorded-change discovery + one-click backfill, kanban S dot + overlay "Open spec →", CLI `spec --status`/record-only backfill. Spec: `docs/superpowers/specs/openspec-surfacing.md`; 25 new TDD tests (suite 944 green).
+- Execution model: self-contained spec → Grok peon (peon-poke, isolated worktree) → black-box acceptance (contract, allowlist diffstat, foreman-rerun tests+ruff, test-file-only audit, 3 independent probes) — zero pokes; the implementation diff was never read. Method + tooling codified into codex-in-claude (`docs/BLACKBOX-ACCEPTANCE.md`, `peon dispatch --allow/--verify`, `peon check`, gated merge, usage line).
+- Live E2E surfaced and fixed two pre-existing bugs: `/kanban` meta injection baked `http://localhost:8788` as API base → whole detail overlay CORS-dead over Tailscale Serve (fixed `44c4b01` — the one renderer violating the origin-relative rule); loops B-01 spec flag corrupted by appended verify output (repaired, loops `be27878`). Loops B-13 backfilled to `linked` through the new UI — the motivating case.
+
+### Lessons Learned
+- **Accepted:** black-box acceptance — spec-mandated tests (names+assertions dictated up front) + foreman-authored independent probes let acceptance skip the implementation diff entirely; ~70% implementation-phase token savings with all quality gates held.
+- **Gotcha:** peon shadow-git recovery needed again (sandbox redirected gitdir to /tmp; fast-forwarded the branch ref via `git update-ref` before `peon merge`) — recurring, matches the existing memory.
+- **Gotcha:** `peon diff <slug> --stat` silently swallowed `--stat` and dumped the full 70KB diff — the exact 1:1-read trap; fixed upstream (unknown diff options now error).
+- **Gotcha:** a corrupted spec flag (verify output appended to the one-line wire format) parses as a truncated change name → `linked_missing`; the new status surfaced the drift immediately. Flag content must stay single-line `lane:change [- note]`.
+
+### Decisions
+- `SPEC_STATUSES` derivation is filesystem-only; `validated`/`invalid` deliberately excluded (subprocess-priced, already covered by `spec_validates`).
+- Backfill reuses `PUT .../readiness/spec` — no new mutation endpoint.
+- `spec_doc_edited` left unmapped in Activity label/icon registries (generic label) — deliberate scope cut, follow-up if wanted.
+- peon usage reporting is provider-self-reported observability only; a "savings" metric was explicitly rejected (counterfactual never ran; a fabricated number would nudge farming out net-negative tasks).
+
 ## 2026-07-28/29 — Lint wall cleared (B-70), OpenSpec work integrated, TT enrolled in its own lifecycle
 
 ### Summary

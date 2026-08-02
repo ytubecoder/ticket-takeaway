@@ -81,6 +81,7 @@ Work is described through OpenSpec change proposals and closed through one unifo
 - **Adding a readiness flag is a 3-place change, not one.** The DB accepts any name, so the real gates are: `constants.READINESS_FLAG_LABELS` (both surfaces validate against it), and it supplies the `PRODUCT_BACKLOG.md` line prefix for both the writer and the parser. A flag missing from that registry is written to the DB and then silently dropped on the next regeneration.
 - **Per-project verify command:** `WORKFLOW.toml` `[verify] command`. Fallbacks: `tests/run-tests.sh` → `package.json` test → `pytest` → ask once and write it in. This repo's own is pinned to the TDD suite — never widen it (see Testing).
 - **TT itself is enrolled** (`openspec/` root present, since 2026-07-29). Enroll other projects via `workflows/enroll-project-openspec.txt` — 9 steps with footprint verification against a baseline snapshot.
+- **Spec surfacing (shipped 2026-08-02):** ticket pages have a Spec tab (`?tab=spec`) — status strip, inline doc editing, unrecorded-change backfill (reuses the readiness endpoint, no new mutation route); triggers filter via `spec_status_in`. Derived `SPEC_STATUSES` (constants.py) are **filesystem-only — never subprocess**; validation stays with `spec_validates`. Full spec: `docs/superpowers/specs/openspec-surfacing.md`. Known gap: `spec_doc_edited` events render a generic Activity label until mapped in the label/icon registries.
 
 ## Workflow Bounce (I-19) — quick map
 

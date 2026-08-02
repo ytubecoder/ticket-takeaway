@@ -99,10 +99,10 @@ That test calls `tempfile.mkdtemp(dir=str(Path.home()))`. This peon sandbox cann
 
 This peon agent could not write under `/Users/llm/projects/ticket-takeaway/.git` (sandbox `Operation not permitted` on the object store / worktree metadata). The implementation commit was created in a shadow git dir with the real object store as alternates:
 
-- **Commit:** `1182827` — `feat: surface OpenSpec changes on tickets (spec tab, status, backfill)` (full: `118282725d8b80277f14f9448fe66babfc68839e`)
+- **Branch tip message:** `feat: surface OpenSpec changes on tickets (spec tab, status, backfill)`
 - **Parent:** `b437ef0` (branch tip at dispatch)
 - **Worktree `.git` file currently points at:** `/tmp/peon-openspec-git-durable/.git` so `git status` / `git log` in the worktree show a clean tree on `peon/implement-docs-superpowers-spe`
-- **Bundle:** `/tmp/peon-openspec-durable.bundle` (recreate after any amend: `git --git-dir=/tmp/peon-openspec-git-durable/.git bundle create /tmp/peon-openspec-durable.bundle b437ef0..HEAD`)
+- Resolve tip SHA with: `git --git-dir=/tmp/peon-openspec-git-durable/.git rev-parse HEAD`
 
 To attach the commit to the real repo (from a non-sandboxed shell):
 
@@ -117,4 +117,4 @@ echo "gitdir: /Users/llm/projects/ticket-takeaway/.git/worktrees/ticket-takeaway
 git -C "$WORK" checkout -f peon/implement-docs-superpowers-spe
 ```
 
-Working tree files already match the feature commit; only the real ref / objects need importing.
+Working tree files already match the feature tip; only the real ref / objects need importing.

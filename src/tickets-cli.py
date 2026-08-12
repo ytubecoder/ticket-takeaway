@@ -729,11 +729,21 @@ def regenerate_dashboard(project: dict):
     if not gen_script.exists():
         return
     project_path = os.path.expanduser(project.get("path", ""))
-    if project_path:
-        subprocess.run(
-            [sys.executable, str(gen_script), "--no-open"],
-            cwd=project_path,
-            capture_output=True,
+    if not project_path:
+        return
+    cmd = [sys.executable, str(gen_script), "--no-open"]
+    # Name the project explicitly: cwd auto-detect is ambiguous for nested
+    # project paths, and a wrong match rebuilds another project's page.
+    project_id = project.get("id")
+    if project_id:
+        cmd += ["--project", project_id]
+    result = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        print(
+            f"Warning: dashboard regeneration failed for {project_id or project_path}{suffix}",
+            file=sys.stderr,
         )
 
 
@@ -1391,7 +1401,9 @@ def cmd_spec(args):
         link = info.get("link") or {}
         print(f"{tid}: status={info['status']}")
         if link:
-            print(f"  lane={link.get('lane') or '-'} change={link.get('change') or '-'}")
+            print(
+                f"  lane={link.get('lane') or '-'} change={link.get('change') or '-'}"
+            )
             if link.get("note"):
                 print(f"  note={link['note']}")
         else:

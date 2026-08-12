@@ -234,6 +234,9 @@ Priority: medium | Status: for-review
 Tags: automation, ux
 Shipped 2026-08-02 (merge 70eaea4, deployed to 8788). Spec tab on ticket pages: status strip, inline change-doc editing (debounced autosave; archived read-only), unrecorded-change discovery + one-click backfill via the readiness endpoint. Derived SPEC_STATUSES (8 values, filesystem-only) + spec_status_in trigger filter with rules-editor round-trip. Kanban S dot + overlay link, CLI spec --status / record-only backfill. Spec: docs/superpowers/specs/openspec-surfacing.md. Implemented by Grok peon under black-box acceptance; 25 new TDD tests; live E2E on loops B-13 (backfilled) and B-01 (archived read-only).
 
+### BUG-04: Nested-project dashboard regen targets wrong project (cwd first-prefix-match)
+Priority: high | Status: for-review
+
 ## Backlog
 
 ### B-45: Show eligibility reasons in ticket detail overlay when not ready
@@ -335,6 +338,11 @@ Priority: medium | Status: proposed
 
 ### B-49: Sample ticket from journey tour
 Priority: medium | Status: proposed
+
+### B-73: Make the codebase ruff check-clean (221 findings)
+Priority: medium | Status: proposed
+Tags: quality, tech-debt
+The global turn-end hook runs `ruff check` on every edited .py file, so any session touching this tool gets its turn blocked by findings it did not cause. Today a one-line change to serve.py surfaced 110 findings, 108 pre-existing. The repo has never been ruff check-clean; it IS ruff format-clean. Scope (excluding workspaces/): 221 findings. serve.py 108 | actions.py 30 | generate.py 24 | runners.py 14 tickets-cli.py 9 | workspaces.py 8 | kitchen.py 6 | kitchen_feed.py 4 | seek.py 3 | import_db.py 3 By rule in serve.py: BLE001 45  blind 'except Exception' DTZ003 18  datetime.utcnow() S110   13  try/except/pass SIM118 10  'k in row.keys()' DTZ005 10  datetime.now() without tz PLW1510 8  subprocess.run without check= TRY004  2  ValueError where TypeError fits S112/PLC0206 2 NOT a mechanical fix. The 14 --unsafe-fixes are unsafe as named: rewriting datetime.utcnow() -> datetime.now(tz=UTC) changes the timestamp STRINGS written to workflow_runs.started_at/completed_at and activity_events.occurred_at. Those are string-compared against existing rows and parsed by the kitchen orchestrator, so a blind rewrite risks a live data bug in a service that runs under launchd and is shared by 13 registered projects. Suggested approach: 1. Land a ruff config (pyproject [tool.ruff]) first, so the rule set is pinned and intentional rather than whatever the global hook defaults to. Decide per rule: fix, or ignore with a reason. 2. Do the safe, semantics-free rules first: SIM118, TRY004, PLC0206, PLW1510 (add explicit check=False). 3. BLE001/S110/S112: narrow each except to real exception types and log instead of pass. Case by case - several of these guard optional features (feedbacks, CDP, tmux) where swallowing is deliberate; those want a targeted ignore, not a rewrite. 4. DTZ003/DTZ005 LAST and on their own commit. Audit every read path that parses these timestamps before changing any write path. Verify against the existing suite at workspaces/ticket-takeaway/ticket/B-31/tests/. Done when: ruff check . passes (or every remaining finding has a pinned per-rule ignore with a comment), the server starts under launchd, and the tt board still renders.
 
 ## Ideas
 

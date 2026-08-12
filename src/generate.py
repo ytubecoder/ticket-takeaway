@@ -13209,7 +13209,12 @@ def _render_single_card(
 def _render_readiness_row(t) -> str:
     """Render readiness indicator dots for a ticket."""
     flag_map = {"D": "description", "C": "criteria", "L": "reviewed", "S": "spec"}
-    icon_name_map = {"D": "file-text", "C": "check-square", "L": "eye", "S": "file-text"}
+    icon_name_map = {
+        "D": "file-text",
+        "C": "check-square",
+        "L": "eye",
+        "S": "file-text",
+    }
     indicators = [
         ("D", "Description", bool(t.description)),
         ("C", "Criteria", len(t.acceptance_criteria) > 0),
@@ -13474,6 +13479,31 @@ def generate_json_output(projects: list[Project]) -> str:
     return json.dumps(output, indent=2)
 
 
+def detect_project_from_cwd(projects: list, cwd: str):
+    """Resolve which registered project a directory belongs to.
+
+    Registered projects can nest (a sub-project board whose path lives inside
+    a parent project's tree), so the MOST SPECIFIC (longest) matching path
+    wins. First-prefix-match resolved to whichever entry came first in the
+    registry — a write on the nested project then rebuilt the parent's
+    dashboard and left the nested board stale.
+    """
+    best_id = None
+    best_len = -1
+    for entry in projects:
+        raw_path = entry.get("path", "")
+        if not raw_path:
+            # realpath("") is this process's cwd — never a real registration.
+            continue
+        proj_path = os.path.realpath(os.path.expanduser(raw_path))
+        if (cwd == proj_path or cwd.startswith(proj_path + os.sep)) and len(
+            proj_path
+        ) > best_len:
+            best_len = len(proj_path)
+            best_id = entry.get("id")
+    return best_id
+
+
 def main():
     # Ensure output directory exists
     DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
@@ -13488,10 +13518,7 @@ def main():
         idx = sys.argv.index("--project")
         if idx + 1 < len(sys.argv):
             filter_project = sys.argv[idx + 1]
-    elif "--all" not in sys.argv:
-        # Auto-detect: match cwd against registered project paths
-        cwd = os.path.realpath(os.getcwd())
-        # Will be matched below after loading registry
+    # else: auto-detected from cwd after the registry loads
 
     # Load registry
     if not REGISTRY_PATH.exists():
@@ -13510,12 +13537,9 @@ def main():
 
     # Auto-detect project from cwd if no explicit flag
     if filter_project is None and "--all" not in sys.argv:
-        cwd = os.path.realpath(os.getcwd())
-        for entry in projects_data.get("projects", []):
-            proj_path = os.path.realpath(os.path.expanduser(entry.get("path", "")))
-            if cwd == proj_path or cwd.startswith(proj_path + os.sep):
-                filter_project = entry.get("id")
-                break
+        filter_project = detect_project_from_cwd(
+            projects_data.get("projects", []), os.path.realpath(os.getcwd())
+        )
 
     projects: list[Project] = []
 

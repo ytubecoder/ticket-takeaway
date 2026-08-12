@@ -153,6 +153,13 @@ Add Bookmarks and Recents collapsible sections to the left nav rail. Users can s
 Priority: medium | Status: released
 Released: 2026-05-17 | Commit: b998a25
 
+
+### BUG-04: Nested-project dashboard regen targets wrong project (cwd first-prefix-match)
+Priority: high | Status: released
+Released: 2026-08-12 | Commit: ab1a1fd
+Verified: `python3 -m pytest tests/test_tdd_*.py -q` exit 0
+Spec: `bug-04-nested-project-dashboard-regen-targets-wrong-project-cwd-first-prefix-mat` archived to openspec/specs/ (2 added)
+
 ## Archive
 
 _Retired features are summarized here. See git history for full details._

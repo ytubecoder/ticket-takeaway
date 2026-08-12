@@ -234,9 +234,6 @@ Priority: medium | Status: for-review
 Tags: automation, ux
 Shipped 2026-08-02 (merge 70eaea4, deployed to 8788). Spec tab on ticket pages: status strip, inline change-doc editing (debounced autosave; archived read-only), unrecorded-change discovery + one-click backfill via the readiness endpoint. Derived SPEC_STATUSES (8 values, filesystem-only) + spec_status_in trigger filter with rules-editor round-trip. Kanban S dot + overlay link, CLI spec --status / record-only backfill. Spec: docs/superpowers/specs/openspec-surfacing.md. Implemented by Grok peon under black-box acceptance; 25 new TDD tests; live E2E on loops B-13 (backfilled) and B-01 (archived read-only).
 
-### BUG-04: Nested-project dashboard regen targets wrong project (cwd first-prefix-match)
-Priority: high | Status: for-review
-
 ## Backlog
 
 ### B-45: Show eligibility reasons in ticket detail overlay when not ready
@@ -686,6 +683,27 @@ Add Bookmarks and Recents collapsible sections to the left nav rail. Users can s
 Priority: medium | Status: done
 Tags: navigation, ux
 Commit: b998a25
+
+### BUG-04: Nested-project dashboard regen targets wrong project (cwd first-prefix-match)
+Priority: high | Status: done
+Commit: ab1a1fd
+Spec: C:bug-04-nested-project-dashboard-regen-targets-wrong-project-cwd-first-prefix-mat
+Verified: exit=0 commit=ab1a1fd at=2026-08-12T16:01:03 cmd=python3 -m pytest tests/test_tdd_*.py -q
+    ........................................................................ [  7%]
+    ........................................................................ [ 14%]
+    ........................................................................ [ 21%]
+    ........................................................................ [ 29%]
+    ........................................................................ [ 36%]
+    ........................................................................ [ 43%]
+    ........................................................................ [ 51%]
+    ........................................................................ [ 58%]
+    ........................................................................ [ 65%]
+    ........................................................................ [ 73%]
+    ........................................................................ [ 80%]
+    ........................................................................ [ 87%]
+    .............................................................sssssssssss [ 95%]
+    ssssssssssssssssss..............................                         [100%]
+    955 passed, 29 skipped in 20.79s
 
 ## Won't Do
 

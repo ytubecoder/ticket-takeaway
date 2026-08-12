@@ -2,7 +2,11 @@
 """Ticket Takeaway Dashboard Server — serves the dashboard with editing API.
 
 Usage:
-    python3 serve.py [--port PORT] [--project ID] [--bind HOST]
+    python3 serve.py [--port PORT] [--project ID] [--bind HOST] [--open]
+
+    --open  launch a browser at the dashboard URL. Off by default: this server
+            normally runs headless under launchd, where a popped window is
+            invisible to a remote operator and never gets closed.
 
 Starts an HTTP server at http://localhost:PORT (default 8787) that:
   - GET /              → serves the generated HTML dashboard
@@ -13789,20 +13793,25 @@ def main():
     print(f"Dashboard server: {url}")
     print("Press Ctrl+C to stop.\n")
 
-    # Open in browser
-    import platform
-    import subprocess
+    # Open in browser — OPT-IN ONLY. This server runs headless under launchd on
+    # remote-operated machines, where an auto-opened window is invisible to the
+    # operator, survives across days and leaks memory. Pass --open to get one.
+    if "--open" in args:
+        import platform
+        import subprocess
 
-    system = platform.system()
-    try:
-        if system == "Darwin":
-            subprocess.Popen(["open", url])
-        elif system == "Linux":
-            subprocess.Popen(["xdg-open", url], stderr=subprocess.DEVNULL)
-        elif system == "Windows":
-            os.startfile(url)
-    except Exception:
-        pass
+        system = platform.system()
+        try:
+            if system == "Darwin":
+                subprocess.Popen(["open", url])
+            elif system == "Linux":
+                subprocess.Popen(["xdg-open", url], stderr=subprocess.DEVNULL)
+            elif system == "Windows":
+                os.startfile(url)
+        except (OSError, AttributeError) as exc:
+            # Missing opener, no display, or os.startfile absent off Windows.
+            # The server is already serving — say so and carry on.
+            print(f"  Could not open a browser at {url}: {exc}", file=sys.stderr)
 
     try:
         server.serve_forever()

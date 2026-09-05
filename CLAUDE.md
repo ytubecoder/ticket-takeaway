@@ -164,3 +164,18 @@ Full deployment map: `INSTALL.md`.
 - `docs/REVIEW_PROCESS.md` — `/review` skill workflow
 - `INSTALL.md` — deployment map + per-project setup
 - `docs/superpowers/specs/` — design docs for major features (gate-check, feedbacks, workflow bounce, etc.)
+
+## 🗄️ Archived warmstart (2026-09-06)
+
+`HANDOFF.md` was moved to `docs/_archive/warmstarts/`. It was a session handoff —
+ephemeral by design — and most of it was already stale (it opens with a directory
+rename that has long since happened). **Nothing was deleted and nothing was
+extracted.**
+
+🚨 It may still hold a durable fact or two that belongs in this file or the specs.
+Nobody has checked. If you next touch an area it covered, open it, lift what is
+still true into the right permanent doc, and note that here.
+
+A doc in this repo is either **static** — maintained, no live system state in it —
+or **ephemeral**, in which case it belongs in a scratchpad and gets deleted after
+use. The tell for the second kind: a "current status" or "next steps" section.
